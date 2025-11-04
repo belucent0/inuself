@@ -147,6 +147,132 @@ python test_pyannote.py
 - ✅ Detailed statistics (processing time, speed, number of speakers, etc.)
 - ✅ MIOpen error handling and automatic workarounds
 - ✅ Windows console encoding fixes
+- ✅ Real-time GPU monitoring during processing
+
+## ⚡ Performance Optimization
+
+### Test Environment
+
+**Hardware:**
+- GPU: AMD Radeon(TM) 890M Graphics (gfx1150)
+- GPU Memory: 48GB (shared)
+- ROCm Version: 6.4.4
+- OS: Windows 10/11
+
+**Test Audio Files:**
+
+| File | Duration | Sample Rate | File Size | Use Case |
+|------|----------|-------------|-----------|----------|
+| `sample.wav` | 33.54 seconds | 16 kHz | ~1 MB | Short audio test |
+| `audio_for_whisper_tariff.wav` | 885.47 seconds (14m 45s) | 16 kHz | ~27 MB | Long audio test |
+
+**Model:**
+- pyannote/speaker-diarization-3.1
+
+### Optimization Results
+
+We tested various optimization strategies individually to identify what actually improves performance. Here are the results with the **14.75-minute audio file**:
+
+| Test | Optimization Method | Time | Speed | Speakers | Segments | Speed Gain | Accuracy |
+|------|-------------------|------|-------|----------|----------|-----------|----------|
+| **Baseline** | No optimization (FP32) | 243.06s | 3.64x | **6** | **56** | - | ✅ **Accurate** |
+| **Test 1** | Mixed Precision (AMP) only | 98.24s | 9.01x | **2** | 42 | 2.47x faster | ❌ **Failed** (-4 speakers) |
+| **Test 2** | `inference_mode()` only | 242.56s | 3.65x | **6** | 56 | 0.2% | ✅ Accurate |
+| **Test 3** | `matmul_precision('medium')` only | 242.59s | 3.65x | **6** | 56 | 0.2% | ✅ Accurate |
+| **All Combined** | All 3 optimizations | 97.74s | 9.06x | **2** | 42 | 2.49x faster | ❌ **Failed** (AMP issue) |
+
+### 🎯 Key Findings
+
+1. **Mixed Precision (AMP) has CRITICAL accuracy issues** ⚠️
+   - Speed improvement: 243s → 98s (2.5x faster) ✅
+   - **Accuracy degradation: 6 speakers → 2 speakers detected** ❌
+   - **4 speakers completely missed** - unacceptable for production use
+   - Root cause: FP16 precision loss corrupts speaker embedding vectors
+   - Different speakers incorrectly merged into same identity
+   - **NOT RECOMMENDED for speaker diarization tasks**
+
+2. **`inference_mode()` and `matmul_precision('medium')` are safe but ineffective**
+   - Speed: < 0.2% improvement (< 1 second difference)
+   - Accuracy: ✅ No degradation - still detects all 6 speakers correctly
+   - Conclusion: No benefit, not worth the added complexity
+
+3. **Final Decision: Use standard FP32 with no aggressive optimizations**
+   - Accuracy is paramount for speaker diarization
+   - 3.64x real-time speed is already practical (15min audio in 4min)
+   - Reliable results > faster but incorrect results
+
+### ⚠️ Why Mixed Precision (AMP) Was Rejected
+
+Although Mixed Precision (FP16) showed impressive speed improvements, **it severely degrades accuracy**:
+
+**Example: 14.75-minute audio file**
+
+| Metric | FP32 (Baseline) | FP16 (AMP) | Result |
+|--------|----------------|-----------|--------|
+| Processing Time | 243s | 98s (2.5x faster) | ✅ Much faster |
+| **Speakers Detected** | **6 speakers** | **2 speakers** | ❌ **Critical failure** |
+| Segments | 56 segments | 42 segments | ❌ Less detailed |
+| GPU Usage | 3% | 25% | ✅ Better utilization |
+
+**Root Cause**: FP16's reduced precision corrupts speaker embedding vectors, causing the model to incorrectly merge different speakers into the same identity.
+
+**Decision**: **Accuracy is more important than speed for speaker diarization.** We keep FP32 precision to ensure reliable results.
+
+### Current Performance (FP32 - Accurate)
+
+**Short audio (33 seconds)** - `sample.wav`:
+- Processing time: ~10 seconds
+- Processing speed: 3.2x real-time
+- GPU usage: 3% average
+- Memory: 2.01GB peak
+
+**Long audio (14.75 minutes)** - `audio_for_whisper_tariff.wav`:
+- Processing time: 243 seconds (4m 3s)
+- Processing speed: 3.64x real-time
+- GPU usage: 3% average  
+- Memory: 2.01GB peak
+- **All 6 speakers correctly identified** ✅
+
+### 🔬 Other Attempted Optimizations (No Effect)
+
+During development, we tested many optimization strategies. Here's what **didn't work** in our ROCm 6.4.4 + Windows environment:
+
+| Strategy | Speed Result | Accuracy Impact | Reason |
+|----------|-------------|-----------------|--------|
+| **Mixed Precision (AMP)** | ✅ 2.5x faster | ❌ **Critical failure** (6→2 speakers) | FP16 corrupts speaker embeddings |
+| **inference_mode()** | ❌ No effect | ✅ No impact | Already disabled gradients, minimal overhead |
+| **matmul_precision('medium')** | ❌ No effect | ✅ No impact | Not a bottleneck in this workload |
+| **cuDNN/MIOpen optimization** | ❌ Failed | N/A (crashed) | `miopenStatusInternalError` - had to disable |
+| **cuDNN benchmark mode** | ❌ No effect | N/A | Requires cuDNN enabled (not available) |
+| **TF32 acceleration** | ❌ No effect | Not tested | `matmul.allow_tf32=True` didn't help |
+| **torch.compile** | ❌ Failed | N/A (crashed) | `ModuleNotFoundError: No module named 'triton'` |
+| **Batch size increase** | ❌ No effect | Not tested | 32 → 256, no gain (other bottlenecks) |
+| **pin_memory + non_blocking** | ❌ No effect | Not tested | Data transfer not the bottleneck |
+| **CUDA streams** | ❌ No effect | Not tested | Already maximized by PyTorch |
+| **GPU memory fraction** | ❌ No effect | Not tested | Memory not the bottleneck (only 2GB used) |
+
+### 🔍 Why Most Optimizations Failed
+
+The root cause is **`torch.backends.cudnn.enabled = False`**, which is required to prevent MIOpen errors:
+
+```python
+# Required to prevent miopenStatusInternalError
+torch.backends.cudnn.enabled = False
+```
+
+This setting forces PyTorch to:
+- Use slower fallback implementations (e.g., `_slow_conv2d_forward`)
+- Increase CPU-GPU data transfer overhead
+- Disable MIOpen-specific optimizations
+
+**Mixed Precision (AMP) works because it optimizes at a different level** - reducing data size and using hardware-accelerated FP16 operations, which doesn't depend on MIOpen.
+
+### 💡 Recommendations
+
+1. **Prioritize accuracy over speed** - FP32 ensures correct speaker identification
+2. **Upgrade to ROCm 7.1+** on Linux for better gfx1150 support (may enable cuDNN/MIOpen)
+3. **3.64x real-time speed is already practical** - 15 minutes of audio processed in ~4 minutes
+4. **Consider batch processing** for multiple files to amortize model loading overhead
 
 ## 🔧 Troubleshooting
 
