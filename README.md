@@ -130,6 +130,7 @@ audio_file = "your_audio_file.wav"
 3. Run the script:
 
 ```bash
+source rocm_env/Scripts/activate
 python test_pyannote.py
 ```
 
@@ -243,6 +244,7 @@ During development, we tested many optimization strategies. Here's what **didn't
 | **inference_mode()** | ❌ No effect | ✅ No impact | Already disabled gradients, minimal overhead |
 | **matmul_precision('medium')** | ❌ No effect | ✅ No impact | Not a bottleneck in this workload |
 | **cuDNN/MIOpen optimization** | ❌ Failed | N/A (crashed) | `miopenStatusInternalError` - had to disable |
+| **MIOPEN_FIND_MODE=FAST** | ❌ Failed | N/A (crashed) | Still crashes with SQLite database errors (ROCm 6.4.4 bug) |
 | **cuDNN benchmark mode** | ❌ No effect | N/A | Requires cuDNN enabled (not available) |
 | **TF32 acceleration** | ❌ No effect | Not tested | `matmul.allow_tf32=True` didn't help |
 | **torch.compile** | ❌ Failed | N/A (crashed) | `ModuleNotFoundError: No module named 'triton'` |
@@ -260,12 +262,22 @@ The root cause is **`torch.backends.cudnn.enabled = False`**, which is required 
 torch.backends.cudnn.enabled = False
 ```
 
-This setting forces PyTorch to:
+**We also tried MIOpen workarounds** (reference: [PyTorch Issue #150168](https://github.com/pytorch/pytorch/issues/150168)):
+```python
+os.environ['MIOPEN_FIND_MODE'] = 'FAST'
+os.environ['MIOPEN_DISABLE_CACHE'] = '1'
+os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'
+torch.backends.cudnn.enabled = True
+```
+
+But still got: `SQLite prepare error: no such column: mode` → This is a fundamental MIOpen bug in ROCm 6.4.4 + Windows + gfx1150.
+
+With `cudnn.enabled = False`, PyTorch is forced to:
 - Use slower fallback implementations (e.g., `_slow_conv2d_forward`)
 - Increase CPU-GPU data transfer overhead
 - Disable MIOpen-specific optimizations
 
-**Mixed Precision (AMP) works because it optimizes at a different level** - reducing data size and using hardware-accelerated FP16 operations, which doesn't depend on MIOpen.
+**Why Mixed Precision failed:** Even though it optimizes at a different level (FP16), the accuracy degradation (6→2 speakers) makes it unusable.
 
 ### 💡 Recommendations
 

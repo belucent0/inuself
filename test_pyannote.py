@@ -31,10 +31,66 @@ os.environ['MIOPEN_USER_DB_PATH'] = cache_dir
 os.environ['MIOPEN_FORCE_LOGGING'] = '0'
 os.environ['MIOPEN_LOG_LEVEL'] = '0'
 
-# GPU 최적화 설정
-# MIOpen 오류 방지를 위해 cudnn.enabled = False로 설정 (필수)
-# On ROCm, cudnn refers to MIOpen, so setting False uses default implementation
-torch.backends.cudnn.enabled = False
+# MIOpen optimization settings based on GitHub issue #150168
+# Reference: https://github.com/pytorch/pytorch/issues/150168
+
+# MIOpen mode selection
+# 0: MIOpen completely disabled (most stable, currently working)
+# 1: FAST mode (SQLite error occurs)
+# 2: Cache completely disabled (worth trying)
+# 3: IMMEDIATE mode (compile skip, immediate execution)
+# 4: Minimum functionality mode (last resort)
+MIOPEN_MODE = 0  # Select 0~4 (Mode 0 is the only one that works)
+
+if MIOPEN_MODE == 0:
+    # Mode 0: MIOpen completely disabled (stable, verified)
+    print("[Info] Mode 0: MIOpen disabled (stable)")
+    USE_MIOPEN_OPTIMIZATION = False
+    
+elif MIOPEN_MODE == 1:
+    # Mode 1: FAST mode (SQLite error - confirmed failure)
+    print("[Info] Mode 1: MIOpen FAST mode (SQLite error risk)")
+    os.environ['MIOPEN_FIND_MODE'] = 'FAST'
+    os.environ['MIOPEN_DISABLE_CACHE'] = '0'
+    USE_MIOPEN_OPTIMIZATION = True
+    
+elif MIOPEN_MODE == 2:
+    # Mode 2: MIOpen enabled + cache completely disabled
+    print("[Info] Mode 2: MIOpen enabled + cache completely disabled")
+    os.environ['MIOPEN_FIND_MODE'] = 'NORMAL'
+    os.environ['MIOPEN_DISABLE_CACHE'] = '1'  # Disable cache completely
+    os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'  # Disable Find DB
+    USE_MIOPEN_OPTIMIZATION = True
+    
+elif MIOPEN_MODE == 3:
+    # Mode 3: IMMEDIATE mode (compile skip, immediate execution)
+    print("[Info] Mode 3: MIOpen IMMEDIATE mode (compile skip)")
+    os.environ['MIOPEN_FIND_MODE'] = 'IMMEDIATE'  # Fastest mode (no optimization)
+    os.environ['MIOPEN_DISABLE_CACHE'] = '1'
+    os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'
+    USE_MIOPEN_OPTIMIZATION = True
+    
+elif MIOPEN_MODE == 4:
+    # Mode 4: All MIOpen optimizations disabled
+    print("[Info] Mode 4: MIOpen minimum functionality mode")
+    os.environ['MIOPEN_FIND_MODE'] = '3'  # IMMEDIATE mode (specified by number)
+    os.environ['MIOPEN_DISABLE_CACHE'] = '1'
+    os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'
+    os.environ['MIOPEN_FIND_ENFORCE'] = 'NONE'
+    os.environ['MIOPEN_DEBUG_CONV_IMPLICIT_GEMM'] = '0'
+    USE_MIOPEN_OPTIMIZATION = True
+
+# GPU optimization settings
+
+if USE_MIOPEN_OPTIMIZATION:
+    print("[Info] MIOpen optimization mode enabled (FIND_MODE=FAST)")
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = False  # Maintain deterministic behavior
+else:
+    print("[Info] MIOpen disabled mode (stable)")
+    # Set cudnn.enabled = False to prevent MIOpen errors
+    # On ROCm, cudnn refers to MIOpen, so setting False uses default implementation
+    torch.backends.cudnn.enabled = False
 
 
 from pyannote.audio import Pipeline
@@ -42,7 +98,8 @@ from pyannote.audio import Pipeline
 # --- Configuration ---
 # Enter the path to the audio file you want to test here.
 # If the file is in the same folder as the script, just enter the filename.
-audio_file = "sample.wav"  # 테스트할 오디오 파일
+audio_file = "sample.wav"  # Audio file to test
+# audio_file = "audio_for_whisper_tariff.wav"  # Audio file to test
 # --- End Configuration ---
 
 # Check if file exists
@@ -63,12 +120,12 @@ if use_gpu:
     device = torch.device("cuda")
     gpu_name = torch.cuda.get_device_name(0)
     
-    # GPU 메모리 캐시 초기화
+    # Clear GPU memory cache
     torch.cuda.empty_cache()
     
-    # GPU 최적화 설정 확인 및 출력
+    # Check and display GPU optimization settings
     print(f"GPU detected: {gpu_name}")
-    print(f"[GPU Settings] cudnn.enabled: {torch.backends.cudnn.enabled} (MIOpen 오류 방지)")
+    print(f"[GPU Settings] cudnn.enabled: {torch.backends.cudnn.enabled} (Prevent MIOpen errors)")
     print(f"[GPU Settings] cudnn.benchmark: {torch.backends.cudnn.benchmark}")
     print(f"[GPU Settings] matmul.allow_tf32: {torch.backends.cuda.matmul.allow_tf32}")
     if hasattr(torch, 'get_float32_matmul_precision'):
@@ -104,16 +161,16 @@ try:
     if hasattr(pipeline, '_embedding') and hasattr(pipeline._embedding, 'model'):
         pipeline._embedding.model.eval()
     
-    # GPU 메모리 정리
+    # Clear GPU memory
     if use_gpu:
         torch.cuda.empty_cache()
-        # 모델 로드 후 GPU 메모리 사용량 확인
+        # Check GPU memory usage after model loading
         gpu_memory_after_load = torch.cuda.memory_allocated(0)/1024**3
-        print(f"[Info] 모델 로드 후 GPU 메모리 사용량: {gpu_memory_after_load:.2f} GB")
+        print(f"[Info] GPU memory usage after model loading: {gpu_memory_after_load:.2f} GB")
     
     model_load_time = time.time() - model_load_start
-    print(f"Speaker diarization pipeline loaded and moved to GPU successfully! (로드 시간: {model_load_time:.2f}초)")
-    logger.log_info(f"Speaker diarization pipeline loaded and moved to GPU successfully! (로드 시간: {model_load_time:.2f}초)")
+    print(f"Speaker diarization pipeline loaded and moved to GPU successfully! (Load time: {model_load_time:.2f}s)")
+    logger.log_info(f"Speaker diarization pipeline loaded and moved to GPU successfully! (Load time: {model_load_time:.2f}s)")
         
 except Exception as e:
     import traceback
@@ -149,7 +206,7 @@ audio_data = {
     "sample_rate": sample_rate
 }
 
-# GPU 모니터링 클래스
+# GPU monitoring class
 class GPUMonitor:
     def __init__(self, device, interval=0.5):
         self.device = device
@@ -164,16 +221,16 @@ class GPUMonitor:
         self.thread = None
     
     def get_gpu_stats(self):
-        """GPU 통계 수집"""
+        """Collect GPU statistics"""
         if not torch.cuda.is_available():
             return None
         
         memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
         memory_reserved = torch.cuda.memory_reserved(self.device) / 1024**3  # GB
         
-        # ROCm에서 GPU 사용률은 직접 측정이 어려우므로 메모리 사용률로 대체
+        # In ROCm, GPU utilization is difficult to measure directly, so use memory usage as a proxy
         try:
-            # 전체 GPU 메모리 가져오기
+            # Get total GPU memory
             if hasattr(torch.cuda, 'get_device_properties'):
                 props = torch.cuda.get_device_properties(self.device)
                 total_memory = props.total_memory / 1024**3  # GB
@@ -194,7 +251,7 @@ class GPUMonitor:
         }
     
     def monitor_loop(self):
-        """모니터링 루프"""
+        """Monitoring loop"""
         while self.monitoring:
             stats = self.get_gpu_stats()
             if stats:
@@ -212,14 +269,14 @@ class GPUMonitor:
                     stats['memory_usage_percent']
                 )
                 
-                # 실시간 출력 (간소화)
-                if len(self.stats['samples']) % 2 == 0:  # 1초마다 출력
+                # Real-time output (simplified)
+                if len(self.stats['samples']) % 2 == 0:  # Output every 1 second
                     print(f"\r[GPU Monitor] Memory: {stats['memory_reserved_gb']:.2f}GB / {stats['total_memory_gb']:.1f}GB ({stats['memory_usage_percent']:.1f}%) | Allocated: {stats['memory_allocated_gb']:.2f}GB", end='', flush=True)
             
             time.sleep(self.interval)
     
     def start(self):
-        """모니터링 시작"""
+        """Start monitoring"""
         self.monitoring = True
         self.stats = {
             'max_memory_allocated': 0,
@@ -231,14 +288,14 @@ class GPUMonitor:
         self.thread.start()
     
     def stop(self):
-        """모니터링 중지"""
+        """Stop monitoring"""
         self.monitoring = False
         if self.thread:
             self.thread.join(timeout=1.0)
-        print()  # 줄바꿈
+        print()  # New line
     
     def get_summary(self):
-        """모니터링 요약"""
+        """Monitoring summary"""
         if not self.stats['samples']:
             return None
         
@@ -258,11 +315,11 @@ class GPUMonitor:
 print(f"Starting speaker diarization for '{audio_file}'...")
 diarization_start = time.time()
 
-# GPU 모니터링 시작
+# Start GPU monitoring
 gpu_monitor = None
 if use_gpu:
     gpu_monitor = GPUMonitor(device, interval=0.5)
-    print("\n[GPU Monitor] 실시간 GPU 모니터링 시작...")
+    print("\n[GPU Monitor] Starting real-time GPU monitoring...")
     gpu_monitor.start()
 
 # Run in inference mode (disable gradient calculation)
@@ -301,13 +358,13 @@ with torch.no_grad():
     # Verify input tensor is also on GPU
     print(f"  - Input data device: {audio_data['waveform'].device}")
     
-    # GPU 최적화 상태 안내
+    # GPU optimization status information
     if cudnn_enabled:
-        print(f"\n[Info] MIOpen (cudnn) 최적화 활성화됨 - 최대 GPU 성능 모드")
+        print(f"\n[Info] MIOpen (cudnn) optimization enabled - Maximum GPU performance mode")
     else:
-        print(f"\n[Note] torch.backends.cudnn.enabled = False로 설정됨.")
-        print(f"[Note] MIOpen 최적화가 비활성화되어 일부 연산이 CPU로 폴백될 수 있습니다.")
-        print(f"[Note] 하지만 MIOpen 오류를 방지합니다.")
+        print(f"\n[Note] torch.backends.cudnn.enabled set to False.")
+        print(f"[Note] MIOpen optimization is disabled, some operations may fall back to CPU.")
+        print(f"[Note] However, this prevents MIOpen errors.")
     
     logger.log_settings(
         cudnn_enabled=cudnn_enabled,
@@ -327,38 +384,38 @@ with torch.no_grad():
         logger.finish()
         raise
 
-# GPU 모니터링 중지
+# Stop GPU monitoring
 if gpu_monitor:
     gpu_monitor.stop()
-    print("\n[GPU Monitor] 모니터링 중지됨")
+    print("\n[GPU Monitor] Monitoring stopped")
 
 diarization_end = time.time()
 diarization_time = diarization_end - diarization_start
 total_time = diarization_end - model_load_start
 
-# GPU 모니터링 결과 출력
+# Output GPU monitoring results
 if gpu_monitor:
     summary = gpu_monitor.get_summary()
     if summary:
         print(f"\n{'='*60}")
-        print(f"GPU 사용률 분석 (GPU Usage Analysis):")
+        print(f"GPU Usage Analysis:")
         print(f"{'='*60}")
-        print(f"최대 메모리 할당: {summary['max_memory_allocated_gb']:.2f} GB")
-        print(f"최대 메모리 예약: {summary['max_memory_reserved_gb']:.2f} GB")
-        print(f"최대 메모리 사용률: {summary['max_memory_usage_percent']:.1f}%")
-        print(f"평균 메모리 예약: {summary['avg_memory_reserved_gb']:.2f} GB")
-        print(f"평균 메모리 사용률: {summary['avg_memory_usage_percent']:.1f}%")
-        print(f"샘플 수: {summary['sample_count']}개")
+        print(f"Max memory allocated: {summary['max_memory_allocated_gb']:.2f} GB")
+        print(f"Max memory reserved: {summary['max_memory_reserved_gb']:.2f} GB")
+        print(f"Max memory usage: {summary['max_memory_usage_percent']:.1f}%")
+        print(f"Avg memory reserved: {summary['avg_memory_reserved_gb']:.2f} GB")
+        print(f"Avg memory usage: {summary['avg_memory_usage_percent']:.1f}%")
+        print(f"Sample count: {summary['sample_count']}")
         print(f"{'='*60}")
 
-# 각 단계별 시간 출력
+# Output time breakdown for each stage
 print(f"\n{'='*60}")
-print(f"시간 분석 (Time Breakdown):")
+print(f"Time Breakdown:")
 print(f"{'='*60}")
-print(f"모델 로드 시간: {model_load_time:.2f}초 ({model_load_time/total_time*100:.1f}%)")
-print(f"오디오 파일 로드 시간: {audio_load_time:.2f}초 ({audio_load_time/total_time*100:.1f}%)")
-print(f"화자 분리 처리 시간: {diarization_time:.2f}초 ({diarization_time/total_time*100:.1f}%)")
-print(f"총 실행 시간: {total_time:.2f}초")
+print(f"Model load time: {model_load_time:.2f}s ({model_load_time/total_time*100:.1f}%)")
+print(f"Audio file load time: {audio_load_time:.2f}s ({audio_load_time/total_time*100:.1f}%)")
+print(f"Speaker diarization processing time: {diarization_time:.2f}s ({diarization_time/total_time*100:.1f}%)")
+print(f"Total execution time: {total_time:.2f}s")
 print(f"{'='*60}")
 
 elapsed_time = diarization_time
@@ -370,7 +427,9 @@ elapsed_secs = int(elapsed_time % 60)
 elapsed_milliseconds = int((elapsed_time % 1) * 1000)
 
 # Collect speaker diarization results
-segments = list(diarization.itertracks(yield_label=True))
+# Extract segments from Annotation object using itertracks method
+segments = [(turn.start, turn.end, speaker) for turn, _, speaker in diarization.itertracks(yield_label=True)]
+
 unique_speakers = set(speaker for _, _, speaker in segments)
 num_speakers = len(unique_speakers)
 num_segments = len(segments)

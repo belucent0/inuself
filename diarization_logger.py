@@ -127,8 +127,8 @@ class DiarizationLogger:
     def log_segments(self, segments):
         """Log speaker diarization segments"""
         self._write_log(f"\n--- Speaker Diarization Results ---")
-        for turn, _, speaker in segments:
-            self._write_log(f"Time: {turn.start:04.1f}s ~ {turn.end:04.1f}s | Speaker: {speaker}")
+        for start, end, speaker in segments:
+            self._write_log(f"Time: {start:04.1f}s ~ {end:04.1f}s | Speaker: {speaker}")
     
     def log_error(self, error_message, traceback_str=None):
         """Log errors"""
