@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+rocm_env/
+venv/
+env/
+ENV/
+
+# Logs
+logs/
+*.log
+
+# Audio files (too large for git)
+*.wav
+*.mp3
+*.flac
+*.m4a
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# MIOpen cache
+.cache/
+~/.cache/miopen/
+
+# Test files (except main script)
+*_test.py
+gpu_test.py
+fix_*.py
+
+# Temporary files
+nul
+*.tmp
+
