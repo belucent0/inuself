@@ -182,6 +182,39 @@ We tested various optimization strategies individually to identify what actually
 | **Test 3** | `matmul_precision('medium')` only | 242.59s | 3.65x | **6** | 56 | 0.2% | ✅ Accurate |
 | **All Combined** | All 3 optimizations | 97.74s | 9.06x | **2** | 42 | 2.49x faster | ❌ **Failed** (AMP issue) |
 
+### MIOpen Mode Test Results
+
+We tested different `MIOPEN_FIND_MODE` settings to find the optimal balance between speed and accuracy. All tests used the **14.75-minute audio file** (`audio_for_whisper_tariff.wav`):
+
+| Mode | FIND_MODE | Cache | Benchmark | Time | Speed | Speakers | Segments | Status | Notes |
+|------|-----------|-------|-----------|------|-------|----------|----------|--------|-------|
+| **Mode 8** ⭐ | **FAST** | Disabled | Enabled | **94.82s** | **9.34x** | **6** | **56** | ✅ **Success** | **Fastest & Recommended** |
+| Mode 6 | NORMAL | Disabled | Enabled | 145.86s | 6.07x | 6 | 56 | ✅ Success | Previous fastest |
+| Mode 5 | NORMAL | Enabled | Enabled | 154.36s | 5.74x | 6 | 56 | ✅ Success | Cache enabled |
+| Mode 7 | IMMEDIATE | Disabled | Disabled | - | - | - | - | ❌ Failed | `miopenStatusUnknownError` |
+| Mode 1 | FAST | Enabled | - | - | - | - | - | ❌ Failed | SQLite error (without rocRAND headers) |
+| Mode 0 | - (Disabled) | - | - | ~243s | 3.64x | 6 | 56 | ✅ Success | Baseline (MIOpen disabled) |
+
+**Key Findings:**
+- ✅ **Mode 8 (FAST)** is the **fastest and most stable** configuration
+  - 35% faster than Mode 6 (94.82s vs 145.86s)
+  - 54% speed improvement (9.34x vs 6.07x real-time)
+  - All 6 speakers correctly detected
+  - No errors or stability issues
+- ✅ **All successful modes maintain 100% accuracy** (6 speakers, 56 segments)
+- ❌ **IMMEDIATE mode fails** due to MIOpen compilation errors
+- ❌ **Cache enabled modes are slower** - cache overhead exceeds benefits in this workload
+- ✅ **rocRAND header paths are required** for FAST mode to work (prevents SQLite errors)
+
+**Recommended Configuration:**
+```python
+MIOPEN_MODE = 8  # FAST mode - fastest verified configuration
+os.environ['MIOPEN_FIND_MODE'] = 'FAST'
+os.environ['MIOPEN_DISABLE_CACHE'] = '1'
+os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'
+torch.backends.cudnn.benchmark = True
+```
+
 ### 🎯 Key Findings
 
 1. **Mixed Precision (AMP) has CRITICAL accuracy issues** ⚠️
@@ -219,7 +252,7 @@ Although Mixed Precision (FP16) showed impressive speed improvements, **it sever
 
 **Decision**: **Accuracy is more important than speed for speaker diarization.** We keep FP32 precision to ensure reliable results.
 
-### Current Performance (FP32 - Accurate)
+### Current Performance (Mode 8 - FAST Mode) ⭐
 
 **Short audio (33 seconds)** - `sample.wav`:
 - Processing time: ~10 seconds
@@ -228,11 +261,12 @@ Although Mixed Precision (FP16) showed impressive speed improvements, **it sever
 - Memory: 2.01GB peak
 
 **Long audio (14.75 minutes)** - `audio_for_whisper_tariff.wav`:
-- Processing time: 243 seconds (4m 3s)
-- Processing speed: 3.64x real-time
+- Processing time: **94.82 seconds** (1m 35s) ⚡
+- Processing speed: **9.34x real-time** ⚡
 - GPU usage: 3% average  
 - Memory: 2.01GB peak
 - **All 6 speakers correctly identified** ✅
+- **Mode 8 (FAST) configuration** - fastest verified setting
 
 ### 🔬 Other Attempted Optimizations (No Effect)
 
@@ -253,38 +287,40 @@ During development, we tested many optimization strategies. Here's what **didn't
 | **CUDA streams** | ❌ No effect | Not tested | Already maximized by PyTorch |
 | **GPU memory fraction** | ❌ No effect | Not tested | Memory not the bottleneck (only 2GB used) |
 
-### 🔍 Why Most Optimizations Failed
+### 🔍 MIOpen Optimization Success
 
-The root cause is **`torch.backends.cudnn.enabled = False`**, which is required to prevent MIOpen errors:
+**The key breakthrough:** Setting up rocRAND header paths enabled FAST mode to work properly.
 
-```python
-# Required to prevent miopenStatusInternalError
-torch.backends.cudnn.enabled = False
+**Previous issue:** Without rocRAND headers, FAST mode failed with SQLite errors:
+```
+SQLite prepare error: no such column: mode
 ```
 
-**We also tried MIOpen workarounds** (reference: [PyTorch Issue #150168](https://github.com/pytorch/pytorch/issues/150168)):
+**Solution:** Configure HIP include paths for rocRAND headers:
 ```python
-os.environ['MIOPEN_FIND_MODE'] = 'FAST'
-os.environ['MIOPEN_DISABLE_CACHE'] = '1'
-os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'
-torch.backends.cudnn.enabled = True
+# Set HIP include paths to point to rocRAND headers
+os.environ['HIP_INCLUDE_PATH'] = '...'
+os.environ['ROCM_PATH'] = '...'
+os.environ['CPLUS_INCLUDE_PATH'] = '...'
+os.environ['C_INCLUDE_PATH'] = '...'
+os.environ['HIPCC_COMPILE_FLAGS_APPEND'] = '-I...'
 ```
 
-But still got: `SQLite prepare error: no such column: mode` → This is a fundamental MIOpen bug in ROCm 6.4.4 + Windows + gfx1150.
-
-With `cudnn.enabled = False`, PyTorch is forced to:
-- Use slower fallback implementations (e.g., `_slow_conv2d_forward`)
-- Increase CPU-GPU data transfer overhead
-- Disable MIOpen-specific optimizations
+**With rocRAND headers configured:**
+- ✅ FAST mode works perfectly (Mode 8: 9.34x speed)
+- ✅ NORMAL mode also works (Mode 6: 6.07x speed)
+- ✅ No SQLite errors
+- ✅ All modes maintain 100% accuracy
 
 **Why Mixed Precision failed:** Even though it optimizes at a different level (FP16), the accuracy degradation (6→2 speakers) makes it unusable.
 
 ### 💡 Recommendations
 
-1. **Prioritize accuracy over speed** - FP32 ensures correct speaker identification
-2. **Upgrade to ROCm 7.1+** on Linux for better gfx1150 support (may enable cuDNN/MIOpen)
-3. **3.64x real-time speed is already practical** - 15 minutes of audio processed in ~4 minutes
+1. **Use Mode 8 (FAST mode)** ⭐ - Fastest verified configuration (9.34x speed, 100% accuracy)
+2. **Prioritize accuracy over speed** - FP32 ensures correct speaker identification
+3. **9.34x real-time speed is excellent** - 15 minutes of audio processed in ~1.5 minutes
 4. **Consider batch processing** for multiple files to amortize model loading overhead
+5. **Ensure rocRAND headers are configured** - Required for FAST mode to work properly
 
 ## 🔧 Troubleshooting
 

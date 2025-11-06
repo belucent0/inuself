@@ -15,32 +15,35 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
-# MIOpen cache directory setup and existing cache deletion (prevent SQLite errors)
-cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'miopen')
-if os.path.exists(cache_dir):
-    import shutil
-    try:
-        shutil.rmtree(cache_dir)
-        print(f"[Info] Existing MIOpen cache deleted: {cache_dir}")
-    except Exception as e:
-        print(f"[Warning] Failed to delete MIOpen cache: {e}")
-os.makedirs(cache_dir, exist_ok=True)
-os.environ['MIOPEN_USER_DB_PATH'] = cache_dir
-
-# MIOpen environment variables
-os.environ['MIOPEN_FORCE_LOGGING'] = '0'
-os.environ['MIOPEN_LOG_LEVEL'] = '0'
-
 # MIOpen optimization settings based on GitHub issue #150168
 # Reference: https://github.com/pytorch/pytorch/issues/150168
 
 # MIOpen mode selection
+# 
+# MIOPEN_FIND_MODE 옵션 설명:
+# - NORMAL: 최적 커널을 찾기 위해 다양한 알고리즘을 평가 (느리지만 정확)
+# - FAST: 제한된 알고리즘만 평가하여 빠르게 선택 (빠르지만 최적화 제한)
+# - IMMEDIATE (또는 '3'): 커널 검색/컴파일 건너뛰고 즉시 실행 (가장 빠르지만 최적화 없음)
+# - HYBRID: NORMAL과 FAST의 균형 (MIOpen 버전에 따라 지원)
+# 
+# 모드별 설정:
 # 0: MIOpen completely disabled (most stable, currently working)
 # 1: FAST mode (SQLite error occurs)
 # 2: Cache completely disabled (worth trying)
 # 3: IMMEDIATE mode (compile skip, immediate execution)
 # 4: Minimum functionality mode (last resort)
-MIOPEN_MODE = 0  # Select 0~4 (Mode 0 is the only one that works)
+# 5: Try to set include paths for rocRAND headers (cache enabled)
+# 6: NORMAL mode - MIOpen enabled with cache disabled + benchmark (145.86s for 885s audio)
+# 7: IMMEDIATE mode - Skip kernel search (MIOpen 오류 발생 - 사용 불가)
+# 8: FAST mode - Limited algorithm search, fastest verified (94.82s for 885s audio) ⭐ RECOMMENDED
+MIOPEN_MODE = 8  # Select 0~8 (Mode 8: FAST mode - 최적 설정)
+
+# MIOpen cache directory setup (will be configured after mode selection)
+# Cache stores optimized kernels for faster subsequent runs
+# First run: MIOpen finds optimal kernels and stores them in cache
+# Subsequent runs: Cached kernels are reused, skipping compilation/search time
+cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'miopen')
+preserve_cache = False  # Will be set to True in Mode 5 if cache is enabled
 
 if MIOPEN_MODE == 0:
     # Mode 0: MIOpen completely disabled (stable, verified)
@@ -79,13 +82,247 @@ elif MIOPEN_MODE == 4:
     os.environ['MIOPEN_FIND_ENFORCE'] = 'NONE'
     os.environ['MIOPEN_DEBUG_CONV_IMPLICIT_GEMM'] = '0'
     USE_MIOPEN_OPTIMIZATION = True
+    
+elif MIOPEN_MODE == 5:
+    # Mode 5: Try to fix rocRAND header issue by setting include paths
+    print("[Info] Mode 5: MIOpen with rocRAND header path fix")
+    import rocm_sdk_devel
+    import rocm_sdk_core
+    devel_path = os.path.dirname(rocm_sdk_devel.__file__)
+    core_path = os.path.dirname(rocm_sdk_core.__file__)
+    site_lib_path = os.path.dirname(devel_path)
+    # Try to find include directories from extracted _rocm_sdk_devel and rocm_sdk_core
+    possible_include_paths = [
+        os.path.join(site_lib_path, '_rocm_sdk_devel', '_rocm_sdk_devel', 'include'),
+        os.path.join(site_lib_path, '_rocm_sdk_core', 'include'),  # rocm-sdk-core include
+        os.path.join(core_path, '..', '_rocm_sdk_core', 'include'),  # Alternative path
+        os.path.join(devel_path, 'include'),
+        os.path.join(devel_path, 'rocm', 'include'),
+        os.path.join(devel_path, '..', 'rocm_sdk_libraries', 'include'),
+    ]
+    include_paths = []
+    for path in possible_include_paths:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path):
+            include_paths.append(abs_path)
+            print(f"[Info] Found include path: {abs_path}")
+    
+    # Verify rocrand_xorwow.h exists
+    rocrand_path = os.path.join(site_lib_path, '_rocm_sdk_devel', '_rocm_sdk_devel', 'include', 'rocrand', 'rocrand_xorwow.h')
+    if os.path.exists(rocrand_path):
+        print(f"[Info] Found rocrand_xorwow.h at: {rocrand_path}")
+    else:
+        print(f"[Warning] rocrand_xorwow.h not found at expected path")
+    
+    # Set HIP include paths if found
+    if include_paths:
+        # Use semicolon for Windows path separator
+        include_path_str = ';'.join(include_paths)
+        os.environ['HIP_INCLUDE_PATH'] = include_path_str
+        os.environ['HIP_PLATFORM'] = 'amd'
+        # Set ROCM_PATH for compatibility
+        os.environ['ROCM_PATH'] = os.path.dirname(include_paths[0])
+        # Also set CPLUS_INCLUDE_PATH and C_INCLUDE_PATH for Windows
+        os.environ['CPLUS_INCLUDE_PATH'] = include_path_str
+        os.environ['C_INCLUDE_PATH'] = include_path_str
+        # Set HIP compiler flags with include paths
+        # Format: -Ipath1 -Ipath2 (space-separated for Windows)
+        hip_include_flags = ' '.join([f'-I{path}' for path in include_paths])
+        os.environ['HIPCC_COMPILE_FLAGS_APPEND'] = hip_include_flags
+        os.environ['HIP_INCLUDE_PATH'] = include_path_str
+        print(f"[Info] Set HIP_INCLUDE_PATH: {include_path_str}")
+        print(f"[Info] Set ROCM_PATH: {os.environ['ROCM_PATH']}")
+        print(f"[Info] Set HIPCC_COMPILE_FLAGS_APPEND: {hip_include_flags}")
+    
+    # Use NORMAL mode - it's slower on first run but more stable
+    # Try enabling cache for better performance on subsequent runs
+    # Cache stores optimized kernels so they don't need to be recompiled
+    os.environ['MIOPEN_FIND_MODE'] = 'NORMAL'
+    os.environ['MIOPEN_DISABLE_CACHE'] = '0'  # Enable cache - test if SQLite issue is resolved
+    # Keep FIND_DB disabled to avoid SQLite errors
+    os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'
+    print("[Info] MIOpen cache enabled - optimized kernels will be cached for faster subsequent runs")
+    preserve_cache = True  # Mark that we want to preserve cache
+    USE_MIOPEN_OPTIMIZATION = True
+
+elif MIOPEN_MODE == 6:
+    # Mode 6: Fastest verified configuration (145.86s for 885s audio = 6.07x speed)
+    # Based on successful run: 2025-11-06 14:01:59
+    print("[Info] Mode 6: Fastest mode - MIOpen with cache disabled + benchmark")
+    import rocm_sdk_devel
+    import rocm_sdk_core
+    devel_path = os.path.dirname(rocm_sdk_devel.__file__)
+    core_path = os.path.dirname(rocm_sdk_core.__file__)
+    site_lib_path = os.path.dirname(devel_path)
+    # Set include paths for rocRAND headers (same as Mode 5)
+    possible_include_paths = [
+        os.path.join(site_lib_path, '_rocm_sdk_devel', '_rocm_sdk_devel', 'include'),
+        os.path.join(site_lib_path, '_rocm_sdk_core', 'include'),
+        os.path.join(core_path, '..', '_rocm_sdk_core', 'include'),
+        os.path.join(devel_path, 'include'),
+        os.path.join(devel_path, 'rocm', 'include'),
+        os.path.join(devel_path, '..', 'rocm_sdk_libraries', 'include'),
+    ]
+    include_paths = []
+    for path in possible_include_paths:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path):
+            include_paths.append(abs_path)
+            print(f"[Info] Found include path: {abs_path}")
+    
+    # Set HIP include paths if found
+    if include_paths:
+        include_path_str = ';'.join(include_paths)
+        os.environ['HIP_INCLUDE_PATH'] = include_path_str
+        os.environ['HIP_PLATFORM'] = 'amd'
+        os.environ['ROCM_PATH'] = os.path.dirname(include_paths[0])
+        os.environ['CPLUS_INCLUDE_PATH'] = include_path_str
+        os.environ['C_INCLUDE_PATH'] = include_path_str
+        hip_include_flags = ' '.join([f'-I{path}' for path in include_paths])
+        os.environ['HIPCC_COMPILE_FLAGS_APPEND'] = hip_include_flags
+        print(f"[Info] Set HIP include paths")
+    
+    # Fastest configuration: NORMAL mode + cache DISABLED + benchmark enabled
+    os.environ['MIOPEN_FIND_MODE'] = 'NORMAL'
+    os.environ['MIOPEN_DISABLE_CACHE'] = '1'  # Cache disabled for faster performance
+    os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'  # Disable Find DB to avoid SQLite errors
+    print("[Info] MIOpen cache disabled - fastest configuration (verified: 145.86s for 885s audio)")
+    preserve_cache = False  # Don't preserve cache
+    USE_MIOPEN_OPTIMIZATION = True
+
+elif MIOPEN_MODE == 7:
+    # Mode 7: IMMEDIATE mode - Skip kernel search/compilation, fastest startup
+    # Expected: Very fast first run, but may be slower overall due to no optimization
+    print("[Info] Mode 7: IMMEDIATE mode - Skip kernel search for fastest startup")
+    import rocm_sdk_devel
+    import rocm_sdk_core
+    devel_path = os.path.dirname(rocm_sdk_devel.__file__)
+    core_path = os.path.dirname(rocm_sdk_core.__file__)
+    site_lib_path = os.path.dirname(devel_path)
+    # Set include paths for rocRAND headers (required for MIOpen)
+    possible_include_paths = [
+        os.path.join(site_lib_path, '_rocm_sdk_devel', '_rocm_sdk_devel', 'include'),
+        os.path.join(site_lib_path, '_rocm_sdk_core', 'include'),
+        os.path.join(core_path, '..', '_rocm_sdk_core', 'include'),
+        os.path.join(devel_path, 'include'),
+        os.path.join(devel_path, 'rocm', 'include'),
+        os.path.join(devel_path, '..', 'rocm_sdk_libraries', 'include'),
+    ]
+    include_paths = []
+    for path in possible_include_paths:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path):
+            include_paths.append(abs_path)
+            print(f"[Info] Found include path: {abs_path}")
+    
+    # Set HIP include paths if found
+    if include_paths:
+        include_path_str = ';'.join(include_paths)
+        os.environ['HIP_INCLUDE_PATH'] = include_path_str
+        os.environ['HIP_PLATFORM'] = 'amd'
+        os.environ['ROCM_PATH'] = os.path.dirname(include_paths[0])
+        os.environ['CPLUS_INCLUDE_PATH'] = include_path_str
+        os.environ['C_INCLUDE_PATH'] = include_path_str
+        hip_include_flags = ' '.join([f'-I{path}' for path in include_paths])
+        os.environ['HIPCC_COMPILE_FLAGS_APPEND'] = hip_include_flags
+        print(f"[Info] Set HIP include paths")
+    
+    # IMMEDIATE mode: Skip kernel search, use default kernels immediately
+    os.environ['MIOPEN_FIND_MODE'] = 'IMMEDIATE'  # 또는 '3'
+    os.environ['MIOPEN_DISABLE_CACHE'] = '1'  # Cache disabled
+    os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'  # Disable Find DB
+    print("[Info] IMMEDIATE mode - will skip kernel search/compilation (fastest startup, may be slower overall)")
+    preserve_cache = False
+    USE_MIOPEN_OPTIMIZATION = True
+
+elif MIOPEN_MODE == 8:
+    # Mode 8: FAST mode - Limited algorithm search for faster kernel selection
+    # Try with rocRAND header paths to avoid previous SQLite errors
+    print("[Info] Mode 8: FAST mode - Limited algorithm search (faster than NORMAL)")
+    import rocm_sdk_devel
+    import rocm_sdk_core
+    devel_path = os.path.dirname(rocm_sdk_devel.__file__)
+    core_path = os.path.dirname(rocm_sdk_core.__file__)
+    site_lib_path = os.path.dirname(devel_path)
+    # Set include paths for rocRAND headers (same as Mode 5/6)
+    possible_include_paths = [
+        os.path.join(site_lib_path, '_rocm_sdk_devel', '_rocm_sdk_devel', 'include'),
+        os.path.join(site_lib_path, '_rocm_sdk_core', 'include'),
+        os.path.join(core_path, '..', '_rocm_sdk_core', 'include'),
+        os.path.join(devel_path, 'include'),
+        os.path.join(devel_path, 'rocm', 'include'),
+        os.path.join(devel_path, '..', 'rocm_sdk_libraries', 'include'),
+    ]
+    include_paths = []
+    for path in possible_include_paths:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path):
+            include_paths.append(abs_path)
+            print(f"[Info] Found include path: {abs_path}")
+    
+    # Set HIP include paths if found
+    if include_paths:
+        include_path_str = ';'.join(include_paths)
+        os.environ['HIP_INCLUDE_PATH'] = include_path_str
+        os.environ['HIP_PLATFORM'] = 'amd'
+        os.environ['ROCM_PATH'] = os.path.dirname(include_paths[0])
+        os.environ['CPLUS_INCLUDE_PATH'] = include_path_str
+        os.environ['C_INCLUDE_PATH'] = include_path_str
+        hip_include_flags = ' '.join([f'-I{path}' for path in include_paths])
+        os.environ['HIPCC_COMPILE_FLAGS_APPEND'] = hip_include_flags
+        print(f"[Info] Set HIP include paths")
+    
+    # FAST mode: Limited algorithm search (faster than NORMAL, but may find less optimal kernels)
+    os.environ['MIOPEN_FIND_MODE'] = 'FAST'
+    os.environ['MIOPEN_DISABLE_CACHE'] = '1'  # Cache disabled for faster performance
+    os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'  # Disable Find DB to avoid SQLite errors
+    print("[Info] FAST mode - will search limited algorithms (faster startup, may be slower overall)")
+    preserve_cache = False
+    USE_MIOPEN_OPTIMIZATION = True
+
+# Handle cache directory based on preserve_cache flag
+if preserve_cache:
+    # Cache enabled - keep existing cache for faster subsequent runs
+    print(f"[Info] MIOpen cache will be preserved: {cache_dir}")
+    if os.path.exists(cache_dir):
+        cache_size = sum(os.path.getsize(os.path.join(dirpath, filename))
+                        for dirpath, dirnames, filenames in os.walk(cache_dir)
+                        for filename in filenames) / (1024**2)  # MB
+        print(f"[Info] Existing cache found ({cache_size:.2f} MB) - will reuse optimized kernels")
+else:
+    # Cache disabled or other mode - delete cache to prevent SQLite errors
+    if os.path.exists(cache_dir):
+        import shutil
+        try:
+            shutil.rmtree(cache_dir)
+            print(f"[Info] Existing MIOpen cache deleted: {cache_dir}")
+        except Exception as e:
+            print(f"[Warning] Failed to delete MIOpen cache: {e}")
+os.makedirs(cache_dir, exist_ok=True)
+os.environ['MIOPEN_USER_DB_PATH'] = cache_dir
 
 # GPU optimization settings
 
 if USE_MIOPEN_OPTIMIZATION:
-    print("[Info] MIOpen optimization mode enabled (FIND_MODE=FAST)")
+    print("[Info] MIOpen optimization mode enabled")
     torch.backends.cudnn.enabled = True
-    torch.backends.cudnn.benchmark = False  # Maintain deterministic behavior
+    # Enable benchmark for better performance - finds optimal algorithm once and reuses it
+    # This is especially beneficial for repeated operations with same input sizes
+    # Mode 6: benchmark=True for fastest performance (verified 145.86s)
+    # Mode 7: IMMEDIATE mode - benchmark may not help much (no kernel search anyway)
+    # Mode 8: FAST mode - benchmark enabled for better performance
+    if MIOPEN_MODE == 6:
+        torch.backends.cudnn.benchmark = True
+        print("[Info] cudnn.benchmark enabled (Mode 6: fastest verified config)")
+    elif MIOPEN_MODE == 7:
+        torch.backends.cudnn.benchmark = False  # IMMEDIATE mode doesn't need benchmark
+        print("[Info] cudnn.benchmark disabled (Mode 7: IMMEDIATE - no kernel search)")
+    elif MIOPEN_MODE == 8:
+        torch.backends.cudnn.benchmark = True  # FAST mode can benefit from benchmark
+        print("[Info] cudnn.benchmark enabled (Mode 8: FAST mode)")
+    else:
+        torch.backends.cudnn.benchmark = True  # Enable for better performance
+        print("[Info] cudnn.benchmark enabled - will optimize algorithms on first run")
 else:
     print("[Info] MIOpen disabled mode (stable)")
     # Set cudnn.enabled = False to prevent MIOpen errors
@@ -98,8 +335,8 @@ from pyannote.audio import Pipeline
 # --- Configuration ---
 # Enter the path to the audio file you want to test here.
 # If the file is in the same folder as the script, just enter the filename.
-audio_file = "sample.wav"  # Audio file to test
-# audio_file = "audio_for_whisper_tariff.wav"  # Audio file to test
+# audio_file = "sample.wav"  # Audio file to test
+audio_file = "audio_for_whisper_tariff.wav"  # Audio file to test
 # --- End Configuration ---
 
 # Check if file exists
@@ -155,6 +392,18 @@ try:
     # Run on GPU
     pipeline.to(device)
     
+    # Optimize pipeline settings for better performance
+    # Try to set batch size if available
+    if hasattr(pipeline, '_segmentation') and hasattr(pipeline._segmentation, 'inference'):
+        # Try to optimize batch processing
+        if hasattr(pipeline._segmentation.inference, 'batch_size'):
+            pipeline._segmentation.inference.batch_size = 32  # Increase batch size for better GPU utilization
+            print("[Info] Segmentation batch size set to 32")
+    if hasattr(pipeline, '_embedding') and hasattr(pipeline._embedding, 'inference'):
+        if hasattr(pipeline._embedding.inference, 'batch_size'):
+            pipeline._embedding.inference.batch_size = 32
+            print("[Info] Embedding batch size set to 32")
+    
     # Set all models to eval mode (prevent MIOpen errors)
     if hasattr(pipeline, '_segmentation') and hasattr(pipeline._segmentation, 'model'):
         pipeline._segmentation.model.eval()
@@ -201,8 +450,9 @@ print(f"Audio file length: {audio_hours:02d}:{audio_minutes:02d}:{audio_secs:02d
 logger.log_audio_info(audio_file, audio_duration_seconds, sample_rate)
 
 # Move input data to GPU (enable GPU acceleration)
+# Use non_blocking=True for async transfer (if supported)
 audio_data = {
-    "waveform": torch.from_numpy(waveform).unsqueeze(0).to(device),  # (1, time) - moved to GPU
+    "waveform": torch.from_numpy(waveform).unsqueeze(0).to(device, non_blocking=True),  # (1, time) - moved to GPU with async transfer
     "sample_rate": sample_rate
 }
 
@@ -322,8 +572,9 @@ if use_gpu:
     print("\n[GPU Monitor] Starting real-time GPU monitoring...")
     gpu_monitor.start()
 
-# Run in inference mode (disable gradient calculation)
-with torch.no_grad():
+# Run in inference mode (disable gradient calculation and autograd)
+# Using inference_mode() is more efficient than no_grad() for inference
+with torch.inference_mode():
     # Verify GPU usage
     print(f"\n[Check] Current device: {device}")
     print(f"[Check] PyTorch CUDA available: {torch.cuda.is_available()}")
