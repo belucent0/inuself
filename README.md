@@ -118,9 +118,31 @@ def check_version(library: Text, theirs: Text, mine: Text, what: Text = "Pipelin
 
 ## 🚀 Usage
 
-### Basic Usage
+### Media File Conversion
 
-1. Place your audio file in the project folder
+Before running speaker diarization, you may need to convert media files to WAV format:
+
+1. Place your media files (`.mp3`, `.mp4`, `.m4a`, `.flac`, etc.) in the `storage/` folder
+2. Run the media converter:
+
+```bash
+python media_converter.py
+```
+
+The script will:
+- Automatically detect all media files in `storage/` folder
+- Convert them to WAV format (16kHz, mono)
+- Save converted files to `wavs/` folder
+- Display conversion progress and statistics
+
+**Supported formats**: `.mp3`, `.mp4`, `.m4a`, `.flac`, `.wav`, `.ogg`, `.wma`, `.aac`, `.mkv`, `.avi`, `.mov`, `.webm`
+
+**Requirements**: ffmpeg must be installed and available in PATH. Install from [ffmpeg.org](https://ffmpeg.org/download.html) or use:
+- Windows: `winget install ffmpeg` or `choco install ffmpeg`
+
+### Speaker Diarization
+
+1. Place your audio file in the project folder (or use converted files from `wavs/` folder)
 2. Set the audio file path in `test_pyannote.py`:
 
 ```python
@@ -149,6 +171,8 @@ python test_pyannote.py
 - ✅ MIOpen error handling and automatic workarounds
 - ✅ Windows console encoding fixes
 - ✅ Real-time GPU monitoring during processing
+- ✅ Media file conversion tool (MP3, MP4, etc. → WAV)
+- ✅ Batch processing support for multiple media files
 
 ## ⚡ Performance Optimization
 
@@ -380,8 +404,11 @@ print(torch.cuda.get_device_name(0))  # Should print GPU name
 torch-test/
 ├── test_pyannote.py          # Main speaker diarization script
 ├── diarization_logger.py     # Logging module
+├── media_converter.py        # Media file conversion tool (MP3/MP4 → WAV)
 ├── README.md                 # This file
 ├── .gitignore               # Git ignore file list
+├── storage/                  # Input media files folder
+├── wavs/                     # Converted WAV files folder
 └── logs/                    # Log file storage folder (auto-created)
 ```
 
