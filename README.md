@@ -43,7 +43,50 @@ pip install --no-cache-dir https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/t
 pip install pyannote.audio librosa
 ```
 
-### 4. Hugging Face Model Access Setup (Required)
+### 4. Install whisper.cpp and Download Models (Required for ASR)
+
+**⚠️ Required for ASR functionality**: This project uses `whisper.cpp` with Vulkan acceleration for fast ASR processing.
+
+#### 4.1. Build whisper.cpp
+
+1. **Clone whisper.cpp repository**:
+   ```bash
+   git clone https://github.com/ggerganov/whisper.cpp.git
+   cd whisper.cpp
+   ```
+
+2. **Build with Vulkan support** (Windows):
+   - Install CMake and Visual Studio (or Build Tools)
+   - Configure with Vulkan:
+     ```bash
+     mkdir build
+     cd build
+     cmake .. -DWHISPER_VULKAN=ON
+     cmake --build . --config Release
+     ```
+   - The executable will be at: `build/bin/Release/whisper-cli.exe`
+
+3. **Set the path** (or place `whisper-cli.exe` at `C:/whisper-cpp/build/bin/Release/whisper-cli.exe`)
+
+#### 4.2. Download GGML Model Files
+
+Download the GGML model files (`.bin` format) for whisper.cpp:
+
+**Option 1: Download to project folder** (Recommended):
+- Place model files in `src/asr/models/` folder
+- Supported models: `ggml-base.bin`, `ggml-large-v2.bin`, `ggml-large-v3.bin`, `ggml-large-v3-turbo.bin`, etc.
+
+**Option 2: Download to external folder**:
+- Place model files in `C:/whisper-cpp/models/` folder
+- The script will automatically fall back to this location if models are not found in the project folder
+
+**Model download links**:
+- [Hugging Face - whisper.cpp models](https://huggingface.co/ggerganov/whisper.cpp/tree/main)
+- Or use the conversion script in whisper.cpp repository to convert PyTorch models to GGML format
+
+**Note**: The project uses **Vulkan-based GPU acceleration** for whisper.cpp, which provides significant speed improvements (e.g., 14 minutes of audio processed in ~5 minutes).
+
+### 5. Hugging Face Model Access Setup (Required)
 
 This project uses Hugging Face's `pyannote/speaker-diarization-3.1` model. The following steps are **required** to use the model:
 
@@ -67,7 +110,7 @@ huggingface-cli login
 
 The token will be automatically saved and used for subsequent runs.
 
-### 5. pyannote.audio Compatibility Patch
+### 6. pyannote.audio Compatibility Patch
 
 **⚠️ Required**: The PyTorch version string (`2.8.0a0+gitfc14c65`) provided by ROCm 6.4.4 is not in SemVer format, causing errors in `pyannote.audio`'s version check.
 
@@ -75,7 +118,7 @@ The token will be automatically saved and used for subsequent runs.
 
 The following patch **must** be applied:
 
-#### 5.1. Modify `pyannote/audio/utils/version.py`
+#### 6.1. Modify `pyannote/audio/utils/version.py`
 
 File location: `rocm_env/Lib/site-packages/pyannote/audio/utils/version.py`
 
@@ -142,30 +185,66 @@ The script will:
 
 ### Speaker Diarization
 
-1. Place your audio file in the project folder (or use converted files from `media/wav/` folder)
-2. Set the audio file path in `test_pyannote.py`:
-
-```python
-audio_file = "your_audio_file.wav"
-```
-
-3. Run the script:
+1. Place your audio file in the `media/wav/` folder (or use converted files from `media/upload/`)
+2. Run the script:
 
 ```bash
 source rocm_env/Scripts/activate
-python test_pyannote.py
+python src/diarization/test_pyannote.py
 ```
+
+Or use the test script:
+
+```bash
+bash run_test.sh
+```
+
+### ASR (Automatic Speech Recognition)
+
+**Note**: ASR uses `whisper.cpp` with **Vulkan GPU acceleration** for fast processing. Make sure you have:
+- `whisper-cli.exe` built with Vulkan support (see Installation section 4.1)
+- GGML model files (`.bin`) downloaded (see Installation section 4.2)
+
+Run ASR with Whisper:
+
+```bash
+python src/asr/test_asr.py base media/wav/sample.wav
+```
+
+For higher accuracy:
+
+```bash
+python src/asr/test_asr.py large-v3 media/wav/sample.wav
+```
+
+### ASR + Speaker Diarization (Integrated)
+
+**Note**: This uses `whisper.cpp` with **Vulkan GPU acceleration** for ASR. Make sure whisper.cpp is installed (see Installation section 4).
+
+Run both ASR and speaker diarization together:
+
+```bash
+python src/diarization/test_asr_with_diarization.py base media/wav/sample.wav
+```
+
+The script will:
+- Run ASR using `whisper-cli.exe` with Vulkan acceleration
+- Run speaker diarization using pyannote.audio
+- Process both tasks in parallel for optimal performance
 
 ### Results
 
-- **Console Output**: Real-time progress and speaker diarization results
-- **Log Files**: Timestamped log files saved in `logs/` folder
+- **Console Output**: Real-time progress and results
+- **Log Files**: Timestamped log files saved in respective `logs/` folders
+  - ASR logs: `src/asr/logs/`
+  - Diarization logs: `src/diarization/logs/`
   - `.log`: Text format log
   - `.json`: Structured JSON format log
 
 ## ✨ Features
 
-- ✅ AMD GPU (ROCm) acceleration support
+- ✅ AMD GPU (ROCm) acceleration support for speaker diarization
+- ✅ **Vulkan GPU acceleration for ASR** (via whisper.cpp) - Fast processing (e.g., 14min audio in ~5min)
 - ✅ Automatic logging (text + JSON format)
 - ✅ Detailed statistics (processing time, speed, number of speakers, etc.)
 - ✅ MIOpen error handling and automatic workarounds
@@ -173,6 +252,7 @@ python test_pyannote.py
 - ✅ Real-time GPU monitoring during processing
 - ✅ Media file conversion tool (MP3, MP4, etc. → WAV)
 - ✅ Batch processing support for multiple media files
+- ✅ Parallel processing (ASR and diarization run simultaneously)
 
 ## ⚡ Performance Optimization
 
@@ -402,11 +482,11 @@ print(torch.cuda.get_device_name(0))  # Should print GPU name
 
 ```
 torch-test/
-├── asr/                      # ASR (음성 인식) 모듈
-│   ├── models/              # 모델 파일들
-│   ├── logs/                # ASR 로그 파일들
-│   └── test_asr.py          # ASR 테스트 스크립트
 ├── src/
+│   ├── asr/                  # ASR (음성 인식) 모듈
+│   │   ├── models/          # 모델 파일들
+│   │   ├── logs/            # ASR 로그 파일들
+│   │   └── test_asr.py      # ASR 테스트 스크립트
 │   ├── diarization/         # 화자분리 모듈
 │   │   ├── test_pyannote.py
 │   │   ├── test_asr_with_diarization.py

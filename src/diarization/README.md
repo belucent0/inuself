@@ -35,6 +35,9 @@ python src/diarization/test_pyannote.py [오디오파일]
 ## 의존성
 
 - `pyannote.audio`: 화자분리 파이프라인
-- `whisper` 또는 `whisper-cli.exe`: ASR 엔진
+- `whisper-cli.exe`: ASR 엔진 (whisper.cpp 기반, **Vulkan GPU 가속 지원**)
+  - **필수**: `whisper.cpp`를 Vulkan 지원으로 빌드해야 함 (메인 README.md의 Installation 섹션 4.1 참조)
+  - **필수**: GGML 모델 파일 (`.bin`) 다운로드 필요 (메인 README.md의 Installation 섹션 4.2 참조)
+  - Vulkan 가속으로 빠른 처리 속도 제공 (예: 14분 오디오를 약 5분에 처리)
 - `torch`: PyTorch (ROCm 지원)
 
