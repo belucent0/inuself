@@ -334,9 +334,12 @@ from pyannote.audio import Pipeline
 
 # --- Configuration ---
 # Enter the path to the audio file you want to test here.
-# If the file is in the same folder as the script, just enter the filename.
-# audio_file = "sample.wav"  # Audio file to test
-audio_file = "audio_for_whisper_tariff.wav"  # Audio file to test
+# All audio files are now in the wavs/ directory.
+# audio_file = "wavs/sample.wav"  # Audio file to test (33초)
+# audio_file = "wavs/audio_for_whisper_tariff.wav"  # Audio file to test (14.75분)
+# audio_file = "wavs/xz-librazy-56m.wav"  # Audio file to test (56분)
+# audio_file = "wavs/president-2h.wav"  # Audio file to test (약 2시간)
+audio_file = "wavs/president-100days-3h.wav"  # Audio file to test (약 3시간)
 # --- End Configuration ---
 
 # Check if file exists

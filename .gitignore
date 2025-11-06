@@ -8,6 +8,10 @@ __pycache__/
 dist/
 build/
 
+# Storage
+storage/
+wavs/
+
 # Virtual Environment
 rocm_env/
 venv/
