@@ -336,10 +336,10 @@ from pyannote.audio import Pipeline
 # Enter the path to the audio file you want to test here.
 # All audio files are now in the wavs/ directory.
 # audio_file = "wavs/sample.wav"  # Audio file to test (33초)
-# audio_file = "wavs/audio_for_whisper_tariff.wav"  # Audio file to test (14.75분)
+audio_file = "wavs/audio_for_whisper_tariff.wav"  # Audio file to test (14.75분)
 # audio_file = "wavs/xz-librazy-56m.wav"  # Audio file to test (56분)
 # audio_file = "wavs/president-2h.wav"  # Audio file to test (약 2시간)
-audio_file = "wavs/president-100days-3h.wav"  # Audio file to test (약 3시간)
+# audio_file = "wavs/president-100days-3h.wav"  # Audio file to test (약 3시간)
 # --- End Configuration ---
 
 # Check if file exists
@@ -397,15 +397,21 @@ try:
     
     # Optimize pipeline settings for better performance
     # Try to set batch size if available
-    if hasattr(pipeline, '_segmentation') and hasattr(pipeline._segmentation, 'inference'):
-        # Try to optimize batch processing
-        if hasattr(pipeline._segmentation.inference, 'batch_size'):
-            pipeline._segmentation.inference.batch_size = 32  # Increase batch size for better GPU utilization
-            print("[Info] Segmentation batch size set to 32")
-    if hasattr(pipeline, '_embedding') and hasattr(pipeline._embedding, 'inference'):
-        if hasattr(pipeline._embedding.inference, 'batch_size'):
-            pipeline._embedding.inference.batch_size = 32
-            print("[Info] Embedding batch size set to 32")
+    # Note: Batch size changes showed minimal impact on processing time
+    # GPU utilization drops during certain phases is a characteristic of pyannote's processing
+    # Tested: 32 (baseline), 128 (no improvement), 512 (10.8% slower) - 32 is optimal
+    SEGMENTATION_BATCH_SIZE = 32  # Default batch size (tested: 128 and 512 showed no improvement or slower)
+    EMBEDDING_BATCH_SIZE = 32     # Default batch size
+    
+    if hasattr(pipeline, '_segmentation'):
+        # 배치 크기 설정
+        if hasattr(pipeline._segmentation, 'batch_size'):
+            pipeline._segmentation.batch_size = SEGMENTATION_BATCH_SIZE
+            print(f"[Info] Segmentation batch size set to {SEGMENTATION_BATCH_SIZE}")
+    if hasattr(pipeline, '_embedding'):
+        if hasattr(pipeline._embedding, 'batch_size'):
+            pipeline._embedding.batch_size = EMBEDDING_BATCH_SIZE
+            print(f"[Info] Embedding batch size set to {EMBEDDING_BATCH_SIZE}")
     
     # Set all models to eval mode (prevent MIOpen errors)
     if hasattr(pipeline, '_segmentation') and hasattr(pipeline._segmentation, 'model'):
