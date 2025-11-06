@@ -44,12 +44,12 @@ desktop.ini
 ~/.cache/miopen/
 
 # ASR models (large files, don't commit)
-asr/models/*.pt
-asr/models/*.bin
-!asr/models/.gitkeep
+src/asr/models/*.pt
+src/asr/models/*.bin
+!src/asr/models/.gitkeep
 
 # ASR logs
-asr/logs/
+src/asr/logs/
 
 # Diarization logs
 src/diarization/logs/
