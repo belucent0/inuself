@@ -1,6 +1,6 @@
 """
 미디어 파일 변환 스크립트
-storage 폴더의 미디어 파일(.mp3, .mp4, .m4a, .flac 등)을 wav 형식으로 변환하여 wavs 폴더에 저장합니다.
+media/upload 폴더의 미디어 파일(.mp3, .mp4, .m4a, .flac 등)을 wav 형식으로 변환하여 media/wav 폴더에 저장합니다.
 """
 
 import os
@@ -124,18 +124,18 @@ def get_output_filename(input_file: Path) -> str:
 
 
 def convert_storage_to_wavs(
-    storage_dir: Path = Path('storage'),
-    wavs_dir: Path = Path('wavs'),
+    storage_dir: Optional[Path] = None,
+    wavs_dir: Optional[Path] = None,
     sample_rate: int = 16000,
     channels: int = 1,
     overwrite: bool = False
 ) -> dict:
     """
-    storage 폴더의 미디어 파일을 wavs 폴더로 변환합니다.
+    media/upload 폴더의 미디어 파일을 media/wav 폴더로 변환합니다.
     
     Args:
-        storage_dir: 입력 미디어 파일이 있는 디렉토리
-        wavs_dir: 변환된 wav 파일을 저장할 디렉토리
+        storage_dir: 입력 미디어 파일이 있는 디렉토리 (기본값: media/upload)
+        wavs_dir: 변환된 wav 파일을 저장할 디렉토리 (기본값: media/wav)
         sample_rate: 샘플 레이트 (기본값: 16000 Hz)
         channels: 채널 수 (기본값: 1=모노)
         overwrite: 기존 파일 덮어쓰기 여부
@@ -143,6 +143,16 @@ def convert_storage_to_wavs(
     Returns:
         변환 결과 통계 딕셔너리
     """
+    # 기본 경로 설정 (프로젝트 루트 기준)
+    if storage_dir is None:
+        script_dir = Path(__file__).parent
+        project_root = script_dir.parent.parent
+        storage_dir = project_root / 'media' / 'upload'
+    if wavs_dir is None:
+        script_dir = Path(__file__).parent
+        project_root = script_dir.parent.parent
+        wavs_dir = project_root / 'media' / 'wav'
+    
     # 디렉토리 생성
     wavs_dir.mkdir(exist_ok=True)
     
@@ -229,9 +239,11 @@ def main():
     print("✅ ffmpeg가 설치되어 있습니다.")
     print()
     
-    # 경로 설정
-    storage_dir = Path('storage')
-    wavs_dir = Path('wavs')
+    # 경로 설정 (프로젝트 루트 기준)
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent.parent  # src/utils -> src -> project_root
+    storage_dir = project_root / 'media' / 'upload'
+    wavs_dir = project_root / 'media' / 'wav'
     
     # 변환 실행
     stats = convert_storage_to_wavs(

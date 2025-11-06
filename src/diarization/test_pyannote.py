@@ -334,12 +334,16 @@ from pyannote.audio import Pipeline
 
 # --- Configuration ---
 # Enter the path to the audio file you want to test here.
-# All audio files are now in the wavs/ directory.
-# audio_file = "wavs/sample.wav"  # Audio file to test (33초)
-audio_file = "wavs/audio_for_whisper_tariff.wav"  # Audio file to test (14.75분)
-# audio_file = "wavs/xz-librazy-56m.wav"  # Audio file to test (56분)
-# audio_file = "wavs/president-2h.wav"  # Audio file to test (약 2시간)
-# audio_file = "wavs/president-100days-3h.wav"  # Audio file to test (약 3시간)
+# All audio files are now in the media/wav/ directory.
+# 프로젝트 루트 기준 경로로 설정
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(script_dir))  # src/diarization -> src -> project_root
+
+audio_file = os.path.join(project_root, "media", "wav", "sample.wav")  # Audio file to test (33초)
+# audio_file = os.path.join(project_root, "media", "wav", "audio_for_whisper_tariff.wav")  # Audio file to test (14.75분)
+# audio_file = os.path.join(project_root, "media", "wav", "xz-librazy-56m.wav")  # Audio file to test (56분)
+# audio_file = os.path.join(project_root, "media", "wav", "president-2h.wav")  # Audio file to test (약 2시간)
+# audio_file = os.path.join(project_root, "media", "wav", "president-100days-3h.wav")  # Audio file to test (약 3시간)
 # --- End Configuration ---
 
 # Check if file exists
@@ -349,7 +353,10 @@ if not os.path.exists(audio_file):
     exit()
 
 # Initialize logger
-logger = DiarizationLogger(log_dir="logs")
+# 로그 디렉토리 설정 (화자분리 전용 logs 폴더)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+log_dir = os.path.join(script_dir, "logs")
+logger = DiarizationLogger(log_dir=log_dir)
 
 print("Starting GPU setup and pipeline loading...")
 logger.log_info("Starting GPU setup and pipeline loading...")

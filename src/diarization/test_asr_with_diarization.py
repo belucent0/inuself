@@ -1,4 +1,4 @@
-# whisper/test_asr_with_diarization.py
+# src/diarization/test_asr_with_diarization.py
 """
 ASR(전사) + 화자 분리 통합 스크립트
 """
@@ -74,8 +74,10 @@ if sys.platform == 'win32':
         pass
 
 # 결과 저장 경로 설정 (로그 파일 시작 전에 미리 설정)
-whisper_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-output_dir = whisper_dir / "logs"
+# 화자분리 전용 logs 폴더 사용
+script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+diarization_dir = script_dir  # src/diarization
+output_dir = diarization_dir / "logs"
 output_dir.mkdir(exist_ok=True)
 
 # MIOpen optimization settings (from test_pyannote.py)
@@ -139,7 +141,7 @@ if model_size not in whisper.available_models():
     sys.exit(1)
 
 # 오디오 파일 선택
-audio_file = sys.argv[2] if len(sys.argv) > 2 else os.path.join(project_root, "wavs", "sample.wav")
+audio_file = sys.argv[2] if len(sys.argv) > 2 else os.path.join(project_root, "media", "wav", "sample.wav")
 audio_file = os.path.abspath(audio_file)
 
 if not os.path.exists(audio_file):
@@ -193,8 +195,10 @@ def get_whispercpp_model_path(model_size):
         raise ValueError(f"Unsupported model size: {model_size}")
     
     # 우선순위 1: 프로젝트 내 모델
-    whisper_dir = os.path.dirname(os.path.abspath(__file__))
-    project_model_path = os.path.join(whisper_dir, "models", model_filename)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(script_dir))  # src/diarization -> src -> project_root
+    asr_dir = os.path.join(project_root, "asr")
+    project_model_path = os.path.join(asr_dir, "models", model_filename)
     if os.path.exists(project_model_path):
         return project_model_path
     

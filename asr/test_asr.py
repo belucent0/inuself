@@ -1,4 +1,4 @@
-# whisper/test_asr.py
+# asr/test_asr.py
 import whisper
 import torch
 import time
@@ -54,7 +54,7 @@ class Tee:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-# 프로젝트 루트 경로 추가 (wavs 폴더 접근용)
+# 프로젝트 루트 경로 추가 (media/wav 폴더 접근용)
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
@@ -146,12 +146,28 @@ print(f"Model loaded in {model_load_time:.2f} seconds")
 print(f"Model location: {model_dir}")
 
 # 오디오 파일 선택 (프로젝트 루트 기준)
-audio_file = sys.argv[2] if len(sys.argv) > 2 else os.path.join(project_root, "wavs", "sample.wav")
+audio_file = sys.argv[2] if len(sys.argv) > 2 else os.path.join(project_root, "media", "wav", "sample.wav")
 audio_file = os.path.abspath(audio_file)
 
 if not os.path.exists(audio_file):
     print(f"Error: Audio file '{audio_file}' not found.")
     sys.exit(1)
+
+# 로그 및 출력 파일 경로 설정
+from datetime import datetime
+from pathlib import Path
+import json
+
+logs_dir = os.path.join(whisper_dir, "logs")
+os.makedirs(logs_dir, exist_ok=True)
+
+timestamp = datetime.now().strftime("%y%m%d_%H%M%S")  # YYMMDD_HHMMSS 형식
+audio_name = Path(audio_file).stem
+log_file = os.path.join(logs_dir, f"{timestamp}_asr_{model_size}_{audio_name}.log")
+output_file = os.path.join(logs_dir, f"{timestamp}_asr_{model_size}_{audio_name}.json")
+
+# 로그 파일 시작 (모든 출력이 파일에도 저장됨)
+tee = Tee(log_file)
 
 print(f"\n{'='*60}")
 print(f"Transcribing: {audio_file}")
@@ -166,9 +182,6 @@ print("Transcription completed!")
 
 # 오디오 길이 계산
 import librosa
-import json
-from datetime import datetime
-from pathlib import Path
 
 waveform, sample_rate = librosa.load(audio_file, sr=16000)
 audio_duration = len(waveform) / sample_rate
