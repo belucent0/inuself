@@ -55,7 +55,7 @@ class Tee:
         self.close()
 
 # 프로젝트 루트 경로 추가 (media/wav 폴더 접근용)
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
 
 # Windows console encoding configuration
