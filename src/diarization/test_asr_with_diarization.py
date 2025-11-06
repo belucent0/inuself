@@ -197,7 +197,7 @@ def get_whispercpp_model_path(model_size):
     # 우선순위 1: 프로젝트 내 모델
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(os.path.dirname(script_dir))  # src/diarization -> src -> project_root
-    asr_dir = os.path.join(project_root, "asr")
+    asr_dir = os.path.join(project_root, "src", "asr")
     project_model_path = os.path.join(asr_dir, "models", model_filename)
     if os.path.exists(project_model_path):
         return project_model_path
