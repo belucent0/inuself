@@ -122,17 +122,17 @@ def check_version(library: Text, theirs: Text, mine: Text, what: Text = "Pipelin
 
 Before running speaker diarization, you may need to convert media files to WAV format:
 
-1. Place your media files (`.mp3`, `.mp4`, `.m4a`, `.flac`, etc.) in the `storage/` folder
+1. Place your media files (`.mp3`, `.mp4`, `.m4a`, `.flac`, etc.) in the `media/upload/` folder
 2. Run the media converter:
 
 ```bash
-python media_converter.py
+python src/utils/media_converter.py
 ```
 
 The script will:
-- Automatically detect all media files in `storage/` folder
+- Automatically detect all media files in `media/upload/` folder
 - Convert them to WAV format (16kHz, mono)
-- Save converted files to `wavs/` folder
+- Save converted files to `media/wav/` folder
 - Display conversion progress and statistics
 
 **Supported formats**: `.mp3`, `.mp4`, `.m4a`, `.flac`, `.wav`, `.ogg`, `.wma`, `.aac`, `.mkv`, `.avi`, `.mov`, `.webm`
@@ -142,7 +142,7 @@ The script will:
 
 ### Speaker Diarization
 
-1. Place your audio file in the project folder (or use converted files from `wavs/` folder)
+1. Place your audio file in the project folder (or use converted files from `media/wav/` folder)
 2. Set the audio file path in `test_pyannote.py`:
 
 ```python
@@ -402,14 +402,28 @@ print(torch.cuda.get_device_name(0))  # Should print GPU name
 
 ```
 torch-test/
-├── test_pyannote.py          # Main speaker diarization script
-├── diarization_logger.py     # Logging module
-├── media_converter.py        # Media file conversion tool (MP3/MP4 → WAV)
-├── README.md                 # This file
-├── .gitignore               # Git ignore file list
-├── storage/                  # Input media files folder
-├── wavs/                     # Converted WAV files folder
-└── logs/                    # Log file storage folder (auto-created)
+├── asr/                      # ASR (음성 인식) 모듈
+│   ├── models/              # 모델 파일들
+│   ├── logs/                # ASR 로그 파일들
+│   └── test_asr.py          # ASR 테스트 스크립트
+├── src/
+│   ├── diarization/         # 화자분리 모듈
+│   │   ├── test_pyannote.py
+│   │   ├── test_asr_with_diarization.py
+│   │   └── diarization_logger.py
+│   └── utils/               # 유틸리티 모듈
+│       └── media_converter.py  # 미디어 파일 변환 도구
+├── docs/                     # 연구/테스트/결과 문서
+│   ├── GPU_OPTIMIZATION_RESEARCH.md
+│   ├── BOTTLENECK_ANALYSIS.md
+│   ├── performance_analysis.md
+│   ├── PARALLEL_PROCESSING_RESULTS.md
+│   └── transcription_comparison.md
+├── media/                    # 미디어 파일 폴더
+│   ├── upload/              # 입력 미디어 파일 (원본)
+│   └── wav/                 # 변환된 WAV 파일
+├── README.md                 # 이 파일
+└── .gitignore               # Git ignore 파일 목록
 ```
 
 ## 📝 References

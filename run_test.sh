@@ -1,5 +1,5 @@
 #!/bin/bash
 source rocm_env/Scripts/activate
-python test_pyannote.py
+python src/diarization/test_pyannote.py
 deactivate
 
