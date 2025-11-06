@@ -43,6 +43,14 @@ desktop.ini
 .cache/
 ~/.cache/miopen/
 
+# Whisper models (large files, don't commit)
+whisper/models/*.pt
+whisper/models/*.bin
+!whisper/models/.gitkeep
+
+# Whisper logs
+whisper/logs/
+
 # Test files (except main script)
 *_test.py
 gpu_test.py
