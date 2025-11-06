@@ -43,13 +43,19 @@ desktop.ini
 .cache/
 ~/.cache/miopen/
 
-# Whisper models (large files, don't commit)
-whisper/models/*.pt
-whisper/models/*.bin
-!whisper/models/.gitkeep
+# ASR models (large files, don't commit)
+asr/models/*.pt
+asr/models/*.bin
+!asr/models/.gitkeep
 
-# Whisper logs
-whisper/logs/
+# ASR logs
+asr/logs/
+
+# Diarization logs
+src/diarization/logs/
+
+# Media files
+media/
 
 # Test files (except main script)
 *_test.py
