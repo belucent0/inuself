@@ -14,9 +14,10 @@ Speaker diarization using PyAnnote with AMD GPU (ROCm) acceleration on Windows.
 ## 🖥️ System Requirements
 
 - **OS**: Windows 10/11 (64-bit)
-- **GPU**: AMD Radeon GPU (ROCm supported)
+- **GPU**: AMD Radeon GPU (ROCm supported, tested on gfx1150)
 - **Python**: 3.12
-- **Driver**: AMD Radeon driver 25.20.01.14 or higher (for ROCm 6.4.4)
+- **Driver**: AMD Radeon driver 25.20.01.14 or higher
+- **PyTorch Version**: 2.9.0+rocm7.10.0a20251105 (recommended) or 2.8.0+rocm6.4.4 (legacy)
 
 ## 📦 Installation
 
@@ -28,6 +29,32 @@ rocm_env\Scripts\activate
 ```
 
 ### 2. Install PyTorch and Dependencies
+
+#### Option 1: Install PyTorch 2.9.0 (ROCm 7.10.0a20251105) - Recommended ⭐
+
+This version has been tested and verified to work correctly with GPU acceleration:
+
+```bash
+python -m pip install --no-cache-dir --no-deps --target "C:/timblo/torch-test/rocm_env/Lib/site-packages" "https://rocm.nightlies.amd.com/v2-staging/gfx1150/torch-2.9.0%2Brocm7.10.0a20251105-cp312-cp312-win_amd64.whl"
+python -m pip install --no-cache-dir --no-deps --target "C:/timblo/torch-test/rocm_env/Lib/site-packages" "https://rocm.nightlies.amd.com/v2-staging/gfx1150/torchaudio-2.9.0%2Brocm7.10.0a20251105-cp312-cp312-win_amd64.whl"
+python -m pip install --no-cache-dir --no-deps --target "C:/timblo/torch-test/rocm_env/Lib/site-packages" "https://rocm.nightlies.amd.com/v2-staging/gfx1150/torchvision-0.24.0%2Brocm7.10.0a20251105-cp312-cp312-win_amd64.whl"
+```
+
+**Note**: Replace `C:/timblo/torch-test/rocm_env` with your actual virtual environment path.
+
+**Alternative (if using standard pip install)**:
+```bash
+pip install --no-cache-dir --no-deps "https://rocm.nightlies.amd.com/v2-staging/gfx1150/torch-2.9.0%2Brocm7.10.0a20251105-cp312-cp312-win_amd64.whl"
+pip install --no-cache-dir --no-deps "https://rocm.nightlies.amd.com/v2-staging/gfx1150/torchaudio-2.9.0%2Brocm7.10.0a20251105-cp312-cp312-win_amd64.whl"
+pip install --no-cache-dir --no-deps "https://rocm.nightlies.amd.com/v2-staging/gfx1150/torchvision-0.24.0%2Brocm7.10.0a20251105-cp312-cp312-win_amd64.whl"
+```
+
+**Installed Versions:**
+- torch: `2.9.0+rocm7.10.0a20251105`
+- torchaudio: `2.9.0+rocm7.10.0a20251105`
+- torchvision: `0.24.0+rocm7.10.0a20251105`
+
+#### Option 2: Install PyTorch 2.8.0 (ROCm 6.4.4) - Legacy
 
 Install PyTorch for ROCm 6.4.4 according to AMD's official documentation:
 
@@ -159,6 +186,78 @@ def check_version(library: Text, theirs: Text, mine: Text, what: Text = "Pipelin
 
 **Important**: This patch is **required**. Without it, you will get `ValueError: 2.8.0a0+gitfc14c65 is not valid SemVer string` error when loading the model.
 
+### 7. PyTorch Compatibility Fixes (Required for PyTorch 2.9.0)
+
+**⚠️ Required for PyTorch 2.9.0**: The following fixes must be applied after installing PyTorch 2.9.0 to ensure proper GPU initialization and compatibility.
+
+#### 7.1. Remove `hipsparselt` from ROCm initialization
+
+File location: `rocm_env/Lib/site-packages/torch/_rocm_init.py`
+
+The `hipsparselt` library is not available in the ROCm SDK, causing initialization errors. Remove it from the preload list:
+
+```python
+# Before:
+preload_shortnames=['amd_comgr', 'amdhip64', 'hiprtc', 'hipblas', 'hipfft', 'hiprand', 'hipsparse', 'hipsparselt', 'hipsolver', 'hipblaslt', 'miopen', 'rocm-openblas'],
+
+# After:
+preload_shortnames=['amd_comgr', 'amdhip64', 'hiprtc', 'hipblas', 'hipfft', 'hiprand', 'hipsparse', 'hipsolver', 'hipblaslt', 'miopen', 'rocm-openblas'],
+```
+
+Also update the version check to match your installed version:
+```python
+check_version='7.10.0a20251105'  # Match your PyTorch ROCm version
+```
+
+#### 7.2. Exclude `caffe2_nvrtc.dll` from loading
+
+File location: `rocm_env/Lib/site-packages/torch/__init__.py`
+
+The `caffe2_nvrtc.dll` may have dependency issues on ROCm. Exclude it from DLL loading:
+
+Find the `_load_dll_libraries` function (around line 252) and modify:
+
+```python
+dlls = glob.glob(os.path.join(th_dll_path, "*.dll"))
+# Exclude caffe2_nvrtc.dll as it may have dependency issues on ROCm
+dlls = [dll for dll in dlls if os.path.basename(dll) != "caffe2_nvrtc.dll"]
+path_patched = False
+```
+
+#### 7.3. Handle torchvision meta registration errors
+
+File location: `rocm_env/Lib/site-packages/torchvision/__init__.py`
+
+Modify the import statement (around line 10):
+
+```python
+# Before:
+from torchvision import _meta_registrations, datasets, io, models, ops, transforms, utils  # usort:skip
+
+# After:
+try:
+    from torchvision import _meta_registrations  # usort:skip
+except RuntimeError:
+    # Ignore meta registration errors for compatibility
+    pass
+from torchvision import datasets, io, models, ops, transforms, utils  # usort:skip
+```
+
+#### 7.4. Update ROCm SDK version
+
+File location: `rocm_env/Lib/site-packages/rocm_sdk/_dist_info.py`
+
+Update the version to match your PyTorch installation (around line 257):
+
+```python
+__version__ = '7.10.0a20251105'  # Match your PyTorch ROCm version
+```
+
+**Note**: These fixes are required for PyTorch 2.9.0+rocm7.10.0a20251105. Without them, you may encounter:
+- `ModuleNotFoundError: Unknown rocm library 'hipsparselt'`
+- `OSError: Error loading "caffe2_nvrtc.dll"`
+- `RuntimeError: operator torchvision::nms does not exist`
+
 ## 🚀 Usage
 
 ### Media File Conversion
@@ -261,7 +360,7 @@ The script will:
 **Hardware:**
 - GPU: AMD Radeon(TM) 890M Graphics (gfx1150)
 - GPU Memory: 48GB (shared)
-- ROCm Version: 6.4.4
+- ROCm Version: 7.10.0a20251105 (PyTorch 2.9.0) or 6.4.4 (PyTorch 2.8.0)
 - OS: Windows 10/11
 
 **Test Audio Files:**
@@ -358,11 +457,14 @@ Although Mixed Precision (FP16) showed impressive speed improvements, **it sever
 
 ### Current Performance (Mode 8 - FAST Mode) ⭐
 
+**Tested with PyTorch 2.9.0+rocm7.10.0a20251105:**
+
 **Short audio (33 seconds)** - `sample.wav`:
-- Processing time: ~10 seconds
-- Processing speed: 3.2x real-time
+- Processing time: ~9.62 seconds
+- Processing speed: 3.49x real-time
 - GPU usage: 3% average
-- Memory: 2.01GB peak
+- Memory: 2.12GB peak (reserved), 0.56GB allocated
+- **GPU: AMD Radeon(TM) 890M Graphics** ✅
 
 **Long audio (14.75 minutes)** - `audio_for_whisper_tariff.wav`:
 - Processing time: **94.82 seconds** (1m 35s) ⚡
@@ -374,7 +476,7 @@ Although Mixed Precision (FP16) showed impressive speed improvements, **it sever
 
 ### 🔬 Other Attempted Optimizations (No Effect)
 
-During development, we tested many optimization strategies. Here's what **didn't work** in our ROCm 6.4.4 + Windows environment:
+During development, we tested many optimization strategies. Here's what **didn't work** in our ROCm 7.10.0a20251105 / 6.4.4 + Windows environment:
 
 | Strategy | Speed Result | Accuracy Impact | Reason |
 |----------|-------------|-----------------|--------|
@@ -466,7 +568,43 @@ os.environ['HIPCC_COMPILE_FLAGS_APPEND'] = '-I...'
 
 **Solution**: Automatically handled in code (`sys.stdout.reconfigure(encoding='utf-8')`)
 
-### 5. GPU Not Detected
+### 5. `ModuleNotFoundError: Unknown rocm library 'hipsparselt'`
+
+**Cause**: PyTorch 2.9.0 tries to load `hipsparselt` library which is not available in the ROCm SDK.
+
+**Symptoms**: 
+- `ModuleNotFoundError: Unknown rocm library 'hipsparselt'` occurs during PyTorch initialization
+
+**Solution**: Remove `hipsparselt` from the preload list in `torch/_rocm_init.py` (see Installation section 7.1)
+
+### 6. `OSError: Error loading "caffe2_nvrtc.dll"`
+
+**Cause**: The `caffe2_nvrtc.dll` has dependency issues on ROCm and may fail to load.
+
+**Symptoms**: 
+- `OSError: [WinError 126] 지정된 모듈을 찾을 수 없습니다. Error loading "caffe2_nvrtc.dll"`
+
+**Solution**: Exclude `caffe2_nvrtc.dll` from DLL loading in `torch/__init__.py` (see Installation section 7.2)
+
+### 7. `RuntimeError: operator torchvision::nms does not exist`
+
+**Cause**: torchvision meta registration fails due to version compatibility issues.
+
+**Symptoms**: 
+- `RuntimeError: operator torchvision::nms does not exist` occurs when importing torchvision
+
+**Solution**: Handle the error gracefully in `torchvision/__init__.py` (see Installation section 7.3)
+
+### 8. `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc1`
+
+**Cause**: GPU initialization may encounter encoding issues when reading system information on Windows.
+
+**Symptoms**: 
+- `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc1 in position 57: invalid start byte` occurs during GPU initialization
+
+**Solution**: The code already handles this gracefully by catching the error and using a fallback GPU name. If this occurs, GPU functionality should still work correctly.
+
+### 9. GPU Not Detected
 
 **Check**:
 - Verify AMD Radeon driver is up to date
@@ -477,6 +615,8 @@ import torch
 print(torch.cuda.is_available())  # Should be True
 print(torch.cuda.get_device_name(0))  # Should print GPU name
 ```
+
+**Note**: If `get_device_name()` fails with `UnicodeDecodeError`, GPU functionality should still work. The error is handled in the code.
 
 ## 📁 Project Structure
 
@@ -515,9 +655,12 @@ torch-test/
 ## ⚠️ Important Notes
 
 - **Performance**: The `torch.backends.cudnn.enabled = False` setting may cause some operations (especially `instance_norm`) to fall back to CPU. This is a necessary setting to prevent MIOpen errors.
-- **ROCm Version**: ROCm 6.4.4 is a preview version on Windows. Stability issues may occur.
+- **ROCm Version**: 
+  - **PyTorch 2.9.0+rocm7.10.0a20251105** (recommended): Tested and verified to work correctly with GPU acceleration
+  - **PyTorch 2.8.0+rocm6.4.4** (legacy): Preview version on Windows, stability issues may occur
 - **GPU Usage**: Most operations run on GPU, but some operations fall back to CPU. You may see high CPU usage in Task Manager.
-- **Compatibility Patches**: Compatibility patches may need to be reapplied after package updates.
+- **Compatibility Patches**: Compatibility patches (sections 6 and 7) must be applied after installing PyTorch 2.9.0. These patches may need to be reapplied after package updates.
+- **Installation Method**: Use `--no-deps` flag when installing PyTorch packages to avoid dependency conflicts. Install other dependencies separately.
 
 ## 📄 License
 
