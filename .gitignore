@@ -54,6 +54,11 @@ src/asr/logs/
 # Diarization logs
 src/diarization/logs/
 
+# Pipeline artifacts
+src/pipeline/logs/*
+!src/pipeline/logs/.gitkeep
+src/pipeline/temp/
+
 # Media files
 media/
 
