@@ -339,8 +339,8 @@ from pyannote.audio import Pipeline
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(script_dir))  # src/diarization -> src -> project_root
 
-audio_file = os.path.join(project_root, "media", "wav", "sample.wav")  # Audio file to test (33초)
-# audio_file = os.path.join(project_root, "media", "wav", "audio_for_whisper_tariff.wav")  # Audio file to test (14.75분)
+# audio_file = os.path.join(project_root, "media", "wav", "sample.wav")  # Audio file to test (33초)
+audio_file = os.path.join(project_root, "media", "wav", "audio_for_whisper_tariff.wav")  # Audio file to test (14.75분)
 # audio_file = os.path.join(project_root, "media", "wav", "xz-librazy-56m.wav")  # Audio file to test (56분)
 # audio_file = os.path.join(project_root, "media", "wav", "president-2h.wav")  # Audio file to test (약 2시간)
 # audio_file = os.path.join(project_root, "media", "wav", "president-100days-3h.wav")  # Audio file to test (약 3시간)
@@ -365,7 +365,12 @@ logger.log_info("Starting GPU setup and pipeline loading...")
 use_gpu = torch.cuda.is_available()
 if use_gpu:
     device = torch.device("cuda")
-    gpu_name = torch.cuda.get_device_name(0)
+    try:
+        gpu_name = torch.cuda.get_device_name(0)
+    except (UnicodeDecodeError, RuntimeError) as e:
+        # Fallback for encoding issues or initialization errors
+        gpu_name = "AMD GPU (name unavailable)"
+        print(f"[Warning] Could not get GPU name: {e}")
     
     # Clear GPU memory cache
     torch.cuda.empty_cache()
@@ -595,7 +600,11 @@ with torch.inference_mode():
     print(f"\n[Check] Current device: {device}")
     print(f"[Check] PyTorch CUDA available: {torch.cuda.is_available()}")
     print(f"[Check] Current GPU: {torch.cuda.current_device()}")
-    print(f"[Check] GPU name: {torch.cuda.get_device_name(0)}")
+    try:
+        gpu_check_name = torch.cuda.get_device_name(0)
+        print(f"[Check] GPU name: {gpu_check_name}")
+    except (UnicodeDecodeError, RuntimeError):
+        print(f"[Check] GPU name: {gpu_name}")
     gpu_memory_allocated = torch.cuda.memory_allocated(0)/1024**3
     gpu_memory_reserved = torch.cuda.memory_reserved(0)/1024**3
     cudnn_enabled = torch.backends.cudnn.enabled
@@ -607,8 +616,12 @@ with torch.inference_mode():
     print(f"[Check] matmul.allow_tf32: {torch.backends.cuda.matmul.allow_tf32}")
     
     # Log GPU information
+    try:
+        log_gpu_name = torch.cuda.get_device_name(0)
+    except (UnicodeDecodeError, RuntimeError):
+        log_gpu_name = gpu_name
     logger.log_gpu_info(
-        gpu_name=torch.cuda.get_device_name(0),
+        gpu_name=log_gpu_name,
         cuda_available=torch.cuda.is_available(),
         cudnn_enabled=cudnn_enabled,
         memory_allocated_gb=gpu_memory_allocated,
