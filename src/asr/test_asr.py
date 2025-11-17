@@ -53,6 +53,10 @@ class Tee:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+        # stdout 복원 보장 (예외 발생 시에도)
+        if hasattr(self, 'stdout'):
+            sys.stdout = self.stdout
+        return False  # 예외를 다시 발생시킴
 
 # 프로젝트 루트 경로 추가 (media/wav 폴더 접근용)
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -253,6 +257,19 @@ print(f"{'='*60}")
 print("✅ END OF TRANSCRIPTION")
 print(f"{'='*60}")
 
-# 로그 파일 닫기
-tee.close()
+# 로그 파일 닫기 및 리소스 정리
+try:
+    # GPU 메모리 정리
+    if device == "cuda":
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    
+    # 로그 파일 닫기
+    tee.close()
+finally:
+    # stdout 복원 보장
+    if hasattr(tee, 'stdout'):
+        sys.stdout = tee.stdout
 
+# 명시적 종료
+sys.exit(0)
