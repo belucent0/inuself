@@ -1,0 +1,227 @@
+"""ASR + 화자분리 메인 파이프라인."""
+import os
+import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+# HuggingFace Hub 호환성 패치를 먼저 적용 (pyannote.audio import 전에)
+try:
+    import huggingface_hub
+    import functools
+    
+    # 원본 함수 백업 (이미 패치된 경우를 대비)
+    if not hasattr(huggingface_hub, '_original_hf_hub_download'):
+        if hasattr(huggingface_hub, 'hf_hub_download'):
+            huggingface_hub._original_hf_hub_download = huggingface_hub.hf_hub_download
+            
+            # use_auth_token을 token으로 변환하는 래퍼
+            @functools.wraps(huggingface_hub._original_hf_hub_download)
+            def _patched_hf_hub_download(*args, **kwargs):
+                if "use_auth_token" in kwargs:
+                    kwargs["token"] = kwargs.pop("use_auth_token")
+                return huggingface_hub._original_hf_hub_download(*args, **kwargs)
+            
+            # monkey patch 적용
+            huggingface_hub.hf_hub_download = _patched_hf_hub_download
+            
+            # utils 모듈에도 패치 적용
+            if hasattr(huggingface_hub, 'utils'):
+                if hasattr(huggingface_hub.utils, 'hf_hub_download'):
+                    huggingface_hub.utils.hf_hub_download = _patched_hf_hub_download
+except (ImportError, AttributeError):
+    # huggingface_hub가 없거나 이미 다른 방식으로 import된 경우 무시
+    pass
+
+import librosa
+import soundfile as sf
+
+# ROCm 가상환경(site-packages)을 우선적으로 사용하도록 sys.path 조정
+from . import rocm_env as _rocm_env  # noqa: F401  # side-effect import
+
+import torch
+
+from .config import setup_rocm_environment
+from .diarization_utils import (
+    build_nominal_ranges,
+    find_optimal_split_points,
+    merge_segments_with_speakers,
+    run_diarization,
+)
+from .whisper_utils import run_asr_transcription
+
+
+@dataclass
+class PipelineResult:
+    """파이프라인 실행 결과."""
+    transcription: dict[str, Any]
+    segments: list[dict[str, Any]]
+    speaker_stats: dict[str, Any]
+    diarization_segments: list[dict[str, Any]]
+    duration_seconds: float
+    logs: list[dict[str, Any]] = field(default_factory=list)
+
+
+def run_asr_diarization_pipeline(
+    audio_file_path: str | Path,
+    model_size: str = "large-v3",
+    processing_mode: str = "case4",
+    num_asr_chunks: int = 2,
+    project_root: Path | None = None,
+) -> PipelineResult:
+    """
+    ASR + 화자분리 파이프라인 실행.
+    
+    Args:
+        audio_file_path: 오디오 파일 경로
+        model_size: Whisper 모델 크기
+        processing_mode: 처리 모드 ("case1", "case2", "case3", "case4")
+        num_asr_chunks: ASR 병렬 조각 수
+        project_root: 프로젝트 루트 경로 (모델 경로 찾기용)
+    
+    Returns:
+        PipelineResult
+    """
+    # ROCm 환경 설정
+    setup_rocm_environment()
+    
+    # GPU 설정
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda":
+        gpu_name = torch.cuda.get_device_name(0)
+        print(f"[Pipeline] GPU: {gpu_name}")
+        torch.cuda.empty_cache()
+    else:
+        print("[Pipeline] GPU not available, using CPU")
+    
+    audio_file_path = Path(audio_file_path)
+    logs = []
+    
+    # 오디오 로드
+    print(f"[Pipeline] Loading audio file...")
+    waveform, sample_rate = librosa.load(str(audio_file_path), sr=16000)
+    audio_duration = len(waveform) / sample_rate
+    print(f"[Pipeline] Audio loaded: {audio_duration:.2f} seconds")
+    
+    logs.append({
+        "event": "audio_loaded",
+        "duration": audio_duration,
+        "sample_rate": sample_rate,
+    })
+    
+    # Case 4: 화자분리와 ASR(전체 파일) 병렬 처리
+    if processing_mode == "case4":
+        return _run_case4_parallel_full_asr(
+            waveform=waveform,
+            sample_rate=sample_rate,
+            audio_duration=audio_duration,
+            audio_file_path=audio_file_path,
+            model_size=model_size,
+            device=device,
+            project_root=project_root,
+            logs=logs,
+        )
+    else:
+        raise ValueError(f"Unsupported processing mode: {processing_mode}")
+
+
+def _run_case4_parallel_full_asr(
+    waveform: Any,
+    sample_rate: int,
+    audio_duration: float,
+    audio_file_path: Path,
+    model_size: str,
+    device: str,
+    project_root: Path | None,
+    logs: list[dict[str, Any]],
+) -> PipelineResult:
+    """Case 4: 화자분리와 ASR(전체 파일) 병렬 처리."""
+    print(f"\n{'='*60}")
+    print("[Case 4] Parallel Processing: Diarization and ASR (Full File)")
+    print(f"{'='*60}")
+    
+    case_start = time.time()
+    
+    # 화자분리와 ASR을 동시에 실행
+    print(f"\n[Step 1] Starting Diarization and ASR simultaneously...")
+    
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        # 화자분리 작업 제출
+        diarization_future = executor.submit(
+            run_diarization,
+            waveform=waveform,
+            sample_rate=sample_rate,
+            device=device,
+            audio_duration=audio_duration,
+        )
+        
+        # ASR 작업 제출 (전체 파일)
+        asr_future = executor.submit(
+            run_asr_transcription,
+            audio_path=audio_file_path,
+            model_size=model_size,
+            project_root=project_root,
+        )
+        
+        # 두 작업 모두 완료 대기
+        print(f"[Parallel] Waiting for both Diarization and ASR to complete...")
+        diarization, diarization_load_time, diarization_time = diarization_future.result()
+        asr_result, model_load_time, transcribe_time = asr_future.result()
+    
+    execution_time = time.time() - case_start
+    
+    print(f"\n[Case 4] All tasks completed in {execution_time:.2f} seconds")
+    print(f"  - Diarization (load + process): {diarization_load_time + diarization_time:.2f}s")
+    print(f"  - ASR (load + transcribe): {model_load_time + transcribe_time:.2f}s")
+    
+    # 화자 정보 병합
+    print(f"\n[Merging] Combining ASR and diarization results...")
+    merged_segments = merge_segments_with_speakers(
+        asr_result.get("segments", []),
+        diarization,
+    )
+    
+    # 화자별 통계
+    speaker_stats = {}
+    for seg in merged_segments:
+        speaker = seg.get("speaker", "UNKNOWN")
+        if speaker not in speaker_stats:
+            speaker_stats[speaker] = {"count": 0, "duration": 0.0}
+        speaker_stats[speaker]["count"] += 1
+        speaker_stats[speaker]["duration"] += seg["end"] - seg["start"]
+    
+    # 화자 세그먼트 추출
+    diarization_segments = []
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        diarization_segments.append({
+            "start": turn.start,
+            "end": turn.end,
+            "speaker": speaker,
+        })
+    
+    # 최종 transcription 구성
+    transcription = {
+        "text": asr_result["text"],
+        "language": asr_result.get("language", "ko"),
+        "segments": merged_segments,
+    }
+    
+    logs.append({
+        "event": "completed",
+        "execution_time": execution_time,
+        "diarization_time": diarization_load_time + diarization_time,
+        "asr_time": model_load_time + transcribe_time,
+        "speaker_stats": speaker_stats,
+    })
+    
+    return PipelineResult(
+        transcription=transcription,
+        segments=merged_segments,
+        speaker_stats=speaker_stats,
+        diarization_segments=diarization_segments,
+        duration_seconds=audio_duration,
+        logs=logs,
+    )
+
