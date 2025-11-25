@@ -1,0 +1,71 @@
+services:
+
+  garage:
+    image: dxflrs/garage:v2.1.0  # 최신 안정화 버전 v2.1.0 사용 (dxflrs/garage가 공식)
+    container_name: asr-garage
+    restart: unless-stopped
+    ports:
+      - "3900:3900" # S3 API
+      - "3902:3902" # S3 Website (정적 웹 호스팅용)
+      - "3903:3903" # Admin API (v2부터 3903 포트 분리가 표준)
+    volumes:
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+      - ./infra/garage.toml:/etc/garage.toml:ro # 경로 확인 필수
+    environment:
+      - RUST_LOG=garage=info # 로그 레벨 설정
+
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: asr-redis
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redis-data:/data
+      - ./infra/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: asr-redis-insight
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "5540:5540"
+    volumes:
+      - redis-insight-data:/data
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:18.1
+    container_name: asr-postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: asr
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d asr"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis-data:
+  redis-insight-data:
+  garage-meta:
+  garage-data:
+  postgres-data:
+

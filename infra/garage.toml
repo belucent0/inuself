@@ -1,0 +1,30 @@
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+# v2.x 설정: 복제 인수 (단일 노드이므로 1 필수)
+replication_factor = 1
+consistency_mode = "consistent" # v2.x 필수 추가 (consistent 또는 eventual)
+compression_level = 2
+
+# RPC 설정 (노드 간 통신용) - 단일 노드에서도 필수
+rpc_bind_addr = "[::]:3901"
+# 32바이트(64글자) HEX 비밀키 생성: openssl rand -hex 32
+rpc_secret = "adda344b5df4ee1f627b9e953fa6c6ae332a2662c6195a85fed4f34656808dd6"
+bootstrap_peers = [] # 단일 노드이므로 비워둡니다
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.localhost"
+
+[s3_web]
+bind_addr = "[::]:3902"
+root_domain = ".web.localhost"
+index = "index.html"
+
+[admin]
+api_bind_addr = "[::]:3903"
+# 관리자 토큰 설정 (나중에 관리용으로 필요)
+admin_token = "CHANGE_ME_ADMIN_TOKEN"
+metrics_token = "CHANGE_ME_METRICS_TOKEN"
