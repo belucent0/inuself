@@ -54,6 +54,16 @@ pip install --no-cache-dir --no-deps "https://rocm.nightlies.amd.com/v2-staging/
 - torchaudio: `2.9.0+rocm7.10.0a20251105`
 - torchvision: `0.24.0+rocm7.10.0a20251105`
 
+### Backend 워커와 ROCm 연동
+
+FastAPI에서 실행되는 백엔드 워커는 아래 순서로 ROCm 전용 파이썬 패키지를 자동으로 탐색해 GPU 가속을 사용합니다.
+
+1. `ROCM_SITE_PACKAGES` 환경변수에 명시된 경로
+2. `ROCM_ENV_PATH` 환경변수(루트) 아래의 `Lib/site-packages` (Windows) 또는 `lib/python3.x/site-packages`
+3. 프로젝트 루트의 `rocm_env/Lib/site-packages`
+
+따라서 위의 `rocm_env` 가상환경에 ROCm 빌드의 `torch`, `torchaudio`, `torchvision`을 설치해 두면 워커가 자동으로 GPU를 사용합니다. 다른 위치를 사용한다면 환경변수를 설정한 뒤 FastAPI 서버를 재시작하면 됩니다.
+
 #### Option 2: Install PyTorch 2.8.0 (ROCm 6.4.4) - Legacy
 
 Install PyTorch for ROCm 6.4.4 according to AMD's official documentation:
@@ -185,6 +195,70 @@ def check_version(library: Text, theirs: Text, mine: Text, what: Text = "Pipelin
 ```
 
 **Important**: This patch is **required**. Without it, you will get `ValueError: 2.8.0a0+gitfc14c65 is not valid SemVer string` error when loading the model.
+
+## 🔌 FastAPI API & Next.js 콘솔
+
+### 인프라 (docker-compose)
+
+```
+docker compose up -d redis redis-insight garage
+```
+
+- `redis`: 큐 및 워커용 (포트 6379). `.env`의 `REDIS_URL=redis://127.0.0.1:6379/0`.
+- `garage`: S3 호환 객체 스토리지. 기본 엔드포인트 `http://127.0.0.1:3900`.
+- 업로드 버킷 생성 예시:
+
+```
+aws --endpoint-url http://127.0.0.1:3900 s3api create-bucket --bucket asr-media --region garage
+```
+
+`garage.toml`에서 발급한 access/secret 키를 `.env`에 `S3_ACCESS_KEY` / `S3_SECRET_KEY`로 설정하세요.
+
+### 백엔드 (FastAPI)
+
+```
+cd backend
+poetry install
+poetry run alembic upgrade head
+poetry run uvicorn app.main:app --reload
+```
+
+- `.env`에 `POSTGRES_DSN`, `REDIS_URL`, `UPLOAD_DIR`, `WHISPER_MODEL_DEFAULT`,
+  `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_PREFIX` 등을 설정하세요.
+- 업로드 API: `POST /api/contents/upload`
+- 목록/상세 API: `GET /api/contents`, `GET /api/contents/{id}`
+
+### 워커 & Redis 큐
+
+1. Redis 서버 실행
+2. 워커 시작:
+
+```
+cd backend
+poetry run python -m app.worker.run_worker
+```
+
+워커는 Redis 큐(`asr_tasks`)를 소비하며 업로드된 파일에 대해 ASR+화자분리를 실행하고 PostgreSQL에 결과/로그를 기록합니다.
+
+### Next.js 클라이언트
+
+```
+cd client
+npm install
+npm run dev
+```
+
+- 기본 API 엔드포인트는 `NEXT_PUBLIC_API_BASE_URL` (기본값 `http://localhost:8000/api`)
+- `/contents` 페이지에서 목록과 업로드, `/contents/[id]`에서 상세/로그를 확인할 수 있습니다.
+
+### 테스트
+
+```
+cd backend
+poetry run pytest
+```
+
+`backend/tests/test_health.py` 에 FastAPI 헬스 체크 테스트가 포함되어 있습니다.
 
 ### 7. PyTorch Compatibility Fixes (Required for PyTorch 2.9.0)
 
