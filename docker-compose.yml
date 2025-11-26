@@ -1,19 +1,38 @@
 services:
 
-  garage:
-    image: dxflrs/garage:v2.1.0  # 최신 안정화 버전 v2.1.0 사용 (dxflrs/garage가 공식)
-    container_name: asr-garage
+  minio:
+    image: minio/minio:latest
+    container_name: asr-minio
+    command: server /data --console-address ":9001"
     restart: unless-stopped
-    ports:
-      - "3900:3900" # S3 API
-      - "3902:3902" # S3 Website (정적 웹 호스팅용)
-      - "3903:3903" # Admin API (v2부터 3903 포트 분리가 표준)
-    volumes:
-      - garage-meta:/var/lib/garage/meta
-      - garage-data:/var/lib/garage/data
-      - ./infra/garage.toml:/etc/garage.toml:ro # 경로 확인 필수
     environment:
-      - RUST_LOG=garage=info # 로그 레벨 설정
+      MINIO_ROOT_USER: torchdev
+      MINIO_ROOT_PASSWORD: torchdev-secret
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # MinIO Console
+    volumes:
+      - minio-data:/data
+    # MinIO Client(mc)와 alias 설정 예시:
+    #   docker run --rm --network host minio/mc \
+    #     alias set local http://127.0.0.1:9000 torchdev torchdev-secret
+
+  minio-bootstrap:
+    image: minio/mc:latest
+    container_name: asr-minio-bootstrap
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
+    command: ["mb", "--ignore-existing", "local/asr-media"]
+    restart: "no"
 
 
   redis:
@@ -65,7 +84,6 @@ services:
 volumes:
   redis-data:
   redis-insight-data:
-  garage-meta:
-  garage-data:
+  minio-data:
   postgres-data:
 

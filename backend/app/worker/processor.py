@@ -9,6 +9,11 @@ from ..core.storage import download_file
 from ..db.models import ContentStatus
 from ..db.session import AsyncSessionLocal
 from ..repositories.content_repository import ContentRepository
+from ..services.transcription_postprocess import (
+    merge_consecutive_speaker_segments,
+    rebuild_speaker_stats,
+    rebuild_transcription_text,
+)
 
 # backend/worker 모듈을 import하기 위해 경로 추가
 backend_dir = Path(__file__).parent.parent.parent
@@ -152,6 +157,24 @@ async def _process_job(
             # Python 3.11 compatibility
             if temp_path.exists():
                 temp_path.unlink()
+
+    print(f"[Worker] 후처리 단계: 연속 화자 세그먼트 병합 중...")
+    original_segments = result.transcription.get("segments", [])
+    processed_segments = merge_consecutive_speaker_segments(original_segments, max_duration=30.0)
+
+    if original_segments:
+        result.transcription["segments"] = processed_segments
+        result.segments = processed_segments
+        result.transcription["text"] = rebuild_transcription_text(processed_segments)
+        result.speaker_stats = rebuild_speaker_stats(processed_segments)
+        if len(original_segments) != len(processed_segments):
+            result.logs.append(
+                {
+                    "event": "post_processed",
+                    "segments_before": len(original_segments),
+                    "segments_after": len(processed_segments),
+                }
+            )
 
     print(f"[Worker] 결과를 데이터베이스에 저장 중...")
     session = AsyncSessionLocal()

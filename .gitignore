@@ -21,11 +21,14 @@ venv/
 env/
 ENV/
 .venv/
+.env
 .env/
 .env.local
 .env.development
 .env.production
 .env.test
+infra/generated/
+!infra/generated/.gitkeep
 .python-version
 .ruff_cache/
 .mypy_cache/

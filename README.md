@@ -201,18 +201,15 @@ def check_version(library: Text, theirs: Text, mine: Text, what: Text = "Pipelin
 ### 인프라 (docker-compose)
 
 ```
-docker compose up -d redis redis-insight garage
+docker compose up -d redis redis-insight minio
+docker compose up minio-bootstrap
 ```
 
 - `redis`: 큐 및 워커용 (포트 6379). `.env`의 `REDIS_URL=redis://127.0.0.1:6379/0`.
-- `garage`: S3 호환 객체 스토리지. 기본 엔드포인트 `http://127.0.0.1:3900`.
-- 업로드 버킷 생성 예시:
+- `minio`: S3 호환 객체 스토리지. 기본 엔드포인트 `http://127.0.0.1:9000`, 콘솔 `http://127.0.0.1:9001`.
+- `minio-bootstrap`: `minio/mc`를 사용해 `asr-media` 버킷을 자동으로 생성/검증하는 일회성 서비스입니다. 이미 존재하면 그대로 종료됩니다.
 
-```
-aws --endpoint-url http://127.0.0.1:3900 s3api create-bucket --bucket asr-media --region garage
-```
-
-`garage.toml`에서 발급한 access/secret 키를 `.env`에 `S3_ACCESS_KEY` / `S3_SECRET_KEY`로 설정하세요.
+`.env`의 `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_ENDPOINT`를 MinIO 설정(기본값 torchdev/torchdev-secret, `http://127.0.0.1:9000`)과 일치시켜 주세요.
 
 ### 백엔드 (FastAPI)
 

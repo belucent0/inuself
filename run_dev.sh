@@ -1,3 +1,18 @@
+# MinIO 상태 확인 함수
+wait_for_minio() {
+  local health_endpoint="${S3_HEALTH_ENDPOINT:-http://127.0.0.1:9000/minio/health/live}"
+  echo "[dev] MinIO 상태 확인: ${health_endpoint}"
+  for _ in {1..10}; do
+    if curl -fsS --max-time 2 "${health_endpoint}" >/dev/null 2>&1; then
+      echo "[dev] ✓ MinIO 응답 확인"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "[dev] ⚠ MinIO endpoint에 접속할 수 없습니다. docker compose up -d minio 를 확인하세요."
+  return 1
+}
+
 #!/usr/bin/env bash
 
 set -euo pipefail
@@ -55,6 +70,8 @@ if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "${MSYSTEM:
   else
     echo "[dev] ✓ 클라이언트 의존성 이미 설치됨"
   fi
+
+  wait_for_minio || true
   
   API_PID=""
   WORKER_PID=""
@@ -132,6 +149,8 @@ if [ ! -d "${CLIENT_DIR}/node_modules" ] || [ ! -f "${CLIENT_DIR}/package-lock.j
 else
   echo "[dev] ✓ 클라이언트 의존성 이미 설치됨"
 fi
+
+wait_for_minio || true
 
 API_PID=""
 WORKER_PID=""

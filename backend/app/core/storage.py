@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import BinaryIO
@@ -11,10 +12,12 @@ from botocore.exceptions import ClientError
 
 from .config import get_settings
 
+logger = logging.getLogger(__name__)
+
 
 @lru_cache
 def get_s3_client() -> BaseClient | None:
-    """S3 클라이언트 반환 (Garage 사용 시)."""
+    """S3 클라이언트 반환."""
     settings = get_settings()
     try:
         session = boto3.session.Session(
@@ -46,6 +49,12 @@ def upload_fileobj(file_obj: BinaryIO, *, key: str) -> None:
             client.head_bucket(Bucket=settings.s3_bucket)
             # 버킷이 존재하면 S3 사용
             client.upload_fileobj(file_obj, settings.s3_bucket, key)
+            logger.info(
+                "[Storage] S3 업로드 완료: endpoint=%s, bucket=%s, key=%s",
+                settings.s3_endpoint,
+                settings.s3_bucket,
+                key,
+            )
             return
         except ClientError:
             # 버킷이 없거나 접근 불가능하면 로컬 파일 시스템 사용
@@ -114,3 +123,36 @@ def delete_file(key: str) -> None:
         local_path.unlink()
 
 
+def check_storage_health() -> tuple[bool, str]:
+    """스토리지 연결 상태를 확인하고 메시지를 반환."""
+    settings = get_settings()
+    client = get_s3_client()
+    if client is None:
+        local_path = settings.upload_dir / "storage"
+        return False, f"S3 클라이언트 생성 실패. 로컬 스토리지 사용: {local_path}"
+    
+    ok, message = _try_head_bucket(client, settings)
+    if ok:
+        return True, message
+    
+    local_path = settings.upload_dir / "storage"
+    return False, (
+        f"S3 연결 실패 ({message}). bucket={settings.s3_bucket}. "
+        f"로컬 스토리지 사용 경로: {local_path}"
+    )
+
+
+def _try_head_bucket(client: BaseClient, settings) -> tuple[bool, str]:
+    try:
+        client.head_bucket(Bucket=settings.s3_bucket)
+        return True, (
+            f"S3 연결 성공: endpoint={settings.s3_endpoint}, "
+            f"bucket={settings.s3_bucket}, prefix={settings.s3_prefix}"
+        )
+    except ClientError as exc:
+        logger.warning(
+            "S3 연결 실패 (bucket=%s): %s",
+            settings.s3_bucket,
+            exc,
+        )
+        return False, str(exc)

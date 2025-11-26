@@ -1,3 +1,4 @@
+import logging
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -6,7 +7,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import get_settings
+from .core.storage import check_storage_health
 from .controllers import content_controller
+
+logger = logging.getLogger(__name__)
 
 
 def start_worker_background() -> None:
@@ -83,6 +87,14 @@ def create_app() -> FastAPI:
         allow_methods=["*"],  # 모든 HTTP 메서드 허용
         allow_headers=["*"],  # 모든 헤더 허용
     )
+
+    storage_ok, storage_message = check_storage_health()
+    if storage_ok:
+        logger.info("[Storage] %s", storage_message)
+        print(f"[Storage] ✓ {storage_message}")
+    else:
+        logger.warning("[Storage] %s", storage_message)
+        print(f"[Storage] ✗ {storage_message}")
 
     app.include_router(content_controller.router, prefix=settings.api_prefix)
 

@@ -16,10 +16,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     upload_dir: Path = Path("data/uploads")
-    s3_endpoint: str = "http://localhost:3900"
-    s3_region: str = "garage"
-    s3_access_key: str = "garage"
-    s3_secret_key: str = "garage-secret"
+    s3_endpoint: str = "http://localhost:9000"
+    s3_region: str = "us-east-1"
+    s3_access_key: str = "torchdev"
+    s3_secret_key: str = "torchdev-secret"
     s3_bucket: str = "asr-media"
     s3_prefix: str = "uploads"
 
