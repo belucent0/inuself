@@ -15,6 +15,7 @@ from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
 from ..schemas.content import ContentDetail, ContentListItem, UploadResponse
 from ..worker.queue import cancel_jobs_by_content_ids, enqueue_transcription_job
+from ..worker.llm_queue import cancel_llm_jobs_by_content_ids
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,31 @@ class ContentService:
         return ContentDetail.model_validate(content)
 
     async def upload_and_enqueue(self, file: UploadFile) -> UploadResponse:
+        logger.info("[Upload] 파일 업로드 시작: filename=%s", file.filename)
+        print(f"[Upload] [1/4] 파일 업로드 시작: {file.filename}")
+        
         object_key = self._build_object_key(file.filename)
-        await self._upload_to_storage(file, object_key)
+        logger.info("[Upload] 스토리지 키 생성: object_key=%s", object_key)
+        
+        # 파일 내용 읽기 및 크기 확인
+        file_content = await file.read()
+        file_size = len(file_content)
+        file_size_mb = file_size / (1024 * 1024)
+        logger.info("[Upload] 파일 크기: %d bytes (%.2f MB)", file_size, file_size_mb)
+        print(f"[Upload] [2/4] 파일 크기: {file_size:,} bytes ({file_size_mb:.2f} MB)")
+        
+        # 스토리지 업로드 (파일 내용을 직접 전달)
+        logger.info("[Upload] 스토리지 업로드 시작: object_key=%s", object_key)
+        print(f"[Upload] [3/4] 스토리지 업로드 중: {object_key}")
+        await self._upload_file_content_to_storage(file_content, object_key)
+        logger.info("[Upload] 스토리지 업로드 완료: object_key=%s", object_key)
+        print(f"[Upload] OK 스토리지 업로드 완료: {object_key}")
+        
+        # 파일 닫기
+        await file.close()
+        
+        # DB에 콘텐츠 생성
+        logger.info("[Upload] DB에 콘텐츠 생성 시작: filename=%s", file.filename)
         content = await self.repo.create_content(
             filename=file.filename,
             object_key=object_key,
@@ -51,29 +75,57 @@ class ContentService:
             status=ContentStatus.QUEUED,
         )
         await self.session.commit()
+        logger.info("[Upload] DB에 콘텐츠 생성 완료: content_id=%s, filename=%s", content.id, file.filename)
+        print(f"[Upload] OK DB 저장 완료: content_id={content.id}")
 
-        enqueue_transcription_job(
-            content_id=content.id,
-            original_filename=file.filename,
-            storage_key=object_key,
-            model_size=self.settings.whisper_model_default,
-            processing_mode="case4",
-            num_asr_chunks=self.settings.max_workers,
-        )
+        # 비동기 컨텍스트에서 동기 RQ 큐 작업을 executor에서 실행
+        logger.info("[Upload] 큐에 작업 등록 시도: content_id=%s, filename=%s", content.id, file.filename)
+        print(f"[Upload] [4/4] 큐에 작업 등록 중: content_id={content.id}")
+        try:
+            loop = asyncio.get_running_loop()
+            # lambda 대신 functools.partial 사용 (클로저 문제 방지)
+            from functools import partial
+            enqueue_func = partial(
+                enqueue_transcription_job,
+                content_id=content.id,
+                original_filename=file.filename,
+                storage_key=object_key,
+                model_size=self.settings.whisper_model_default,
+                processing_mode="case4",
+                num_asr_chunks=self.settings.max_workers,
+            )
+            await loop.run_in_executor(None, enqueue_func)
+            logger.info("[Upload] 큐에 작업 등록 성공: content_id=%s", content.id)
+            print(f"[Upload] OK 큐 등록 완료: content_id={content.id}")
+        except Exception as exc:
+            error_msg = f"큐에 작업 등록 실패: content_id={content.id}, error={exc}"
+            logger.exception("[Upload] %s", error_msg)
+            print(f"[Upload] ERROR {error_msg}")
+            # 큐 등록 실패해도 파일은 업로드되었으므로 사용자에게는 성공으로 반환
+            # 하지만 로그에는 기록
+            # 필요시 상태를 QUEUED에서 ERROR로 변경할 수도 있음
 
+        logger.info("[Upload] 파일 업로드 전체 프로세스 완료: content_id=%s, filename=%s", content.id, file.filename)
+        print(f"[Upload] ========================================")
+        print(f"[Upload] 파일 업로드 완료: content_id={content.id}, filename={file.filename}")
+        print(f"[Upload] ========================================")
         return UploadResponse(content_id=content.id, queued=True)
 
-    async def _upload_to_storage(self, file: UploadFile, object_key: str) -> None:
-        # 파일 내용을 메모리에 읽어서 저장 (파일 포인터 문제 방지)
-        file_content = await file.read()
-        await file.close()
-        
+    async def _upload_file_content_to_storage(self, file_content: bytes, object_key: str) -> None:
+        """파일 내용을 스토리지에 업로드."""
         # BytesIO로 변환하여 upload_fileobj에 전달
         from io import BytesIO
         file_obj = BytesIO(file_content)
         
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: upload_fileobj(file_obj, key=object_key))
+    
+    async def _upload_to_storage(self, file: UploadFile, object_key: str) -> None:
+        """파일을 스토리지에 업로드 (레거시 호환용)."""
+        # 파일 내용을 메모리에 읽어서 저장 (파일 포인터 문제 방지)
+        file_content = await file.read()
+        await file.close()
+        await self._upload_file_content_to_storage(file_content, object_key)
 
     async def delete_queued_contents(self) -> int:
         """QUEUED 상태인 모든 콘텐츠 삭제 (DB + 스토리지 + 큐)."""
@@ -115,6 +167,10 @@ class ContentService:
             cancelled_count = await loop.run_in_executor(None, cancel_jobs_by_content_ids, content_ids)
             if cancelled_count:
                 logger.info("Cancelled %s jobs for deleted contents", cancelled_count)
+
+            llm_cancelled = await loop.run_in_executor(None, cancel_llm_jobs_by_content_ids, content_ids)
+            if llm_cancelled:
+                logger.info("Cancelled %s LLM jobs for deleted contents", llm_cancelled)
 
         for object_key in object_keys:
             try:

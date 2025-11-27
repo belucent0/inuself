@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .core.config import get_settings
 from .core.storage import check_storage_health
 from .controllers import content_controller
+from .worker.run_llm_worker import safe_print
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ def start_worker_background() -> None:
     
     try:
         logger.info("Starting worker as subprocess")
-        print("[Worker] 워커를 subprocess로 시작합니다...")
+        safe_print("[Worker] 워커를 subprocess로 시작합니다...")
         
         # subprocess로 워커 실행 (Windows에서 signal 문제 해결)
         # stdout/stderr를 None으로 설정하여 현재 터미널에 출력되도록 함
@@ -42,12 +43,12 @@ def start_worker_background() -> None:
         )
         
         logger.info("Worker subprocess started with PID: %s", process.pid)
-        print(f"[Worker] 워커 프로세스 시작됨 (PID: {process.pid})")
-        print(f"[Worker] 워커는 별도 프로세스로 실행 중입니다.")
+        safe_print(f"[Worker] 워커 프로세스 시작됨 (PID: {process.pid})")
+        safe_print(f"[Worker] 워커는 별도 프로세스로 실행 중입니다.")
         
     except Exception as e:
         logger.exception("Failed to start worker subprocess")
-        print(f"[Worker] 워커 시작 실패: {e}")
+        safe_print(f"[Worker] 워커 시작 실패: {e}")
         import traceback
         traceback.print_exc()
 
@@ -61,11 +62,11 @@ async def lifespan(app: FastAPI):
     should_start_worker = os.getenv("START_WORKER", "true").lower() == "true"
     
     if should_start_worker:
-        print("[FastAPI] 워커를 백그라운드에서 시작합니다...")
+        safe_print("[FastAPI] 워커를 백그라운드에서 시작합니다...")
         start_worker_background()
     else:
-        print("[FastAPI] 워커 자동 시작이 비활성화되었습니다.")
-        print("[FastAPI] 워커 실행: poetry run python -m app.worker.run_worker")
+        safe_print("[FastAPI] 워커 자동 시작이 비활성화되었습니다.")
+        safe_print("[FastAPI] 워커 실행: poetry run python -m app.worker.run_worker")
     yield
     # 종료 시: 정리 작업 (필요시)
 
@@ -91,10 +92,10 @@ def create_app() -> FastAPI:
     storage_ok, storage_message = check_storage_health()
     if storage_ok:
         logger.info("[Storage] %s", storage_message)
-        print(f"[Storage] ✓ {storage_message}")
+        safe_print(f"[Storage] ✓ {storage_message}")
     else:
         logger.warning("[Storage] %s", storage_message)
-        print(f"[Storage] ✗ {storage_message}")
+        safe_print(f"[Storage] ✗ {storage_message}")
 
     app.include_router(content_controller.router, prefix=settings.api_prefix)
 
@@ -107,11 +108,28 @@ def create_app() -> FastAPI:
         """큐 상태 확인."""
         try:
             from rq import Queue
+            from rq.registry import FailedJobRegistry
             from .core.redis import get_redis_connection
             from .worker.queue import QUEUE_NAME
             
             redis = get_redis_connection()
             queue = Queue(QUEUE_NAME, connection=redis)
+            failed_registry = FailedJobRegistry(queue=queue)
+            
+            # 실패한 작업의 에러 메시지 확인 (최근 5개)
+            failed_jobs_info = []
+            failed_job_ids = failed_registry.get_job_ids(0, 4)  # 최근 5개
+            for job_id in failed_job_ids:
+                try:
+                    job = queue.fetch_job(job_id)
+                    if job:
+                        failed_jobs_info.append({
+                            "job_id": job_id,
+                            "error": str(job.exc_info) if job.exc_info else "Unknown error",
+                            "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+                        })
+                except Exception:
+                    pass
             
             return {
                 "queue_name": QUEUE_NAME,
@@ -119,6 +137,39 @@ def create_app() -> FastAPI:
                 "started_jobs": len(queue.started_job_registry),
                 "finished_jobs": len(queue.finished_job_registry),
                 "failed_jobs": len(queue.failed_job_registry),
+                "recent_failed_jobs": failed_jobs_info,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+    
+    @app.post(f"{settings.api_prefix}/queue/cleanup-failed", tags=["system"])
+    async def cleanup_failed_jobs():
+        """실패한 작업들을 정리합니다."""
+        try:
+            from rq import Queue
+            from rq.registry import FailedJobRegistry
+            from .core.redis import get_redis_connection
+            from .worker.queue import QUEUE_NAME
+            
+            redis = get_redis_connection()
+            queue = Queue(QUEUE_NAME, connection=redis)
+            failed_registry = FailedJobRegistry(queue=queue)
+            
+            failed_job_ids = failed_registry.get_job_ids()
+            cleaned_count = 0
+            
+            for job_id in failed_job_ids:
+                try:
+                    job = queue.fetch_job(job_id)
+                    if job:
+                        job.delete()
+                        cleaned_count += 1
+                except Exception:
+                    pass
+            
+            return {
+                "message": f"{cleaned_count}개의 실패한 작업이 정리되었습니다.",
+                "cleaned_count": cleaned_count,
             }
         except Exception as e:
             return {"error": str(e)}

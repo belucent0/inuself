@@ -150,9 +150,50 @@ def _try_head_bucket(client: BaseClient, settings) -> tuple[bool, str]:
             f"bucket={settings.s3_bucket}, prefix={settings.s3_prefix}"
         )
     except ClientError as exc:
-        logger.warning(
-            "S3 연결 실패 (bucket=%s): %s",
-            settings.s3_bucket,
-            exc,
-        )
-        return False, str(exc)
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        error_msg = str(exc)
+        
+        # 자격증명 오류인 경우 (MinIO 재시작 등으로 인한 초기화)
+        if error_code in ("InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied"):
+            logger.warning(
+                "S3 자격증명 오류 (bucket=%s): %s. MinIO가 재시작되어 초기화되었을 수 있습니다.",
+                settings.s3_bucket,
+                error_msg,
+            )
+            return False, f"자격증명 오류: {error_msg}. MinIO 설정을 확인하세요 (기본값: torchdev/torchdev-secret)"
+        
+        # 404 또는 403이면 버킷이 없는 것으로 간주하고 생성 시도
+        if error_code in ("404", "NoSuchBucket", "403", "Forbidden"):
+            try:
+                logger.info(
+                    "버킷이 없습니다. 생성 시도 중: bucket=%s",
+                    settings.s3_bucket,
+                )
+                client.create_bucket(Bucket=settings.s3_bucket)
+                logger.info("버킷 생성 성공: bucket=%s", settings.s3_bucket)
+                return True, (
+                    f"S3 연결 성공 (버킷 자동 생성됨): endpoint={settings.s3_endpoint}, "
+                    f"bucket={settings.s3_bucket}, prefix={settings.s3_prefix}"
+                )
+            except ClientError as create_exc:
+                create_error_code = create_exc.response.get("Error", {}).get("Code", "")
+                if create_error_code in ("InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied"):
+                    logger.warning(
+                        "버킷 생성 실패 - 자격증명 오류 (bucket=%s): %s",
+                        settings.s3_bucket,
+                        create_exc,
+                    )
+                    return False, f"자격증명 오류로 버킷 생성 실패: {create_exc}. MinIO 설정을 확인하세요"
+                logger.warning(
+                    "버킷 생성 실패 (bucket=%s): %s",
+                    settings.s3_bucket,
+                    create_exc,
+                )
+                return False, f"버킷 생성 실패: {create_exc}"
+        else:
+            logger.warning(
+                "S3 연결 실패 (bucket=%s): %s",
+                settings.s3_bucket,
+                exc,
+            )
+            return False, str(exc)
