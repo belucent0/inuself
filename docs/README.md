@@ -35,6 +35,16 @@
   - 세그먼트별 전사 비교
   - 정확도 및 속도 분석
 
+### 문제 해결 문서 (Troubleshooting)
+
+- **WINDOWS_WORKER_FIXES.md**: Windows 환경 워커 문제 해결 가이드
+  - Windows 이벤트 루프 문제 (ProactorEventLoop)
+  - asyncpg 연결 충돌 해결
+  - Unicode 인코딩 문제 (cp949)
+  - 순환 import 문제
+  - LLM 워커 헬스체크 실패
+  - QUEUED 상태 재큐잉 누락
+
 ## 문서 구조
 
 ```
@@ -42,8 +52,9 @@ docs/
 ├── README.md                        # 이 파일
 ├── GPU_OPTIMIZATION_RESEARCH.md     # GPU 최적화 연구
 ├── BOTTLENECK_ANALYSIS.md           # 병목 지점 분석
-├── performance_analysis.md          # 성능 분석
+├── performance_analysis.md           # 성능 분석
 ├── PARALLEL_PROCESSING_RESULTS.md   # 병렬 처리 결과
-└── transcription_comparison.md      # 전사 결과 비교
+├── transcription_comparison.md      # 전사 결과 비교
+└── WINDOWS_WORKER_FIXES.md          # Windows 워커 문제 해결 가이드
 ```
 

@@ -7,6 +7,7 @@ Speaker diarization using PyAnnote with AMD GPU (ROCm) acceleration on Windows.
 - [System Requirements](#system-requirements)
 - [Installation](#installation)
 - [Usage](#usage)
+- [LLM 요약 파이프라인](#-llm-요약-파이프라인)
 - [Features](#features)
 - [Troubleshooting](#troubleshooting)
 - [Project Structure](#project-structure)
@@ -196,20 +197,190 @@ def check_version(library: Text, theirs: Text, mine: Text, what: Text = "Pipelin
 
 **Important**: This patch is **required**. Without it, you will get `ValueError: 2.8.0a0+gitfc14c65 is not valid SemVer string` error when loading the model.
 
+## 🧠 LLM 요약 파이프라인
+
+ASR/화자분리 결과는 이제 LLM으로 2차 요약됩니다. 전체 파이프라인은 `QUEUED → PROCESSING → SUMMARIZING → COMPLETED`(또는 `FAILED`/`SUMMARY_FAILED`)로 진행되며, 결과 Markdown은 `summary_md` 컬럼과 `/contents/{id}` API에서 확인할 수 있습니다.
+
+### 1. LLM Provider 선택
+
+두 가지 LLM provider를 지원합니다:
+
+#### 옵션 A: Ollama (권장)
+
+Ollama는 llama.cpp 기반이며 Vulkan 가속을 지원합니다. 두 가지 실행 방법이 있습니다:
+
+**방법 1: Windows에서 직접 실행 (GPU 가속 권장) ⭐**
+
+Windows에서 직접 Ollama를 실행하면 호스트의 Vulkan 드라이버를 직접 사용할 수 있어 GPU 가속이 더 잘 작동합니다.
+
+1. **Ollama Windows 설치:**
+   
+   **PowerShell 또는 CMD에서:**
+   ```powershell
+   winget install Ollama.Ollama
+   ```
+   또는 [Ollama 공식 사이트](https://ollama.com/download)에서 Windows용 설치 파일 다운로드
+   
+   > ⚠️ **참고**: Ollama는 Windows 네이티브 프로그램이므로, 설치 자체는 Windows 환경에서 해야 합니다. 설치 후 Git Bash나 WSL에서도 사용할 수 있습니다.
+
+2. **모델 준비 (Git Bash / WSL):**
+   
+   프로젝트 루트 디렉토리에서:
+   
+   **Git Bash:**
+   ```bash
+   /c/Users/$USER/AppData/Local/Programs/Ollama/ollama.exe create gpt-oss-20b -f Modelfile
+   ```
+   
+   **WSL:**
+   ```bash
+   /mnt/c/Users/$USER/AppData/Local/Programs/Ollama/ollama.exe create gpt-oss-20b -f Modelfile
+   ```
+   
+   > **간편한 사용**: `~/.bashrc`에 alias를 추가하면 `ollama` 명령으로 바로 사용할 수 있습니다.  
+   > `Modelfile`은 프로젝트 루트에 있으며, `./models/gpt-oss-20b-Q4_K_S.gguf` 파일을 참조합니다.
+
+3. **모델 확인:**
+   ```bash
+   # Git Bash
+   /c/Users/$USER/AppData/Local/Programs/Ollama/ollama.exe list
+   
+   # WSL
+   /mnt/c/Users/$USER/AppData/Local/Programs/Ollama/ollama.exe list
+   ```
+   `gpt-oss-20b`가 목록에 나타나면 성공입니다.
+
+4. **Ollama 서비스 확인:**
+   - Windows에서 Ollama가 자동으로 서비스로 실행됩니다
+   - API 테스트: `curl http://localhost:11434/api/tags`
+
+5. **`.env` 파일 설정:**
+   ```env
+   LLM_PROVIDER=ollama
+   OLLAMA_BASE_URL=http://localhost:11434
+   OLLAMA_MODEL_NAME=gpt-oss-20b
+   ```
+
+> 📖 **자세한 설정 가이드**: `setup_ollama_windows.md` 참조
+
+**방법 2: Docker 사용 (선택사항)**
+
+> ⚠️ **참고**: Windows에서 GPU 가속을 사용하려면 방법 1(Windows 네이티브)을 권장합니다.
+> Docker는 Linux 환경이나 WSL2에서 GPU가 제대로 노출된 경우에만 사용하세요.
+
+Docker Compose로 실행하려면:
+
+1. `docker-compose.yml`에서 Ollama 서비스 주석 해제
+2. Ollama 시작:
+   ```bash
+   docker compose up -d ollama
+   ```
+3. 모델 준비:
+   ```bash
+   docker exec asr-ollama sh -c "echo 'FROM /models/gpt-oss-20b-Q4_K_S.gguf' > /tmp/Modelfile && ollama create gpt-oss-20b -f /tmp/Modelfile"
+   ```
+4. `.env` 파일 설정:
+   ```env
+   LLM_PROVIDER=ollama
+   OLLAMA_BASE_URL=http://localhost:11434
+   OLLAMA_MODEL_NAME=gpt-oss-20b
+   ```
+
+#### 옵션 B: llama-cpp-python 직접 사용
+
+로컬에서 llama-cpp-python을 직접 사용합니다 (Vulkan 지원 빌드 필요).
+
+**설정:**
+1. 모델 파일 준비: `models/gpt-oss-20b-Q4_K_S.gguf`
+2. `.env` 파일 설정:
+   ```env
+   LLM_PROVIDER=llama_cpp
+   LLM_MODEL_PATH=models/gpt-oss-20b-Q4_K_S.gguf
+   ```
+
+### 2. 환경 변수 / 설정
+
+`backend/app/core/config.py`에 다음 설정이 추가되었습니다. 필요 시 `.env`에서 오버라이드하면 됩니다.
+
+| 설정 | 기본값 | 설명 |
+| --- | --- | --- |
+| `LLM_PROVIDER` | `ollama` | LLM provider: `ollama` 또는 `llama_cpp` |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API 엔드포인트 |
+| `OLLAMA_MODEL_NAME` | `gpt-oss-20b` | Ollama에서 사용할 모델 이름 |
+| `LLM_MODEL_PATH` | `models/gpt-oss-20b-Q4_K_S.gguf` | llama_cpp 사용 시 모델 파일 경로 |
+| `LLM_CONTEXT_LENGTH` | `4096` | Context window |
+| `LLM_TEMPERATURE` | `0.4` | 생성 온도 |
+| `LLM_TOP_P` | `0.9` | Top-p nucleus 샘플링 |
+| `LLM_MAX_TOKENS` | `1024` | Markdown 응답 최대 토큰 |
+| `LLM_N_THREADS` | `8` | CPU 스레드 수 (llama_cpp만 사용) |
+
+> ⚠️ **Ollama 사용 시**: Vulkan 가속은 Ollama 컨테이너 내부에서 자동으로 처리됩니다.  
+> ⚠️ **llama_cpp 직접 사용 시**: Vulkan 가속만 지원합니다. CPU 폴백은 제공되지 않으므로, 모델 로딩 실패 시 바로 `SUMMARY_FAILED` 상태로 기록됩니다.
+
+### 3. 요약 워커 실행
+
+LLM 요약은 RQ 큐(`llm_tasks`)를 통해 비동기 실행됩니다. 개발 스크립트(`run_dev.sh`)는 ASR/LLM 워커를 모두 자동으로 띄우지만, 수동으로 실행하려면 아래 명령을 사용하세요.
+
+```bash
+# ASR + 화자분리 워커
+cd backend && poetry run python -m app.worker.run_worker
+
+# LLM 요약 워커
+cd backend && poetry run python -m app.worker.run_llm_worker
+```
+
+실패한 요약 작업은 `SUMMARY_FAILED` 상태로 표시되며, 콘텐츠를 다시 큐에 넣으면 재시도할 수 있습니다. 요약 로그는 `llm_log` 테이블에 저장되어 클라이언트 UI에서 확인 가능합니다.
+
 ## 🔌 FastAPI API & Next.js 콘솔
 
 ### 인프라 (docker-compose)
 
 ```
-docker compose up -d redis redis-insight minio
+docker compose up -d redis redis-insight minio ollama
 docker compose up minio-bootstrap
 ```
 
 - `redis`: 큐 및 워커용 (포트 6379). `.env`의 `REDIS_URL=redis://127.0.0.1:6379/0`.
 - `minio`: S3 호환 객체 스토리지. 기본 엔드포인트 `http://127.0.0.1:9000`, 콘솔 `http://127.0.0.1:9001`.
 - `minio-bootstrap`: `minio/mc`를 사용해 `asr-media` 버킷을 자동으로 생성/검증하는 일회성 서비스입니다. 이미 존재하면 그대로 종료됩니다.
+- `ollama`: LLM 서비스 (포트 11434). Vulkan 가속을 지원하며, llama.cpp 기반입니다.
 
-`.env`의 `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_ENDPOINT`를 MinIO 설정(기본값 torchdev/torchdev-secret, `http://127.0.0.1:9000`)과 일치시켜 주세요.
+**설정:**
+- `.env`의 `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_ENDPOINT`를 MinIO 설정(기본값 torchdev/torchdev-secret, `http://127.0.0.1:9000`)과 일치시켜 주세요.
+- Ollama 사용 시: `LLM_PROVIDER=ollama`, `OLLAMA_BASE_URL=http://localhost:11434`, `OLLAMA_MODEL_NAME=gpt-oss-20b` 설정 후 모델을 준비하세요:
+  - 로컬 GGUF 파일 import (권장):
+    ```bash
+    docker exec asr-ollama sh -c "echo 'FROM /models/gpt-oss-20b-Q4_K_S.gguf' > /tmp/Modelfile && ollama create gpt-oss-20b -f /tmp/Modelfile"
+    ```
+  - 또는 Ollama 레지스트리에서 pull:
+    ```bash
+    docker exec asr-ollama ollama pull llama3.2
+    ```
+
+**WSL2에서 GPU 사용 설정:**
+
+Windows Docker Desktop에서 WSL2 백엔드를 통해 GPU를 사용하려면:
+
+1. **Docker Desktop 설정:**
+   - Docker Desktop > Settings > General > "Use the WSL 2 based engine" 활성화
+   - Settings > Resources > WSL Integration > 사용 중인 WSL2 배포판 활성화
+
+2. **WSL2에서 GPU 디바이스 확인:**
+   ```bash
+   wsl ls -la /dev/dri/
+   ```
+   GPU 디바이스가 보이면 (`card0`, `renderD128` 등) `docker-compose.yml`의 `devices` 설정이 자동으로 적용됩니다.
+
+3. **Ollama 재시작:**
+   ```bash
+   docker compose up -d ollama
+   ```
+
+4. **GPU 인식 확인:**
+   ```bash
+   docker compose logs ollama | grep -i "compute\|vulkan\|gpu"
+   ```
+   `id=vulkan` 또는 GPU 정보가 보이면 성공입니다.
 
 ### 백엔드 (FastAPI)
 
