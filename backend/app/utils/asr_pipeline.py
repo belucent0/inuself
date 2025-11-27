@@ -323,6 +323,11 @@ def run_asr(*, audio_file: str, model_size: str) -> dict[str, Any]:
         str(json_output_path.with_suffix("")),
         audio_file,
     ]
+    
+    # GPU 사용 확인을 위한 환경 변수 설정
+    env = os.environ.copy()
+    env.setdefault("GGML_VULKAN_DEVICE", "0")  # Vulkan 디바이스 선택
+    
     result = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -331,6 +336,7 @@ def run_asr(*, audio_file: str, model_size: str) -> dict[str, Any]:
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=env,  # GPU 환경 변수 포함
     )
     if result.returncode != 0:
         raise RuntimeError(f"whisper-cli failed: {result.stderr}")

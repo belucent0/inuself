@@ -143,6 +143,9 @@ def run_asr_transcription(
     
     # whisper-cli.exe 실행 (동기 - subprocess.run)
     # 파일명은 이미 업로드 시점에 안전한 이름으로 변경되어 있음
+    # GPU 가속 사용 (기본적으로 활성화되어 있지만 명시적으로 확인)
+    # --no-gpu 플래그가 있으므로 기본적으로 GPU가 활성화되어 있음
+    # Vulkan 디바이스가 감지되면 자동으로 GPU 사용
     cmd = [
         whisper_cli,
         "-m", model_path,
@@ -151,6 +154,11 @@ def run_asr_transcription(
         "--output-file", json_output_path.replace('.json', ''),
         actual_audio_path
     ]
+    
+    # GPU 사용 확인을 위한 환경 변수 설정 (필요한 경우)
+    env = os.environ.copy()
+    # Vulkan 디바이스 선택 (기본값: 0)
+    env.setdefault("GGML_VULKAN_DEVICE", "0")
     
     try:
         result = subprocess.run(
@@ -162,7 +170,16 @@ def run_asr_transcription(
             errors='replace'
         )
         
-        # 출력 로그
+        # 출력 로그 (stdout과 stderr 모두 확인)
+        if result.stderr:
+            for line in result.stderr.strip().split('\n'):
+                if line.strip():
+                    # GPU 관련 메시지 확인
+                    if 'vulkan' in line.lower() or 'gpu' in line.lower():
+                        print(f"{part_prefix} [GPU] {line}")
+                    else:
+                        print(f"{part_prefix} {line}")
+        
         if result.stdout:
             for line in result.stdout.strip().split('\n'):
                 if line.strip():

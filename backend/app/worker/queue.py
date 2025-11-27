@@ -1,17 +1,17 @@
 import logging
-from functools import lru_cache
 from rq import Queue
 
 from ..core.redis import get_redis_connection
 from .processor import process_transcription_job
+from .utils import safe_print
 
 QUEUE_NAME = "asr_tasks"
 
 logger = logging.getLogger(__name__)
 
 
-@lru_cache
 def _get_queue() -> Queue:
+    """큐 인스턴스를 반환 (매번 새로 생성하여 Redis 연결 문제 방지)."""
     return Queue(QUEUE_NAME, connection=get_redis_connection())
 
 
@@ -25,18 +25,28 @@ def enqueue_transcription_job(
     num_asr_chunks: int,
 ) -> None:
     """작업을 큐에 등록."""
-    queue = _get_queue()
-    job = queue.enqueue(
-        process_transcription_job,
-        content_id=content_id,
-        storage_key=storage_key,
-        original_filename=original_filename,
-        model_size=model_size,
-        processing_mode=processing_mode,
-        num_asr_chunks=num_asr_chunks,
-    )
-    print(f"[Queue] 작업 등록됨: content_id={content_id}, job_id={job.id}, 큐 크기={len(queue)}")
-    logger.info("Job enqueued: content_id=%s, job_id=%s, queue_size=%s", content_id, job.id, len(queue))
+    try:
+        queue = _get_queue()
+        # Redis 연결 테스트
+        redis_conn = queue.connection
+        redis_conn.ping()
+        
+        job = queue.enqueue(
+            process_transcription_job,
+            content_id=content_id,
+            storage_key=storage_key,
+            original_filename=original_filename,
+            model_size=model_size,
+            processing_mode=processing_mode,
+            num_asr_chunks=num_asr_chunks,
+        )
+        safe_print(f"[Queue] 작업 등록됨: content_id={content_id}, job_id={job.id}, 큐 크기={len(queue)}")
+        logger.info("Job enqueued: content_id=%s, job_id=%s, queue_size=%s", content_id, job.id, len(queue))
+    except Exception as e:
+        error_msg = f"큐에 작업 등록 실패: content_id={content_id}, error={e}"
+        safe_print(f"[Queue] ERROR {error_msg}")
+        logger.exception(error_msg)
+        raise
 
 
 def cancel_jobs_by_content_ids(content_ids: list[int]) -> int:
@@ -49,7 +59,7 @@ def cancel_jobs_by_content_ids(content_ids: list[int]) -> int:
     
     # 큐의 모든 작업 조회
     job_ids = queue.get_job_ids()
-    print(f"[Queue] 큐에서 {len(job_ids)}개의 작업을 확인 중... (삭제 대상: {len(content_ids)}개)")
+    safe_print(f"[Queue] 큐에서 {len(job_ids)}개의 작업을 확인 중... (삭제 대상: {len(content_ids)}개)")
     
     for job_id in job_ids:
         try:
@@ -72,12 +82,12 @@ def cancel_jobs_by_content_ids(content_ids: list[int]) -> int:
                 # 작업 삭제
                 job.delete()
                 cancelled_count += 1
-                print(f"[Queue] 작업 취소/삭제됨: content_id={job_content_id}, job_id={job_id}")
+                safe_print(f"[Queue] 작업 취소/삭제됨: content_id={job_content_id}, job_id={job_id}")
                 logger.info("Job cancelled: content_id=%s, job_id=%s", job_content_id, job_id)
         except Exception as e:
             logger.warning("Failed to cancel job %s: %s", job_id, e)
             continue
     
-    print(f"[Queue] 총 {cancelled_count}개의 작업이 큐에서 삭제되었습니다.")
+    safe_print(f"[Queue] 총 {cancelled_count}개의 작업이 큐에서 삭제되었습니다.")
     return cancelled_count
 
