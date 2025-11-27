@@ -16,6 +16,32 @@ def _get_queue() -> Queue:
     return Queue(LLM_QUEUE_NAME, connection=get_redis_connection())
 
 
+def is_llm_job_in_queue(*, content_id: int) -> bool:
+    """해당 content_id의 LLM 작업이 큐에 이미 있는지 확인."""
+    queue = _get_queue()
+    job_ids = queue.get_job_ids()
+    
+    # 시작된 작업도 확인 (처리 중인 작업)
+    started_job_ids = queue.started_job_registry.get_job_ids()
+    all_job_ids = set(job_ids) | set(started_job_ids)
+    
+    for job_id in all_job_ids:
+        try:
+            job = queue.fetch_job(job_id)
+            if job is None:
+                continue
+            
+            job_kwargs = getattr(job, "kwargs", {})
+            job_content_id = job_kwargs.get("content_id")
+            
+            if job_content_id == content_id:
+                return True
+        except Exception:
+            continue
+    
+    return False
+
+
 def enqueue_llm_job(*, content_id: int) -> None:
     """LLM 요약 작업을 큐에 등록."""
     queue = _get_queue()

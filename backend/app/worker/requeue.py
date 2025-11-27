@@ -9,7 +9,7 @@ from ..core.config import get_settings
 from ..db.models import Content, ContentStatus
 from ..db.session import AsyncSessionLocal
 from ..repositories.content_repository import ContentRepository
-from .llm_queue import enqueue_llm_job
+from .llm_queue import enqueue_llm_job, is_llm_job_in_queue
 from .queue import enqueue_transcription_job
 
 logger = logging.getLogger(__name__)
@@ -77,32 +77,52 @@ async def requeue_processing_contents() -> int:
 
 async def requeue_summarizing_contents() -> int:
     """
-    SUMMARIZING 상태에서 멈춘 콘텐츠를 다시 LLM 큐에 등록한다.
+    SUMMARIZING 또는 SUMMARY_FAILED 상태에서 멈춘 콘텐츠를 다시 LLM 큐에 등록한다.
+    
+    SUMMARIZING 상태는 워커 재시작 시 큐에 작업이 없어졌을 수 있으므로 재등록이 필요합니다.
+    SUMMARY_FAILED 상태는 재시도할 수 있으므로 재등록 대상에 포함합니다.
 
     Returns:
         재큐잉된 콘텐츠 개수
     """
-    contents = await _fetch_contents_by_status([ContentStatus.SUMMARIZING])
+    contents = await _fetch_contents_by_status([
+        ContentStatus.SUMMARIZING,
+        ContentStatus.SUMMARY_FAILED,
+    ])
     if not contents:
-        logger.info("No stuck SUMMARIZING contents found.")
+        logger.info("No stuck SUMMARIZING or SUMMARY_FAILED contents found.")
         return 0
 
     requeued = 0
 
     for content in contents:
+        # 이미 큐에 있는 작업은 재큐잉하지 않음 (중복 방지)
+        if is_llm_job_in_queue(content_id=content.id):
+            logger.debug("LLM job already in queue for content_id=%s, skipping requeue", content.id)
+            continue
+        
         session = AsyncSessionLocal()
         try:
             repo = ContentRepository(session)
+            
+            # 재큐잉 로그 추가
+            reason = "stuck_summarizing" if content.status == ContentStatus.SUMMARIZING else "retry_summary_failed"
             await repo.add_llm_log(
                 content_id=content.id,
-                log={"event": "requeued", "reason": "stuck_summarizing"},
+                log={"event": "requeued", "reason": reason, "previous_status": content.status.value},
                 message="Automatically requeued after restart",
             )
+            
+            # SUMMARY_FAILED 상태인 경우 SUMMARIZING으로 변경 (재시도)
+            # SUMMARIZING 상태는 그대로 유지 (summarize() 함수가 다시 SUMMARIZING으로 설정함)
+            if content.status == ContentStatus.SUMMARY_FAILED:
+                await repo.update_content_status(content.id, ContentStatus.SUMMARIZING)
+            
             await session.commit()
 
             enqueue_llm_job(content_id=content.id)
             requeued += 1
-            logger.info("Requeued LLM job for content_id=%s", content.id)
+            logger.info("Requeued LLM job for content_id=%s (previous_status=%s)", content.id, content.status.value)
         except Exception as exc:
             logger.exception("Failed to requeue LLM job for content_id=%s", content.id)
             await session.rollback()

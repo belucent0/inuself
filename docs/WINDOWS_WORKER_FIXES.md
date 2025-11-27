@@ -327,6 +327,116 @@ logger.info("[Upload] OK 큐 등록 완료")
 
 ---
 
+## 문제 7: SUMMARIZING 상태 작업 자동 재큐잉 누락
+
+### 증상
+- 워커 재시작 후 `SUMMARIZING` 상태에서 멈춘 콘텐츠가 재처리되지 않음
+- `SUMMARY_FAILED` 상태의 콘텐츠도 재시도되지 않음
+- 수동으로 재큐잉해야 함
+
+### 원인
+- `requeue_summarizing_contents()` 함수가 워커 시작 시에만 실행됨
+- 워커가 실행 중일 때 `SUMMARIZING` 상태로 멈춘 콘텐츠는 자동으로 재큐잉되지 않음
+- `SUMMARY_FAILED` 상태가 재큐잉 대상에 포함되지 않음
+
+### 해결 방법
+
+#### 1. 재큐잉 로직 개선 (`backend/app/worker/requeue.py`)
+
+```python
+async def requeue_summarizing_contents() -> int:
+    """
+    SUMMARIZING 또는 SUMMARY_FAILED 상태에서 멈춘 콘텐츠를 다시 LLM 큐에 등록한다.
+    """
+    contents = await _fetch_contents_by_status([
+        ContentStatus.SUMMARIZING,
+        ContentStatus.SUMMARY_FAILED,  # 추가
+    ])
+    
+    for content in contents:
+        # SUMMARY_FAILED 상태인 경우 SUMMARIZING으로 변경 (재시도)
+        if content.status == ContentStatus.SUMMARY_FAILED:
+            await repo.update_content_status(content.id, ContentStatus.SUMMARIZING)
+        
+        enqueue_llm_job(content_id=content.id)
+```
+
+#### 2. 자동 재큐잉 백그라운드 태스크 추가 (`backend/app/main.py`)
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ... 기존 코드 ...
+    
+    # 백그라운드 태스크: 주기적으로 SUMMARIZING 상태 콘텐츠 자동 재큐잉
+    async def auto_requeue_llm_jobs():
+        """주기적으로 SUMMARIZING 상태의 콘텐츠를 자동으로 재큐잉."""
+        from .worker.requeue import requeue_summarizing_contents
+        
+        while True:
+            try:
+                await asyncio.sleep(60)  # 60초마다 체크
+                requeued = await requeue_summarizing_contents()
+                if requeued > 0:
+                    logger.info("Auto-requeued %d LLM jobs", requeued)
+            except Exception as exc:
+                logger.exception("Failed to auto-requeue LLM jobs")
+    
+    # 백그라운드 태스크 시작
+    auto_requeue_task = asyncio.create_task(auto_requeue_llm_jobs())
+    
+    yield
+    
+    # 종료 시: 백그라운드 태스크 취소
+    auto_requeue_task.cancel()
+```
+
+#### 3. LLM Summary Service 개선 (`backend/app/services/llm_summary_service.py`)
+
+```python
+async def summarize(self, content_id: int) -> None:
+    # 이미 SUMMARIZING 상태인 경우는 재시도 케이스 (로그만 추가)
+    if content.status != ContentStatus.SUMMARIZING:
+        await self.repo.update_content_status(content_id, ContentStatus.SUMMARIZING)
+```
+
+### 핵심 포인트
+- **자동 재큐잉**: FastAPI 백그라운드 태스크로 60초마다 자동 체크
+- **SUMMARY_FAILED 포함**: 실패한 요약 작업도 자동 재시도
+- **상태 관리**: 재시도 시 상태를 적절히 변경
+- **중복 방지**: 이미 큐에 있는 작업은 재큐잉하지 않음 (무한 루프 방지)
+
+#### 중복 재큐잉 방지 (`backend/app/worker/llm_queue.py`)
+
+```python
+def is_llm_job_in_queue(*, content_id: int) -> bool:
+    """해당 content_id의 LLM 작업이 큐에 이미 있는지 확인."""
+    queue = _get_queue()
+    job_ids = queue.get_job_ids()
+    
+    # 시작된 작업도 확인 (처리 중인 작업)
+    started_job_ids = queue.started_job_registry.get_job_ids()
+    all_job_ids = set(job_ids) | set(started_job_ids)
+    
+    for job_id in all_job_ids:
+        job = queue.fetch_job(job_id)
+        job_kwargs = getattr(job, "kwargs", {})
+        if job_kwargs.get("content_id") == content_id:
+            return True
+    return False
+```
+
+재큐잉 전에 중복 체크:
+
+```python
+# 이미 큐에 있는 작업은 재큐잉하지 않음
+if is_llm_job_in_queue(content_id=content.id):
+    logger.debug("LLM job already in queue, skipping requeue")
+    continue
+```
+
+---
+
 ## 요약
 
 ### 해결된 문제들
@@ -336,6 +446,7 @@ logger.info("[Upload] OK 큐 등록 완료")
 4. ✅ 순환 import 문제 (utils.py 분리)
 5. ✅ LLM 워커 헬스체크 실패 (reasoning 필드 지원)
 6. ✅ QUEUED 상태 재큐잉 누락 (상태 추가)
+7. ✅ SUMMARIZING 상태 자동 재큐잉 누락 (백그라운드 태스크 추가)
 
 ### 핵심 원칙
 - **Windows 특화 처리**: 플랫폼별 분기 처리 (`sys.platform == "win32"`)
