@@ -13,8 +13,10 @@ class ContentStatus(str, enum.Enum):
 
     QUEUED = "QUEUED"  # 처리 대기중 (큐에 등록됨)
     PROCESSING = "PROCESSING"  # 처리중 (ASR/화자분리 진행 중)
-    COMPLETED = "COMPLETED"  # 완료
-    FAILED = "FAILED"  # 에러/실패
+    SUMMARIZING = "SUMMARIZING"  # LLM 요약 중
+    COMPLETED = "COMPLETED"  # 전체 파이프라인 완료
+    FAILED = "FAILED"  # ASR/화자분리 단계 실패
+    SUMMARY_FAILED = "SUMMARY_FAILED"  # LLM 요약 실패
     CANCELLED = "CANCELLED"  # 취소됨 (사용자 취소 또는 타임아웃)
     RETRYING = "RETRYING"  # 재시도 중 (실패 후 자동 재시도)
 
@@ -30,6 +32,7 @@ class Content(Base):
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     duration_seconds: Mapped[float] = mapped_column(default=0.0)
     transcription: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    summary_md: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[ContentStatus] = mapped_column(
         Enum(ContentStatus),
         default=ContentStatus.QUEUED,
@@ -42,6 +45,9 @@ class Content(Base):
 
     logs: Mapped[list["SttLog"]] = relationship(
         "SttLog", back_populates="content", cascade="all, delete-orphan"
+    )
+    llm_logs: Mapped[list["LlmLog"]] = relationship(
+        "LlmLog", back_populates="content", cascade="all, delete-orphan"
     )
 
 
@@ -59,4 +65,20 @@ class SttLog(Base):
     )
 
     content: Mapped[Content] = relationship("Content", back_populates="logs")
+
+
+class LlmLog(Base):
+    """LLM 요약 과정 로그 테이블."""
+
+    __tablename__ = "llm_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int] = mapped_column(ForeignKey("content.id", ondelete="CASCADE"))
+    log: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False
+    )
+
+    content: Mapped[Content] = relationship("Content", back_populates="llm_logs")
 

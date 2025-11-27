@@ -24,7 +24,10 @@ class ContentRepository:
     async def get_content(self, content_id: int) -> models.Content | None:
         stmt = (
             select(models.Content)
-            .options(selectinload(models.Content.logs))
+            .options(
+                selectinload(models.Content.logs),
+                selectinload(models.Content.llm_logs),
+            )
             .where(models.Content.id == content_id)
         )
         result = await self.session.execute(stmt)
@@ -58,6 +61,12 @@ class ContentRepository:
         await self.session.flush()
         return entry
 
+    async def add_llm_log(self, content_id: int, log: dict, message: str = "") -> models.LlmLog:
+        entry = models.LlmLog(content_id=content_id, log=log, message=message)
+        self.session.add(entry)
+        await self.session.flush()
+        return entry
+
     async def update_content_status(
         self, content_id: int, status: models.ContentStatus
     ) -> None:
@@ -82,6 +91,15 @@ class ContentRepository:
         content.transcription = transcription
         await self.session.flush()
         return content
+
+    async def update_summary_markdown(self, content_id: int, summary_md: str) -> None:
+        stmt = (
+            update(models.Content)
+            .where(models.Content.id == content_id)
+            .values(summary_md=summary_md)
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()
 
     async def delete_queued_contents(self) -> tuple[int, list[int], list[str]]:
         """QUEUED 상태인 모든 콘텐츠 삭제. (삭제된 개수, content_id 리스트, object_key 리스트) 반환."""
