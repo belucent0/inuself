@@ -141,3 +141,17 @@ export async function uploadContent(file: File): Promise<{ content_id: number }>
   }
 }
 
+export async function retryProcessing(
+  contentId: number, 
+  type: 'asr' | 'summary'
+): Promise<{ success: boolean; message: string; job_id?: string }> {
+  const res = await fetch(`${API_BASE}/contents/${contentId}/retry?type=${type}`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const errorText = await res.text()
+    throw new Error(`재처리 실패: ${res.status} ${errorText}`)
+  }
+  return res.json()
+}
+

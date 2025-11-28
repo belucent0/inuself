@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ContentSummary, ContentStatus, deleteContentsBulk } from '@/lib/api'
+import { ContentSummary, ContentStatus, deleteContentsBulk, retryProcessing } from '@/lib/api'
 
 type Props = {
   contents: ContentSummary[]
@@ -99,6 +99,23 @@ export default function ContentList({ contents }: Props) {
     }
   }
 
+  const handleRetry = async (contentId: number, type: 'asr' | 'summary', event: React.MouseEvent) => {
+    event.stopPropagation()
+    const typeLabel = type === 'asr' ? 'ASR 처리' : 'LLM 요약'
+    if (!confirm(`${typeLabel}를 다시 시도하시겠습니까?`)) {
+      return
+    }
+    
+    try {
+      const result = await retryProcessing(contentId, type)
+      setMessage(result.message)
+      router.refresh()
+      setTimeout(() => setMessage(''), 3000)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '재처리 실패')
+    }
+  }
+
   if (!contents.length) {
     return <p>아직 처리된 콘텐츠가 없습니다. 파일을 업로드해 보세요.</p>
   }
@@ -190,6 +207,40 @@ export default function ContentList({ contents }: Props) {
               </p>
               <small>{new Date(item.created_at).toLocaleString()}</small>
             </Link>
+            {item.status === 'ASR_FAILED' && (
+              <button
+                type="button"
+                onClick={(e) => handleRetry(item.id, 'asr', e)}
+                style={{
+                  padding: '0.4rem 0.8rem',
+                  backgroundColor: '#2196F3',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                }}
+              >
+                ASR 재처리
+              </button>
+            )}
+            {item.status === 'SUMMARY_FAILED' && (
+              <button
+                type="button"
+                onClick={(e) => handleRetry(item.id, 'summary', e)}
+                style={{
+                  padding: '0.4rem 0.8rem',
+                  backgroundColor: '#673AB7',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                }}
+              >
+                요약 재처리
+              </button>
+            )}
           </div>
         ))}
       </div>
