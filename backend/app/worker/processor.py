@@ -260,11 +260,11 @@ async def _process_job(
             session = AsyncSessionLocal()
         try:
             repo = ContentRepository(session)
-            await repo.update_content_status(content_id, ContentStatus.FAILED)
+            await repo.update_content_status(content_id, ContentStatus.ASR_FAILED)
             await repo.add_log(
                 content_id=content_id,
                 log={"event": "error", "details": str(exc)},
-                message="Pipeline failed",
+                message="ASR pipeline failed",
             )
             await session.commit()
         finally:

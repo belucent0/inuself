@@ -23,3 +23,4 @@ def safe_print(*args, **kwargs):
                 safe_args.append(arg)
         print(*safe_args, **kwargs)
 
+

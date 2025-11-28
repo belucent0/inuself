@@ -12,10 +12,9 @@ export type ContentStatus =
   | 'PROCESSING' // 처리중 (ASR/화자분리 진행 중)
   | 'SUMMARIZING' // LLM 요약 진행 중
   | 'COMPLETED' // 전체 파이프라인 완료
-  | 'FAILED' // ASR/화자분리 단계 실패
+  | 'ASR_FAILED' // ASR/화자분리 단계 실패
   | 'SUMMARY_FAILED' // LLM 요약 실패
   | 'CANCELLED' // 취소됨 (사용자 취소 또는 타임아웃)
-  | 'RETRYING' // 재시도 중 (실패 후 자동 재시도)
 
 export type ContentSummary = {
   id: number

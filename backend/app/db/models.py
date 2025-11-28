@@ -11,14 +11,22 @@ from .base import Base
 class ContentStatus(str, enum.Enum):
     """콘텐츠 처리 상태."""
 
+    # 초기 상태
     QUEUED = "QUEUED"  # 처리 대기중 (큐에 등록됨)
-    PROCESSING = "PROCESSING"  # 처리중 (ASR/화자분리 진행 중)
+    
+    # 진행 중 상태
+    PROCESSING = "PROCESSING"  # ASR/화자분리 진행 중
     SUMMARIZING = "SUMMARIZING"  # LLM 요약 중
+    
+    # 완료 상태
     COMPLETED = "COMPLETED"  # 전체 파이프라인 완료
-    FAILED = "FAILED"  # ASR/화자분리 단계 실패
+    
+    # 실패 상태
+    ASR_FAILED = "ASR_FAILED"  # ASR/화자분리 단계 실패
     SUMMARY_FAILED = "SUMMARY_FAILED"  # LLM 요약 실패
+    
+    # 취소 상태
     CANCELLED = "CANCELLED"  # 취소됨 (사용자 취소 또는 타임아웃)
-    RETRYING = "RETRYING"  # 재시도 중 (실패 후 자동 재시도)
 
 
 class Content(Base):

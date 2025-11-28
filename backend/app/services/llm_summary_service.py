@@ -31,10 +31,14 @@ class LlmSummaryService:
         if not transcript_text:
             raise ValueError("전사 텍스트가 비어 있어 요약할 수 없습니다.")
 
-        await self.repo.update_content_status(content_id, ContentStatus.SUMMARIZING)
+        # 이미 SUMMARIZING 상태인 경우는 재시도 케이스 (로그만 추가)
+        # 그 외 상태는 SUMMARIZING으로 변경
+        if content.status != ContentStatus.SUMMARIZING:
+            await self.repo.update_content_status(content_id, ContentStatus.SUMMARIZING)
+        
         await self.repo.add_llm_log(
             content_id,
-            log={"event": "summarizing_started"},
+            log={"event": "summarizing_started", "previous_status": content.status.value},
             message="LLM summarization started",
         )
         await self.session.commit()

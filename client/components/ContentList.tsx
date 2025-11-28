@@ -14,10 +14,9 @@ const statusLabels: Record<ContentStatus, string> = {
   PROCESSING: '처리중',
   SUMMARIZING: '요약중',
   COMPLETED: '완료',
-  FAILED: '실패',
+  ASR_FAILED: 'ASR 실패',
   SUMMARY_FAILED: '요약 실패',
   CANCELLED: '취소됨',
-  RETRYING: '재시도중',
 }
 
 const statusColors: Record<ContentStatus, string> = {
@@ -25,10 +24,9 @@ const statusColors: Record<ContentStatus, string> = {
   PROCESSING: '#2196F3',
   SUMMARIZING: '#673AB7',
   COMPLETED: '#4CAF50',
-  FAILED: '#F44336',
+  ASR_FAILED: '#F44336',
   SUMMARY_FAILED: '#E91E63',
   CANCELLED: '#FF9800',
-  RETRYING: '#FFC107',
 }
 
 export default function ContentList({ contents }: Props) {

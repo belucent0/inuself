@@ -56,9 +56,11 @@ def start_worker_background() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 실행되는 lifespan 이벤트."""
+    import asyncio
+    import os
+    
     # 시작 시: 워커 시작 (개발 환경에서는 항상 시작)
     # 프로덕션에서는 환경변수로 제어 가능
-    import os
     should_start_worker = os.getenv("START_WORKER", "true").lower() == "true"
     
     if should_start_worker:
@@ -67,8 +69,36 @@ async def lifespan(app: FastAPI):
     else:
         safe_print("[FastAPI] 워커 자동 시작이 비활성화되었습니다.")
         safe_print("[FastAPI] 워커 실행: poetry run python -m app.worker.run_worker")
+    
+    # 백그라운드 태스크: 주기적으로 SUMMARIZING 상태 콘텐츠 자동 재큐잉
+    async def auto_requeue_llm_jobs():
+        """주기적으로 SUMMARIZING 상태의 콘텐츠를 자동으로 재큐잉."""
+        from .worker.requeue import requeue_summarizing_contents
+        
+        while True:
+            try:
+                await asyncio.sleep(60)  # 60초마다 체크
+                requeued = await requeue_summarizing_contents()
+                if requeued > 0:
+                    logger.info("Auto-requeued %d LLM jobs", requeued)
+                    safe_print(f"[Auto-Requeue] {requeued}개의 LLM 작업을 자동으로 재큐잉했습니다.")
+            except Exception as exc:
+                logger.exception("Failed to auto-requeue LLM jobs")
+                safe_print(f"[Auto-Requeue] 자동 재큐잉 실패: {exc}")
+    
+    # 백그라운드 태스크 시작
+    auto_requeue_task = asyncio.create_task(auto_requeue_llm_jobs())
+    safe_print("[FastAPI] LLM 작업 자동 재큐잉 백그라운드 태스크 시작 (60초 간격)")
+    
     yield
-    # 종료 시: 정리 작업 (필요시)
+    
+    # 종료 시: 백그라운드 태스크 취소
+    auto_requeue_task.cancel()
+    try:
+        await auto_requeue_task
+    except asyncio.CancelledError:
+        pass
+    safe_print("[FastAPI] LLM 작업 자동 재큐잉 백그라운드 태스크 종료")
 
 
 def create_app() -> FastAPI:
@@ -170,6 +200,60 @@ def create_app() -> FastAPI:
             return {
                 "message": f"{cleaned_count}개의 실패한 작업이 정리되었습니다.",
                 "cleaned_count": cleaned_count,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+    
+    @app.post(f"{settings.api_prefix}/queue/requeue-llm", tags=["system"])
+    async def requeue_llm_jobs():
+        """SUMMARIZING 또는 SUMMARY_FAILED 상태의 콘텐츠를 LLM 큐에 재등록합니다."""
+        try:
+            from .worker.requeue import requeue_summarizing_contents
+            
+            requeued = await requeue_summarizing_contents()
+            return {
+                "message": f"{requeued}개의 LLM 작업을 큐에 재등록했습니다.",
+                "requeued_count": requeued,
+            }
+        except Exception as e:
+            logger.exception("Failed to requeue LLM jobs")
+            return {"error": str(e)}
+    
+    @app.get(f"{settings.api_prefix}/queue/llm-status", tags=["system"])
+    async def llm_queue_status():
+        """LLM 큐 상태 확인."""
+        try:
+            from rq import Queue
+            from rq.registry import FailedJobRegistry
+            from .core.redis import get_redis_connection
+            from .worker.llm_queue import LLM_QUEUE_NAME
+            
+            redis = get_redis_connection()
+            queue = Queue(LLM_QUEUE_NAME, connection=redis)
+            failed_registry = FailedJobRegistry(queue=queue)
+            
+            # 실패한 작업의 에러 메시지 확인 (최근 5개)
+            failed_jobs_info = []
+            failed_job_ids = failed_registry.get_job_ids(0, 4)  # 최근 5개
+            for job_id in failed_job_ids:
+                try:
+                    job = queue.fetch_job(job_id)
+                    if job:
+                        failed_jobs_info.append({
+                            "job_id": job_id,
+                            "error": str(job.exc_info) if job.exc_info else "Unknown error",
+                            "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+                        })
+                except Exception:
+                    pass
+            
+            return {
+                "queue_name": LLM_QUEUE_NAME,
+                "queued_jobs": len(queue),
+                "started_jobs": len(queue.started_job_registry),
+                "finished_jobs": len(queue.finished_job_registry),
+                "failed_jobs": len(queue.failed_job_registry),
+                "recent_failed_jobs": failed_jobs_info,
             }
         except Exception as e:
             return {"error": str(e)}
