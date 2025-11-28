@@ -22,7 +22,6 @@ if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
 from worker.pipeline import PipelineResult, run_asr_diarization_pipeline
-from .llm_queue import enqueue_llm_job
 from .utils import safe_print
 
 logger = logging.getLogger(__name__)
@@ -131,16 +130,35 @@ def process_transcription_job(
         # Windows에서는 작업 완료 후 이벤트 루프 정리
         if sys.platform == "win32":
             try:
-                # 남은 작업이 있으면 완료 대기
+                # 남은 작업이 있으면 타임아웃과 함께 완료 대기
                 pending = asyncio.all_tasks(loop)
                 if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception:
-                pass
+                    try:
+                        loop.run_until_complete(
+                            asyncio.wait_for(
+                                asyncio.gather(*pending, return_exceptions=True),
+                                timeout=5.0
+                            )
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Timeout waiting for pending tasks to complete")
+                    except Exception as e:
+                        logger.error("Error waiting for pending tasks: %s", e)
+            except Exception as e:
+                logger.error("Error during event loop cleanup: %s", e)
             finally:
                 # 이벤트 루프 닫기
-                if not loop.is_closed():
-                    loop.close()
+                try:
+                    if not loop.is_closed():
+                        loop.close()
+                except Exception as e:
+                    logger.error("Error closing event loop: %s", e)
+                
+                # 현재 이벤트 루프 제거 (중요! 다음 작업이 닫힌 루프를 사용하지 않도록)
+                try:
+                    asyncio.set_event_loop(None)
+                except Exception as e:
+                    logger.error("Error unsetting event loop: %s", e)
 
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
@@ -186,6 +204,8 @@ async def _process_job(
             settings.postgres_dsn,
             echo=settings.debug,
             future=True,
+            pool_pre_ping=True,  # 연결 상태 체크
+            pool_recycle=3600,   # 1시간마다 연결 재생성
         )
         CurrentAsyncSessionLocal = async_sessionmaker(
             current_engine,
@@ -207,9 +227,14 @@ async def _process_job(
         await session.commit()
     finally:
         await session.close()
-        # Windows에서 생성한 엔진도 닫기
+        # Windows에서 생성한 엔진도 타임아웃과 함께 정리
         if current_engine:
-            await current_engine.dispose()
+            try:
+                await asyncio.wait_for(current_engine.dispose(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("Timeout disposing database engine after status update")
+            except Exception as e:
+                logger.error("Error disposing database engine: %s", e)
     safe_print(f"[Worker] [2/5] 파일 다운로드 중: {storage_key}")
 
     temp_root = settings.upload_dir
@@ -270,7 +295,12 @@ async def _process_job(
         finally:
             await session.close()
             if error_engine:
-                await error_engine.dispose()
+                try:
+                    await asyncio.wait_for(error_engine.dispose(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout disposing error engine")
+                except Exception as e:
+                    logger.error("Error disposing error engine: %s", e)
         logger.exception("Processing failed for content_id=%s", content_id)
         raise
     finally:
@@ -337,15 +367,23 @@ async def _process_job(
     finally:
         await session.close()
         if result_engine:
-            await result_engine.dispose()
+            try:
+                await asyncio.wait_for(result_engine.dispose(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("Timeout disposing result engine")
+            except Exception as e:
+                logger.error("Error disposing result engine: %s", e)
     safe_print(f"[Worker] OK 데이터베이스 저장 완료, 요약 작업 큐 등록 준비")
     logger.info("Processing completed for content_id=%s", content_id)
 
-    # LLM 요약 작업 큐잉
+    # LLM 요약 작업 큐잉 (Task Queue Adapter 사용)
     try:
-        enqueue_llm_job(content_id=content_id)
-        safe_print(f"[Worker] >> 요약 작업이 LLM 큐에 등록되었습니다 (content_id={content_id})")
-        logger.info("LLM job enqueued for content_id=%s", content_id)
+        from .task_queue_adapter import get_task_queue
+        
+        task_queue = get_task_queue()
+        job_id = task_queue.enqueue_llm_job(content_id=content_id)
+        safe_print(f"[Worker] >> 요약 작업이 LLM 큐에 등록되었습니다 (content_id={content_id}, job_id={job_id})")
+        logger.info("LLM job enqueued for content_id=%s, job_id=%s", content_id, job_id)
     except Exception as exc:
         safe_print(f"[Worker] ERROR LLM 큐 등록 실패: {exc}")
         logger.exception("Failed to enqueue LLM job for content_id=%s", content_id)

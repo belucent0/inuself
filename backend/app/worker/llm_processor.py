@@ -82,14 +82,35 @@ def process_llm_job(*, content_id: int) -> None:
     finally:
         if sys.platform == "win32":
             try:
+                # 남은 작업이 있으면 타임아웃과 함께 완료 대기
                 pending = asyncio.all_tasks(loop)
                 if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception:
-                pass
+                    try:
+                        loop.run_until_complete(
+                            asyncio.wait_for(
+                                asyncio.gather(*pending, return_exceptions=True),
+                                timeout=5.0
+                            )
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Timeout waiting for pending LLM tasks")
+                    except Exception as e:
+                        logger.error("Error waiting for pending LLM tasks: %s", e)
+            except Exception as e:
+                logger.error("Error during LLM event loop cleanup: %s", e)
             finally:
-                if not loop.is_closed():
-                    loop.close()
+                # 이벤트 루프 닫기
+                try:
+                    if not loop.is_closed():
+                        loop.close()
+                except Exception as e:
+                    logger.error("Error closing LLM event loop: %s", e)
+                
+                # 현재 이벤트 루프 제거 (중요!)
+                try:
+                    asyncio.set_event_loop(None)
+                except Exception as e:
+                    logger.error("Error unsetting LLM event loop: %s", e)
 
 
 def _ensure_worker_loop() -> asyncio.AbstractEventLoop:
@@ -122,6 +143,8 @@ async def _process_job(*, content_id: int) -> None:
             settings.postgres_dsn,
             echo=settings.debug,
             future=True,
+            pool_pre_ping=True,  # 연결 상태 체크
+            pool_recycle=3600,   # 1시간마다 연결 재생성
         )
         CurrentAsyncSessionLocal = async_sessionmaker(
             current_engine,
@@ -141,7 +164,12 @@ async def _process_job(*, content_id: int) -> None:
     finally:
         safe_print(f"[LLM] DB 세션 종료 중...")
         await session.close()
-        # Windows에서 생성한 엔진도 닫기
+        # Windows에서 생성한 엔진도 타임아웃과 함께 정리
         if current_engine:
-            await current_engine.dispose()
+            try:
+                await asyncio.wait_for(current_engine.dispose(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("Timeout disposing LLM database engine")
+            except Exception as e:
+                logger.error("Error disposing LLM database engine: %s", e)
 

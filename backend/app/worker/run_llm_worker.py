@@ -347,16 +347,44 @@ def main() -> None:
             safe_print("[LLM Worker] [OK] 워커 생성 완료")
             safe_print("[LLM Worker] 작업 대기 중... (LLM 큐에서 작업을 기다립니다)")
             safe_print("[LLM Worker] ========================================")
-            worker.work()
+            
+            # 100개 작업 처리 후 자동 재시작 (리소스 누수 방지)
+            worker.work(max_jobs=100)
+            
+            logger.info("LLM worker processed 100 jobs, will restart...")
+            safe_print("[LLM Worker] 100개 작업 처리 완료, 워커 재시작 중...")
+            
+    except KeyboardInterrupt:
+        logger.info("LLM worker shutdown requested")
+        safe_print("[LLM Worker] 워커 종료 요청됨")
     except Exception as exc:
         logger.exception("LLM worker failed to start")
         safe_print(f"[LLM Worker] [ERROR] 워커 시작 실패: {exc}")
         import traceback
-
         traceback.print_exc()
         raise
 
 
 if __name__ == "__main__":
-    main()
+    # 워커를 주기적으로 재시작하여 리소스 누수 방지
+    job_count = 0
+    while True:
+        try:
+            main()
+            job_count += 100
+            logger.info("Total LLM jobs processed: %d, restarting...", job_count)
+            safe_print(f"[LLM Worker] 총 {job_count}개 작업 처리 완료, 5초 후 재시작...")
+            
+            import time
+            time.sleep(5)  # 짧은 대기 후 재시작
+            
+        except KeyboardInterrupt:
+            logger.info("LLM worker shutdown requested")
+            safe_print("[LLM Worker] 워커 종료")
+            break
+        except Exception as e:
+            logger.exception("LLM worker crashed, restarting in 10 seconds...")
+            safe_print(f"[LLM Worker] ERROR 워커 크래시, 10초 후 재시작: {e}")
+            import time
+            time.sleep(10)
 

@@ -77,6 +77,11 @@ def main() -> None:
         safe_print("[Worker] Windows 환경: SimpleWorker 사용 (fork 없음, 타임아웃 비활성화)")
     safe_print(f"[Worker] ========================================")
     
+    # 초기화 대기 (intermediate queue 안정화 시간 확보)
+    safe_print("[Worker] 초기화 대기 중... (2초)")
+    import time
+    time.sleep(2)
+    
     # DB에 남아있는 PROCESSING 상태 작업 재큐잉
     try:
         safe_print("[Worker] DB 재큐잉 검사 중...")
@@ -123,7 +128,23 @@ def main() -> None:
             safe_print("[Worker] OK 워커 생성 완료")
             safe_print("[Worker] 작업 대기 중... (큐에서 작업을 기다립니다)")
             safe_print("[Worker] ========================================")
+            
+            # 워커 실행 (무한 루프, Ctrl+C로 종료)
             worker.work()
+            
+            logger.info("Worker stopped")
+            safe_print("[Worker] 워커 정상 종료")
+            safe_print("[Worker] ========================================")
+            
+            # 워커 실행 (무한 루프, Ctrl+C로 종료)
+            worker.work()
+            
+            logger.info("Worker stopped")
+            safe_print("[Worker] 워커 정상 종료")
+            
+    except KeyboardInterrupt:
+        logger.info("Worker shutdown requested")
+        safe_print("[Worker] 워커 종료 요청됨")
     except Exception as e:
         logger.exception("Worker failed to start")
         safe_print(f"[Worker] ERROR 워커 시작 실패: {e}")
@@ -133,6 +154,17 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Worker shutdown requested")
+        safe_print("[Worker] 워커 종료")
+    except Exception as e:
+        logger.exception("Worker crashed: %s", e)
+        safe_print(f"[Worker] ERROR 워커 크래시: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
 
 
