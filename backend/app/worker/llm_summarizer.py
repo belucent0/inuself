@@ -328,34 +328,44 @@ def _summarize_with_lmstudio(text: str, settings) -> str:
     logger.info("텍스트를 %d개의 청크로 분할했습니다.", len(chunks))
     
     # 각 청크 요약
-    chunk_summaries = []
+    successful_chunks = []
+    failed_chunks = []
     for i, chunk in enumerate(chunks, 1):
         logger.info("청크 %d/%d 요약 중... (길이: %d chars)", i, len(chunks), len(chunk))
         try:
             chunk_summary = _summarize_chunk_with_lmstudio(chunk, i, len(chunks), settings)
-            chunk_summaries.append({
+            successful_chunks.append({
                 "chunk_index": i,
                 "summary": chunk_summary
             })
+            logger.info("청크 %d/%d 요약 성공", i, len(chunks))
         except Exception as exc:
             logger.error("청크 %d 요약 실패: %s", i, exc)
-            # 실패한 청크는 건너뛰고 계속 진행
-            chunk_summaries.append({
-                "chunk_index": i,
-                "summary": f"[청크 {i} 요약 실패: {str(exc)[:100]}]"
-            })
+            failed_chunks.append(i)
+            # 실패한 청크는 건너뛰고 계속 진행 (에러 메시지는 포함하지 않음)
     
-    if not chunk_summaries:
+    if not successful_chunks:
         raise RuntimeError("모든 청크 요약이 실패했습니다.")
     
-    # 통합 요약 생성
-    logger.info("청크 요약을 통합하여 최종 요약 생성 중...")
+    # 실패한 청크가 있으면 경고 로그
+    if failed_chunks:
+        logger.warning(
+            "일부 청크 요약 실패: 실패한 청크=%s, 성공한 청크=%d/%d",
+            failed_chunks, len(successful_chunks), len(chunks)
+        )
+    
+    # 통합 요약 생성 (성공한 청크만 사용)
+    logger.info("청크 요약을 통합하여 최종 요약 생성 중... (성공한 청크: %d/%d)", len(successful_chunks), len(chunks))
     combined_summaries = "\n\n".join([
         f"## 부분 {cs['chunk_index']}\n\n{cs['summary']}"
-        for cs in chunk_summaries
+        for cs in successful_chunks
     ])
     
-    # 통합 요약 프롬프트
+    # 통합 요약 프롬프트 개선
+    failed_parts_note = ""
+    if failed_chunks:
+        failed_parts_note = f"\n\nNote: Some parts ({', '.join(map(str, failed_chunks))}) failed to summarize and are excluded from this summary."
+    
     merge_prompt = """You are an expert meeting summarizer.
 The following are summaries of different parts of a long meeting transcription.
 Please create a unified, comprehensive summary that combines all parts.
@@ -366,7 +376,9 @@ Guidelines:
 - Add another section `## 세부 사항` with numbered items for decisions or action items.
 - Ensure the summary covers all important points from all parts.
 - Remove redundant information and merge similar points.
-- The output must be valid Markdown. Do not include the raw summaries.
+- Focus only on the actual meeting content. Ignore any error messages, technical information, or placeholder text.
+- The output must be valid Markdown. Do not include the raw summaries or any error messages.
+- If some parts are missing, summarize only what is available.{failed_parts_note}
 
 Part Summaries:
 {transcript}
@@ -374,7 +386,7 @@ Part Summaries:
     
     try:
         # 통합 요약에는 custom_prompt를 사용해야 하므로 별도 처리
-        prompt = merge_prompt.format(transcript=combined_summaries)
+        prompt = merge_prompt.format(transcript=combined_summaries, failed_parts_note=failed_parts_note)
         system_prompt = settings.lmstudio_system_prompt.strip()
         messages = [
             {"role": "system", "content": system_prompt},
