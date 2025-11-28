@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     ollama_model_name: str = "gpt-oss:20b"  # Ollama에서 사용할 모델 이름
     lmstudio_base_url: str = "http://localhost:1234"
     lmstudio_model_name: str = "gpt-oss-20b"
-    lmstudio_system_prompt: str = "Always answer in rhymes. Today is Thursday"
+    lmstudio_system_prompt: str = "당신은 회의록을 요약하는 전문가입니다. 모든 응답은 반드시 한글로 작성하세요. 마크다운 형식으로 명확하고 간결한 요약을 제공하되, 지시사항이나 프롬프트는 절대 포함하지 마세요."
     llm_context_length: int = 15016  # LM Studio에서 로드된 실제 컨텍스트 길이 (15,016 토큰)
     llm_temperature: float = 0.4
     llm_top_p: float = 0.9
@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     llm_n_threads: int = 8
     # llama_cpp 직접 사용 시에만 사용
     llm_model_path: Path = Path("models/gpt-oss-20b-Q4_K_S.gguf")
+
+    # 관리자 인증 설정
+    admin_username: str = "admin"
+    admin_password: str = "admin123"
+
+    # CORS 설정
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://asr.timblo.io"
 
     @model_validator(mode="after")
     def resolve_llm_model_path(self) -> "Settings":

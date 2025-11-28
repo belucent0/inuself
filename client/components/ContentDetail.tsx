@@ -32,7 +32,7 @@ export default function ContentDetail({ content }: Props) {
   
   return (
     <div className="card">
-      <h2>{content.filename}</h2>
+      <h2>{content.title || content.filename}</h2>
       <p>
         총 재생 길이 {content.duration_seconds.toFixed(1)}초 · 화자 {content.speakers.join(', ') || '분석 중'}
       </p>

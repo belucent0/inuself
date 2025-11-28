@@ -33,6 +33,7 @@ class ContentBaseSchema(BaseModel):
     duration_seconds: float = 0.0
     status: ContentStatus
     summary_md: str | None = None
+    title: str | None = None
     created_at: datetime
 
     class Config:

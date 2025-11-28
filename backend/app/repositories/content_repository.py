@@ -101,6 +101,16 @@ class ContentRepository:
         await self.session.execute(stmt)
         await self.session.flush()
 
+    async def update_title(self, content_id: int, title: str) -> None:
+        """콘텐츠 제목 업데이트."""
+        stmt = (
+            update(models.Content)
+            .where(models.Content.id == content_id)
+            .values(title=title)
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()
+
     async def delete_queued_contents(self) -> tuple[int, list[int], list[str]]:
         """QUEUED 상태인 모든 콘텐츠 삭제. (삭제된 개수, content_id 리스트, object_key 리스트) 반환."""
         stmt = select(models.Content).where(models.Content.status == models.ContentStatus.QUEUED)

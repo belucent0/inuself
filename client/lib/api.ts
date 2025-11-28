@@ -24,6 +24,7 @@ export type ContentSummary = {
   duration_seconds: number
   status: ContentStatus
   summary_md?: string | null
+  title?: string | null
   created_at: string
 }
 

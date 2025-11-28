@@ -41,6 +41,7 @@ class Content(Base):
     duration_seconds: Mapped[float] = mapped_column(default=0.0)
     transcription: Mapped[dict] = mapped_column(JSONB, nullable=False)
     summary_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[ContentStatus] = mapped_column(
         Enum(ContentStatus),
         default=ContentStatus.QUEUED,

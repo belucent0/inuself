@@ -192,7 +192,7 @@ export default function ContentList({ contents }: Props) {
               <span>선택</span>
             </label>
             <Link href={`/contents/${item.id}`} className="card-link">
-              <h3>{item.filename}</h3>
+              <h3>{item.title || item.filename}</h3>
               <p>
                 <span
                   style={{

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.config import get_settings
 from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
-from ..worker.llm_summarizer import summarize_transcription
+from ..worker.llm_summarizer import summarize_transcription, sanitize_summary_output
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,8 @@ class LlmSummaryService:
 
         start = time.perf_counter()
         try:
-            summary_md = summarize_transcription(transcript_text)
+            title, summary_md = summarize_transcription(transcript_text)
+            summary_md = sanitize_summary_output(summary_md, transcript_text)
         except Exception as exc:
             await self.repo.update_content_status(content_id, ContentStatus.SUMMARY_FAILED)
             await self.repo.add_llm_log(
@@ -84,7 +85,11 @@ class LlmSummaryService:
 
         elapsed = time.perf_counter() - start
 
+        # 제목과 요약 저장
+        await self.repo.update_title(content_id, title)
         await self.repo.update_summary_markdown(content_id, summary_md)
+        logger.info("Title and summary stored for content_id=%s: title=%s, summary_length=%d", 
+                    content_id, title, len(summary_md))
         await self.repo.update_content_status(content_id, ContentStatus.COMPLETED)
         await self.repo.add_llm_log(
             content_id,
