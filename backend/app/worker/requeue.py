@@ -9,8 +9,9 @@ from ..core.config import get_settings
 from ..db.models import Content, ContentStatus
 from ..db.session import AsyncSessionLocal
 from ..repositories.content_repository import ContentRepository
-from .llm_queue import enqueue_llm_job, is_llm_job_in_queue
+from .llm_queue import is_llm_job_in_queue
 from .queue import enqueue_transcription_job
+from .task_queue_adapter import get_task_queue
 
 logger = logging.getLogger(__name__)
 
@@ -77,20 +78,20 @@ async def requeue_processing_contents() -> int:
 
 async def requeue_summarizing_contents() -> int:
     """
-    SUMMARIZING 또는 SUMMARY_FAILED 상태에서 멈춘 콘텐츠를 다시 LLM 큐에 등록한다.
+    SUMMARIZING 상태에서 멈춘 콘텐츠를 다시 LLM 큐에 등록한다.
     
     SUMMARIZING 상태는 워커 재시작 시 큐에 작업이 없어졌을 수 있으므로 재등록이 필요합니다.
-    SUMMARY_FAILED 상태는 재시도할 수 있으므로 재등록 대상에 포함합니다.
+    SUMMARY_FAILED 상태는 재시도하지 않음 (실패한 작업은 수동으로 재시도해야 함).
 
     Returns:
         재큐잉된 콘텐츠 개수
     """
+    # SUMMARIZING 상태만 재큐잉 (SUMMARY_FAILED는 제외)
     contents = await _fetch_contents_by_status([
         ContentStatus.SUMMARIZING,
-        ContentStatus.SUMMARY_FAILED,
     ])
     if not contents:
-        logger.info("No stuck SUMMARIZING or SUMMARY_FAILED contents found.")
+        logger.info("No stuck SUMMARIZING contents found.")
         return 0
 
     requeued = 0
@@ -120,9 +121,12 @@ async def requeue_summarizing_contents() -> int:
             
             await session.commit()
 
-            enqueue_llm_job(content_id=content.id)
+            # Task Queue Adapter 사용 (RQ 또는 Celery)
+            task_queue = get_task_queue()
+            job_id = task_queue.enqueue_llm_job(content_id=content.id)
             requeued += 1
-            logger.info("Requeued LLM job for content_id=%s (previous_status=%s)", content.id, content.status.value)
+            logger.info("Requeued LLM job for content_id=%s (previous_status=%s, job_id=%s)", 
+                      content.id, content.status.value, job_id)
         except Exception as exc:
             logger.exception("Failed to requeue LLM job for content_id=%s", content.id)
             await session.rollback()

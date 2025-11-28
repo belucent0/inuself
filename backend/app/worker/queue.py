@@ -31,6 +31,9 @@ def enqueue_transcription_job(
         redis_conn = queue.connection
         redis_conn.ping()
         
+        # 등록 전 큐 크기
+        queue_size_before = len(queue)
+        
         job = queue.enqueue(
             process_transcription_job,
             content_id=content_id,
@@ -40,8 +43,17 @@ def enqueue_transcription_job(
             processing_mode=processing_mode,
             num_asr_chunks=num_asr_chunks,
         )
-        safe_print(f"[Queue] 작업 등록됨: content_id={content_id}, job_id={job.id}, 큐 크기={len(queue)}")
-        logger.info("Job enqueued: content_id=%s, job_id=%s, queue_size=%s", content_id, job.id, len(queue))
+        
+        # 등록 후 큐 크기
+        queue_size_after = len(queue)
+        
+        safe_print(f"[Queue] 작업 등록됨: content_id={content_id}, job_id={job.id}")
+        safe_print(f"[Queue] 큐 크기: {queue_size_before} -> {queue_size_after}")
+        safe_print(f"[Queue] 작업 상태: {job.get_status()}")
+        logger.info(
+            "Job enqueued: content_id=%s, job_id=%s, queue_size_before=%s, queue_size_after=%s, job_status=%s",
+            content_id, job.id, queue_size_before, queue_size_after, job.get_status()
+        )
     except Exception as e:
         error_msg = f"큐에 작업 등록 실패: content_id={content_id}, error={e}"
         safe_print(f"[Queue] ERROR {error_msg}")

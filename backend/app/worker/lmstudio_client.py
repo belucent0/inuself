@@ -52,8 +52,35 @@ def request_chat_completion(
     try:
         with httpx.Client(timeout=120.0) as client:
             response = client.post(url, json=payload)
+            
+            # 400 에러인 경우 응답 본문을 로깅하여 정확한 원인 확인
+            if response.status_code == 400:
+                try:
+                    error_body = response.json()
+                    logger.error(
+                        "LM Studio API 400 Bad Request 응답: %s",
+                        error_body
+                    )
+                except Exception:
+                    error_text = response.text[:500] if response.text else "응답 본문 없음"
+                    logger.error(
+                        "LM Studio API 400 Bad Request 응답 (JSON 파싱 실패): %s",
+                        error_text
+                    )
+            
             response.raise_for_status()
             result = response.json()
+    except httpx.HTTPStatusError as exc:
+        # HTTPStatusError는 이미 raise_for_status()에서 발생
+        # 응답 본문을 포함한 상세한 에러 메시지 생성
+        try:
+            error_body = exc.response.json()
+            error_msg = f"LM Studio API HTTP 오류 ({exc.response.status_code}): {error_body}"
+        except Exception:
+            error_text = exc.response.text[:500] if exc.response.text else "응답 본문 없음"
+            error_msg = f"LM Studio API HTTP 오류 ({exc.response.status_code}): {error_text}"
+        logger.error(error_msg)
+        raise LMStudioClientError(error_msg) from exc
     except httpx.HTTPError as exc:
         error_msg = f"LM Studio API HTTP 오류: {exc}"
         logger.error(error_msg)

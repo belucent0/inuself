@@ -17,29 +17,88 @@ def _get_queue() -> Queue:
 
 
 def is_llm_job_in_queue(*, content_id: int) -> bool:
-    """해당 content_id의 LLM 작업이 큐에 이미 있는지 확인."""
-    queue = _get_queue()
-    job_ids = queue.get_job_ids()
+    """
+    해당 content_id의 LLM 작업이 큐에 이미 있는지 확인.
     
-    # 시작된 작업도 확인 (처리 중인 작업)
-    started_job_ids = queue.started_job_registry.get_job_ids()
-    all_job_ids = set(job_ids) | set(started_job_ids)
+    Celery를 사용할 때는 Celery 작업 상태를 확인하고,
+    RQ를 사용할 때는 RQ 큐를 확인합니다.
+    """
+    from ..core.config import get_settings
     
-    for job_id in all_job_ids:
+    settings = get_settings()
+    queue_type = settings.task_queue_type.lower()
+    
+    if queue_type == "celery":
+        # Celery를 사용할 때는 Celery 작업 상태 확인
         try:
-            job = queue.fetch_job(job_id)
-            if job is None:
+            from celery.result import AsyncResult
+            from .celery_app import celery_app
+            from celery import current_app
+            
+            # Celery의 활성 작업 확인 (Inspector 사용)
+            inspector = current_app.control.inspect()
+            
+            # 활성 작업 확인 (현재 실행 중인 작업)
+            active = inspector.active()
+            if active:
+                for worker_name, tasks in active.items():
+                    for task in tasks:
+                        if task.get("name") == "process_llm_task":
+                            task_args = task.get("args", [])
+                            task_kwargs = task.get("kwargs", {})
+                            # content_id 확인
+                            if task_kwargs.get("content_id") == content_id or (task_args and task_args[0] == content_id):
+                                return True
+            
+            # 예약된 작업 확인 (큐에 대기 중인 작업)
+            scheduled = inspector.scheduled()
+            if scheduled:
+                for worker_name, tasks in scheduled.items():
+                    for task in tasks:
+                        if task.get("request", {}).get("task") == "process_llm_task":
+                            task_kwargs = task.get("request", {}).get("kwargs", {})
+                            if task_kwargs.get("content_id") == content_id:
+                                return True
+            
+            # 예약된 작업 확인 (reserved)
+            reserved = inspector.reserved()
+            if reserved:
+                for worker_name, tasks in reserved.items():
+                    for task in tasks:
+                        if task.get("name") == "process_llm_task":
+                            task_kwargs = task.get("kwargs", {})
+                            if task_kwargs.get("content_id") == content_id:
+                                return True
+        except Exception as exc:
+            logger.warning("Failed to check Celery queue for content_id=%s: %s", content_id, exc)
+            # Celery 확인 실패 시 안전하게 False 반환 (중복 등록 허용)
+            return False
+        
+        return False
+    else:
+        # RQ를 사용할 때는 RQ 큐 확인
+        queue = _get_queue()
+        job_ids = queue.get_job_ids()
+        
+        # 시작된 작업도 확인 (처리 중인 작업)
+        started_job_ids = queue.started_job_registry.get_job_ids()
+        all_job_ids = set(job_ids) | set(started_job_ids)
+        
+        for job_id in all_job_ids:
+            try:
+                job = queue.fetch_job(job_id)
+                if job is None:
+                    continue
+                
+                job_kwargs = getattr(job, "kwargs", {})
+                job_content_id = job_kwargs.get("content_id")
+                
+                if job_content_id == content_id:
+                    return True
+            except Exception:
                 continue
-            
-            job_kwargs = getattr(job, "kwargs", {})
-            job_content_id = job_kwargs.get("content_id")
-            
-            if job_content_id == content_id:
-                return True
-        except Exception:
-            continue
-    
-    return False
+        
+        return False
 
 
 def enqueue_llm_job(*, content_id: int) -> None:
