@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # MinIO 상태 확인 함수
 wait_for_minio() {
   local health_endpoint="${S3_HEALTH_ENDPOINT:-http://127.0.0.1:9000/minio/health/live}"
@@ -13,11 +15,20 @@ wait_for_minio() {
   return 1
 }
 
-#!/usr/bin/env bash
+
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPTS_DIR="${ROOT_DIR}/scripts"
+
+# 공통 함수 로드
+if [ -f "${SCRIPTS_DIR}/common.sh" ]; then
+    source "${SCRIPTS_DIR}/common.sh"
+else
+    echo "[dev] ⚠ 공통 스크립트를 찾을 수 없습니다: ${SCRIPTS_DIR}/common.sh"
+    exit 1
+fi
 BACKEND_DIR="${ROOT_DIR}/backend"
 CLIENT_DIR="${ROOT_DIR}/client"
 DEFAULT_LLM_MODEL="models/gpt-oss-20b.gguf"
@@ -81,19 +92,10 @@ if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "${MSYSTEM:
   # Windows Git Bash에서 직접 실행 (ROCm은 Windows에서 동작)
   echo "[dev] Windows 환경 감지. Windows에서 직접 실행합니다..."
   
-  # Windows에서 Poetry 경로 확인 (일반적인 설치 위치)
-  if ! command -v poetry > /dev/null 2>&1; then
-    # 일반적인 Poetry 설치 위치 추가
-    export PATH="$HOME/.local/bin:$PATH"
-    export PATH="$HOME/AppData/Roaming/Python/Scripts:$PATH"
-    # 현재 사용자 홈 디렉토리 기반 경로도 추가
-    if [ -n "${USER:-}" ]; then
-      export PATH="/c/Users/$USER/.local/bin:$PATH"
-      export PATH="/c/Users/$USER/AppData/Roaming/Python/Scripts:$PATH"
-    fi
-    USER_HOME=$(echo "$HOME" | sed 's|/c/|C:/|' | sed 's|/|\\|g' | sed 's|\\|/|g')
-    export PATH="$USER_HOME/AppData/Roaming/Python/Scripts:$PATH"
-  fi
+  # Windows에서 Poetry 경로 확인 및 찾기 (공통 함수 사용)
+  # if ! setup_poetry "[dev]"; then
+  #   exit 1
+  # fi
   
   # Node.js 경로 확인
   if ! command -v npm > /dev/null 2>&1; then
@@ -133,9 +135,17 @@ if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "${MSYSTEM:
   wait_for_minio || true
   check_llm_model
   
+  # 워커 수 설정 (환경변수 또는 기본값)
+  NUM_ASR_WORKERS="${NUM_ASR_WORKERS:-1}"
+  NUM_LLM_WORKERS="${NUM_LLM_WORKERS:-1}"
+  
+  echo "[dev] 워커 설정:"
+  echo "[dev]   ASR 워커 수: ${NUM_ASR_WORKERS}"
+  echo "[dev]   LLM 워커 수: ${NUM_LLM_WORKERS}"
+  
   API_PID=""
-  WORKER_PID=""
-  LLM_WORKER_PID=""
+  WORKER_PIDS=()  # ASR 워커 PID 배열
+  LLM_WORKER_PIDS=()  # LLM 워커 PID 배열
   CLIENT_PID=""
   
   cleanup() {
@@ -145,21 +155,45 @@ if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "${MSYSTEM:
     # Windows에서 프로세스 종료 (taskkill 사용)
     if command -v taskkill >/dev/null 2>&1; then
       # Windows 환경: taskkill 사용
-      for pid in "$CLIENT_PID" "$LLM_WORKER_PID" "$WORKER_PID" "$API_PID"; do
+      # 클라이언트 종료
+      if [[ -n "${CLIENT_PID}" ]]; then
+        if tasklist /FI "PID eq ${CLIENT_PID}" 2>/dev/null | grep -q "${CLIENT_PID}"; then
+          taskkill /F /PID "${CLIENT_PID}" >/dev/null 2>&1 || true
+        fi
+      fi
+      
+      # LLM 워커들 종료
+      for pid in "${LLM_WORKER_PIDS[@]}"; do
         if [[ -n "${pid}" ]]; then
-          # 프로세스가 존재하는지 확인 후 종료
           if tasklist /FI "PID eq ${pid}" 2>/dev/null | grep -q "${pid}"; then
             taskkill /F /PID "${pid}" >/dev/null 2>&1 || true
           fi
         fi
       done
-      # 추가로 Python 프로세스들도 정리 (uvicorn, worker 등)
+      
+      # ASR 워커들 종료
+      for pid in "${WORKER_PIDS[@]}"; do
+        if [[ -n "${pid}" ]]; then
+          if tasklist /FI "PID eq ${pid}" 2>/dev/null | grep -q "${pid}"; then
+            taskkill /F /PID "${pid}" >/dev/null 2>&1 || true
+          fi
+        fi
+      done
+      
+      # FastAPI 종료
+      if [[ -n "${API_PID}" ]]; then
+        if tasklist /FI "PID eq ${API_PID}" 2>/dev/null | grep -q "${API_PID}"; then
+          taskkill /F /PID "${API_PID}" >/dev/null 2>&1 || true
+        fi
+      fi
+      
+      # 추가로 이름으로 찾아서 정리 (혹시 놓친 것들)
       taskkill /F /IM python.exe /FI "WINDOWTITLE eq *uvicorn*" >/dev/null 2>&1 || true
       taskkill /F /IM python.exe /FI "COMMANDLINE eq *run_worker*" >/dev/null 2>&1 || true
       taskkill /F /IM python.exe /FI "COMMANDLINE eq *run_llm_worker*" >/dev/null 2>&1 || true
     else
       # Unix 환경: kill 사용
-      for pid in "$CLIENT_PID" "$LLM_WORKER_PID" "$WORKER_PID" "$API_PID"; do
+      for pid in "$CLIENT_PID" "${LLM_WORKER_PIDS[@]}" "${WORKER_PIDS[@]}" "$API_PID"; do
         if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
           kill "${pid}" 2>/dev/null || true
           wait "${pid}" 2>/dev/null || true
@@ -224,115 +258,195 @@ if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "${MSYSTEM:
     fi
   fi
   
-  echo "[dev] ASR 워커 시작..."
-  (cd "${BACKEND_DIR}" && poetry run python -m app.worker.run_worker) &
-  WORKER_PID=$!
-  sleep 1
-
-  echo "[dev] LLM 워커 시작 (헬스체크 포함)..."
-  # LLM 워커 출력을 파일로 리다이렉트하여 확인 가능하도록
-  LLM_LOG_FILE="${ROOT_DIR}/llm_worker.log"
-  # 기존 로그 파일이 있으면 백업
-  if [ -f "${LLM_LOG_FILE}" ]; then
-    mv "${LLM_LOG_FILE}" "${LLM_LOG_FILE}.old" 2>/dev/null || true
+  # Task Queue 타입 확인 (.env에서)
+  TASK_QUEUE_TYPE="${TASK_QUEUE_TYPE:-rq}"
+  if [ -f "${ENV_FILE}" ]; then
+    # .env 파일에서 TASK_QUEUE_TYPE 읽기
+    set -a
+    source "${ENV_FILE}" 2>/dev/null || true
+    set +a
+    TASK_QUEUE_TYPE="${TASK_QUEUE_TYPE:-rq}"
   fi
-  (cd "${BACKEND_DIR}" && poetry run python -m app.worker.run_llm_worker > "${LLM_LOG_FILE}" 2>&1) &
-  LLM_WORKER_PID=$!
-  echo "[dev] LLM 워커 PID: ${LLM_WORKER_PID}, 로그: ${LLM_LOG_FILE}"
   
-  # 프로세스가 실제로 시작되었는지 확인
-  sleep 0.5
-  if ! kill -0 "${LLM_WORKER_PID}" 2>/dev/null; then
-    echo "[dev] ⚠ LLM 워커가 즉시 종료되었습니다."
-    echo "[dev]   LLM 워커 로그 확인:"
-    if [ -f "${LLM_LOG_FILE}" ]; then
-      if command -v tail >/dev/null 2>&1; then
-        tail -n 50 "${LLM_LOG_FILE}" 2>/dev/null || cat "${LLM_LOG_FILE}" 2>/dev/null | head -n 50
-      else
-        head -n 50 "${LLM_LOG_FILE}" 2>/dev/null || echo "[dev]   로그 파일을 읽을 수 없습니다."
-      fi
-    else
-      echo "[dev]   로그 파일을 찾을 수 없습니다."
+  if [ "${TASK_QUEUE_TYPE}" = "celery" ]; then
+    # Celery 워커 시작
+    echo "[dev] Celery 워커 시작 (ASR: ${NUM_ASR_WORKERS}개, LLM: ${NUM_LLM_WORKERS}개)..."
+    TOTAL_CELERY_WORKERS=$((NUM_ASR_WORKERS + NUM_LLM_WORKERS))
+    CELERY_LOG_FILE="${ROOT_DIR}/celery_worker.log"
+    if [ -f "${CELERY_LOG_FILE}" ]; then
+      mv "${CELERY_LOG_FILE}" "${CELERY_LOG_FILE}.old" 2>/dev/null || true
     fi
-    echo "[dev]   LLM 기능 없이 계속 진행합니다."
-    LLM_WORKER_PID=""
+    
+    if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "${MSYSTEM:-}" ]]; then
+      # Windows: solo pool
+      (cd "${BACKEND_DIR}" && poetry run celery -A app.worker.celery_app worker \
+        --pool=solo \
+        --concurrency=${TOTAL_CELERY_WORKERS} \
+        --loglevel=info \
+        --max-tasks-per-child=100 \
+        --task-events > "${CELERY_LOG_FILE}" 2>&1) &
+    else
+      # Unix: prefork pool
+      (cd "${BACKEND_DIR}" && poetry run celery -A app.worker.celery_app worker \
+        --pool=prefork \
+        --concurrency=${TOTAL_CELERY_WORKERS} \
+        --loglevel=info \
+        --max-tasks-per-child=100 \
+        --task-events > "${CELERY_LOG_FILE}" 2>&1) &
+    fi
+    CELERY_PID=$!
+    WORKER_PIDS+=("$CELERY_PID")
+    echo "[dev]   Celery 워커 PID: ${CELERY_PID}, 로그: ${CELERY_LOG_FILE}"
+    sleep 1
+  else
+    # RQ 워커 시작 (기본)
+    echo "[dev] RQ ASR 워커 시작 (${NUM_ASR_WORKERS}개)..."
+    for ((i=1; i<=NUM_ASR_WORKERS; i++)); do
+      (cd "${BACKEND_DIR}" && poetry run python -m app.worker.run_worker) &
+      worker_pid=$!
+      WORKER_PIDS+=("$worker_pid")
+      echo "[dev]   ASR 워커 #${i} PID: ${worker_pid}"
+    done
+    sleep 1
+  fi
+
+  # LLM 워커는 Celery를 사용할 때는 시작하지 않음 (Celery 워커가 처리)
+  if [ "${TASK_QUEUE_TYPE}" != "celery" ]; then
+    echo "[dev] RQ LLM 워커 시작 (${NUM_LLM_WORKERS}개, 헬스체크 포함)..."
+    # LLM 워커 출력을 파일로 리다이렉트하여 확인 가능하도록
+    for ((i=1; i<=NUM_LLM_WORKERS; i++)); do
+      LLM_LOG_FILE="${ROOT_DIR}/llm_worker_${i}.log"
+      # 기존 로그 파일이 있으면 백업
+      if [ -f "${LLM_LOG_FILE}" ]; then
+        mv "${LLM_LOG_FILE}" "${LLM_LOG_FILE}.old" 2>/dev/null || true
+      fi
+      (cd "${BACKEND_DIR}" && poetry run python -m app.worker.run_llm_worker > "${LLM_LOG_FILE}" 2>&1) &
+      llm_worker_pid=$!
+      LLM_WORKER_PIDS+=("$llm_worker_pid")
+      echo "[dev]   LLM 워커 #${i} PID: ${llm_worker_pid}, 로그: ${LLM_LOG_FILE}"
+    done
+  else
+    echo "[dev] LLM 워커는 Celery 워커가 처리합니다."
+    LLM_WORKER_PIDS=()  # Celery 사용 시 LLM 워커 PID 없음
   fi
   
-  # LLM 워커 헬스체크 대기 (최대 10초, 짧게 설정하여 프론트엔드 시작 지연 최소화)
+  # LLM 워커 헬스체크 (RQ 사용 시에만)
   LLM_WORKER_SUCCESS=false
-  if [ -n "${LLM_WORKER_PID}" ]; then
-    echo "[dev] LLM 워커 헬스체크 대기 중..."
-    for llm_wait in {1..20}; do
-      # 프로세스가 살아있는지 확인
-      if ! kill -0 "${LLM_WORKER_PID}" 2>/dev/null; then
-      echo "[dev] ⚠ LLM 워커가 헬스체크 실패로 종료되었습니다."
+  if [ "${TASK_QUEUE_TYPE}" != "celery" ]; then
+    # 프로세스가 실제로 시작되었는지 확인
+    sleep 0.5
+    LLM_WORKERS_STARTED=0
+    for pid in "${LLM_WORKER_PIDS[@]}"; do
+      if kill -0 "${pid}" 2>/dev/null; then
+        LLM_WORKERS_STARTED=$((LLM_WORKERS_STARTED + 1))
+      fi
+    done
+    
+    if [ "$LLM_WORKERS_STARTED" -eq 0 ]; then
+      echo "[dev] ⚠ 모든 LLM 워커가 즉시 종료되었습니다."
       echo "[dev]   LLM 워커 로그 확인:"
-      if [ -f "${LLM_LOG_FILE}" ]; then
-        # Windows에서 tail이 없을 수 있으므로 head/tail 대신 직접 읽기
+      if [ -f "${ROOT_DIR}/llm_worker_1.log" ]; then
         if command -v tail >/dev/null 2>&1; then
-          tail -n 30 "${LLM_LOG_FILE}" 2>/dev/null || echo "[dev]   로그 파일을 읽을 수 없습니다."
+          tail -n 50 "${ROOT_DIR}/llm_worker_1.log" 2>/dev/null || cat "${ROOT_DIR}/llm_worker_1.log" 2>/dev/null | head -n 50
         else
-          echo "[dev]   로그 파일: ${LLM_LOG_FILE}"
+          head -n 50 "${ROOT_DIR}/llm_worker_1.log" 2>/dev/null || echo "[dev]   로그 파일을 읽을 수 없습니다."
         fi
       else
         echo "[dev]   로그 파일을 찾을 수 없습니다."
       fi
-      echo "[dev]   LLM 기능 없이 계속 진행합니다. (ASR 워커와 클라이언트는 정상 작동)"
-      LLM_WORKER_SUCCESS=false
-      break
+      echo "[dev]   LLM 기능 없이 계속 진행합니다."
+      LLM_WORKER_PIDS=()
+    else
+      echo "[dev] ${LLM_WORKERS_STARTED}개의 LLM 워커가 시작되었습니다."
     fi
     
-    # 로그 파일이 존재하고 프로세스가 살아있으면 성공으로 간주
-    if [ -f "${LLM_LOG_FILE}" ] && kill -0 "${LLM_WORKER_PID}" 2>/dev/null; then
-      # 로그 파일 크기가 증가했는지 확인 (워커가 출력을 하고 있다는 증거)
-      if [ "$llm_wait" -ge 5 ]; then
-        echo "[dev] ✓ LLM 워커가 실행 중입니다."
-        LLM_WORKER_SUCCESS=true
-        break
-      fi
-    fi
-    
-    # 진행 상황 표시 (2초마다)
-    if [ $((llm_wait % 4)) -eq 0 ]; then
-      echo "[dev]   LLM 워커 헬스체크 대기 중... ($((llm_wait / 2))초 경과, PID: ${LLM_WORKER_PID})"
-    fi
-    
-    sleep 0.5
-    
-    # 타임아웃 처리 (10초)
-    if [ "$llm_wait" -ge 20 ]; then
-      echo "[dev] ⚠ LLM 워커 헬스체크 타임아웃 (10초)"
-      # 프로세스가 살아있으면 성공으로 간주
-      if kill -0 "${LLM_WORKER_PID}" 2>/dev/null; then
-        echo "[dev]   LLM 워커 프로세스는 실행 중입니다. 계속 진행합니다."
-        LLM_WORKER_SUCCESS=true
-      else
-        echo "[dev]   LLM 워커가 실행 중이지만 헬스체크 완료를 확인하지 못했습니다."
+    # LLM 워커 헬스체크 대기 (최대 10초, 짧게 설정하여 프론트엔드 시작 지연 최소화)
+    if [ "${#LLM_WORKER_PIDS[@]}" -gt 0 ]; then
+    echo "[dev] LLM 워커 헬스체크 대기 중..."
+    for llm_wait in {1..20}; do
+      # 프로세스가 살아있는지 확인
+      alive_count=0
+      for pid in "${LLM_WORKER_PIDS[@]}"; do
+        if kill -0 "${pid}" 2>/dev/null; then
+          alive_count=$((alive_count + 1))
+        fi
+      done
+      
+      if [ "$alive_count" -eq 0 ]; then
+        echo "[dev] ⚠ 모든 LLM 워커가 헬스체크 실패로 종료되었습니다."
         echo "[dev]   LLM 워커 로그 확인:"
-        if [ -f "${LLM_LOG_FILE}" ]; then
+        if [ -f "${ROOT_DIR}/llm_worker_1.log" ]; then
           if command -v tail >/dev/null 2>&1; then
-            tail -n 30 "${LLM_LOG_FILE}" 2>/dev/null || echo "[dev]   로그 파일을 읽을 수 없습니다."
+            tail -n 30 "${ROOT_DIR}/llm_worker_1.log" 2>/dev/null || echo "[dev]   로그 파일을 읽을 수 없습니다."
           else
-            echo "[dev]   로그 파일: ${LLM_LOG_FILE}"
+            echo "[dev]   로그 파일: ${ROOT_DIR}/llm_worker_1.log"
           fi
         else
           echo "[dev]   로그 파일을 찾을 수 없습니다."
         fi
+        echo "[dev]   LLM 기능 없이 계속 진행합니다. (ASR 워커와 클라이언트는 정상 작동)"
         LLM_WORKER_SUCCESS=false
+        break
       fi
-      break
-    fi
+      
+      # 로그 파일이 존재하고 프로세스가 살아있으면 성공으로 간주
+      if [ -f "${ROOT_DIR}/llm_worker_1.log" ] && [ "$alive_count" -gt 0 ]; then
+        # 로그 파일 크기가 증가했는지 확인 (워커가 출력을 하고 있다는 증거)
+        if [ "$llm_wait" -ge 5 ]; then
+          echo "[dev] ✓ ${alive_count}개의 LLM 워커가 실행 중입니다."
+          LLM_WORKER_SUCCESS=true
+          break
+        fi
+      fi
+      
+      # 진행 상황 표시 (2초마다)
+      if [ $((llm_wait % 4)) -eq 0 ]; then
+        echo "[dev]   LLM 워커 헬스체크 대기 중... ($((llm_wait / 2))초 경과, ${alive_count}개 실행 중)"
+      fi
+      
+      sleep 0.5
+      
+      # 타임아웃 처리 (10초)
+      if [ "$llm_wait" -ge 20 ]; then
+        echo "[dev] ⚠ LLM 워커 헬스체크 타임아웃 (10초)"
+        # 프로세스가 살아있으면 성공으로 간주
+        if [ "$alive_count" -gt 0 ]; then
+          echo "[dev]   ${alive_count}개의 LLM 워커 프로세스는 실행 중입니다. 계속 진행합니다."
+          LLM_WORKER_SUCCESS=true
+        else
+          echo "[dev]   LLM 워커가 실행 중이지만 헬스체크 완료를 확인하지 못했습니다."
+          echo "[dev]   LLM 워커 로그 확인:"
+          if [ -f "${ROOT_DIR}/llm_worker_1.log" ]; then
+            if command -v tail >/dev/null 2>&1; then
+              tail -n 30 "${ROOT_DIR}/llm_worker_1.log" 2>/dev/null || echo "[dev]   로그 파일을 읽을 수 없습니다."
+            else
+              echo "[dev]   로그 파일: ${ROOT_DIR}/llm_worker_1.log"
+            fi
+          else
+            echo "[dev]   로그 파일을 찾을 수 없습니다."
+          fi
+          LLM_WORKER_SUCCESS=false
+        fi
+        break
+      fi
     done
   else
     echo "[dev] LLM 워커가 시작되지 않았습니다. 헬스체크를 건너뜁니다."
   fi
-  
-  # LLM 워커 상태 출력
-  if [ "$LLM_WORKER_SUCCESS" = true ]; then
-    echo "[dev] ✓ LLM 워커가 정상적으로 시작되었습니다."
   else
-    echo "[dev] ⚠ LLM 워커가 시작되지 않았거나 헬스체크를 통과하지 못했습니다."
-    echo "[dev]   LLM 기능 없이 계속 진행합니다."
+    # Celery 사용 시
+    echo "[dev] ✓ Celery 워커가 실행 중입니다 (ASR + LLM 모두 처리)."
+    LLM_WORKER_SUCCESS=true
+  fi
+  
+  # LLM 워커 상태 출력 (RQ 사용 시에만)
+  if [ "${TASK_QUEUE_TYPE}" != "celery" ]; then
+    if [ "$LLM_WORKER_SUCCESS" = true ]; then
+      echo "[dev] ✓ LLM 워커가 정상적으로 시작되었습니다."
+    else
+      echo "[dev] ⚠ LLM 워커가 시작되지 않았거나 헬스체크를 통과하지 못했습니다."
+      echo "[dev]   LLM 기능 없이 계속 진행합니다."
+    fi
   fi
   
   echo "[dev] Next.js 클라이언트 시작..."
@@ -389,9 +503,13 @@ if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ -n "${MSYSTEM:
 fi
 
 # WSL/Linux 환경에서 직접 실행
-export PATH="$HOME/.local/bin:$PATH"
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+# Poetry 환경 확인 (공통 함수 사용)
+if ! setup_poetry "[dev]"; then
+    exit 1
+fi
 
 # 의존성 설치 확인 (한 번만 설치)
 echo "[dev] 백엔드 의존성 확인 중..."
@@ -417,15 +535,26 @@ fi
 wait_for_minio || true
 check_llm_model
 
+# Task Queue 타입 확인 (.env에서)
+TASK_QUEUE_TYPE="${TASK_QUEUE_TYPE:-rq}"
+if [ -f "${ENV_FILE}" ]; then
+  # .env 파일에서 TASK_QUEUE_TYPE 읽기
+  set -a
+  source "${ENV_FILE}" 2>/dev/null || true
+  set +a
+  TASK_QUEUE_TYPE="${TASK_QUEUE_TYPE:-rq}"
+fi
+
 API_PID=""
 WORKER_PID=""
 LLM_WORKER_PID=""
+CELERY_PID=""
 CLIENT_PID=""
 
 cleanup() {
   echo ""
   echo "[dev] 정리 중..."
-  for pid in "$CLIENT_PID" "$LLM_WORKER_PID" "$WORKER_PID" "$API_PID"; do
+  for pid in "$CLIENT_PID" "$LLM_WORKER_PID" "$WORKER_PID" "$CELERY_PID" "$API_PID"; do
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
       kill "${pid}" 2>/dev/null || true
       wait "${pid}" 2>/dev/null || true
@@ -454,83 +583,96 @@ for wait_count in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   sleep 0.5
 done
 
-echo "[dev] RQ 워커 시작..."
-(cd "${BACKEND_DIR}" && poetry run python -m app.worker.run_worker) &
-WORKER_PID=$!
-sleep 1
+if [ "${TASK_QUEUE_TYPE}" = "celery" ]; then
+  # Celery 워커 시작
+  echo "[dev] Celery 워커 시작..."
+  CELERY_LOG_FILE="/tmp/celery_worker.log"
+  (cd "${BACKEND_DIR}" && poetry run celery -A app.worker.celery_app worker \
+    --pool=prefork \
+    --concurrency=2 \
+    --loglevel=info \
+    --max-tasks-per-child=100 \
+    --task-events > "${CELERY_LOG_FILE}" 2>&1) &
+  CELERY_PID=$!
+  echo "[dev] Celery 워커 PID: ${CELERY_PID}, 로그: ${CELERY_LOG_FILE}"
+  sleep 1
+else
+  # RQ 워커 시작 (기본)
+  echo "[dev] RQ 워커 시작..."
+  (cd "${BACKEND_DIR}" && poetry run python -m app.worker.run_worker) &
+  WORKER_PID=$!
+  sleep 1
 
-echo "[dev] LLM 워커 시작 (헬스체크 포함)..."
-(cd "${BACKEND_DIR}" && poetry run python -m app.worker.run_llm_worker) &
-LLM_WORKER_PID=$!
+  echo "[dev] LLM 워커 시작 (헬스체크 포함)..."
+  (cd "${BACKEND_DIR}" && poetry run python -m app.worker.run_llm_worker) &
+  LLM_WORKER_PID=$!
 
-# LLM 워커 헬스체크 대기 (최대 30초)
-echo "[dev] LLM 워커 헬스체크 대기 중..."
-for llm_wait in {1..60}; do
-  if ! kill -0 "${LLM_WORKER_PID}" 2>/dev/null; then
-    echo "[dev] ✗ LLM 워커가 예기치 않게 종료되었습니다."
-    exit 1
-  fi
-  sleep 0.5
-  if [ "$llm_wait" -ge 60 ]; then
-    echo "[dev] ✓ LLM 워커가 실행 중입니다."
-    break
-  fi
-  done
-  
-  # LLM 워커 상태 출력
-  if [ "$LLM_WORKER_SUCCESS" = true ]; then
-    echo "[dev] ✓ LLM 워커가 정상적으로 시작되었습니다."
-  else
-    echo "[dev] ⚠ LLM 워커가 시작되지 않았거나 헬스체크를 통과하지 못했습니다."
-    echo "[dev]   LLM 기능 없이 계속 진행합니다."
-  fi
-  
-  echo "[dev] Next.js 클라이언트 시작..."
-  (cd "${CLIENT_DIR}" && npm run dev) &
-  CLIENT_PID=$!
-  echo "[dev] 클라이언트 PID: ${CLIENT_PID}"
-  
-  # 클라이언트 시작 대기 (최대 10초)
-  echo "[dev] 클라이언트 시작 대기 중..."
-  CLIENT_STARTED=false
-  for client_wait in {1..20}; do
-    if ! kill -0 "${CLIENT_PID}" 2>/dev/null; then
-      echo "[dev] ⚠ 클라이언트가 시작되지 않았습니다."
-      break
-    fi
-    # 포트 3000이 열렸는지 확인 (Windows에서는 netstat 사용)
-    if command -v netstat >/dev/null 2>&1; then
-      if netstat -an 2>/dev/null | grep -q ":3000.*LISTEN" || netstat -an 2>/dev/null | grep -q "3000.*LISTENING"; then
-        CLIENT_STARTED=true
-        break
-      fi
-    elif command -v ss >/dev/null 2>&1; then
-      if ss -an 2>/dev/null | grep -q ":3000.*LISTEN"; then
-        CLIENT_STARTED=true
-        break
-      fi
-    else
-      # netstat/ss가 없으면 일정 시간 후 진행
-      if [ "$client_wait" -ge 10 ]; then
-        CLIENT_STARTED=true
-        break
-      fi
+  # LLM 워커 헬스체크 대기 (최대 30초)
+  echo "[dev] LLM 워커 헬스체크 대기 중..."
+  for llm_wait in {1..60}; do
+    if ! kill -0 "${LLM_WORKER_PID}" 2>/dev/null; then
+      echo "[dev] ✗ LLM 워커가 예기치 않게 종료되었습니다."
+      exit 1
     fi
     sleep 0.5
+    if [ "$llm_wait" -ge 60 ]; then
+      echo "[dev] ✓ LLM 워커가 실행 중입니다."
+      break
+    fi
   done
-  
-  echo ""
-  echo "[dev] ========================================"
-  echo "[dev] 모든 프로세스가 실행 중입니다."
-  echo "[dev] - API: http://localhost:8000"
-  echo "[dev] - API Docs: http://localhost:8000/docs"
-  echo "[dev] - Client: http://localhost:3000"
-  if [ "$LLM_WORKER_SUCCESS" = true ]; then
+fi
+
+echo "[dev] Next.js 클라이언트 시작..."
+(cd "${CLIENT_DIR}" && npm run dev) &
+CLIENT_PID=$!
+echo "[dev] 클라이언트 PID: ${CLIENT_PID}"
+
+# 클라이언트 시작 대기 (최대 10초)
+echo "[dev] 클라이언트 시작 대기 중..."
+CLIENT_STARTED=false
+for client_wait in {1..20}; do
+  if ! kill -0 "${CLIENT_PID}" 2>/dev/null; then
+    echo "[dev] ⚠ 클라이언트가 시작되지 않았습니다."
+    break
+  fi
+  # 포트 3000이 열렸는지 확인 (Windows에서는 netstat 사용)
+  if command -v netstat >/dev/null 2>&1; then
+    if netstat -an 2>/dev/null | grep -q ":3000.*LISTEN" || netstat -an 2>/dev/null | grep -q "3000.*LISTENING"; then
+      CLIENT_STARTED=true
+      break
+    fi
+  elif command -v ss >/dev/null 2>&1; then
+    if ss -an 2>/dev/null | grep -q ":3000.*LISTEN"; then
+      CLIENT_STARTED=true
+      break
+    fi
+  else
+    # netstat/ss가 없으면 일정 시간 후 진행
+    if [ "$client_wait" -ge 10 ]; then
+      CLIENT_STARTED=true
+      break
+    fi
+  fi
+  sleep 0.5
+done
+
+echo ""
+echo "[dev] ========================================"
+echo "[dev] 모든 프로세스가 실행 중입니다."
+echo "[dev] - API: http://localhost:8000"
+echo "[dev] - API Docs: http://localhost:8000/docs"
+echo "[dev] - Client: http://localhost:3000"
+if [ "${TASK_QUEUE_TYPE}" = "celery" ]; then
+  echo "[dev] - Celery Worker: 실행 중 (ASR + LLM 모두 처리)"
+else
+  echo "[dev] - RQ Worker: 실행 중"
+  if [ -n "${LLM_WORKER_PID:-}" ] && kill -0 "${LLM_WORKER_PID}" 2>/dev/null; then
     echo "[dev] - LLM Worker: 실행 중"
   else
     echo "[dev] - LLM Worker: 비활성화됨"
   fi
-  echo "[dev] ========================================"
+fi
+echo "[dev] ========================================"
 echo "[dev] 종료하려면 Ctrl+C 를 누르세요."
 echo ""
 
