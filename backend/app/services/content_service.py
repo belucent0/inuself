@@ -14,7 +14,7 @@ from ..core.storage import delete_file, upload_fileobj
 from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
 from ..schemas.content import ContentDetail, ContentListItem, UploadResponse
-from ..worker.queue import cancel_jobs_by_content_ids, enqueue_transcription_job
+from ..worker.queue import cancel_jobs_by_content_ids  # RQ용 취소만 남김
 from ..worker.llm_queue import cancel_llm_jobs_by_content_ids
 
 logger = logging.getLogger(__name__)
@@ -78,25 +78,32 @@ class ContentService:
         logger.info("[Upload] DB에 콘텐츠 생성 완료: content_id=%s, filename=%s", content.id, file.filename)
         print(f"[Upload] OK DB 저장 완료: content_id={content.id}")
 
-        # 비동기 컨텍스트에서 동기 RQ 큐 작업을 executor에서 실행
+        # 비동기 컨텍스트에서 동기 큐 작업을 executor에서 실행
         logger.info("[Upload] 큐에 작업 등록 시도: content_id=%s, filename=%s", content.id, file.filename)
         print(f"[Upload] [4/4] 큐에 작업 등록 중: content_id={content.id}")
         try:
             loop = asyncio.get_running_loop()
-            # lambda 대신 functools.partial 사용 (클로저 문제 방지)
+            # Task Queue Adapter 사용 (RQ 또는 Celery)
             from functools import partial
+            from ..worker.task_queue_adapter import get_task_queue
+            
+            task_queue = get_task_queue()
+            queue_type_name = type(task_queue).__name__
+            logger.info(f"[Upload] 사용 중인 큐 어댑터: {queue_type_name}")
+            print(f"[Upload] 큐 어댑터: {queue_type_name}")
+            
             enqueue_func = partial(
-                enqueue_transcription_job,
+                task_queue.enqueue_asr_job,
                 content_id=content.id,
-                original_filename=file.filename,
                 storage_key=object_key,
+                original_filename=file.filename,
                 model_size=self.settings.whisper_model_default,
                 processing_mode="case4",
                 num_asr_chunks=self.settings.max_workers,
             )
-            await loop.run_in_executor(None, enqueue_func)
-            logger.info("[Upload] 큐에 작업 등록 성공: content_id=%s", content.id)
-            print(f"[Upload] OK 큐 등록 완료: content_id={content.id}")
+            job_id = await loop.run_in_executor(None, enqueue_func)
+            logger.info("[Upload] 큐에 작업 등록 성공: content_id=%s, job_id=%s", content.id, job_id)
+            print(f"[Upload] OK 큐 등록 완료: content_id={content.id}, job_id={job_id}")
         except Exception as exc:
             error_msg = f"큐에 작업 등록 실패: content_id={content.id}, error={exc}"
             logger.exception("[Upload] %s", error_msg)
@@ -177,4 +184,82 @@ class ContentService:
                 await loop.run_in_executor(None, delete_file, object_key)
             except Exception as exc:
                 logger.warning("Failed to delete file from storage: %s, error: %s", object_key, exc)
+
+    async def retry_processing(self, content_id: int, retry_type: str) -> dict:
+        """
+        실패한 콘텐츠를 재처리합니다.
+        
+        Args:
+            content_id: 콘텐츠 ID
+            retry_type: "asr" 또는 "summary"
+        
+        Returns:
+            {"success": True, "message": "...", "job_id": "..."}
+        """
+        content = await self.repo.get_content(content_id)
+        if not content:
+            raise ValueError("Content not found")
+        
+        retry_type = retry_type.lower()
+        
+        if retry_type == "asr":
+            if content.status != ContentStatus.ASR_FAILED:
+                raise ValueError(f"Cannot retry ASR for content with status: {content.status.value}")
+            
+            # 상태를 QUEUED로 변경
+            await self.repo.update_content_status(content_id, ContentStatus.QUEUED)
+            await self.repo.add_log(
+                content_id=content_id,
+                log={"event": "manual_retry", "type": "asr"},
+                message="Manual ASR retry requested by user",
+            )
+            await self.session.commit()
+            
+            # 큐에 작업 등록
+            loop = asyncio.get_running_loop()
+            from functools import partial
+            from ..worker.task_queue_adapter import get_task_queue
+            
+            task_queue = get_task_queue()
+            enqueue_func = partial(
+                task_queue.enqueue_asr_job,
+                content_id=content_id,
+                storage_key=content.object_key,
+                original_filename=content.filename,
+                model_size=self.settings.whisper_model_default,
+                processing_mode="case4",
+                num_asr_chunks=self.settings.max_workers,
+            )
+            job_id = await loop.run_in_executor(None, enqueue_func)
+            
+            logger.info("Manual ASR retry enqueued: content_id=%s, job_id=%s", content_id, job_id)
+            return {"success": True, "message": "ASR 재처리가 시작되었습니다.", "job_id": job_id}
+        
+        elif retry_type == "summary":
+            if content.status != ContentStatus.SUMMARY_FAILED:
+                raise ValueError(f"Cannot retry LLM summary for content with status: {content.status.value}")
+            
+            # 상태를 SUMMARIZING으로 변경
+            await self.repo.update_content_status(content_id, ContentStatus.SUMMARIZING)
+            await self.repo.add_llm_log(
+                content_id=content_id,
+                log={"event": "manual_retry", "type": "llm_summary"},
+                message="Manual LLM summary retry requested by user",
+            )
+            await self.session.commit()
+            
+            # 큐에 작업 등록
+            loop = asyncio.get_running_loop()
+            from functools import partial
+            from ..worker.task_queue_adapter import get_task_queue
+            
+            task_queue = get_task_queue()
+            enqueue_func = partial(task_queue.enqueue_llm_job, content_id=content_id)
+            job_id = await loop.run_in_executor(None, enqueue_func)
+            
+            logger.info("Manual LLM retry enqueued: content_id=%s, job_id=%s", content_id, job_id)
+            return {"success": True, "message": "LLM 요약 재처리가 시작되었습니다.", "job_id": job_id}
+        
+        else:
+            raise ValueError(f"Invalid retry_type: {retry_type}. Must be 'asr' or 'summary'")
 

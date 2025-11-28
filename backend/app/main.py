@@ -59,16 +59,18 @@ async def lifespan(app: FastAPI):
     import asyncio
     import os
     
-    # 시작 시: 워커 시작 (개발 환경에서는 항상 시작)
-    # 프로덕션에서는 환경변수로 제어 가능
-    should_start_worker = os.getenv("START_WORKER", "true").lower() == "true"
+    # 시작 시: 워커 시작 제어
+    # 개발 환경에서는 run_dev.sh가 워커를 관리하므로 기본적으로 비활성화
+    # 프로덕션에서는 START_WORKER=true로 설정하여 FastAPI가 워커를 시작하도록 할 수 있음
+    should_start_worker = os.getenv("START_WORKER", "false").lower() == "true"
     
     if should_start_worker:
         safe_print("[FastAPI] 워커를 백그라운드에서 시작합니다...")
         start_worker_background()
     else:
         safe_print("[FastAPI] 워커 자동 시작이 비활성화되었습니다.")
-        safe_print("[FastAPI] 워커 실행: poetry run python -m app.worker.run_worker")
+        safe_print("[FastAPI] 개발 환경: run_dev.sh가 워커를 관리합니다.")
+        safe_print("[FastAPI] 프로덕션 환경: START_WORKER=true 설정 시 자동 시작됩니다.")
     
     # 백그라운드 태스크: 주기적으로 SUMMARIZING 상태 콘텐츠 자동 재큐잉
     async def auto_requeue_llm_jobs():

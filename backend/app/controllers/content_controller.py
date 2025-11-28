@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.session import get_session
@@ -87,5 +87,29 @@ async def bulk_delete_contents(
         logger = logging.getLogger(__name__)
         logger.exception("Bulk delete contents failed")
         raise HTTPException(status_code=500, detail=f"삭제 실패: {str(exc)}") from exc
+
+
+@router.post("/{content_id}/retry", tags=["contents"])
+async def retry_processing(
+    content_id: int,
+    type: str = Query(..., description="재처리 타입: 'asr' (ASR 재처리) 또는 'summary' (LLM 요약 재처리)"),
+    service: ContentService = Depends(get_service)
+):
+    """
+    실패한 콘텐츠를 재처리합니다.
+    
+    Query Parameters:
+        type: "asr" (ASR 재처리) 또는 "summary" (LLM 요약 재처리)
+    """
+    try:
+        result = await service.retry_processing(content_id, type)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Retry processing failed")
+        raise HTTPException(status_code=500, detail=f"재처리 실패: {str(exc)}") from exc
 
 

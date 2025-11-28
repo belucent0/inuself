@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     debug: bool = False
 
+    # Task Queue 설정
+    task_queue_type: str = "rq"  # "rq" 또는 "celery"
+    
     postgres_dsn: str = "postgresql+asyncpg://user:pass@localhost:5432/asr"
     redis_url: str = "redis://localhost:6379/0"
 
@@ -42,7 +45,7 @@ class Settings(BaseSettings):
     lmstudio_base_url: str = "http://localhost:1234"
     lmstudio_model_name: str = "gpt-oss-20b"
     lmstudio_system_prompt: str = "Always answer in rhymes. Today is Thursday"
-    llm_context_length: int = 4096
+    llm_context_length: int = 15016  # LM Studio에서 로드된 실제 컨텍스트 길이 (15,016 토큰)
     llm_temperature: float = 0.4
     llm_top_p: float = 0.9
     llm_max_tokens: int = 1024
@@ -63,7 +66,17 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """싱글톤 설정 인스턴스."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # .env 파일 경로 확인
+    project_root = _get_project_root()
+    env_file = project_root / ".env"
+    logger.info(f"[Config] .env 파일 경로: {env_file}")
+    logger.info(f"[Config] .env 파일 존재: {env_file.exists()}")
+    
     settings = Settings()
+    logger.info(f"[Config] task_queue_type 로드됨: {settings.task_queue_type}")
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     return settings
 
