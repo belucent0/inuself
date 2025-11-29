@@ -34,6 +34,18 @@ services:
     command: ["mb", "--ignore-existing", "local/asr-media"]
     restart: "no"
 
+  minio-policy-setup:
+    image: minio/mc:latest
+    container_name: asr-minio-policy-setup
+    depends_on:
+      minio-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
+    entrypoint: /bin/sh
+    command: -c "mc anonymous set download local/asr-media"
+    restart: "no"
+
 
   redis:
     image: redis:7.2-alpine
