@@ -1,8 +1,6 @@
 """Celery 태스크 정의 - ASR 및 LLM 처리."""
 import logging
 from .celery_app import celery_app
-from .processor import process_transcription_job
-from .llm_processor import process_llm_job
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +26,9 @@ def process_asr_task(
     기존 RQ의 process_transcription_job을 재사용합니다.
     """
     try:
+        # Lazy import: API 서버에서는 torch가 없으므로 실행 시점에만 import
+        from .processor import process_transcription_job
+        
         logger.info(
             "[Celery ASR] Starting task: content_id=%s, task_id=%s",
             content_id,
@@ -66,6 +67,9 @@ def process_llm_task(self, content_id: int):
     기존 RQ의 process_llm_job을 재사용합니다.
     """
     try:
+        # Lazy import: API 서버에서는 torch가 없으므로 실행 시점에만 import
+        from .llm_processor import process_llm_job
+        
         logger.info(
             "[Celery LLM] Starting task: content_id=%s, task_id=%s",
             content_id,
