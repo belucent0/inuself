@@ -34,7 +34,7 @@ class LlmSummaryService:
                     content_id,
                     len(content.summary_md)
                 )
-                from .utils import safe_print
+                from ..worker.utils import safe_print
                 safe_print(f"[LLM] SKIP 이미 완료된 콘텐츠: content_id={content_id}, summary_length={len(content.summary_md)}")
                 return
             else:
@@ -43,7 +43,7 @@ class LlmSummaryService:
                     "Content %s status is COMPLETED but summary_md is empty, reprocessing",
                     content_id
                 )
-                from .utils import safe_print
+                from ..worker.utils import safe_print
                 safe_print(f"[LLM] WARNING 상태는 COMPLETED인데 summary_md가 없음, 재처리: content_id={content_id}")
 
         transcription = content.transcription or {}
