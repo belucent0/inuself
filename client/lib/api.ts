@@ -20,6 +20,7 @@ export type ContentSummary = {
   id: number
   filename: string
   object_key: string
+  media_url?: string | null
   speakers: string[]
   duration_seconds: number
   status: ContentStatus

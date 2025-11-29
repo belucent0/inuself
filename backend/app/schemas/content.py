@@ -29,6 +29,7 @@ class ContentBaseSchema(BaseModel):
     id: int
     filename: str
     object_key: str
+    media_url: str | None = None
     speakers: list[str] = Field(default_factory=list)
     duration_seconds: float = 0.0
     status: ContentStatus

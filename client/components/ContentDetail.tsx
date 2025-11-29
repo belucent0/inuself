@@ -10,6 +10,13 @@ type Props = {
   content: ContentDetailType
 }
 
+// 오디오 파일인지 확인하는 헬퍼 함수
+function isAudioFile(filename: string): boolean {
+  const audioExtensions = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.wma']
+  const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
+  return audioExtensions.includes(ext)
+}
+
 export default function ContentDetail({ content }: Props) {
   const router = useRouter()
   const [message, setMessage] = useState<string>('')
@@ -37,6 +44,32 @@ export default function ContentDetail({ content }: Props) {
         총 재생 길이 {content.duration_seconds.toFixed(1)}초 · 화자 {content.speakers.join(', ') || '분석 중'}
       </p>
       <p>저장 키: {content.object_key}</p>
+      
+      {content.media_url && (
+        <section style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+          <h3>미디어 재생</h3>
+          {isAudioFile(content.filename) ? (
+            <audio 
+              controls 
+              src={content.media_url} 
+              style={{ width: '100%', maxWidth: '600px' }}
+              preload="metadata"
+            >
+              브라우저가 오디오 재생을 지원하지 않습니다.
+            </audio>
+          ) : (
+            <video 
+              controls 
+              src={content.media_url} 
+              style={{ width: '100%', maxHeight: '500px' }}
+              preload="metadata"
+            >
+              브라우저가 비디오 재생을 지원하지 않습니다.
+            </video>
+          )}
+        </section>
+      )}
+      
       <section>
         <h3>LLM 요약</h3>
         {content.status === 'SUMMARIZING' && <p>LLM이 요약을 생성하는 중입니다. 잠시만 기다려 주세요.</p>}

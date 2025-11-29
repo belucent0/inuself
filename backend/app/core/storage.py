@@ -123,6 +123,25 @@ def delete_file(key: str) -> None:
         local_path.unlink()
 
 
+def get_public_media_url(key: str) -> str | None:
+    """MinIO에 저장된 파일의 public URL을 반환."""
+    settings = get_settings()
+    client = get_s3_client()
+    if client:
+        try:
+            client.head_bucket(Bucket=settings.s3_bucket)
+            # media_base_url이 설정되어 있으면 nginx 프록시 경로 사용
+            if settings.media_base_url:
+                # key는 "uploads/xxx.mp4" 형식이므로 그대로 사용
+                return f"{settings.media_base_url}/{key}"
+            else:
+                # 개발 환경: MinIO 직접 URL 생성
+                return f"{settings.s3_endpoint}/{settings.s3_bucket}/{key}"
+        except ClientError:
+            pass
+    return None
+
+
 def check_storage_health() -> tuple[bool, str]:
     """스토리지 연결 상태를 확인하고 메시지를 반환."""
     settings = get_settings()

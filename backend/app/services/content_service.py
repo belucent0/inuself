@@ -10,7 +10,7 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
-from ..core.storage import delete_file, upload_fileobj
+from ..core.storage import delete_file, upload_fileobj, get_public_media_url
 from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
 from ..schemas.content import ContentDetail, ContentListItem, UploadResponse
@@ -30,7 +30,13 @@ class ContentService:
 
     async def list_contents(self, limit: int = 20, offset: int = 0) -> Sequence[ContentListItem]:
         rows = await self.repo.list_contents(limit=limit, offset=offset)
-        return [ContentListItem.model_validate(row) for row in rows]
+        items = []
+        for row in rows:
+            item = ContentListItem.model_validate(row)
+            # media_url 추가
+            item.media_url = get_public_media_url(row.object_key)
+            items.append(item)
+        return items
 
     async def get_content(self, content_id: int) -> ContentDetail:
         content = await self.repo.get_content(content_id)
@@ -38,7 +44,10 @@ class ContentService:
             raise ValueError("Content not found")
         # lazy load logs
         await self.session.refresh(content)
-        return ContentDetail.model_validate(content)
+        detail = ContentDetail.model_validate(content)
+        # media_url 추가
+        detail.media_url = get_public_media_url(content.object_key)
+        return detail
 
     async def upload_and_enqueue(self, file: UploadFile) -> UploadResponse:
         logger.info("[Upload] 파일 업로드 시작: filename=%s", file.filename)

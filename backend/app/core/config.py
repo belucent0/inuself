@@ -34,9 +34,18 @@ class Settings(BaseSettings):
     s3_secret_key: str = "torchdev-secret"
     s3_bucket: str = "asr-media"
     s3_prefix: str = "uploads"
+    
+    # 외부 접근용 미디어 URL (nginx 프록시 경로)
+    # 환경변수로 설정 가능: MEDIA_BASE_URL=https://asr.timblo.io/media
+    media_base_url: str = ""  # 비어있으면 s3_endpoint 사용
 
     whisper_model_default: str = "large-v3"
     max_workers: int = 2
+
+    # ASR 청킹 설정 (긴 오디오 파일 처리용)
+    asr_chunk_duration_minutes: int = 30  # 청크 크기 (분)
+    asr_chunk_overlap_seconds: int = 0  # 오버랩 크기 (초) - 테스트용 0으로 설정
+    asr_chunk_threshold_minutes: int = 60  # 이 길이 이상인 파일만 청킹 적용
 
     # LLM 요약 설정 (Ollama/llama_cpp/LM Studio)
     llm_provider: str = "lmstudio"  # "ollama", "llama_cpp", "lmstudio"
