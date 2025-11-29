@@ -63,6 +63,7 @@ def run_asr_transcription(
     project_root: Path | None = None,
     part_label: str | None = None,
     time_range: tuple[float, float] | None = None,
+    prompt: str | None = None,
 ) -> tuple[dict[str, Any], float, float]:
     """
     ASR 전사 실행 (동기 처리).
@@ -73,6 +74,7 @@ def run_asr_transcription(
         project_root: 프로젝트 루트 경로
         part_label: 파트 식별자 (예: "Part 1", "Part 2")
         time_range: 시간 구간 튜플 (start, end) 또는 None
+        prompt: 이전 문맥 텍스트 (--prompt 옵션으로 전달)
     
     Returns:
         (asr_result, model_load_time, transcribe_time)
@@ -152,8 +154,14 @@ def run_asr_transcription(
         "-l", "ko",
         "--output-json-full",
         "--output-file", json_output_path.replace('.json', ''),
-        actual_audio_path
     ]
+    
+    # 프롬프트 옵션 추가 (문맥 주입)
+    if prompt:
+        cmd.extend(["--prompt", prompt])
+        print(f"{part_prefix} Using prompt context: {prompt[:100]}..." if len(prompt) > 100 else f"{part_prefix} Using prompt context: {prompt}")
+    
+    cmd.append(actual_audio_path)
     
     # GPU 사용 확인을 위한 환경 변수 설정 (필요한 경우)
     env = os.environ.copy()

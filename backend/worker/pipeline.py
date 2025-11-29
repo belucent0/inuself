@@ -1,5 +1,6 @@
 """ASR + 화자분리 메인 파이프라인."""
 import os
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -51,6 +52,23 @@ from .diarization_utils import (
     run_diarization,
 )
 from .whisper_utils import run_asr_transcription
+
+# Settings import를 위한 경로 조정
+_backend_dir = Path(__file__).parent.parent
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
+
+try:
+    from app.core.config import get_settings
+except ImportError:
+    # fallback: 직접 경로 구성
+    _app_dir = _backend_dir / "app"
+    if str(_app_dir) not in sys.path:
+        sys.path.insert(0, str(_app_dir))
+    from core.config import get_settings
+
+# 청킹 모듈 import
+from .chunked_asr import merge_asr_results, run_chunked_asr
 
 
 @dataclass
@@ -111,7 +129,35 @@ def run_asr_diarization_pipeline(
         "sample_rate": sample_rate,
     })
     
-    # Case 4: 화자분리와 ASR(전체 파일) 병렬 처리
+    # Settings 로드하여 청킹 설정 확인
+    try:
+        settings = get_settings()
+        chunk_threshold_minutes = settings.asr_chunk_threshold_minutes
+        chunk_duration_minutes = settings.asr_chunk_duration_minutes
+        chunk_overlap_seconds = settings.asr_chunk_overlap_seconds
+    except Exception as e:
+        print(f"[Pipeline] Warning: Failed to load settings, using defaults: {e}")
+        chunk_threshold_minutes = 60
+        chunk_duration_minutes = 30
+        chunk_overlap_seconds = 30
+    
+    # 청킹 여부 결정
+    audio_duration_minutes = audio_duration / 60.0
+    use_chunking = audio_duration_minutes >= chunk_threshold_minutes
+    
+    if use_chunking:
+        print(f"[Pipeline] Audio duration ({audio_duration_minutes:.2f} min) >= threshold ({chunk_threshold_minutes} min)")
+        print(f"[Pipeline] Using chunked ASR processing (chunk size: {chunk_duration_minutes} min, overlap: {chunk_overlap_seconds} s)")
+        logs.append({
+            "event": "chunking_enabled",
+            "chunk_duration_minutes": chunk_duration_minutes,
+            "chunk_overlap_seconds": chunk_overlap_seconds,
+        })
+    else:
+        print(f"[Pipeline] Audio duration ({audio_duration_minutes:.2f} min) < threshold ({chunk_threshold_minutes} min)")
+        print(f"[Pipeline] Using standard ASR processing (no chunking)")
+    
+    # Case 4: 화자분리와 ASR(전체 파일 또는 청킹) 병렬 처리
     if processing_mode == "case4":
         return _run_case4_parallel_full_asr(
             waveform=waveform,
@@ -122,6 +168,9 @@ def run_asr_diarization_pipeline(
             device=device,
             project_root=project_root,
             logs=logs,
+            use_chunking=use_chunking,
+            chunk_duration_seconds=chunk_duration_minutes * 60,
+            chunk_overlap_seconds=chunk_overlap_seconds,
         )
     else:
         raise ValueError(f"Unsupported processing mode: {processing_mode}")
@@ -136,10 +185,16 @@ def _run_case4_parallel_full_asr(
     device: str,
     project_root: Path | None,
     logs: list[dict[str, Any]],
+    use_chunking: bool = False,
+    chunk_duration_seconds: float = 1800.0,  # 30분 기본값
+    chunk_overlap_seconds: float = 30.0,
 ) -> PipelineResult:
-    """Case 4: 화자분리와 ASR(전체 파일) 병렬 처리."""
+    """Case 4: 화자분리와 ASR(전체 파일 또는 청킹) 병렬 처리."""
     print(f"\n{'='*60}")
-    print("[Case 4] Parallel Processing: Diarization and ASR (Full File)")
+    if use_chunking:
+        print("[Case 4] Parallel Processing: Diarization and ASR (Chunked)")
+    else:
+        print("[Case 4] Parallel Processing: Diarization and ASR (Full File)")
     print(f"{'='*60}")
     
     case_start = time.time()
@@ -157,24 +212,47 @@ def _run_case4_parallel_full_asr(
             audio_duration=audio_duration,
         )
         
-        # ASR 작업 제출 (전체 파일)
-        asr_future = executor.submit(
-            run_asr_transcription,
-            audio_path=audio_file_path,
-            model_size=model_size,
-            project_root=project_root,
-        )
+        # ASR 작업 제출 (전체 파일 또는 청킹)
+        if use_chunking:
+            asr_future = executor.submit(
+                run_chunked_asr,
+                audio_path=audio_file_path,
+                model_size=model_size,
+                chunk_duration_seconds=chunk_duration_seconds,
+                overlap_seconds=chunk_overlap_seconds,
+                project_root=project_root,
+            )
+        else:
+            asr_future = executor.submit(
+                run_asr_transcription,
+                audio_path=audio_file_path,
+                model_size=model_size,
+                project_root=project_root,
+            )
         
         # 두 작업 모두 완료 대기
         print(f"[Parallel] Waiting for both Diarization and ASR to complete...")
         diarization, diarization_load_time, diarization_time = diarization_future.result()
-        asr_result, model_load_time, transcribe_time = asr_future.result()
+        
+        if use_chunking:
+            # 청킹 결과는 리스트로 반환됨
+            chunk_results = asr_future.result()
+            # 청킹 결과 병합
+            asr_result = merge_asr_results(chunk_results, chunk_overlap_seconds)
+            # 청킹 모드에서는 모델 로드 시간과 전사 시간을 추정
+            model_load_time = 0.0  # 청킹 모드에서는 각 청크마다 로드되므로 정확한 시간 측정 어려움
+            transcribe_time = time.time() - case_start - diarization_load_time - diarization_time
+        else:
+            asr_result, model_load_time, transcribe_time = asr_future.result()
     
     execution_time = time.time() - case_start
     
     print(f"\n[Case 4] All tasks completed in {execution_time:.2f} seconds")
     print(f"  - Diarization (load + process): {diarization_load_time + diarization_time:.2f}s")
-    print(f"  - ASR (load + transcribe): {model_load_time + transcribe_time:.2f}s")
+    if use_chunking:
+        print(f"  - ASR (chunked, total): {transcribe_time:.2f}s")
+    else:
+        print(f"  - ASR (load + transcribe): {model_load_time + transcribe_time:.2f}s")
     
     # 화자 정보 병합
     print(f"\n[Merging] Combining ASR and diarization results...")
