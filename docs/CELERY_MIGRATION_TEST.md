@@ -85,3 +85,4 @@ poetry run celery -A app.worker.celery_app flower
 ✅ Windows에서 안정적 동작
 
 
+
