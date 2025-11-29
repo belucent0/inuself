@@ -37,3 +37,4 @@ if os.name == "nt":
         worker_pool="solo",  # Windows에서 안전한 solo pool
     )
 
+

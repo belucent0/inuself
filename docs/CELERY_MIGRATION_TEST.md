@@ -84,3 +84,4 @@ poetry run celery -A app.worker.celery_app flower
 ✅ 워커 크래시 시 작업 자동 재시도
 ✅ Windows에서 안정적 동작
 
+
