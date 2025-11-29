@@ -14,6 +14,18 @@ from .worker.run_llm_worker import safe_print
 logger = logging.getLogger(__name__)
 
 
+class HealthCheckLogFilter(logging.Filter):
+    """헬스체크 요청 로그를 필터링하는 필터."""
+    
+    def filter(self, record: logging.LogRecord) -> bool:
+        """헬스체크 경로(`/health`)는 로그에서 제외."""
+        # uvicorn access log 형식: "127.0.0.1:xxxxx - "GET /health HTTP/1.1" 200 OK"
+        message = record.getMessage()
+        if "/health" in message and "200" in message:
+            return False  # 로그 제외
+        return True  # 다른 로그는 정상 출력
+
+
 def start_worker_background() -> None:
     """백그라운드에서 RQ 워커 시작 (subprocess로 실행)."""
     import logging
@@ -70,7 +82,7 @@ async def lifespan(app: FastAPI):
     else:
         safe_print("[FastAPI] 워커 자동 시작이 비활성화되었습니다.")
         safe_print("[FastAPI] 개발 환경: run_dev.sh가 워커를 관리합니다.")
-        safe_print("[FastAPI] 프로덕션 환경: START_WORKER=true 설정 시 자동 시작됩니다.")
+        safe_print("[FastAPI] 프로덕션 환경: start.bat을 사용하면 PM2 워커도 함께 시작됩니다.")
     
     # 백그라운드 태스크: 주기적으로 SUMMARIZING 상태 콘텐츠 자동 재큐잉
     async def auto_requeue_llm_jobs():
@@ -106,6 +118,12 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """FastAPI 애플리케이션 생성."""
     settings = get_settings()
+    
+    # 헬스체크 로그 필터 적용 (uvicorn access logger)
+    uvicorn_access_logger = logging.getLogger("uvicorn.access")
+    health_check_filter = HealthCheckLogFilter()
+    uvicorn_access_logger.addFilter(health_check_filter)
+    
     app = FastAPI(
         title=settings.app_name,
         debug=settings.debug,
