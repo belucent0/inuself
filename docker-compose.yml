@@ -105,6 +105,58 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: asr-backend:1.0.0
+    container_name: asr-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./backend/data:/app/data
+      # Windows 호스트의 PM2 워커 시작 트리거 파일 공유
+      - ./backend/data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      - TASK_QUEUE_TYPE=celery
+      - DATABASE_URL=postgresql+asyncpg://user:pass@asr-postgres:5432/asr
+      - REDIS_URL=redis://asr-redis:6379/0
+      - S3_ENDPOINT=http://asr-minio:9000
+      - S3_ACCESS_KEY=torchdev
+      - S3_SECRET_KEY=torchdev-secret
+      - S3_BUCKET_NAME=asr-media
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_ADMIN_USERNAME=${NEXT_PUBLIC_ADMIN_USERNAME}
+        - NEXT_PUBLIC_ADMIN_PASSWORD=${NEXT_PUBLIC_ADMIN_PASSWORD}
+        - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+    container_name: asr-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   redis-data:
   redis-insight-data:
