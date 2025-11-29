@@ -3,10 +3,10 @@ from functools import lru_cache
 from rq import Queue
 
 from ..core.redis import get_redis_connection
-from .llm_processor import process_llm_job
 from .utils import safe_print
 
 LLM_QUEUE_NAME = "llm_tasks"
+LLM_PROCESSOR_FUNCTION_PATH = "app.worker.llm_processor.process_llm_job"
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def is_llm_job_in_queue(*, content_id: int) -> bool:
 def enqueue_llm_job(*, content_id: int) -> None:
     """LLM 요약 작업을 큐에 등록."""
     queue = _get_queue()
-    job = queue.enqueue(process_llm_job, content_id=content_id)
+    job = queue.enqueue(LLM_PROCESSOR_FUNCTION_PATH, content_id=content_id)
     safe_print(f"[LLM Queue] 작업 등록됨: content_id={content_id}, job_id={job.id}, 큐 크기={len(queue)}")
     logger.info(
         "LLM job enqueued: content_id=%s, job_id=%s, queue_size=%s",

@@ -79,6 +79,7 @@ class CeleryAdapter(TaskQueueAdapter):
         processing_mode: str,
         num_asr_chunks: int,
     ) -> str:
+        # Lazy import: celery_tasks가 processor를 import하므로 실행 시점에만 로드
         from .celery_tasks import process_asr_task
         
         result = process_asr_task.delay(
@@ -92,6 +93,7 @@ class CeleryAdapter(TaskQueueAdapter):
         return result.id
     
     def enqueue_llm_job(self, content_id: int) -> str:
+        # Lazy import: celery_tasks가 llm_processor를 import하므로 실행 시점에만 로드
         from .celery_tasks import process_llm_task
         
         result = process_llm_task.delay(content_id=content_id)

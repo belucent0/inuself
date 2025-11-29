@@ -2,10 +2,10 @@ import logging
 from rq import Queue
 
 from ..core.redis import get_redis_connection
-from .processor import process_transcription_job
 from .utils import safe_print
 
 QUEUE_NAME = "asr_tasks"
+PROCESSOR_FUNCTION_PATH = "app.worker.processor.process_transcription_job"
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def enqueue_transcription_job(
         queue_size_before = len(queue)
         
         job = queue.enqueue(
-            process_transcription_job,
+            PROCESSOR_FUNCTION_PATH,
             content_id=content_id,
             storage_key=storage_key,
             original_filename=original_filename,
