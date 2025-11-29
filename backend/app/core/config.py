@@ -1,6 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,16 +15,30 @@ def _get_project_root() -> Path:
 class Settings(BaseSettings):
     """환경설정 모델."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        env_file_encoding="utf-8", 
+        extra="ignore"
+    )
 
     app_name: str = "Torch ASR Backend"
     api_prefix: str = "/api"
     debug: bool = False
 
     # Task Queue 설정
-    task_queue_type: str = "rq"  # "rq" 또는 "celery"
+    task_queue_type: str = "celery"  #  "celery"
     
-    postgres_dsn: str = "postgresql+asyncpg://user:pass@localhost:5432/asr"
+    # DATABASE_URL 환경변수와 매핑 (유지보수성을 위해 외부 이름은 DATABASE_URL 사용)
+    database_url: str = Field(
+        "postgresql+asyncpg://user:pass@localhost:5432/asr",
+        validation_alias="DATABASE_URL",
+    )
+    
+    @property
+    def postgres_dsn(self) -> str:
+        """하위 호환성을 위한 postgres_dsn 프로퍼티."""
+        return self.database_url
+    
     redis_url: str = "redis://localhost:6379/0"
 
     upload_dir: Path = Path("data/uploads")
