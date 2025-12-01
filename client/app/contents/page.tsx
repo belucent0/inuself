@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import ContentList from '@/components/ContentList'
 import DeleteQueuedButton from '@/components/DeleteQueuedButton'
 import { listContents, ContentListResponse } from '@/lib/api'
@@ -10,24 +11,35 @@ export default function ContentsPage() {
   const [page, setPage] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const searchParams = useSearchParams()
 
   const pageSize = 10
 
-  useEffect(() => {
-    const fetchData = async () => {
-      setIsLoading(true)
-      setError(null)
-      try {
-        const result = await listContents(page, pageSize)
-        setData(result)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : '콘텐츠 목록을 불러오는데 실패했습니다.')
-      } finally {
-        setIsLoading(false)
-      }
+  const fetchData = useCallback(async () => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      const result = await listContents(page, pageSize)
+      setData(result)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '콘텐츠 목록을 불러오는데 실패했습니다.')
+    } finally {
+      setIsLoading(false)
     }
+  }, [page, pageSize])
+
+  useEffect(() => {
     fetchData()
-  }, [page])
+  }, [fetchData])
+
+  // refresh 쿼리 파라미터가 있으면 자동 새로고침 (업로드 후 목록 페이지로 이동했을 때)
+  useEffect(() => {
+    const refresh = searchParams.get('refresh')
+    if (refresh) {
+      // refresh 파라미터가 있으면 데이터 새로고침
+      fetchData()
+    }
+  }, [searchParams, fetchData])
 
   if (isLoading && !data) {
     return (

@@ -19,7 +19,9 @@ export default function UploadForm() {
       await uploadContent(selectedFile)
       setStatus('업로드 완료! 큐에 등록되었습니다.')
       setSelectedFile(null)
-      router.refresh()
+      
+      // 목록 페이지로 이동하고 자동 새로고침 (쿼리 파라미터로 강제 새로고침)
+      router.push(`/contents?refresh=${Date.now()}`)
     } catch (error) {
       setStatus('업로드 실패. 다시 시도해 주세요.')
     } finally {
