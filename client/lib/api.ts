@@ -51,8 +51,16 @@ export type ContentDetail = ContentSummary & {
   llm_logs: LlmLog[]
 }
 
-export async function listContents(): Promise<ContentSummary[]> {
-  const res = await fetch(`${API_BASE}/contents`, { cache: 'no-store' })
+export type ContentListResponse = {
+  items: ContentSummary[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+export async function listContents(page: number = 1, pageSize: number = 20): Promise<ContentListResponse> {
+  const res = await fetch(`${API_BASE}/contents?page=${page}&page_size=${pageSize}`, { cache: 'no-store' })
   if (!res.ok) {
     throw new Error('콘텐츠 목록 조회 실패')
   }

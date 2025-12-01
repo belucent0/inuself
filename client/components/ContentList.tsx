@@ -5,8 +5,18 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ContentSummary, ContentStatus, deleteContentsBulk, retryProcessing } from '@/lib/api'
 
+type PaginationProps = {
+  currentPage: number
+  totalPages: number
+  total: number
+  pageSize: number
+  onPageChange: (page: number) => void
+}
+
 type Props = {
   contents: ContentSummary[]
+  pagination?: PaginationProps
+  onRefresh?: () => void
 }
 
 const statusLabels: Record<ContentStatus, string> = {
@@ -29,7 +39,7 @@ const statusColors: Record<ContentStatus, string> = {
   CANCELLED: '#FF9800',
 }
 
-export default function ContentList({ contents }: Props) {
+export default function ContentList({ contents, pagination, onRefresh }: Props) {
   const router = useRouter()
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [isDeleting, setIsDeleting] = useState(false)
@@ -90,7 +100,11 @@ export default function ContentList({ contents }: Props) {
       const result = await deleteContentsBulk(Array.from(selectedIds))
       setMessage(result.message)
       setSelectedIds(new Set())
-      router.refresh()
+      if (onRefresh) {
+        onRefresh()
+      } else {
+        router.refresh()
+      }
       setTimeout(() => setMessage(''), 3000)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '삭제 실패')
@@ -109,7 +123,11 @@ export default function ContentList({ contents }: Props) {
     try {
       const result = await retryProcessing(contentId, type)
       setMessage(result.message)
-      router.refresh()
+      if (onRefresh) {
+        onRefresh()
+      } else {
+        router.refresh()
+      }
       setTimeout(() => setMessage(''), 3000)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '재처리 실패')
@@ -257,6 +275,106 @@ export default function ContentList({ contents }: Props) {
           </div>
         ))}
       </div>
+      {pagination && pagination.totalPages > 1 && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            gap: '0.5rem',
+            marginTop: '2rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => pagination.onPageChange(pagination.currentPage - 1)}
+            disabled={pagination.currentPage === 1}
+            style={{
+              padding: '0.5rem 1rem',
+              border: '1px solid #ccc',
+              backgroundColor: pagination.currentPage === 1 ? '#f5f5f5' : '#fff',
+              cursor: pagination.currentPage === 1 ? 'not-allowed' : 'pointer',
+              borderRadius: '4px',
+              minHeight: '44px',
+              fontSize: '0.9rem',
+              opacity: pagination.currentPage === 1 ? 0.6 : 1,
+            }}
+          >
+            이전
+          </button>
+          <div
+            style={{
+              display: 'flex',
+              gap: '0.25rem',
+              alignItems: 'center',
+            }}
+          >
+            {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
+              .filter((pageNum) => {
+                // 현재 페이지 주변 2페이지씩만 표시
+                const diff = Math.abs(pageNum - pagination.currentPage)
+                return diff <= 2 || pageNum === 1 || pageNum === pagination.totalPages
+              })
+              .map((pageNum, index, array) => {
+                // 생략 표시 추가
+                const showEllipsis = index > 0 && pageNum - array[index - 1] > 1
+                return (
+                  <div key={pageNum} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    {showEllipsis && (
+                      <span style={{ padding: '0 0.5rem', color: '#666' }}>...</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => pagination.onPageChange(pageNum)}
+                      style={{
+                        padding: '0.5rem 0.75rem',
+                        border: '1px solid #ccc',
+                        backgroundColor: pageNum === pagination.currentPage ? '#2196F3' : '#fff',
+                        color: pageNum === pagination.currentPage ? '#fff' : '#000',
+                        cursor: 'pointer',
+                        borderRadius: '4px',
+                        minHeight: '44px',
+                        minWidth: '44px',
+                        fontSize: '0.9rem',
+                        fontWeight: pageNum === pagination.currentPage ? 'bold' : 'normal',
+                      }}
+                    >
+                      {pageNum}
+                    </button>
+                  </div>
+                )
+              })}
+          </div>
+          <button
+            type="button"
+            onClick={() => pagination.onPageChange(pagination.currentPage + 1)}
+            disabled={pagination.currentPage === pagination.totalPages}
+            style={{
+              padding: '0.5rem 1rem',
+              border: '1px solid #ccc',
+              backgroundColor: pagination.currentPage === pagination.totalPages ? '#f5f5f5' : '#fff',
+              cursor: pagination.currentPage === pagination.totalPages ? 'not-allowed' : 'pointer',
+              borderRadius: '4px',
+              minHeight: '44px',
+              fontSize: '0.9rem',
+              opacity: pagination.currentPage === pagination.totalPages ? 0.6 : 1,
+            }}
+          >
+            다음
+          </button>
+          <span
+            style={{
+              marginLeft: '1rem',
+              fontSize: '0.9rem',
+              color: '#666',
+            }}
+          >
+            전체 {pagination.total}개 중 {((pagination.currentPage - 1) * pagination.pageSize) + 1}-
+            {Math.min(pagination.currentPage * pagination.pageSize, pagination.total)}개 표시
+          </span>
+        </div>
+      )}
     </div>
   )
 }
