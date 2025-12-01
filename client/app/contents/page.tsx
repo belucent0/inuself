@@ -11,7 +11,7 @@ export default function ContentsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const pageSize = 20
+  const pageSize = 10
 
   useEffect(() => {
     const fetchData = async () => {

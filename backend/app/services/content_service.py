@@ -28,12 +28,12 @@ class ContentService:
         self.repo = ContentRepository(session)
         self.settings = get_settings()
 
-    async def list_contents(self, page: int = 1, page_size: int = 20) -> ContentListResponse:
+    async def list_contents(self, page: int = 1, page_size: int = 10) -> ContentListResponse:
         """페이지네이션을 포함한 콘텐츠 목록 조회."""
         if page < 1:
             page = 1
         if page_size < 1:
-            page_size = 20
+            page_size = 10
         
         offset = (page - 1) * page_size
         total = await self.repo.count_contents()
