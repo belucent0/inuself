@@ -135,6 +135,8 @@ export default function ContentList({ contents }: Props) {
             border: '1px solid #ccc',
             backgroundColor: allSelected ? '#e0e0e0' : '#fff',
             cursor: selectableIds.length ? 'pointer' : 'not-allowed',
+            minHeight: '44px',
+            fontSize: '0.9rem',
           }}
         >
           {allSelected ? '선택 해제' : '전체 선택'}
@@ -151,6 +153,8 @@ export default function ContentList({ contents }: Props) {
             borderRadius: '4px',
             cursor: isDeleting || selectedIds.size === 0 ? 'not-allowed' : 'pointer',
             opacity: isDeleting || selectedIds.size === 0 ? 0.6 : 1,
+            minHeight: '44px',
+            fontSize: '0.9rem',
           }}
         >
           {isDeleting ? '삭제 중...' : `선택 삭제 (${selectedIds.size}개)`}
@@ -178,6 +182,7 @@ export default function ContentList({ contents }: Props) {
                 alignItems: 'center',
                 gap: '0.3rem',
                 fontSize: '0.9rem',
+                minHeight: '44px',
               }}
             >
               <input
@@ -188,12 +193,16 @@ export default function ContentList({ contents }: Props) {
                   toggleSelection(item.id)
                 }}
                 onClick={(event) => event.stopPropagation()}
+                style={{
+                  width: '20px',
+                  height: '20px',
+                }}
               />
               <span>선택</span>
             </label>
-            <Link href={`/contents/${item.id}`} className="card-link">
-              <h3>{item.title || item.filename}</h3>
-              <p>
+            <Link href={`/contents/${item.id}`} className="card-link" style={{ textDecoration: 'none', color: 'inherit' }}>
+              <h3 style={{ margin: '0.5rem 0', fontSize: '1.1rem', wordBreak: 'break-word' }}>{item.title || item.filename}</h3>
+              <p style={{ margin: '0.5rem 0', fontSize: '0.9rem', lineHeight: '1.5' }}>
                 <span
                   style={{
                     color: statusColors[item.status],
@@ -205,20 +214,22 @@ export default function ContentList({ contents }: Props) {
                 </span>
                 화자 수: {item.speakers.length || 0} · 재생 길이: {item.duration_seconds.toFixed(1)}초
               </p>
-              <small>{new Date(item.created_at).toLocaleString()}</small>
+              <small style={{ fontSize: '0.85rem', color: '#666' }}>{new Date(item.created_at).toLocaleString()}</small>
             </Link>
             {item.status === 'ASR_FAILED' && (
               <button
                 type="button"
                 onClick={(e) => handleRetry(item.id, 'asr', e)}
                 style={{
-                  padding: '0.4rem 0.8rem',
+                  padding: '0.5rem 1rem',
                   backgroundColor: '#2196F3',
                   color: '#fff',
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  fontSize: '0.85rem',
+                  fontSize: '0.9rem',
+                  minHeight: '44px',
+                  width: '100%',
                 }}
               >
                 ASR 재처리
@@ -229,13 +240,15 @@ export default function ContentList({ contents }: Props) {
                 type="button"
                 onClick={(e) => handleRetry(item.id, 'summary', e)}
                 style={{
-                  padding: '0.4rem 0.8rem',
+                  padding: '0.5rem 1rem',
                   backgroundColor: '#673AB7',
                   color: '#fff',
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  fontSize: '0.85rem',
+                  fontSize: '0.9rem',
+                  minHeight: '44px',
+                  width: '100%',
                 }}
               >
                 요약 재처리

@@ -3,7 +3,12 @@
 import Link from 'next/link'
 import UploadForm from './UploadForm'
 
-export default function Sidebar() {
+type Props = {
+  isOpen?: boolean
+  onClose?: () => void
+}
+
+export default function Sidebar({ isOpen = false, onClose }: Props) {
   const handleLogout = () => {
     if (confirm('로그아웃하시겠습니까?')) {
       localStorage.removeItem('admin_auth')
@@ -11,13 +16,19 @@ export default function Sidebar() {
     }
   }
 
+  const handleLinkClick = () => {
+    if (onClose) {
+      onClose()
+    }
+  }
+
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
       <div>
         <h1>ASR 파이프라인</h1>
         <p>전사/화자분리 작업 현황을 확인하세요.</p>
         <nav>
-          <Link href="/contents">전사된 콘텐츠</Link>
+          <Link href="/contents" onClick={handleLinkClick}>전사된 콘텐츠</Link>
         </nav>
         <button
           onClick={handleLogout}

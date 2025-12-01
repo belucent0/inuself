@@ -29,17 +29,40 @@ export default function UploadForm() {
 
   return (
     <form onSubmit={handleSubmit}>
-      <h2>파일 업로드</h2>
+      <h2 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>파일 업로드</h2>
       <input
         type="file"
         accept="audio/*,video/*"
         onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
         disabled={isUploading}
+        style={{
+          width: '100%',
+          padding: '0.5rem',
+          marginBottom: '0.5rem',
+          fontSize: '0.9rem',
+          minHeight: '44px',
+        }}
       />
-      <button type="submit" disabled={!selectedFile || isUploading} style={{ marginTop: '0.5rem' }}>
+      <button
+        type="submit"
+        disabled={!selectedFile || isUploading}
+        style={{
+          marginTop: '0.5rem',
+          width: '100%',
+          padding: '0.75rem',
+          backgroundColor: '#2196F3',
+          color: '#fff',
+          border: 'none',
+          borderRadius: '4px',
+          cursor: !selectedFile || isUploading ? 'not-allowed' : 'pointer',
+          opacity: !selectedFile || isUploading ? 0.6 : 1,
+          minHeight: '44px',
+          fontSize: '0.9rem',
+        }}
+      >
         {isUploading ? '업로드 중...' : '업로드'}
       </button>
-      {status && <p>{status}</p>}
+      {status && <p style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}>{status}</p>}
     </form>
   )
 }

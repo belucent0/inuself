@@ -44,6 +44,9 @@ export default function DeleteQueuedButton() {
           borderRadius: '4px',
           cursor: isDeleting ? 'not-allowed' : 'pointer',
           opacity: isDeleting ? 0.6 : 1,
+          minHeight: '44px',
+          fontSize: '0.9rem',
+          width: '100%',
         }}
       >
         {isDeleting ? '삭제 중...' : '대기 중인 콘텐츠 모두 삭제'}

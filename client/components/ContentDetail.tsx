@@ -39,15 +39,15 @@ export default function ContentDetail({ content }: Props) {
   
   return (
     <div className="card">
-      <h2>{content.title || content.filename}</h2>
-      <p>
+      <h2 style={{ fontSize: '1.2rem', wordBreak: 'break-word', marginBottom: '0.5rem' }}>{content.title || content.filename}</h2>
+      <p style={{ fontSize: '0.9rem', marginBottom: '0.5rem', lineHeight: '1.5' }}>
         총 재생 길이 {content.duration_seconds.toFixed(1)}초 · 화자 {content.speakers.join(', ') || '분석 중'}
       </p>
-      <p>저장 키: {content.object_key}</p>
+      <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '1rem', wordBreak: 'break-all' }}>저장 키: {content.object_key}</p>
       
       {content.media_url && (
         <section style={{ marginTop: '1rem', marginBottom: '1rem' }}>
-          <h3>미디어 재생</h3>
+          <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>미디어 재생</h3>
           {isAudioFile(content.filename) ? (
             <audio 
               controls 
@@ -70,8 +70,8 @@ export default function ContentDetail({ content }: Props) {
         </section>
       )}
       
-      <section>
-        <h3>LLM 요약</h3>
+      <section style={{ marginTop: '1.5rem' }}>
+        <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>LLM 요약</h3>
         {content.status === 'SUMMARIZING' && <p>LLM이 요약을 생성하는 중입니다. 잠시만 기다려 주세요.</p>}
         {content.status === 'SUMMARY_FAILED' && (
           <div>
@@ -87,6 +87,9 @@ export default function ContentDetail({ content }: Props) {
                 borderRadius: '4px',
                 cursor: 'pointer',
                 marginTop: '0.5rem',
+                minHeight: '44px',
+                width: '100%',
+                fontSize: '0.9rem',
               }}
             >
               LLM 요약 재처리
@@ -115,6 +118,9 @@ export default function ContentDetail({ content }: Props) {
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
+              minHeight: '44px',
+              width: '100%',
+              fontSize: '0.9rem',
             }}
           >
             ASR 재처리
@@ -126,33 +132,33 @@ export default function ContentDetail({ content }: Props) {
           {message}
         </p>
       )}
-      <section>
-        <h3>세그먼트</h3>
+      <section style={{ marginTop: '1.5rem' }}>
+        <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>세그먼트</h3>
         {content.transcription.segments?.map((seg) => (
           <div key={seg.id} className="segment">
-            <strong>{seg.speaker || 'UNKNOWN'}</strong> [{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]
-            <p>{seg.text}</p>
+            <strong style={{ fontSize: '0.9rem' }}>{seg.speaker || 'UNKNOWN'}</strong> <span style={{ fontSize: '0.85rem', color: '#666' }}>[{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]</span>
+            <p style={{ marginTop: '0.25rem', fontSize: '0.9rem', lineHeight: '1.5', wordBreak: 'break-word' }}>{seg.text}</p>
           </div>
         ))}
       </section>
-      <section>
-        <h3>로그</h3>
+      <section style={{ marginTop: '1.5rem' }}>
+        <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>로그</h3>
         {content.logs?.map((log) => (
-          <div key={log.id} className="segment">
-            <strong>{log.message}</strong>
-            <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(log.log, null, 2)}</pre>
-            <small>{new Date(log.created_at).toLocaleString()}</small>
-          </div>
+            <div key={log.id} className="segment">
+              <strong style={{ fontSize: '0.9rem' }}>{log.message || '로그'}</strong>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8rem', overflowX: 'auto', wordBreak: 'break-word' }}>{JSON.stringify(log.log, null, 2)}</pre>
+              <small style={{ fontSize: '0.85rem', color: '#666' }}>{new Date(log.created_at).toLocaleString()}</small>
+            </div>
         ))}
       </section>
-      <section>
-        <h3>LLM 로그</h3>
+      <section style={{ marginTop: '1.5rem' }}>
+        <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>LLM 로그</h3>
         {content.llm_logs?.length ? (
           content.llm_logs.map((log) => (
             <div key={log.id} className="segment">
-              <strong>{log.message || '로그'}</strong>
-              <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(log.log, null, 2)}</pre>
-              <small>{new Date(log.created_at).toLocaleString()}</small>
+              <strong style={{ fontSize: '0.9rem' }}>{log.message || '로그'}</strong>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8rem', overflowX: 'auto', wordBreak: 'break-word' }}>{JSON.stringify(log.log, null, 2)}</pre>
+              <small style={{ fontSize: '0.85rem', color: '#666' }}>{new Date(log.created_at).toLocaleString()}</small>
             </div>
           ))
         ) : (
