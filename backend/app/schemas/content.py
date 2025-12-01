@@ -66,3 +66,11 @@ class BulkDeleteResponse(BaseModel):
     skipped_ids: list[int] = Field(default_factory=list)
     message: str
 
+
+class ContentListResponse(BaseModel):
+    items: list[ContentListItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+

@@ -7,6 +7,7 @@ from ..schemas.content import (
     BulkDeleteResponse,
     ContentDetail,
     ContentListItem,
+    ContentListResponse,
     UploadResponse,
 )
 from ..services.content_service import ContentService
@@ -18,9 +19,13 @@ async def get_service(session: AsyncSession = Depends(get_session)) -> ContentSe
     return ContentService(session)
 
 
-@router.get("", response_model=list[ContentListItem])
-async def list_contents(limit: int = 20, offset: int = 0, service: ContentService = Depends(get_service)):
-    return await service.list_contents(limit=limit, offset=offset)
+@router.get("", response_model=ContentListResponse)
+async def list_contents(
+    page: int = Query(1, ge=1, description="페이지 번호 (1부터 시작)"),
+    page_size: int = Query(20, ge=1, le=100, description="페이지당 항목 수 (최대 100)"),
+    service: ContentService = Depends(get_service)
+):
+    return await service.list_contents(page=page, page_size=page_size)
 
 
 @router.get("/{content_id}", response_model=ContentDetail)

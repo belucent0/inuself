@@ -13,7 +13,7 @@ from ..core.config import get_settings
 from ..core.storage import delete_file, upload_fileobj, get_public_media_url
 from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
-from ..schemas.content import ContentDetail, ContentListItem, UploadResponse
+from ..schemas.content import ContentDetail, ContentListItem, ContentListResponse, UploadResponse
 from ..worker.queue import cancel_jobs_by_content_ids  # RQ용 취소만 남김
 from ..worker.llm_queue import cancel_llm_jobs_by_content_ids
 
@@ -28,15 +28,33 @@ class ContentService:
         self.repo = ContentRepository(session)
         self.settings = get_settings()
 
-    async def list_contents(self, limit: int = 20, offset: int = 0) -> Sequence[ContentListItem]:
-        rows = await self.repo.list_contents(limit=limit, offset=offset)
+    async def list_contents(self, page: int = 1, page_size: int = 20) -> ContentListResponse:
+        """페이지네이션을 포함한 콘텐츠 목록 조회."""
+        if page < 1:
+            page = 1
+        if page_size < 1:
+            page_size = 20
+        
+        offset = (page - 1) * page_size
+        total = await self.repo.count_contents()
+        rows = await self.repo.list_contents(limit=page_size, offset=offset)
+        
         items = []
         for row in rows:
             item = ContentListItem.model_validate(row)
             # media_url 추가
             item.media_url = get_public_media_url(row.object_key)
             items.append(item)
-        return items
+        
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+        
+        return ContentListResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+        )
 
     async def get_content(self, content_id: int) -> ContentDetail:
         content = await self.repo.get_content(content_id)

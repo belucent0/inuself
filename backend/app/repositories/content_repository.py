@@ -21,6 +21,13 @@ class ContentRepository:
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
+    async def count_contents(self) -> int:
+        """전체 콘텐츠 개수 조회."""
+        from sqlalchemy import func
+        stmt = select(func.count(models.Content.id))
+        result = await self.session.execute(stmt)
+        return result.scalar_one() or 0
+
     async def get_content(self, content_id: int) -> models.Content | None:
         stmt = (
             select(models.Content)
