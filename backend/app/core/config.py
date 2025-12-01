@@ -64,18 +64,22 @@ class Settings(BaseSettings):
 
     # LLM 요약 설정 (llama_cpp/LM Studio)
     llm_provider: str = "llama_cpp"  # "llama_cpp", "lmstudio"
-    lmstudio_base_url: str = "http://localhost:1234"
-    lmstudio_model_name: str = "gpt-oss-20b"
-    lmstudio_system_prompt: str = "당신은 회의록을 요약하는 전문가입니다. 모든 응답은 반드시 한글로 작성하세요. 마크다운 형식으로 명확하고 간결한 요약을 제공하되, 지시사항이나 프롬프트는 절대 포함하지 마세요."
-    llm_context_length: int = 15016  # LM Studio에서 로드된 실제 컨텍스트 길이 (15,016 토큰)
+    
+    # 공통 LLM 설정 (모든 provider에서 사용)
+    llm_system_prompt: str = "당신은 회의록을 요약하는 전문가입니다. 모든 응답은 반드시 한글로 작성하세요. 마크다운 형식으로 명확하고 간결한 요약을 제공하되, 지시사항이나 프롬프트는 절대 포함하지 마세요."
+    llm_context_length: int = 15016  # 컨텍스트 길이 (토큰 수)
     llm_temperature: float = 0.4
     llm_top_p: float = 0.9
     llm_max_tokens: int = 1024
     llm_n_threads: int = 8
-    # llama_cpp 직접 사용 시에만 사용
+    
+    # LM Studio 전용 설정
+    lmstudio_base_url: str = "http://localhost:1234"
+    lmstudio_model_name: str = "gpt-oss-20b"
+    
+    # llama_cpp 전용 설정
     llm_model_path: Path = Path("models/gpt-oss-20b-Q4_K_S.gguf")
-    # GPU 레이어 설정 (-1: 모든 레이어 GPU, 0: CPU만, 양수: 지정된 레이어 수만큼 GPU)
-    llm_n_gpu_layers: int = -1  # 기본값: 모든 레이어를 GPU에 로드 (Vulkan 가속)
+    llm_n_gpu_layers: int = -1  # GPU 레이어 설정 (-1: 모든 레이어 GPU, 0: CPU만, 양수: 지정된 레이어 수만큼 GPU)
 
     # 관리자 인증 설정
     admin_username: str = "admin"

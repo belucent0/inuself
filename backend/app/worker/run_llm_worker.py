@@ -31,7 +31,7 @@ def health_check_llm() -> bool:
             safe_print(f"[LLM Worker] 모델 이름: {settings.lmstudio_model_name}")
 
             test_messages = [
-                {"role": "system", "content": settings.lmstudio_system_prompt},
+                {"role": "system", "content": settings.llm_system_prompt},
                 {"role": "user", "content": "간단한 헬스체크 문장을 요약해 주세요."},
             ]
 

@@ -496,7 +496,7 @@ def _split_text_into_chunks(text: str, max_tokens_per_chunk: int = 10000, overla
 def _summarize_chunk_with_lmstudio(chunk: str, chunk_index: int, total_chunks: int, settings) -> str:
     """단일 청크를 LM Studio로 요약합니다."""
     prompt = DEFAULT_SUMMARY_PROMPT.format(transcript=chunk)
-    system_prompt = settings.lmstudio_system_prompt.strip()
+    system_prompt = settings.llm_system_prompt.strip()
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
@@ -638,7 +638,7 @@ def _summarize_with_lmstudio(text: str, settings) -> str:
     try:
         # 통합 요약에는 custom_prompt를 사용해야 하므로 별도 처리
         prompt = merge_prompt.format(transcript=combined_summaries, failed_parts_note=failed_parts_note)
-        system_prompt = settings.lmstudio_system_prompt.strip()
+        system_prompt = settings.llm_system_prompt.strip()
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
