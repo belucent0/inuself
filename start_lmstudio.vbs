@@ -42,3 +42,5 @@ WScript.Echo "LM Studio가 최소화 상태로 시작되었습니다."
 WScript.Quit 0
 
 
+
+

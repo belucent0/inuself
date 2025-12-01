@@ -55,12 +55,8 @@ check_llm_model() {
   fi
 
   # LLM_PROVIDER 확인
-  local llm_provider="${LLM_PROVIDER:-ollama}"
-  if [[ "$llm_provider" == "ollama" ]]; then
-    echo "[dev] LLM Provider: Ollama"
-    echo "[dev]   Ollama 모델 확인은 LLM 워커 헬스체크에서 수행됩니다."
-    return 0
-  elif [[ "$llm_provider" == "lmstudio" ]]; then
+  local llm_provider="${LLM_PROVIDER:-lmstudio}"
+  if [[ "$llm_provider" == "lmstudio" ]]; then
     local lmstudio_base="${LMSTUDIO_BASE_URL:-http://localhost:1234}"
     echo "[dev] LLM Provider: LM Studio"
     echo "[dev]   Endpoint: ${lmstudio_base}"
