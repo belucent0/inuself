@@ -39,20 +39,22 @@ module.exports = {
         // false: ASR과 LLM 작업을 동시 처리 (concurrency=2) - 더 빠르지만 GPU 메모리 부족 가능
         SEQUENTIAL_PROCESSING: envVars.SEQUENTIAL_PROCESSING || 'true',
         
-        // LLM Provider 설정 (.env에서 읽어옴)
+        // 공통 LLM 설정 (.env에서 읽어옴)
         LLM_PROVIDER: envVars.LLM_PROVIDER || 'lmstudio',
-        LLM_MODEL_PATH: envVars.LLM_MODEL_PATH || '',
+        LLM_SYSTEM_PROMPT: envVars.LLM_SYSTEM_PROMPT || '',
         LLM_CONTEXT_LENGTH: envVars.LLM_CONTEXT_LENGTH || '15016',
         LLM_TEMPERATURE: envVars.LLM_TEMPERATURE || '0.4',
         LLM_TOP_P: envVars.LLM_TOP_P || '0.9',
         LLM_MAX_TOKENS: envVars.LLM_MAX_TOKENS || '1024',
         LLM_N_THREADS: envVars.LLM_N_THREADS || '8',
-        LLM_N_GPU_LAYERS: envVars.LLM_N_GPU_LAYERS || '-1',  // -1: 모든 레이어 GPU, 0: CPU만, 양수: 하이브리드
         
-        // LM Studio 설정 (.env에서 읽어옴)
+        // LM Studio 전용 설정 (.env에서 읽어옴)
         LMSTUDIO_BASE_URL: envVars.LMSTUDIO_BASE_URL || 'http://localhost:1234',
         LMSTUDIO_MODEL_NAME: envVars.LMSTUDIO_MODEL_NAME || 'gpt-oss-20b',
-        LMSTUDIO_SYSTEM_PROMPT: envVars.LMSTUDIO_SYSTEM_PROMPT || '',
+        
+        // llama_cpp 전용 설정 (.env에서 읽어옴)
+        LLM_MODEL_PATH: envVars.LLM_MODEL_PATH || '',
+        LLM_N_GPU_LAYERS: envVars.LLM_N_GPU_LAYERS || '-1',  // -1: 모든 레이어 GPU, 0: CPU만, 양수: 하이브리드
       },
       autorestart: true,
       max_restarts: 10,
