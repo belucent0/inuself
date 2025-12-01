@@ -243,3 +243,5 @@ pm2 start ecosystem.config.js
 - `service_manager.py`: GUI 기반 서비스 관리 도구
 - `start.bat`, `stop.bat`, `restart.bat`: 배치 파일로 간편하게 관리
 
+
+
