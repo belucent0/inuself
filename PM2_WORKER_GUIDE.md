@@ -166,9 +166,17 @@ type C:\timblo\torch-test\logs\celery-error.log
 
 ## 8. LM Studio ↔ llama.cpp 전환
 
-`.env` 파일의 `LLM_PROVIDER`만 변경하고 워커를 재시작하면 됩니다:
+`.env` 파일의 `LLM_PROVIDER`와 provider별 설정만 변경하고 워커를 재시작하면 됩니다:
 
 ```env
+# 공통 LLM 설정 (모든 provider에서 사용)
+LLM_SYSTEM_PROMPT=당신은 회의록을 요약하는 전문가입니다...
+LLM_CONTEXT_LENGTH=15016
+LLM_TEMPERATURE=0.4
+LLM_TOP_P=0.9
+LLM_MAX_TOKENS=1024
+LLM_N_THREADS=8
+
 # LM Studio 사용
 LLM_PROVIDER=lmstudio
 LMSTUDIO_BASE_URL=http://localhost:1234
@@ -177,6 +185,7 @@ LMSTUDIO_MODEL_NAME=gpt-oss-20b
 # llama.cpp 사용
 LLM_PROVIDER=llama_cpp
 LLM_MODEL_PATH=models/gpt-oss-20b-Q4_K_S.gguf
+LLM_N_GPU_LAYERS=-1
 ```
 
 워커 재시작:

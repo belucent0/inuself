@@ -67,23 +67,32 @@ LLM_PROVIDER=llama_cpp
 # 모델 파일 경로 (프로젝트 루트 기준 상대 경로 또는 절대 경로)
 LLM_MODEL_PATH=models/gpt-oss-20b-Q4_K_S.gguf
 
-# LLM 설정 (선택사항, 기본값 사용 가능)
+# 공통 LLM 설정 (선택사항, 기본값 사용 가능)
+LLM_SYSTEM_PROMPT=당신은 회의록을 요약하는 전문가입니다...
 LLM_CONTEXT_LENGTH=4096
 LLM_TEMPERATURE=0.4
 LLM_TOP_P=0.9
 LLM_MAX_TOKENS=1024
 LLM_N_THREADS=8
+
+# llama_cpp 전용 설정
+LLM_N_GPU_LAYERS=-1
 ```
 
 ### 설정 설명
 
-- `LLM_PROVIDER`: `llama_cpp`로 설정
-- `LLM_MODEL_PATH`: 모델 파일 경로 (상대 또는 절대 경로)
+#### 공통 LLM 설정 (모든 provider에서 사용)
+- `LLM_SYSTEM_PROMPT`: 시스템 프롬프트 (선택사항)
 - `LLM_CONTEXT_LENGTH`: 컨텍스트 윈도우 크기 (토큰 수)
 - `LLM_TEMPERATURE`: 생성 온도 (0.0 ~ 1.0, 낮을수록 일관성 높음)
 - `LLM_TOP_P`: Top-p 샘플링 (0.0 ~ 1.0)
 - `LLM_MAX_TOKENS`: 최대 생성 토큰 수
-- `LLM_N_THREADS`: CPU 스레드 수 (llama_cpp 사용 시)
+- `LLM_N_THREADS`: CPU 스레드 수
+
+#### llama_cpp 전용 설정
+- `LLM_PROVIDER`: `llama_cpp`로 설정
+- `LLM_MODEL_PATH`: 모델 파일 경로 (상대 또는 절대 경로)
+- `LLM_N_GPU_LAYERS`: GPU 레이어 수 (-1: 모든 레이어 GPU, 0: CPU만, 양수: 지정된 레이어 수만큼 GPU)
 
 ## 4. 워커 실행 (PM2 사용)
 
@@ -234,9 +243,17 @@ LLM 모델 로드 실패: ...
 
 ## LM Studio와 llama.cpp 전환
 
-환경 변수 `LLM_PROVIDER`만 변경하면 됩니다:
+환경 변수 `LLM_PROVIDER`와 provider별 설정만 변경하면 됩니다:
 
 ```env
+# 공통 LLM 설정 (모든 provider에서 사용)
+LLM_SYSTEM_PROMPT=당신은 회의록을 요약하는 전문가입니다...
+LLM_CONTEXT_LENGTH=15016
+LLM_TEMPERATURE=0.4
+LLM_TOP_P=0.9
+LLM_MAX_TOKENS=1024
+LLM_N_THREADS=8
+
 # LM Studio 사용
 LLM_PROVIDER=lmstudio
 LMSTUDIO_BASE_URL=http://localhost:1234
@@ -245,6 +262,7 @@ LMSTUDIO_MODEL_NAME=gpt-oss-20b
 # llama.cpp 사용
 LLM_PROVIDER=llama_cpp
 LLM_MODEL_PATH=models/gpt-oss-20b-Q4_K_S.gguf
+LLM_N_GPU_LAYERS=-1
 ```
 
 워커를 재시작하면 새로운 provider가 적용됩니다.

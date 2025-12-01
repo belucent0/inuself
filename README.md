@@ -259,17 +259,31 @@ LM Studio는 Windows에서 실행되는 LLM 서버입니다.
 
 `backend/app/core/config.py`에 다음 설정이 추가되었습니다. 필요 시 `.env`에서 오버라이드하면 됩니다.
 
+#### 공통 LLM 설정 (모든 provider에서 사용)
+
 | 설정 | 기본값 | 설명 |
 | --- | --- | --- |
-| `LLM_PROVIDER` | `lmstudio` | LLM provider: `lmstudio` 또는 `llama_cpp` |
-| `LMSTUDIO_BASE_URL` | `http://localhost:1234` | LM Studio API 엔드포인트 (lmstudio 사용 시) |
-| `LMSTUDIO_MODEL_NAME` | `gpt-oss-20b` | LM Studio에서 사용할 모델 이름 (lmstudio 사용 시) |
-| `LLM_MODEL_PATH` | `models/gpt-oss-20b-Q4_K_S.gguf` | llama_cpp 사용 시 모델 파일 경로 (상대 또는 절대 경로) |
+| `LLM_PROVIDER` | `llama_cpp` | LLM provider: `lmstudio` 또는 `llama_cpp` |
+| `LLM_SYSTEM_PROMPT` | (기본값 참조) | 시스템 프롬프트 (모든 provider에서 사용) |
 | `LLM_CONTEXT_LENGTH` | `15016` | Context window (토큰 수) |
 | `LLM_TEMPERATURE` | `0.4` | 생성 온도 (0.0 ~ 1.0) |
 | `LLM_TOP_P` | `0.9` | Top-p nucleus 샘플링 (0.0 ~ 1.0) |
-| `LLM_MAX_TOKENS` | `1024` | Markdown 응답 최대 토큰 수 |
+| `LLM_MAX_TOKENS` | `1024` | 최대 토큰 수 |
 | `LLM_N_THREADS` | `8` | CPU 스레드 수 (llama_cpp 사용 시) |
+
+#### LM Studio 전용 설정
+
+| 설정 | 기본값 | 설명 |
+| --- | --- | --- |
+| `LMSTUDIO_BASE_URL` | `http://localhost:1234` | LM Studio API 엔드포인트 |
+| `LMSTUDIO_MODEL_NAME` | `gpt-oss-20b` | LM Studio에서 사용할 모델 이름 |
+
+#### llama_cpp 전용 설정
+
+| 설정 | 기본값 | 설명 |
+| --- | --- | --- |
+| `LLM_MODEL_PATH` | `models/gpt-oss-20b-Q4_K_S.gguf` | 모델 파일 경로 (상대 또는 절대 경로) |
+| `LLM_N_GPU_LAYERS` | `-1` | GPU 레이어 수 (-1: 모든 레이어 GPU, 0: CPU만, 양수: 지정된 레이어 수만큼 GPU) |
 
 > ⚠️ **llama_cpp 직접 사용 시**: 
 > - Vulkan 가속을 사용합니다 (`n_gpu_layers=-1`). CPU 폴백은 제공되지 않으므로, 모델 로딩 실패 시 바로 `SUMMARY_FAILED` 상태로 기록됩니다.
