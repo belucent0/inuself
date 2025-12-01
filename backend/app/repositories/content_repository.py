@@ -55,13 +55,27 @@ class ContentRepository:
         await self.session.flush()
         return content
 
-    async def add_log(self, content_id: int, log: dict, message: str = "") -> models.SttLog:
+    async def add_log(self, content_id: int, log: dict, message: str = "") -> models.SttLog | None:
+        """로그 추가. content가 존재하지 않으면 None 반환."""
+        # content 존재 여부 확인
+        content = await self.get_content(content_id)
+        if not content:
+            # content가 존재하지 않으면 로그를 기록하지 않음 (외래키 제약 조건 위반 방지)
+            return None
+        
         entry = models.SttLog(content_id=content_id, log=log, message=message)
         self.session.add(entry)
         await self.session.flush()
         return entry
 
-    async def add_llm_log(self, content_id: int, log: dict, message: str = "") -> models.LlmLog:
+    async def add_llm_log(self, content_id: int, log: dict, message: str = "") -> models.LlmLog | None:
+        """LLM 로그 추가. content가 존재하지 않으면 None 반환."""
+        # content 존재 여부 확인
+        content = await self.get_content(content_id)
+        if not content:
+            # content가 존재하지 않으면 로그를 기록하지 않음 (외래키 제약 조건 위반 방지)
+            return None
+        
         entry = models.LlmLog(content_id=content_id, log=log, message=message)
         self.session.add(entry)
         await self.session.flush()

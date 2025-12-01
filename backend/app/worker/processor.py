@@ -218,12 +218,20 @@ async def _process_job(
     
     try:
         repo = ContentRepository(session)
+        # content 존재 여부 확인
+        content = await repo.get_content(content_id)
+        if not content:
+            logger.warning("Content not found: content_id=%d, skipping status update and log", content_id)
+            return
+        
         await repo.update_content_status(content_id, ContentStatus.PROCESSING)
-        await repo.add_log(
+        log_entry = await repo.add_log(
             content_id=content_id,
             log={"event": "started", "file": original_filename},
             message="ASR processing started",
         )
+        if not log_entry:
+            logger.warning("Failed to add log: content_id=%d (content may have been deleted)", content_id)
         await session.commit()
     finally:
         await session.close()
