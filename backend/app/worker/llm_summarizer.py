@@ -56,9 +56,7 @@ def summarize_transcription(text: str) -> tuple[str, str]:
     settings = get_settings()
     
     # LLM 호출
-    if settings.llm_provider == "ollama":
-        raw_response = _summarize_with_ollama(normalized, settings)
-    elif settings.llm_provider == "llama_cpp":
+    if settings.llm_provider == "llama_cpp":
         raw_response = _summarize_with_llama_cpp(normalized, settings)
     elif settings.llm_provider == "lmstudio":
         raw_response = _summarize_with_lmstudio(normalized, settings)
@@ -135,65 +133,6 @@ def _parse_json_response(raw_response: str, transcript_text: str) -> tuple[str, 
         logger.warning("JSON 파싱 실패: %s, fallback 사용. JSON 문자열: %s", e, json_str[:200])
         # JSON 파싱 실패 시 원본 응답에서 제목과 요약 추출 시도
         return _extract_title_fallback(raw_response, transcript_text), sanitize_summary_output(raw_response, transcript_text)
-
-
-def _summarize_with_ollama(text: str, settings) -> str:
-    """Ollama API를 사용한 요약."""
-    prompt = DEFAULT_SUMMARY_PROMPT.format(transcript=text)
-    
-    ollama_url = f"{settings.ollama_base_url}/api/generate"
-    payload = {
-        "model": settings.ollama_model_name,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": settings.llm_temperature,
-            "top_p": settings.llm_top_p,
-            "num_predict": settings.llm_max_tokens,
-            "num_gpu": -1,  # GPU 레이어 수 (-1 = 모든 레이어를 GPU에 로드)
-            "num_ctx": settings.llm_context_length,
-        },
-    }
-    
-    logger.info("Ollama API 호출: model=%s, url=%s, num_gpu=%s", 
-                settings.ollama_model_name, ollama_url, payload["options"].get("num_gpu"))
-    
-    try:
-        with httpx.Client(timeout=600.0) as client:  # 10분 타임아웃 (대형 모델 로딩 시간 고려)
-            # GPU 사용 강제: 이미 로드된 모델이 시스템 RAM에 있으면 GPU로 이동하지 않을 수 있음
-            # keep_alive를 0으로 설정하여 요청 후 모델을 언로드하고, 다음 요청에서 재로드
-            # 이렇게 하면 num_gpu=-1 옵션이 적용되어 GPU에 로드될 수 있음
-            payload["keep_alive"] = "0"  # 요청 후 즉시 언로드 (다음 요청에서 재로드)
-            
-            response = client.post(ollama_url, json=payload)
-            response.raise_for_status()
-            result = response.json()
-            
-            # GPU 사용 여부 확인을 위한 로그
-            load_duration = result.get("load_duration", 0)
-            total_duration = result.get("total_duration", 0)
-            eval_duration = result.get("eval_duration", 0)
-            logger.info(
-                "Ollama 응답: load_duration=%.2fs, total_duration=%.2fs, eval_duration=%.2fs",
-                load_duration / 1e9 if load_duration > 0 else 0,
-                total_duration / 1e9 if total_duration > 0 else 0,
-                eval_duration / 1e9 if eval_duration > 0 else 0,
-            )
-            
-            raw_response = result.get("response", "").strip()
-            if not raw_response:
-                raise RuntimeError("LLM 요약 결과가 비어 있습니다.")
-            
-            logger.info("Ollama 응답 완료 (길이: %d chars)", len(raw_response))
-            return raw_response
-    except httpx.HTTPError as e:
-        error_msg = f"Ollama API 호출 실패: {e}"
-        logger.error(error_msg)
-        raise RuntimeError(error_msg) from e
-    except Exception as e:
-        error_msg = f"Ollama 요약 처리 실패: {e}"
-        logger.error(error_msg)
-        raise RuntimeError(error_msg) from e
 
 
 def _summarize_with_llama_cpp(text: str, settings) -> str:
@@ -542,9 +481,7 @@ def extract_title(summary_md: str, transcript_text: str) -> str:
     prompt = title_prompt.format(summary=summary_md[:2000])  # 요약의 앞부분만 사용
     
     try:
-        if settings.llm_provider == "ollama":
-            title = _extract_title_with_ollama(prompt, settings)
-        elif settings.llm_provider == "llama_cpp":
+        if settings.llm_provider == "llama_cpp":
             title = _extract_title_with_llama_cpp(prompt, settings)
         elif settings.llm_provider == "lmstudio":
             title = _extract_title_with_lmstudio(prompt, settings)
@@ -628,26 +565,6 @@ def extract_title(summary_md: str, transcript_text: str) -> str:
     except Exception as exc:
         logger.warning("제목 추출 실패, 대체 방법 사용: %s", exc)
         return _extract_title_fallback(summary_md, transcript_text)
-
-
-def _extract_title_with_ollama(prompt: str, settings) -> str:
-    """Ollama를 사용한 제목 추출."""
-    ollama_url = f"{settings.ollama_base_url}/api/generate"
-    payload = {
-        "model": settings.ollama_model_name,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.3,  # 제목 추출은 더 낮은 temperature 사용
-            "num_predict": 100,  # 제목은 짧으므로 토큰 수 제한
-        },
-    }
-    
-    with httpx.Client(timeout=30.0) as client:
-        response = client.post(ollama_url, json=payload)
-        response.raise_for_status()
-        result = response.json()
-        return result.get("response", "").strip()
 
 
 def _extract_title_with_llama_cpp(prompt: str, settings) -> str:

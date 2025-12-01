@@ -61,10 +61,8 @@ class Settings(BaseSettings):
     asr_chunk_overlap_seconds: int = 0  # 오버랩 크기 (초) - 테스트용 0으로 설정
     asr_chunk_threshold_minutes: int = 60  # 이 길이 이상인 파일만 청킹 적용
 
-    # LLM 요약 설정 (Ollama/llama_cpp/LM Studio)
-    llm_provider: str = "lmstudio"  # "ollama", "llama_cpp", "lmstudio"
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model_name: str = "gpt-oss:20b"  # Ollama에서 사용할 모델 이름
+    # LLM 요약 설정 (llama_cpp/LM Studio)
+    llm_provider: str = "lmstudio"  # "llama_cpp", "lmstudio"
     lmstudio_base_url: str = "http://localhost:1234"
     lmstudio_model_name: str = "gpt-oss-20b"
     lmstudio_system_prompt: str = "당신은 회의록을 요약하는 전문가입니다. 모든 응답은 반드시 한글로 작성하세요. 마크다운 형식으로 명확하고 간결한 요약을 제공하되, 지시사항이나 프롬프트는 절대 포함하지 마세요."
