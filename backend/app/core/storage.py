@@ -135,7 +135,18 @@ def get_public_media_url(key: str) -> str | None:
                 # key는 "uploads/xxx.mp4" 형식이므로 그대로 사용
                 return f"{settings.media_base_url}/{key}"
             else:
-                # 개발 환경: MinIO 직접 URL 생성
+                # s3_endpoint가 내부 서비스 이름을 포함하는 경우 (예: asr-minio:9000)
+                # nginx 프록시 경로(/media)를 사용
+                s3_endpoint = settings.s3_endpoint
+                if '://' in s3_endpoint:
+                    # URL에서 호스트 부분 추출
+                    host_part = s3_endpoint.split('://', 1)[1].split('/', 1)[0]
+                    # 내부 서비스 이름 패턴 감지 (포트 번호가 있거나 도메인이 아닌 경우)
+                    if ':' in host_part and not host_part.startswith('localhost') and not host_part.startswith('127.0.0.1'):
+                        # 내부 서비스 이름으로 판단하고 nginx 프록시 경로 사용
+                        return f"/media/{key}"
+                
+                # 개발 환경: MinIO 직접 URL 생성 (localhost인 경우)
                 return f"{settings.s3_endpoint}/{settings.s3_bucket}/{key}"
         except ClientError:
             pass
