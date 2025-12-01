@@ -83,7 +83,10 @@ S3_ENDPOINT=http://localhost:9000
 S3_ACCESS_KEY=torchdev
 S3_SECRET_KEY=torchdev-secret
 S3_BUCKET_NAME=asr-media
-MEDIA_BASE_URL=http://localhost:9000/asr-media
+# 로컬 개발 환경: MinIO 직접 접근
+# MEDIA_BASE_URL=http://localhost:9000/asr-media
+# Docker 컨테이너 환경: nginx 프록시 경로 사용 (docker-compose.yml에서 자동 설정됨)
+# MEDIA_BASE_URL=/media
 
 # LLM Provider (LM Studio 사용 중)
 LLM_PROVIDER=lmstudio
