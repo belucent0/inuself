@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     """환경설정 모델."""
 
     model_config = SettingsConfigDict(
-        env_file=".env", 
+        # .env 파일 경로를 프로젝트 루트 기준으로 명시적으로 지정
+        env_file=str(_get_project_root() / ".env"),
         env_file_encoding="utf-8", 
         extra="ignore"
     )
@@ -73,6 +74,8 @@ class Settings(BaseSettings):
     llm_n_threads: int = 8
     # llama_cpp 직접 사용 시에만 사용
     llm_model_path: Path = Path("models/gpt-oss-20b-Q4_K_S.gguf")
+    # GPU 레이어 설정 (-1: 모든 레이어 GPU, 0: CPU만, 양수: 지정된 레이어 수만큼 GPU)
+    llm_n_gpu_layers: int = -1  # 기본값: 모든 레이어를 GPU에 로드 (Vulkan 가속)
 
     # 관리자 인증 설정
     admin_username: str = "admin"

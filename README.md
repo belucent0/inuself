@@ -224,12 +224,36 @@ LM Studio는 Windows에서 실행되는 LLM 서버입니다.
 로컬에서 llama-cpp-python을 직접 사용합니다 (Vulkan 지원 빌드 필요).
 
 **설정:**
-1. 모델 파일 준비: `models/gpt-oss-20b-Q4_K_S.gguf`
-2. `.env` 파일 설정:
+
+1. **llama-cpp-python 설치 (Vulkan 지원):**
+   
+   Windows에서 Vulkan 지원 빌드:
+   ```bash
+   cd backend
+   poetry add llama-cpp-python --optional
+   # 또는 직접 pip로 설치 (Vulkan 지원 빌드)
+   CMAKE_ARGS='-DGGML_VULKAN=ON' pip install --force-reinstall llama-cpp-python
+   ```
+   
+   > ⚠️ **참고**: Vulkan 지원 빌드가 필요합니다. 기본 pip 설치 버전은 CPU만 지원할 수 있습니다.
+
+2. **모델 파일 준비:**
+   
+   모델 파일을 프로젝트 루트의 `models/` 디렉토리에 배치합니다:
+   - 예: `models/gpt-oss-20b-Q4_K_S.gguf`
+
+3. **`.env` 파일 설정:**
    ```env
    LLM_PROVIDER=llama_cpp
    LLM_MODEL_PATH=models/gpt-oss-20b-Q4_K_S.gguf
+   LLM_CONTEXT_LENGTH=4096
+   LLM_TEMPERATURE=0.4
+   LLM_TOP_P=0.9
+   LLM_MAX_TOKENS=1024
+   LLM_N_THREADS=8
    ```
+   
+   > 📝 **참고**: `LLM_MODEL_PATH`는 프로젝트 루트 기준 상대 경로 또는 절대 경로를 사용할 수 있습니다.
 
 ### 2. 환경 변수 / 설정
 
@@ -238,16 +262,19 @@ LM Studio는 Windows에서 실행되는 LLM 서버입니다.
 | 설정 | 기본값 | 설명 |
 | --- | --- | --- |
 | `LLM_PROVIDER` | `lmstudio` | LLM provider: `lmstudio` 또는 `llama_cpp` |
-| `LMSTUDIO_BASE_URL` | `http://localhost:1234` | LM Studio API 엔드포인트 |
-| `LMSTUDIO_MODEL_NAME` | `gpt-oss-20b` | LM Studio에서 사용할 모델 이름 |
-| `LLM_MODEL_PATH` | `models/gpt-oss-20b-Q4_K_S.gguf` | llama_cpp 사용 시 모델 파일 경로 |
-| `LLM_CONTEXT_LENGTH` | `4096` | Context window |
-| `LLM_TEMPERATURE` | `0.4` | 생성 온도 |
-| `LLM_TOP_P` | `0.9` | Top-p nucleus 샘플링 |
-| `LLM_MAX_TOKENS` | `1024` | Markdown 응답 최대 토큰 |
-| `LLM_N_THREADS` | `8` | CPU 스레드 수 (llama_cpp만 사용) |
+| `LMSTUDIO_BASE_URL` | `http://localhost:1234` | LM Studio API 엔드포인트 (lmstudio 사용 시) |
+| `LMSTUDIO_MODEL_NAME` | `gpt-oss-20b` | LM Studio에서 사용할 모델 이름 (lmstudio 사용 시) |
+| `LLM_MODEL_PATH` | `models/gpt-oss-20b-Q4_K_S.gguf` | llama_cpp 사용 시 모델 파일 경로 (상대 또는 절대 경로) |
+| `LLM_CONTEXT_LENGTH` | `15016` | Context window (토큰 수) |
+| `LLM_TEMPERATURE` | `0.4` | 생성 온도 (0.0 ~ 1.0) |
+| `LLM_TOP_P` | `0.9` | Top-p nucleus 샘플링 (0.0 ~ 1.0) |
+| `LLM_MAX_TOKENS` | `1024` | Markdown 응답 최대 토큰 수 |
+| `LLM_N_THREADS` | `8` | CPU 스레드 수 (llama_cpp 사용 시) |
 
-> ⚠️ **llama_cpp 직접 사용 시**: Vulkan 가속만 지원합니다. CPU 폴백은 제공되지 않으므로, 모델 로딩 실패 시 바로 `SUMMARY_FAILED` 상태로 기록됩니다.
+> ⚠️ **llama_cpp 직접 사용 시**: 
+> - Vulkan 가속을 사용합니다 (`n_gpu_layers=-1`). CPU 폴백은 제공되지 않으므로, 모델 로딩 실패 시 바로 `SUMMARY_FAILED` 상태로 기록됩니다.
+> - 긴 텍스트는 자동으로 청크로 분할하여 처리합니다.
+> - 모델 파일이 존재하지 않거나 손상된 경우 헬스체크에서 실패합니다.
 
 ### 3. 요약 워커 실행
 
