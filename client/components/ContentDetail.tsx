@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
-import { ContentDetail as ContentDetailType, retryProcessing } from '@/lib/api'
+import { ContentDetail as ContentDetailType, retryProcessing, reclusterSpeakers } from '@/lib/api'
 
 type Props = {
   content: ContentDetailType
@@ -20,6 +20,12 @@ function isAudioFile(filename: string): boolean {
 export default function ContentDetail({ content }: Props) {
   const router = useRouter()
   const [message, setMessage] = useState<string>('')
+  const [reclusterMessage, setReclusterMessage] = useState<string>('')
+  const [isReclustering, setIsReclustering] = useState<boolean>(false)
+  const [numSpeakers, setNumSpeakers] = useState<string>('')
+  const [similarityThreshold, setSimilarityThreshold] = useState<number>(0.7)
+  const [minSpeakers, setMinSpeakers] = useState<string>('')
+  const [maxSpeakers, setMaxSpeakers] = useState<string>('')
   
   const handleRetry = async (type: 'asr' | 'summary') => {
     const typeLabel = type === 'asr' ? 'ASR 처리' : 'LLM 요약'
@@ -28,12 +34,71 @@ export default function ContentDetail({ content }: Props) {
     }
     
     try {
-      const result = await retryProcessing(content.id, type)
+      let minSpeakersValue: number | undefined = undefined
+      let maxSpeakersValue: number | undefined = undefined
+      
+      if (type === 'asr') {
+        if (minSpeakers.trim()) {
+          const parsed = parseInt(minSpeakers.trim())
+          if (isNaN(parsed) || parsed < 1) {
+            throw new Error('최소 화자 수는 1 이상의 정수여야 합니다.')
+          }
+          minSpeakersValue = parsed
+        }
+        if (maxSpeakers.trim()) {
+          const parsed = parseInt(maxSpeakers.trim())
+          if (isNaN(parsed) || parsed < 1) {
+            throw new Error('최대 화자 수는 1 이상의 정수여야 합니다.')
+          }
+          maxSpeakersValue = parsed
+        }
+        if (minSpeakersValue !== undefined && maxSpeakersValue !== undefined && minSpeakersValue > maxSpeakersValue) {
+          throw new Error('최소 화자 수는 최대 화자 수보다 작거나 같아야 합니다.')
+        }
+      }
+      
+      const result = await retryProcessing(content.id, type, minSpeakersValue, maxSpeakersValue)
       setMessage(result.message)
       router.refresh()
       setTimeout(() => setMessage(''), 3000)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '재처리 실패')
+    }
+  }
+  
+  const handleRecluster = async () => {
+    if (!content.transcription.diarization_metadata?.segment_embeddings || 
+        content.transcription.diarization_metadata.segment_embeddings.length === 0) {
+      setReclusterMessage('세그먼트 임베딩이 없습니다. 먼저 화자 분리를 완료해주세요.')
+      return
+    }
+    
+    if (!confirm('화자 재분류를 실행하시겠습니까? 기존 화자 라벨이 변경될 수 있습니다.')) {
+      return
+    }
+    
+    setIsReclustering(true)
+    setReclusterMessage('')
+    
+    try {
+      const numSpeakersValue = numSpeakers.trim() ? parseInt(numSpeakers.trim()) : undefined
+      if (numSpeakersValue !== undefined && (numSpeakersValue < 1 || isNaN(numSpeakersValue))) {
+        throw new Error('화자 수는 1 이상의 정수여야 합니다.')
+      }
+      
+      const result = await reclusterSpeakers(
+        content.id,
+        numSpeakersValue,
+        similarityThreshold
+      )
+      
+      setReclusterMessage(`✅ ${result.message} (${result.num_speakers}명: ${result.speaker_labels.join(', ')})`)
+      router.refresh()
+      setTimeout(() => setReclusterMessage(''), 5000)
+    } catch (error) {
+      setReclusterMessage(`❌ ${error instanceof Error ? error.message : '재클러스터링 실패'}`)
+    } finally {
+      setIsReclustering(false)
     }
   }
   
@@ -103,11 +168,60 @@ export default function ContentDetail({ content }: Props) {
           content.status !== 'SUMMARY_FAILED' && <p>요약이 아직 준비되지 않았습니다.</p>
         )}
       </section>
-      {content.status === 'ASR_FAILED' && (
-        <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#ffebee', borderRadius: '4px' }}>
-          <p style={{ color: '#E53935', marginBottom: '0.5rem' }}>
-            ASR 처리가 실패했습니다. 다시 시도하려면 아래 버튼을 클릭하세요.
+      {(content.status === 'ASR_FAILED' || content.status === 'PROCESSING' || content.status === 'QUEUED') && (
+        <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: content.status === 'ASR_FAILED' ? '#ffebee' : content.status === 'QUEUED' ? '#e3f2fd' : '#fff3e0', borderRadius: '4px' }}>
+          <p style={{ color: content.status === 'ASR_FAILED' ? '#E53935' : content.status === 'QUEUED' ? '#1976D2' : '#F57C00', marginBottom: '0.5rem' }}>
+            {content.status === 'ASR_FAILED' 
+              ? 'ASR 처리가 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.'
+              : content.status === 'QUEUED'
+              ? 'ASR 처리가 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.'
+              : 'ASR 처리가 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.'}
           </p>
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+              <div style={{ flex: '1', minWidth: '150px' }}>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                  최소 화자 수 (선택사항):
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={minSpeakers}
+                  onChange={(e) => setMinSpeakers(e.target.value)}
+                  placeholder="자동 결정"
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    fontSize: '0.9rem'
+                  }}
+                />
+              </div>
+              <div style={{ flex: '1', minWidth: '150px' }}>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                  최대 화자 수 (선택사항):
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={maxSpeakers}
+                  onChange={(e) => setMaxSpeakers(e.target.value)}
+                  placeholder="자동 결정"
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    fontSize: '0.9rem'
+                  }}
+                />
+              </div>
+            </div>
+            <p style={{ fontSize: '0.8rem', color: '#999', marginTop: '0.25rem' }}>
+              화자 수 범위를 지정하지 않으면 자동으로 결정됩니다.
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => handleRetry('asr')}
@@ -151,86 +265,85 @@ export default function ContentDetail({ content }: Props) {
             <p style={{ marginBottom: '0.5rem' }}>
               <strong>화자 라벨:</strong> {content.transcription.diarization_metadata.speaker_labels.join(', ')}
             </p>
-            {content.transcription.diarization_metadata.speaker_embeddings && (
-              <div style={{ marginTop: '1rem' }}>
-                <strong style={{ display: 'block', marginBottom: '0.5rem' }}>화자별 임베딩 벡터:</strong>
-                {Object.entries(content.transcription.diarization_metadata.speaker_embeddings).map(([speaker, embedding]) => (
-                  <div key={speaker} style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #ddd' }}>
-                    <strong style={{ fontSize: '0.9rem', color: '#673AB7' }}>{speaker}</strong>
-                    <p style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem', marginBottom: '0.5rem' }}>
-                      차원: {embedding.length}
-                    </p>
-                    <details style={{ fontSize: '0.8rem' }}>
-                      <summary style={{ cursor: 'pointer', color: '#2196F3', marginBottom: '0.25rem' }}>
-                        임베딩 벡터 보기/숨기기
-                      </summary>
-                      <pre style={{ 
-                        marginTop: '0.5rem', 
-                        padding: '0.5rem', 
-                        backgroundColor: '#fafafa', 
-                        borderRadius: '4px', 
-                        overflowX: 'auto',
-                        fontSize: '0.75rem',
-                        maxHeight: '200px',
-                        overflowY: 'auto',
-                        wordBreak: 'break-all',
-                        whiteSpace: 'pre-wrap'
-                      }}>
-                        {JSON.stringify(embedding, null, 2)}
-                      </pre>
-                    </details>
-                  </div>
-                ))}
-              </div>
-            )}
-            {content.transcription.diarization_metadata.segment_embeddings && content.transcription.diarization_metadata.segment_embeddings.length > 0 ? (
-              <div style={{ marginTop: '1.5rem' }}>
-                <strong style={{ display: 'block', marginBottom: '0.5rem' }}>시간대별 세그먼트 임베딩 벡터:</strong>
-                <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.75rem' }}>
-                  총 {content.transcription.diarization_metadata.segment_embeddings.length}개 세그먼트
-                </p>
-                <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid #ddd', borderRadius: '4px', padding: '0.5rem' }}>
-                  {content.transcription.diarization_metadata.segment_embeddings.map((segEmb, idx) => (
-                    <div key={idx} style={{ marginBottom: '0.75rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #eee' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                        <strong style={{ fontSize: '0.9rem', color: '#673AB7' }}>{segEmb.speaker}</strong>
-                        <span style={{ fontSize: '0.85rem', color: '#666' }}>
-                          {segEmb.start.toFixed(2)}s - {segEmb.end.toFixed(2)}s ({segEmb.duration.toFixed(2)}s)
-                        </span>
-                      </div>
-                      <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem' }}>
-                        임베딩 차원: {segEmb.embedding.length}
-                      </p>
-                      <details style={{ fontSize: '0.8rem' }}>
-                        <summary style={{ cursor: 'pointer', color: '#2196F3', marginBottom: '0.25rem' }}>
-                          임베딩 벡터 보기/숨기기
-                        </summary>
-                        <pre style={{ 
-                          marginTop: '0.5rem', 
-                          padding: '0.5rem', 
-                          backgroundColor: '#fafafa', 
-                          borderRadius: '4px', 
-                          overflowX: 'auto',
-                          fontSize: '0.75rem',
-                          maxHeight: '200px',
-                          overflowY: 'auto',
-                          wordBreak: 'break-all',
-                          whiteSpace: 'pre-wrap'
-                        }}>
-                          {JSON.stringify(segEmb.embedding, null, 2)}
-                        </pre>
-                      </details>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div style={{ marginTop: '1.5rem' }}>
-                <strong style={{ display: 'block', marginBottom: '0.5rem' }}>시간대별 세그먼트 임베딩 벡터:</strong>
-                <p style={{ fontSize: '0.85rem', color: '#999', fontStyle: 'italic' }}>
-                  시간대별 세그먼트 임베딩이 추출되지 않았습니다. (백엔드 로그에서 원인 확인 가능)
-                </p>
-              </div>
+          </div>
+        </section>
+      )}
+      {content.transcription.diarization_metadata?.segment_embeddings && 
+       content.transcription.diarization_metadata.segment_embeddings.length > 0 && (
+        <section style={{ marginTop: '1.5rem' }}>
+          <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>화자 재분류</h3>
+          <div style={{ padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px', fontSize: '0.9rem' }}>
+            <p style={{ marginBottom: '1rem', color: '#666', fontSize: '0.85rem' }}>
+              저장된 세그먼트 임베딩을 기반으로 화자를 재클러스터링합니다. GPU 연산 없이 빠르게 처리됩니다.
+            </p>
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                화자 수 (선택사항):
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={numSpeakers}
+                onChange={(e) => setNumSpeakers(e.target.value)}
+                placeholder="자동 결정"
+                style={{
+                  width: '200px',
+                  padding: '0.5rem',
+                  border: '1px solid #ddd',
+                  borderRadius: '4px',
+                  fontSize: '0.9rem'
+                }}
+                disabled={isReclustering}
+              />
+              <p style={{ fontSize: '0.8rem', color: '#999', marginTop: '0.25rem' }}>
+                비워두면 자동으로 결정됩니다.
+              </p>
+            </div>
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                유사도 임계값: {similarityThreshold.toFixed(2)}
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={similarityThreshold}
+                onChange={(e) => setSimilarityThreshold(parseFloat(e.target.value))}
+                style={{ width: '100%', maxWidth: '400px' }}
+                disabled={isReclustering}
+              />
+              <p style={{ fontSize: '0.8rem', color: '#999', marginTop: '0.25rem' }}>
+                0.0 (낮음) ~ 1.0 (높음) - 유사도가 이 값 이상인 세그먼트를 같은 화자로 묶습니다.
+              </p>
+            </div>
+            <button
+              onClick={handleRecluster}
+              disabled={isReclustering}
+              style={{
+                padding: '0.75rem 1.5rem',
+                backgroundColor: isReclustering ? '#ccc' : '#673AB7',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                fontSize: '0.9rem',
+                cursor: isReclustering ? 'not-allowed' : 'pointer',
+                fontWeight: 'bold'
+              }}
+            >
+              {isReclustering ? '재클러스터링 중...' : '재클러스터링 실행'}
+            </button>
+            {reclusterMessage && (
+              <p style={{ 
+                marginTop: '1rem', 
+                padding: '0.75rem',
+                backgroundColor: reclusterMessage.includes('✅') ? '#e8f5e9' : '#ffebee',
+                color: reclusterMessage.includes('✅') ? '#2e7d32' : '#c62828',
+                borderRadius: '4px',
+                fontSize: '0.85rem'
+              }}>
+                {reclusterMessage}
+              </p>
             )}
           </div>
         </section>
