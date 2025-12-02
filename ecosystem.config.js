@@ -27,8 +27,8 @@ module.exports = {
     {
       name: 'celery-worker',
       cwd: 'C:\\timblo\\torch-test\\backend',
-      script: 'C:\\Users\\jg\\.local\\bin\\poetry.exe',
-      args: ['run', 'python', 'run_celery_worker.py'],
+      script: 'C:\\Users\\jg\\AppData\\Local\\pypoetry\\Cache\\virtualenvs\\torch-asr-backend-D1eM01ne-py3.12\\Scripts\\python.exe',
+      args: ['run_celery_worker.py'],
       env: {
         // 작업 큐 설정
         TASK_QUEUE_TYPE: envVars.TASK_QUEUE_TYPE || 'celery',
