@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import get_settings
-from .core.logging import logger, safe_print
+from .core.logging import logger
 from .core.storage import check_storage_health
 from .controllers import content_controller
 
@@ -41,12 +41,12 @@ async def lifespan(app: FastAPI):
     should_start_worker = os.getenv("START_WORKER", "false").lower() == "true"
     
     if should_start_worker:
-        safe_print("[FastAPI] 워커를 백그라운드에서 시작합니다...")
+        logger.info("[FastAPI] 워커를 백그라운드에서 시작합니다...")
         start_worker_background()
     else:
-        safe_print("[FastAPI] 워커 자동 시작이 비활성화되었습니다.")
-        safe_print("[FastAPI] 개발 환경: run_dev.sh가 워커를 관리합니다.")
-        safe_print("[FastAPI] 프로덕션 환경: start.bat을 사용하면 PM2 워커도 함께 시작됩니다.")
+        logger.info("[FastAPI] 워커 자동 시작이 비활성화되었습니다.")
+        logger.info("[FastAPI] 개발 환경: run_dev.sh가 워커를 관리합니다.")
+        logger.info("[FastAPI] 프로덕션 환경: start.bat을 사용하면 PM2 워커도 함께 시작됩니다.")
     
     # 백그라운드 태스크: 주기적으로 SUMMARIZING 상태 콘텐츠 자동 재큐잉
     async def auto_requeue_llm_jobs():
@@ -59,14 +59,14 @@ async def lifespan(app: FastAPI):
                 requeued = await requeue_summarizing_contents()
                 if requeued > 0:
                     logger.info("Auto-requeued %d LLM jobs", requeued)
-                    safe_print(f"[Auto-Requeue] {requeued}개의 LLM 작업을 자동으로 재큐잉했습니다.")
+                    logger.info(f"[Auto-Requeue] {requeued}개의 LLM 작업을 자동으로 재큐잉했습니다.")
             except Exception as exc:
                 logger.exception("Failed to auto-requeue LLM jobs")
-                safe_print(f"[Auto-Requeue] 자동 재큐잉 실패: {exc}")
+                logger.error(f"[Auto-Requeue] 자동 재큐잉 실패: {exc}")
     
     # 백그라운드 태스크 시작
     auto_requeue_task = asyncio.create_task(auto_requeue_llm_jobs())
-    safe_print("[FastAPI] LLM 작업 자동 재큐잉 백그라운드 태스크 시작 (60초 간격)")
+    logger.info("[FastAPI] LLM 작업 자동 재큐잉 백그라운드 태스크 시작 (60초 간격)")
     
     yield
     
@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI):
         await auto_requeue_task
     except asyncio.CancelledError:
         pass
-    safe_print("[FastAPI] LLM 작업 자동 재큐잉 백그라운드 태스크 종료")
+    logger.info("[FastAPI] LLM 작업 자동 재큐잉 백그라운드 태스크 종료")
 
 
 def create_app() -> FastAPI:
@@ -112,10 +112,10 @@ def create_app() -> FastAPI:
     storage_ok, storage_message = check_storage_health()
     if storage_ok:
         logger.info("[Storage] %s", storage_message)
-        safe_print(f"[Storage] ✓ {storage_message}")
+        logger.info(f"[Storage] ✓ {storage_message}")
     else:
         logger.warning("[Storage] %s", storage_message)
-        safe_print(f"[Storage] ✗ {storage_message}")
+        logger.warning(f"[Storage] ✗ {storage_message}")
 
     app.include_router(content_controller.router, prefix=settings.api_prefix)
 

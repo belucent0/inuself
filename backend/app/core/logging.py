@@ -68,21 +68,39 @@ def setup_file_logging(log_dir: Path | None = None, log_level: str = "INFO") -> 
     )
 
 
-# safe_print를 loguru로 대체하는 함수
-def safe_print(*args, **kwargs) -> None:
-    """
-    Windows cp949 인코딩 문제를 피하기 위한 안전한 print 함수.
-    loguru를 사용하여 UTF-8로 출력합니다.
-    """
-    # kwargs에서 sep, end 등을 처리
-    sep = kwargs.get("sep", " ")
-    end = kwargs.get("end", "\n")
+# safe_print는 더 이상 사용하지 않습니다. logger를 직접 사용하세요.
+# 예: logger.info("message") 또는 logger.error("error message")
+
+
+# Python logging 포맷 설정 (타임스탬프 제거 - Loguru가 이미 타임스탬프를 추가함)
+def configure_python_logging() -> None:
+    """Python 표준 logging 모듈의 포맷을 일관되게 설정."""
+    import logging
     
-    message = sep.join(str(arg) for arg in args)
-    if end != "\n":
-        message = message.rstrip("\n") + end
+    # 루트 로거의 핸들러 포맷 수정
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        # 타임스탬프를 제거한 포맷 (Loguru와 일관성 유지)
+        formatter = logging.Formatter(
+            "%(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s"
+        )
+        handler.setFormatter(formatter)
     
-    logger.info(message)
+    # Celery 로거 포맷 설정
+    celery_logger = logging.getLogger("celery")
+    for handler in celery_logger.handlers:
+        formatter = logging.Formatter(
+            "%(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s"
+        )
+        handler.setFormatter(formatter)
+    
+    # Celery task 로거 포맷 설정
+    celery_task_logger = logging.getLogger("celery.task")
+    for handler in celery_task_logger.handlers:
+        formatter = logging.Formatter(
+            "%(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s"
+        )
+        handler.setFormatter(formatter)
 
 
 # 외부 라이브러리 로거 억제 설정
@@ -105,4 +123,6 @@ def configure_external_loggers() -> None:
 
 # 모듈 import 시 자동으로 외부 로거 설정
 configure_external_loggers()
+# Python logging 포맷 설정 (나중에 호출되어 Celery가 초기화된 후 적용)
+# configure_python_logging()는 celery_app이 초기화된 후에 호출되어야 함
 
