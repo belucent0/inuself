@@ -27,6 +27,7 @@ export type ContentSummary = {
   summary_md?: string | null
   title?: string | null
   created_at: string
+  updated_at?: string | null
 }
 
 export type LlmLog = {
@@ -122,12 +123,29 @@ export async function deleteContentsBulk(contentIds: number[]): Promise<BulkDele
   return res.json()
 }
 
-export async function uploadContent(file: File): Promise<{ content_id: number }> {
+export async function uploadContent(
+  file: File,
+  minSpeakers?: number,
+  maxSpeakers?: number
+): Promise<{ content_id: number }> {
   const formData = new FormData()
   formData.append('file', file)
 
+  const params = new URLSearchParams()
+  if (minSpeakers !== undefined) {
+    params.append('min_speakers', minSpeakers.toString())
+  }
+  if (maxSpeakers !== undefined) {
+    params.append('max_speakers', maxSpeakers.toString())
+  }
+
+  const queryString = params.toString()
+  const url = queryString 
+    ? `${API_BASE}/contents/upload?${queryString}`
+    : `${API_BASE}/contents/upload`
+
   try {
-    const res = await fetch(`${API_BASE}/contents/upload`, {
+    const res = await fetch(url, {
       method: 'POST',
       body: formData,
     })
@@ -165,15 +183,54 @@ export async function uploadContent(file: File): Promise<{ content_id: number }>
 
 export async function retryProcessing(
   contentId: number, 
-  type: 'asr' | 'summary'
+  type: 'asr' | 'summary',
+  minSpeakers?: number,
+  maxSpeakers?: number
 ): Promise<{ success: boolean; message: string; job_id?: string }> {
-  const res = await fetch(`${API_BASE}/contents/${contentId}/retry?type=${type}`, {
+  const params = new URLSearchParams({ type })
+  if (minSpeakers !== undefined) {
+    params.append('min_speakers', minSpeakers.toString())
+  }
+  if (maxSpeakers !== undefined) {
+    params.append('max_speakers', maxSpeakers.toString())
+  }
+  
+  const res = await fetch(`${API_BASE}/contents/${contentId}/retry?${params.toString()}`, {
     method: 'POST',
   })
   if (!res.ok) {
     const errorText = await res.text()
     throw new Error(`재처리 실패: ${res.status} ${errorText}`)
   }
+  return res.json()
+}
+
+export async function reclusterSpeakers(
+  contentId: number,
+  numSpeakers?: number,
+  similarityThreshold?: number
+): Promise<{ message: string; num_speakers: number; speaker_labels: string[]; updated_segments_count: number }> {
+  const body: { num_speakers?: number; similarity_threshold?: number } = {}
+  if (numSpeakers !== undefined) {
+    body.num_speakers = numSpeakers
+  }
+  if (similarityThreshold !== undefined) {
+    body.similarity_threshold = similarityThreshold
+  }
+  
+  const res = await fetch(`${API_BASE}/contents/${contentId}/recluster-speakers`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  
+  if (!res.ok) {
+    const errorText = await res.text()
+    throw new Error(`재클러스터링 실패: ${res.status} ${errorText}`)
+  }
+  
   return res.json()
 }
 
