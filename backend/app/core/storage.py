@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import BinaryIO
@@ -11,8 +10,7 @@ from botocore.client import BaseClient
 from botocore.exceptions import ClientError
 
 from .config import get_settings
-
-logger = logging.getLogger(__name__)
+from .logging import logger
 
 
 @lru_cache

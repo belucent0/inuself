@@ -141,6 +141,100 @@ export default function ContentDetail({ content }: Props) {
           </div>
         ))}
       </section>
+      {content.transcription.diarization_metadata && (
+        <section style={{ marginTop: '1.5rem' }}>
+          <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>화자 분리 메타데이터</h3>
+          <div style={{ padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px', fontSize: '0.9rem' }}>
+            <p style={{ marginBottom: '0.5rem' }}>
+              <strong>구분된 화자 수:</strong> {content.transcription.diarization_metadata.num_speakers}명
+            </p>
+            <p style={{ marginBottom: '0.5rem' }}>
+              <strong>화자 라벨:</strong> {content.transcription.diarization_metadata.speaker_labels.join(', ')}
+            </p>
+            {content.transcription.diarization_metadata.speaker_embeddings && (
+              <div style={{ marginTop: '1rem' }}>
+                <strong style={{ display: 'block', marginBottom: '0.5rem' }}>화자별 임베딩 벡터:</strong>
+                {Object.entries(content.transcription.diarization_metadata.speaker_embeddings).map(([speaker, embedding]) => (
+                  <div key={speaker} style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #ddd' }}>
+                    <strong style={{ fontSize: '0.9rem', color: '#673AB7' }}>{speaker}</strong>
+                    <p style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem', marginBottom: '0.5rem' }}>
+                      차원: {embedding.length}
+                    </p>
+                    <details style={{ fontSize: '0.8rem' }}>
+                      <summary style={{ cursor: 'pointer', color: '#2196F3', marginBottom: '0.25rem' }}>
+                        임베딩 벡터 보기/숨기기
+                      </summary>
+                      <pre style={{ 
+                        marginTop: '0.5rem', 
+                        padding: '0.5rem', 
+                        backgroundColor: '#fafafa', 
+                        borderRadius: '4px', 
+                        overflowX: 'auto',
+                        fontSize: '0.75rem',
+                        maxHeight: '200px',
+                        overflowY: 'auto',
+                        wordBreak: 'break-all',
+                        whiteSpace: 'pre-wrap'
+                      }}>
+                        {JSON.stringify(embedding, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                ))}
+              </div>
+            )}
+            {content.transcription.diarization_metadata.segment_embeddings && content.transcription.diarization_metadata.segment_embeddings.length > 0 ? (
+              <div style={{ marginTop: '1.5rem' }}>
+                <strong style={{ display: 'block', marginBottom: '0.5rem' }}>시간대별 세그먼트 임베딩 벡터:</strong>
+                <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.75rem' }}>
+                  총 {content.transcription.diarization_metadata.segment_embeddings.length}개 세그먼트
+                </p>
+                <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid #ddd', borderRadius: '4px', padding: '0.5rem' }}>
+                  {content.transcription.diarization_metadata.segment_embeddings.map((segEmb, idx) => (
+                    <div key={idx} style={{ marginBottom: '0.75rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #eee' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <strong style={{ fontSize: '0.9rem', color: '#673AB7' }}>{segEmb.speaker}</strong>
+                        <span style={{ fontSize: '0.85rem', color: '#666' }}>
+                          {segEmb.start.toFixed(2)}s - {segEmb.end.toFixed(2)}s ({segEmb.duration.toFixed(2)}s)
+                        </span>
+                      </div>
+                      <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem' }}>
+                        임베딩 차원: {segEmb.embedding.length}
+                      </p>
+                      <details style={{ fontSize: '0.8rem' }}>
+                        <summary style={{ cursor: 'pointer', color: '#2196F3', marginBottom: '0.25rem' }}>
+                          임베딩 벡터 보기/숨기기
+                        </summary>
+                        <pre style={{ 
+                          marginTop: '0.5rem', 
+                          padding: '0.5rem', 
+                          backgroundColor: '#fafafa', 
+                          borderRadius: '4px', 
+                          overflowX: 'auto',
+                          fontSize: '0.75rem',
+                          maxHeight: '200px',
+                          overflowY: 'auto',
+                          wordBreak: 'break-all',
+                          whiteSpace: 'pre-wrap'
+                        }}>
+                          {JSON.stringify(segEmb.embedding, null, 2)}
+                        </pre>
+                      </details>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{ marginTop: '1.5rem' }}>
+                <strong style={{ display: 'block', marginBottom: '0.5rem' }}>시간대별 세그먼트 임베딩 벡터:</strong>
+                <p style={{ fontSize: '0.85rem', color: '#999', fontStyle: 'italic' }}>
+                  시간대별 세그먼트 임베딩이 추출되지 않았습니다. (백엔드 로그에서 원인 확인 가능)
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
       <section style={{ marginTop: '1.5rem' }}>
         <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>로그</h3>
         {content.logs?.map((log) => (

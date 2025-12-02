@@ -50,6 +50,8 @@ from .diarization_utils import (
     find_optimal_split_points,
     merge_segments_with_speakers,
     run_diarization,
+    extract_speaker_embeddings,
+    extract_segment_embeddings,
 )
 from .whisper_utils import run_asr_transcription
 
@@ -80,6 +82,9 @@ class PipelineResult:
     diarization_segments: list[dict[str, Any]]
     duration_seconds: float
     logs: list[dict[str, Any]] = field(default_factory=list)
+    speaker_embeddings: dict[str, list[float]] | None = None  # 화자별 embedding 벡터
+    segment_embeddings: list[dict[str, Any]] | None = None  # 시간대별 세그먼트 embedding 벡터
+    num_speakers: int = 0  # pyannote가 구분한 화자 수
 
 
 def run_asr_diarization_pipeline(
@@ -203,13 +208,15 @@ def _run_case4_parallel_full_asr(
     print(f"\n[Step 1] Starting Diarization and ASR simultaneously...")
     
     with ThreadPoolExecutor(max_workers=2) as executor:
-        # 화자분리 작업 제출
+        # 화자분리 작업 제출 (임베딩 및 pipeline 포함)
         diarization_future = executor.submit(
             run_diarization,
             waveform=waveform,
             sample_rate=sample_rate,
             device=device,
             audio_duration=audio_duration,
+            return_embeddings=True,  # 임베딩 추출 활성화
+            return_pipeline=True,  # pipeline 객체도 반환 (시간대별 임베딩 추출용)
         )
         
         # ASR 작업 제출 (전체 파일 또는 청킹)
@@ -232,7 +239,18 @@ def _run_case4_parallel_full_asr(
         
         # 두 작업 모두 완료 대기
         print(f"[Parallel] Waiting for both Diarization and ASR to complete...")
-        diarization, diarization_load_time, diarization_time = diarization_future.result()
+        diarization_result = diarization_future.result()
+        # return_embeddings=True, return_pipeline=True로 변경했으므로 결과 구조 확인
+        if isinstance(diarization_result, tuple) and len(diarization_result) == 5:
+            diarization, diarization_load_time, diarization_time, embeddings_dict, diarization_pipeline = diarization_result
+        elif isinstance(diarization_result, tuple) and len(diarization_result) == 4:
+            diarization, diarization_load_time, diarization_time, embeddings_dict = diarization_result
+            diarization_pipeline = None
+        else:
+            # 기존 호환성 유지
+            diarization, diarization_load_time, diarization_time = diarization_result
+            embeddings_dict = None
+            diarization_pipeline = None
         
         if use_chunking:
             # 청킹 결과는 리스트로 반환됨
@@ -254,11 +272,36 @@ def _run_case4_parallel_full_asr(
     else:
         print(f"  - ASR (load + transcribe): {model_load_time + transcribe_time:.2f}s")
     
+    # 시간대별 세그먼트 임베딩 추출
+    segment_embeddings = None
+    print(f"\n[Embeddings] Checking pipeline for segment embeddings extraction...")
+    print(f"[Embeddings] diarization_pipeline is None: {diarization_pipeline is None}")
+    if diarization_pipeline is not None:
+        print(f"[Embeddings] Pipeline type: {type(diarization_pipeline)}")
+        print(f"[Embeddings] Extracting time-based segment embeddings...")
+        audio_data_for_embeddings = {
+            "waveform": torch.from_numpy(waveform).unsqueeze(0).to(device),
+            "sample_rate": sample_rate
+        }
+        segment_embeddings = extract_segment_embeddings(
+            diarization_pipeline,
+            audio_data_for_embeddings,
+            diarization,
+            min_segment_duration=0.5,  # 최소 0.5초 세그먼트만 추출
+        )
+        if segment_embeddings:
+            print(f"[Embeddings] Successfully extracted {len(segment_embeddings)} segment embeddings")
+        else:
+            print(f"[Embeddings] No segment embeddings extracted (returned None or empty list)")
+    else:
+        print(f"[Embeddings] Cannot extract segment embeddings: diarization_pipeline is None")
+    
     # 화자 정보 병합
     print(f"\n[Merging] Combining ASR and diarization results...")
     merged_segments = merge_segments_with_speakers(
         asr_result.get("segments", []),
         diarization,
+        embeddings_dict=embeddings_dict,
     )
     
     # 화자별 통계
@@ -279,6 +322,40 @@ def _run_case4_parallel_full_asr(
             "speaker": speaker,
         })
     
+    # pyannote가 구분한 화자 수 계산
+    unique_speakers = set()
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        unique_speakers.add(speaker)
+    num_speakers = len(unique_speakers)
+    
+    # 임베딩이 없으면 수동 추출 시도
+    if embeddings_dict is None:
+        print(f"[Pipeline] Embeddings not returned, attempting manual extraction...")
+        try:
+            # pipeline 객체를 다시 로드해야 하므로, 여기서는 None으로 유지
+            # 대신 로그에 기록
+            print(f"[Pipeline] Warning: Embeddings extraction skipped (requires pipeline object)")
+        except Exception as e:
+            print(f"[Pipeline] Warning: Failed to extract embeddings: {e}")
+    
+    # 임베딩 정보 로깅
+    if embeddings_dict:
+        print(f"\n[Pipeline] Speaker embeddings extracted:")
+        print(f"  - Number of speakers with embeddings: {len(embeddings_dict)}")
+        for speaker, embedding in embeddings_dict.items():
+            embedding_dim = len(embedding) if isinstance(embedding, list) else 0
+            print(f"  - {speaker}: embedding dimension = {embedding_dim}")
+            # 처음 5개 값만 표시
+            if isinstance(embedding, list) and len(embedding) > 0:
+                preview = embedding[:5]
+                print(f"    Preview: {preview}...")
+    else:
+        print(f"[Pipeline] No embeddings extracted")
+    
+    print(f"\n[Pipeline] Diarization summary:")
+    print(f"  - Total speakers detected: {num_speakers}")
+    print(f"  - Speaker labels: {sorted(unique_speakers)}")
+    
     # 최종 transcription 구성
     transcription = {
         "text": asr_result["text"],
@@ -286,12 +363,44 @@ def _run_case4_parallel_full_asr(
         "segments": merged_segments,
     }
     
+    # 시간대별 임베딩 요약 (로깅용)
+    segment_embeddings_summary = None
+    if segment_embeddings:
+        # 화자별로 그룹화하여 요약
+        speaker_segment_counts = {}
+        for seg_emb in segment_embeddings:
+            speaker = seg_emb.get("speaker", "UNKNOWN")
+            if speaker not in speaker_segment_counts:
+                speaker_segment_counts[speaker] = {
+                    "count": 0,
+                    "total_duration": 0.0,
+                    "time_ranges": [],
+                }
+            speaker_segment_counts[speaker]["count"] += 1
+            speaker_segment_counts[speaker]["total_duration"] += seg_emb.get("duration", 0.0)
+            # 처음 5개 시간 범위만 저장
+            if len(speaker_segment_counts[speaker]["time_ranges"]) < 5:
+                speaker_segment_counts[speaker]["time_ranges"].append({
+                    "start": seg_emb.get("start"),
+                    "end": seg_emb.get("end"),
+                    "embedding_dim": len(seg_emb.get("embedding", [])),
+                })
+        
+        segment_embeddings_summary = speaker_segment_counts
+    
     logs.append({
         "event": "completed",
         "execution_time": execution_time,
         "diarization_time": diarization_load_time + diarization_time,
         "asr_time": model_load_time + transcribe_time,
         "speaker_stats": speaker_stats,
+        "num_speakers": num_speakers,
+        "speaker_labels": sorted(unique_speakers),
+        "embeddings_extracted": embeddings_dict is not None,
+        "num_embeddings": len(embeddings_dict) if embeddings_dict else 0,
+        "segment_embeddings_extracted": segment_embeddings is not None,
+        "num_segment_embeddings": len(segment_embeddings) if segment_embeddings else 0,
+        "segment_embeddings_summary": segment_embeddings_summary,
     })
     
     return PipelineResult(
@@ -301,5 +410,8 @@ def _run_case4_parallel_full_asr(
         diarization_segments=diarization_segments,
         duration_seconds=audio_duration,
         logs=logs,
+        speaker_embeddings=embeddings_dict,
+        segment_embeddings=segment_embeddings,
+        num_speakers=num_speakers,
     )
 

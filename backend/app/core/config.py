@@ -101,17 +101,16 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """싱글톤 설정 인스턴스."""
-    import logging
-    logger = logging.getLogger(__name__)
+    from .logging import logger
     
     # .env 파일 경로 확인
     project_root = _get_project_root()
     env_file = project_root / ".env"
-    logger.info(f"[Config] .env 파일 경로: {env_file}")
-    logger.info(f"[Config] .env 파일 존재: {env_file.exists()}")
+    logger.info("[Config] .env file path: {}", env_file)
+    logger.info("[Config] .env file exists: {}", env_file.exists())
     
     settings = Settings()
-    logger.info(f"[Config] task_queue_type 로드됨: {settings.task_queue_type}")
+    logger.info("[Config] task_queue_type loaded: {}", settings.task_queue_type)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     return settings
 

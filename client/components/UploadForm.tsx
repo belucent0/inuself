@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { uploadContent } from '@/lib/api'
 
@@ -9,6 +9,7 @@ export default function UploadForm() {
   const [status, setStatus] = useState<string>('')
   const [isUploading, setUploading] = useState(false)
   const router = useRouter()
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -19,6 +20,11 @@ export default function UploadForm() {
       await uploadContent(selectedFile)
       setStatus('업로드 완료! 큐에 등록되었습니다.')
       setSelectedFile(null)
+      
+      // 파일 입력 필드 초기화
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
       
       // 목록 페이지로 이동하고 자동 새로고침 (쿼리 파라미터로 강제 새로고침)
       router.push(`/contents?refresh=${Date.now()}`)
@@ -33,6 +39,7 @@ export default function UploadForm() {
     <form onSubmit={handleSubmit}>
       <h2 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>파일 업로드</h2>
       <input
+        ref={fileInputRef}
         type="file"
         accept="audio/*,video/*"
         onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}

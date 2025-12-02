@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import Path
 from typing import Sequence
 from uuid import uuid4
@@ -10,14 +9,13 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
+from ..core.logging import logger
 from ..core.storage import delete_file, upload_fileobj, get_public_media_url
 from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
 from ..schemas.content import ContentDetail, ContentListItem, ContentListResponse, UploadResponse
 from ..worker.queue import cancel_jobs_by_content_ids  # RQ용 취소만 남김
 from ..worker.llm_queue import cancel_llm_jobs_by_content_ids
-
-logger = logging.getLogger(__name__)
 
 
 class ContentService:

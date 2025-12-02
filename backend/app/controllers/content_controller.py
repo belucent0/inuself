@@ -38,19 +38,18 @@ async def get_content(content_id: int, service: ContentService = Depends(get_ser
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_content(file: UploadFile, service: ContentService = Depends(get_service)):
-    import logging
-    logger = logging.getLogger(__name__)
+    from ..core.logging import logger
     
-    logger.info("[Upload] 파일 업로드 요청 받음: filename=%s, content_type=%s", file.filename, file.content_type)
+    logger.info("[Upload] File upload request received: filename={}, content_type={}", file.filename, file.content_type)
     print(f"[Upload] 파일 업로드 요청: {file.filename} ({file.content_type})")
     
     try:
         result = await service.upload_and_enqueue(file)
-        logger.info("[Upload] 파일 업로드 성공: content_id=%s, filename=%s", result.content_id, file.filename)
+        logger.info("[Upload] File upload successful: content_id={}, filename={}", result.content_id, file.filename)
         print(f"[Upload] OK 파일 업로드 완료: content_id={result.content_id}, filename={file.filename}")
         return result
     except Exception as exc:
-        logger.exception("[Upload] 파일 업로드 실패: filename=%s, error=%s", file.filename, exc)
+        logger.exception("[Upload] File upload failed: filename={}, error={}", file.filename, exc)
         print(f"[Upload] ERROR 파일 업로드 실패: {file.filename}, error={exc}")
         raise HTTPException(status_code=500, detail=f"업로드 실패: {str(exc)}") from exc
 

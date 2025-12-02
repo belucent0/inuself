@@ -1,8 +1,6 @@
 """Celery 태스크 정의 - ASR 및 LLM 처리."""
-import logging
+from ..core.logging import logger
 from .celery_app import celery_app
-
-logger = logging.getLogger(__name__)
 
 
 @celery_app.task(
@@ -30,7 +28,7 @@ def process_asr_task(
         from .processor import process_transcription_job
         
         logger.info(
-            "[Celery ASR] Starting task: content_id=%s, task_id=%s",
+            "[Celery ASR] Starting task: content_id={}, task_id={}",
             content_id,
             self.request.id,
         )
@@ -45,11 +43,11 @@ def process_asr_task(
             num_asr_chunks=num_asr_chunks,
         )
         
-        logger.info("[Celery ASR] Task completed: content_id=%s", content_id)
+        logger.info("[Celery ASR] Task completed: content_id={}", content_id)
         return {"status": "success", "content_id": content_id}
         
     except Exception as exc:
-        logger.exception("[Celery ASR] Task failed: content_id=%s", content_id)
+        logger.exception("[Celery ASR] Task failed: content_id={}", content_id)
         # 재시도 로직
         raise self.retry(exc=exc)
 
@@ -71,7 +69,7 @@ def process_llm_task(self, content_id: int):
         from .llm_processor import process_llm_job
         
         logger.info(
-            "[Celery LLM] Starting task: content_id=%s, task_id=%s",
+            "[Celery LLM] Starting task: content_id={}, task_id={}",
             content_id,
             self.request.id,
         )
@@ -79,7 +77,7 @@ def process_llm_task(self, content_id: int):
         # 기존 RQ 프로세서 재사용
         process_llm_job(content_id=content_id)
         
-        logger.info("[Celery LLM] Task completed: content_id=%s", content_id)
+        logger.info("[Celery LLM] Task completed: content_id={}", content_id)
         return {"status": "success", "content_id": content_id}
         
     except Exception as exc:
@@ -97,11 +95,11 @@ def process_llm_task(self, content_id: int):
         should_retry = not any(keyword in error_str.lower() for keyword in no_retry_keywords)
         
         if not should_retry:
-            logger.exception("[Celery LLM] Task failed (no retry): content_id=%s, error=%s", content_id, error_str)
+            logger.exception("[Celery LLM] Task failed (no retry): content_id={}, error={}", content_id, error_str)
             # 재시도하지 않고 즉시 실패 처리
             return {"status": "failed", "content_id": content_id, "error": error_str}
         
-        logger.exception("[Celery LLM] Task failed: content_id=%s", content_id)
+        logger.exception("[Celery LLM] Task failed: content_id={}", content_id)
         # 재시도 로직
         raise self.retry(exc=exc)
 

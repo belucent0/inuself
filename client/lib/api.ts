@@ -46,6 +46,18 @@ export type ContentDetail = ContentSummary & {
       text: string
       speaker?: string
     }>
+    diarization_metadata?: {
+      num_speakers: number
+      speaker_labels: string[]
+      speaker_embeddings?: Record<string, number[]>  // 화자별 embedding 벡터
+      segment_embeddings?: Array<{  // 시간대별 세그먼트 embedding 벡터
+        start: number
+        end: number
+        speaker: string
+        duration: number
+        embedding: number[]
+      }>
+    }
   }
   logs: SttLog[]
   llm_logs: LlmLog[]

@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import logging
 import time
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
+from ..core.logging import logger
 from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
 from ..worker.llm_summarizer import summarize_transcription, sanitize_summary_output
-
-logger = logging.getLogger(__name__)
 
 
 class LlmSummaryService:
@@ -34,17 +32,17 @@ class LlmSummaryService:
                     content_id,
                     len(content.summary_md)
                 )
-                from ..worker.utils import safe_print
-                safe_print(f"[LLM] SKIP 이미 완료된 콘텐츠: content_id={content_id}, summary_length={len(content.summary_md)}")
+                from ..core.logging import safe_print
+                safe_print(f"[LLM] SKIP Content already completed: content_id={content_id}, summary_length={len(content.summary_md)}")
                 return
             else:
                 # 상태는 COMPLETED인데 summary_md가 없는 경우는 이상하지만 재처리
                 logger.warning(
-                    "Content %s status is COMPLETED but summary_md is empty, reprocessing",
+                    "Content {} status is COMPLETED but summary_md is empty, reprocessing",
                     content_id
                 )
-                from ..worker.utils import safe_print
-                safe_print(f"[LLM] WARNING 상태는 COMPLETED인데 summary_md가 없음, 재처리: content_id={content_id}")
+                from ..core.logging import safe_print
+                safe_print(f"[LLM] WARNING Status is COMPLETED but summary_md is empty, reprocessing: content_id={content_id}")
 
         transcription = content.transcription or {}
         transcript_text = str(transcription.get("text") or "").strip()
@@ -63,7 +61,7 @@ class LlmSummaryService:
         )
         await self.session.commit()
         logger.info(
-            "LLM summarization started for content_id=%s (provider=%s)",
+            "LLM summarization started for content_id={} (provider={})",
             content_id,
             self.settings.llm_provider,
         )
@@ -80,7 +78,7 @@ class LlmSummaryService:
                 message="LLM summarization failed",
             )
             await self.session.commit()
-            logger.exception("LLM summarization failed for content_id=%s", content_id)
+            logger.exception("LLM summarization failed for content_id={}", content_id)
             raise
 
         elapsed = time.perf_counter() - start
@@ -88,7 +86,7 @@ class LlmSummaryService:
         # 제목과 요약 저장
         await self.repo.update_title(content_id, title)
         await self.repo.update_summary_markdown(content_id, summary_md)
-        logger.info("Title and summary stored for content_id=%s: title=%s, summary_length=%d", 
+        logger.info("Title and summary stored for content_id={}: title={}, summary_length={}", 
                     content_id, title, len(summary_md))
         await self.repo.update_content_status(content_id, ContentStatus.COMPLETED)
         await self.repo.add_llm_log(
@@ -97,5 +95,5 @@ class LlmSummaryService:
             message="LLM summarization completed",
         )
         await self.session.commit()
-        logger.info("LLM summary stored for content_id=%s (%.2fs)", content_id, elapsed)
+        logger.info("LLM summary stored for content_id={} ({:.2f}s)", content_id, elapsed)
 

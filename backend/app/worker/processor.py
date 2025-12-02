@@ -1,10 +1,10 @@
 import asyncio
-import logging
 import sys
 from pathlib import Path
 from uuid import uuid4
 
 from ..core.config import get_settings
+from ..core.logging import logger, safe_print
 from ..core.storage import download_file
 from ..db.models import ContentStatus
 from ..db.session import AsyncSessionLocal, engine
@@ -22,9 +22,7 @@ if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
 from worker.pipeline import PipelineResult, run_asr_diarization_pipeline
-from .utils import safe_print
 
-logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -39,12 +37,12 @@ def process_transcription_job(
 ) -> None:
     """RQ 워커가 호출하는 진입점."""
     safe_print(f"[Worker] ========================================")
-    safe_print(f"[Worker] 작업 시작: content_id={content_id}")
-    safe_print(f"[Worker] 파일: {original_filename}")
-    safe_print(f"[Worker] 스토리지 키: {storage_key}")
-    safe_print(f"[Worker] 모델: {model_size}, 모드: {processing_mode}")
+    safe_print(f"[Worker] Job started: content_id={content_id}")
+    safe_print(f"[Worker] File: {original_filename}")
+    safe_print(f"[Worker] Storage key: {storage_key}")
+    safe_print(f"[Worker] Model: {model_size}, Mode: {processing_mode}")
     safe_print(f"[Worker] ========================================")
-    logger.info("Job started: content_id=%s, file=%s, key=%s", content_id, original_filename, storage_key)
+    logger.info("Job started: content_id={}, file={}, key={}", content_id, original_filename, storage_key)
     
     # Windows에서는 매 작업마다 새로운 이벤트 루프를 생성 (이벤트 루프 닫힘 문제 방지)
     # asyncpg는 Windows에서 ProactorEventLoop를 사용해야 함
@@ -91,7 +89,7 @@ def process_transcription_job(
                 loop.run_until_complete(_init_proactor())
             except Exception as exc:
                 # 초기화 실패 시 루프를 다시 생성
-                logger.warning("Failed to initialize Proactor, recreating loop: %s", exc)
+                logger.warning("Failed to initialize Proactor, recreating loop: {}", exc)
                 try:
                     loop.close()
                 except Exception:
@@ -121,10 +119,10 @@ def process_transcription_job(
                 num_asr_chunks=num_asr_chunks,
             )
         )
-        safe_print(f"[Worker] OK 작업 완료: content_id={content_id}")
+        safe_print(f"[Worker] OK Job completed: content_id={content_id}")
     except Exception as e:
-        safe_print(f"[Worker] ERROR 작업 실패: content_id={content_id}, error={e}")
-        logger.exception("Job failed: content_id=%s", content_id)
+        safe_print(f"[Worker] ERROR Job failed: content_id={content_id}, error={e}")
+        logger.exception("Job failed: content_id={}", content_id)
         raise
     finally:
         # Windows에서는 작업 완료 후 이벤트 루프 정리
@@ -143,22 +141,22 @@ def process_transcription_job(
                     except asyncio.TimeoutError:
                         logger.warning("Timeout waiting for pending tasks to complete")
                     except Exception as e:
-                        logger.error("Error waiting for pending tasks: %s", e)
+                        logger.error("Error waiting for pending tasks: {}", e)
             except Exception as e:
-                logger.error("Error during event loop cleanup: %s", e)
+                logger.error("Error during event loop cleanup: {}", e)
             finally:
                 # 이벤트 루프 닫기
                 try:
                     if not loop.is_closed():
                         loop.close()
                 except Exception as e:
-                    logger.error("Error closing event loop: %s", e)
+                    logger.error("Error closing event loop: {}", e)
                 
                 # 현재 이벤트 루프 제거 (중요! 다음 작업이 닫힌 루프를 사용하지 않도록)
                 try:
                     asyncio.set_event_loop(None)
                 except Exception as e:
-                    logger.error("Error unsetting event loop: %s", e)
+                    logger.error("Error unsetting event loop: {}", e)
 
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
@@ -191,8 +189,8 @@ async def _process_job(
     processing_mode: str,
     num_asr_chunks: int,
 ) -> None:
-    safe_print(f"[Worker] [1/5] 상태를 PROCESSING으로 변경 중...")
-    logger.info("Processing job content_id=%s key=%s", content_id, storage_key)
+    safe_print(f"[Worker] [1/5] Updating status to PROCESSING...")
+    logger.info("Processing job content_id={} key={}", content_id, storage_key)
     
     # Windows에서 각 작업마다 새로운 이벤트 루프를 사용하므로
     # 현재 이벤트 루프에서 새로운 DB 엔진과 세션을 생성해야 함
@@ -221,7 +219,7 @@ async def _process_job(
         # content 존재 여부 확인
         content = await repo.get_content(content_id)
         if not content:
-            logger.warning("Content not found: content_id=%d, skipping status update and log", content_id)
+            logger.warning("Content not found: content_id={}, skipping status update and log", content_id)
             return
         
         await repo.update_content_status(content_id, ContentStatus.PROCESSING)
@@ -231,7 +229,7 @@ async def _process_job(
             message="ASR processing started",
         )
         if not log_entry:
-            logger.warning("Failed to add log: content_id=%d (content may have been deleted)", content_id)
+            logger.warning("Failed to add log: content_id={} (content may have been deleted)", content_id)
         await session.commit()
     finally:
         await session.close()
@@ -242,8 +240,8 @@ async def _process_job(
             except asyncio.TimeoutError:
                 logger.warning("Timeout disposing database engine after status update")
             except Exception as e:
-                logger.error("Error disposing database engine: %s", e)
-    safe_print(f"[Worker] [2/5] 파일 다운로드 중: {storage_key}")
+                logger.error("Error disposing database engine: {}", e)
+    safe_print(f"[Worker] [2/5] Downloading file: {storage_key}")
 
     temp_root = settings.upload_dir
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -253,8 +251,8 @@ async def _process_job(
 
     try:
         download_file(storage_key, destination=temp_path)
-        safe_print(f"[Worker] [3/5] 파일 다운로드 완료: {temp_path}")
-        safe_print(f"[Worker] [4/5] ASR 파이프라인 실행 중... (이 작업은 시간이 걸릴 수 있습니다)")
+        safe_print(f"[Worker] [3/5] File download completed: {temp_path}")
+        safe_print(f"[Worker] [4/5] Running ASR pipeline... (this may take some time)")
         
         # 프로젝트 루트 경로 계산 (backend/app/worker -> backend -> project_root)
         project_root = backend_dir.parent
@@ -270,12 +268,30 @@ async def _process_job(
                 project_root=project_root,
             ),
         )
-        safe_print(f"[Worker] [5/5] ASR 파이프라인 완료!")
-        safe_print(f"[Worker] - 화자 수: {len(result.speaker_stats)}")
-        safe_print(f"[Worker] - 재생 길이: {result.duration_seconds:.2f}초")
+        safe_print(f"[Worker] [5/5] ASR pipeline completed!")
+        safe_print(f"[Worker] - Number of speakers (from stats): {len(result.speaker_stats)}")
+        safe_print(f"[Worker] - Number of speakers (from diarization): {result.num_speakers}")
+        safe_print(f"[Worker] - Duration: {result.duration_seconds:.2f} seconds")
+        if result.speaker_embeddings:
+            safe_print(f"[Worker] - Speaker embeddings extracted: {len(result.speaker_embeddings)} speakers")
+            for speaker, embedding in result.speaker_embeddings.items():
+                safe_print(f"[Worker]   - {speaker}: embedding dim={len(embedding)}")
+        else:
+            safe_print(f"[Worker] - No speaker embeddings extracted")
+        if result.segment_embeddings:
+            safe_print(f"[Worker] - Segment embeddings extracted: {len(result.segment_embeddings)} segments")
+            # 화자별 세그먼트 수 요약
+            speaker_segment_counts = {}
+            for seg_emb in result.segment_embeddings:
+                speaker = seg_emb.get("speaker", "UNKNOWN")
+                speaker_segment_counts[speaker] = speaker_segment_counts.get(speaker, 0) + 1
+            for speaker, count in sorted(speaker_segment_counts.items()):
+                safe_print(f"[Worker]   - {speaker}: {count} segments with embeddings")
+        else:
+            safe_print(f"[Worker] - No segment embeddings extracted")
     except Exception as exc:
-        safe_print(f"[Worker] ERROR 에러 발생: {exc}")
-        safe_print(f"[Worker] 상태를 FAILED로 변경 중...")
+        safe_print(f"[Worker] ERROR Error occurred: {exc}")
+        safe_print(f"[Worker] Updating status to FAILED...")
         # Windows에서 새로운 엔진 생성, Linux/Mac에서는 전역 엔진 사용
         error_engine = None
         if sys.platform == "win32":
@@ -308,8 +324,8 @@ async def _process_job(
                 except asyncio.TimeoutError:
                     logger.warning("Timeout disposing error engine")
                 except Exception as e:
-                    logger.error("Error disposing error engine: %s", e)
-        logger.exception("Processing failed for content_id=%s", content_id)
+                    logger.error("Error disposing error engine: {}", e)
+        logger.exception("Processing failed for content_id={}", content_id)
         raise
     finally:
         try:
@@ -319,7 +335,7 @@ async def _process_job(
             if temp_path.exists():
                 temp_path.unlink()
 
-    safe_print(f"[Worker] 후처리 단계: 연속 화자 세그먼트 병합 중...")
+    safe_print(f"[Worker] Post-processing: Merging consecutive speaker segments...")
     original_segments = result.transcription.get("segments", [])
     processed_segments = merge_consecutive_speaker_segments(original_segments, max_duration=30.0)
 
@@ -336,8 +352,18 @@ async def _process_job(
                     "segments_after": len(processed_segments),
                 }
             )
+    
+    # 임베딩 정보를 transcription에 추가
+    if not result.transcription.get("diarization_metadata"):
+        result.transcription["diarization_metadata"] = {}
+    result.transcription["diarization_metadata"].update({
+        "num_speakers": result.num_speakers,
+        "speaker_labels": sorted(result.speaker_stats.keys()),
+        "speaker_embeddings": result.speaker_embeddings,  # 화자별 embedding 벡터
+        "segment_embeddings": result.segment_embeddings,  # 시간대별 세그먼트 embedding 벡터
+    })
 
-    safe_print(f"[Worker] 결과를 데이터베이스에 저장 중...")
+    safe_print(f"[Worker] Saving results to database...")
     # Windows에서 새로운 엔진 생성, Linux/Mac에서는 전역 엔진 사용
     result_engine = None
     if sys.platform == "win32":
@@ -362,14 +388,59 @@ async def _process_job(
             transcription=result.transcription,
         )
         await repo.update_content_status(content_id, ContentStatus.SUMMARIZING)
+        # 임베딩 정보를 로그에 포함 (전체 임베딩은 크기가 크므로 요약만 포함)
+        embeddings_summary = None
+        if result.speaker_embeddings:
+            embeddings_summary = {
+                speaker: {
+                    "dimension": len(embedding) if isinstance(embedding, list) else 0,
+                    "preview": embedding[:5] if isinstance(embedding, list) and len(embedding) > 0 else [],
+                }
+                for speaker, embedding in result.speaker_embeddings.items()
+            }
+        
+        # 시간대별 세그먼트 임베딩 요약 (로깅용)
+        segment_embeddings_summary = None
+        if result.segment_embeddings:
+            # 화자별로 그룹화하여 요약
+            speaker_segment_info = {}
+            for seg_emb in result.segment_embeddings:
+                speaker = seg_emb.get("speaker", "UNKNOWN")
+                if speaker not in speaker_segment_info:
+                    speaker_segment_info[speaker] = {
+                        "count": 0,
+                        "total_duration": 0.0,
+                        "sample_segments": [],  # 처음 3개만 저장
+                    }
+                speaker_segment_info[speaker]["count"] += 1
+                speaker_segment_info[speaker]["total_duration"] += seg_emb.get("duration", 0.0)
+                # 처음 3개 세그먼트만 저장 (시간 범위와 임베딩 미리보기)
+                if len(speaker_segment_info[speaker]["sample_segments"]) < 3:
+                    embedding = seg_emb.get("embedding", [])
+                    speaker_segment_info[speaker]["sample_segments"].append({
+                        "start": seg_emb.get("start"),
+                        "end": seg_emb.get("end"),
+                        "duration": seg_emb.get("duration"),
+                        "embedding_dim": len(embedding),
+                        "embedding_preview": embedding[:5] if len(embedding) > 0 else [],
+                    })
+            segment_embeddings_summary = speaker_segment_info
+        
         await repo.add_log(
             content_id,
             log={
                 "event": "completed",
                 "speaker_stats": result.speaker_stats,
+                "num_speakers": result.num_speakers,
+                "speaker_labels": sorted(result.speaker_stats.keys()),
+                "embeddings_extracted": result.speaker_embeddings is not None,
+                "embeddings_summary": embeddings_summary,  # 전체 임베딩 대신 요약만 저장
+                "segment_embeddings_extracted": result.segment_embeddings is not None,
+                "num_segment_embeddings": len(result.segment_embeddings) if result.segment_embeddings else 0,
+                "segment_embeddings_summary": segment_embeddings_summary,  # 시간대별 임베딩 요약
                 "logs": result.logs,
             },
-            message="ASR processing completed",
+            message=f"ASR processing completed (speakers: {result.num_speakers}, embeddings: {'yes' if result.speaker_embeddings else 'no'}, segment_embeddings: {len(result.segment_embeddings) if result.segment_embeddings else 0})",
         )
         await session.commit()
     finally:
@@ -380,9 +451,9 @@ async def _process_job(
             except asyncio.TimeoutError:
                 logger.warning("Timeout disposing result engine")
             except Exception as e:
-                logger.error("Error disposing result engine: %s", e)
-    safe_print(f"[Worker] OK 데이터베이스 저장 완료, 요약 작업 큐 등록 준비")
-    logger.info("Processing completed for content_id=%s", content_id)
+                logger.error("Error disposing result engine: {}", e)
+    safe_print(f"[Worker] OK Database save completed, ready to enqueue summary job")
+    logger.info("Processing completed for content_id={}", content_id)
 
     # LLM 요약 작업 큐잉 (Task Queue Adapter 사용)
     try:
@@ -390,9 +461,9 @@ async def _process_job(
         
         task_queue = get_task_queue()
         job_id = task_queue.enqueue_llm_job(content_id=content_id)
-        safe_print(f"[Worker] >> 요약 작업이 LLM 큐에 등록되었습니다 (content_id={content_id}, job_id={job_id})")
-        logger.info("LLM job enqueued for content_id=%s, job_id=%s", content_id, job_id)
+        safe_print(f"[Worker] >> Summary job enqueued to LLM queue (content_id={content_id}, job_id={job_id})")
+        logger.info("LLM job enqueued for content_id={}, job_id={}", content_id, job_id)
     except Exception as exc:
-        safe_print(f"[Worker] ERROR LLM 큐 등록 실패: {exc}")
-        logger.exception("Failed to enqueue LLM job for content_id=%s", content_id)
+        safe_print(f"[Worker] ERROR Failed to enqueue LLM job: {exc}")
+        logger.exception("Failed to enqueue LLM job for content_id={}", content_id)
 

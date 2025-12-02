@@ -1,14 +1,12 @@
 import asyncio
-import logging
 import sys
 
+from ..core.config import get_settings
+from ..core.logging import logger, safe_print
 from ..db.session import AsyncSessionLocal
 from ..services.llm_summary_service import LlmSummaryService
-from .utils import safe_print
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from ..core.config import get_settings
 
-logger = logging.getLogger(__name__)
 settings = get_settings()
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
@@ -17,8 +15,8 @@ _worker_loop: asyncio.AbstractEventLoop | None = None
 def process_llm_job(*, content_id: int) -> None:
     """RQ 워커가 호출하는 요약 작업 진입점."""
     safe_print(f"[LLM] ========================================")
-    safe_print(f"[LLM] 요약 작업 시작: content_id={content_id}")
-    logger.info("LLM job started for content_id=%s", content_id)
+    safe_print(f"[LLM] Summary job started: content_id={content_id}")
+    logger.info("LLM job started for content_id={}", content_id)
     
     # Windows에서는 매 작업마다 새로운 이벤트 루프를 생성 (ASR 워커와 동일)
     if sys.platform == "win32":
@@ -71,13 +69,13 @@ def process_llm_job(*, content_id: int) -> None:
         loop = _ensure_worker_loop()
     
     try:
-        safe_print(f"[LLM] 이벤트 루프 실행 중...")
+        safe_print(f"[LLM] Running event loop...")
         loop.run_until_complete(_process_job(content_id=content_id))
-        safe_print(f"[LLM] OK 요약 작업 완료: content_id={content_id}")
-        logger.info("LLM job completed for content_id=%s", content_id)
+        safe_print(f"[LLM] OK Summary job completed: content_id={content_id}")
+        logger.info("LLM job completed for content_id={}", content_id)
     except Exception as exc:
-        safe_print(f"[LLM] ERROR 요약 작업 실패: content_id={content_id}, error={exc}")
-        logger.exception("LLM job failed for content_id=%s", content_id)
+        safe_print(f"[LLM] ERROR Summary job failed: content_id={content_id}, error={exc}")
+        logger.exception("LLM job failed for content_id={}", content_id)
         raise
     finally:
         if sys.platform == "win32":
@@ -95,22 +93,22 @@ def process_llm_job(*, content_id: int) -> None:
                     except asyncio.TimeoutError:
                         logger.warning("Timeout waiting for pending LLM tasks")
                     except Exception as e:
-                        logger.error("Error waiting for pending LLM tasks: %s", e)
+                        logger.error("Error waiting for pending LLM tasks: {}", e)
             except Exception as e:
-                logger.error("Error during LLM event loop cleanup: %s", e)
+                logger.error("Error during LLM event loop cleanup: {}", e)
             finally:
                 # 이벤트 루프 닫기
                 try:
                     if not loop.is_closed():
                         loop.close()
                 except Exception as e:
-                    logger.error("Error closing LLM event loop: %s", e)
+                    logger.error("Error closing LLM event loop: {}", e)
                 
                 # 현재 이벤트 루프 제거 (중요!)
                 try:
                     asyncio.set_event_loop(None)
                 except Exception as e:
-                    logger.error("Error unsetting LLM event loop: %s", e)
+                    logger.error("Error unsetting LLM event loop: {}", e)
 
 
 def _ensure_worker_loop() -> asyncio.AbstractEventLoop:
@@ -131,7 +129,7 @@ def _ensure_worker_loop() -> asyncio.AbstractEventLoop:
 
 
 async def _process_job(*, content_id: int) -> None:
-    safe_print(f"[LLM] DB 세션 생성 중...")
+    safe_print(f"[LLM] Creating DB session...")
     
     # Windows에서 각 작업마다 새로운 이벤트 루프를 사용하므로
     # 현재 이벤트 루프에서 새로운 DB 엔진과 세션을 생성해야 함
@@ -156,13 +154,13 @@ async def _process_job(*, content_id: int) -> None:
         session = AsyncSessionLocal()
     
     try:
-        safe_print(f"[LLM] LlmSummaryService 초기화 중...")
+        safe_print(f"[LLM] Initializing LlmSummaryService...")
         service = LlmSummaryService(session)
-        safe_print(f"[LLM] 요약 함수 호출 중...")
+        safe_print(f"[LLM] Calling summarize function...")
         await service.summarize(content_id)
-        safe_print(f"[LLM] 요약 함수 완료")
+        safe_print(f"[LLM] Summarize function completed")
     finally:
-        safe_print(f"[LLM] DB 세션 종료 중...")
+        safe_print(f"[LLM] Closing DB session...")
         await session.close()
         # Windows에서 생성한 엔진도 타임아웃과 함께 정리
         if current_engine:

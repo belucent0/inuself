@@ -7,11 +7,9 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import get_settings
+from .core.logging import logger, safe_print
 from .core.storage import check_storage_health
 from .controllers import content_controller
-from .worker.run_llm_worker import safe_print
-
-logger = logging.getLogger(__name__)
 
 
 class HealthCheckLogFilter(logging.Filter):
