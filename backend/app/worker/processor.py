@@ -4,7 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from ..core.config import get_settings
-from ..core.logging import logger, safe_print
+from ..core.logging import logger
 from ..core.storage import download_file
 from ..db.models import ContentStatus
 from ..db.session import AsyncSessionLocal, engine
@@ -38,14 +38,14 @@ def process_transcription_job(
     max_speakers: int | None = None,
 ) -> None:
     """RQ 워커가 호출하는 진입점."""
-    safe_print(f"[Worker] ========================================")
-    safe_print(f"[Worker] Job started: content_id={content_id}")
-    safe_print(f"[Worker] File: {original_filename}")
-    safe_print(f"[Worker] Storage key: {storage_key}")
-    safe_print(f"[Worker] Model: {model_size}, Mode: {processing_mode}")
+    logger.info("[Worker] ========================================")
+    logger.info(f"[Worker] Job started: content_id={content_id}")
+    logger.info(f"[Worker] File: {original_filename}")
+    logger.info(f"[Worker] Storage key: {storage_key}")
+    logger.info(f"[Worker] Model: {model_size}, Mode: {processing_mode}")
     if min_speakers is not None or max_speakers is not None:
-        safe_print(f"[Worker] Speaker range: min={min_speakers}, max={max_speakers}")
-    safe_print(f"[Worker] ========================================")
+        logger.info(f"[Worker] Speaker range: min={min_speakers}, max={max_speakers}")
+    logger.info("[Worker] ========================================")
     logger.info("Job started: content_id={}, file={}, key={}, min_speakers={}, max_speakers={}", 
                content_id, original_filename, storage_key, min_speakers, max_speakers)
     
@@ -126,10 +126,9 @@ def process_transcription_job(
                 max_speakers=max_speakers,
             )
         )
-        safe_print(f"[Worker] OK Job completed: content_id={content_id}")
+        logger.info(f"[Worker] OK Job completed: content_id={content_id}")
     except Exception as e:
-        safe_print(f"[Worker] ERROR Job failed: content_id={content_id}, error={e}")
-        logger.exception("Job failed: content_id={}", content_id)
+        # 에러는 _process_job에서 이미 로깅되므로 여기서는 재로깅하지 않음
         raise
     finally:
         # Windows에서는 작업 완료 후 이벤트 루프 정리
@@ -205,10 +204,10 @@ async def _process_job(
     상태 변경은 파일 다운로드 완료 후 파이프라인이 실제로 시작될 때 수행합니다.
     """
     logger.info("Processing job content_id={} key={}", content_id, storage_key)
-    safe_print(f"[Worker] [1/5] Starting job: content_id={content_id}, file={original_filename}")
+    logger.info(f"[Worker] [1/5] Starting job: content_id={content_id}, file={original_filename}")
     
     # 파일 다운로드 먼저 수행 (상태 변경 전)
-    safe_print(f"[Worker] [2/5] Downloading file: {storage_key}")
+    logger.info(f"[Worker] [2/5] Downloading file: {storage_key}")
 
     temp_root = settings.upload_dir
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -218,11 +217,11 @@ async def _process_job(
 
     try:
         download_file(storage_key, destination=temp_path)
-        safe_print(f"[Worker] [3/5] File download completed: {temp_path}")
+        logger.info(f"[Worker] [3/5] File download completed: {temp_path}")
         
         # 파일 다운로드 완료 후, 실제 파이프라인 시작 전에 상태를 PROCESSING으로 변경
         # 이 시점이 실제 처리 작업이 시작되는 시점입니다.
-        safe_print(f"[Worker] [4/5] Updating status to PROCESSING and starting ASR pipeline...")
+        logger.info("[Worker] [4/5] Updating status to PROCESSING and starting ASR pipeline...")
         
         # Windows에서 각 작업마다 새로운 이벤트 루프를 사용하므로
         # 현재 이벤트 루프에서 새로운 DB 엔진과 세션을 생성해야 함
@@ -291,30 +290,33 @@ async def _process_job(
                 max_speakers=max_speakers,
             ),
         )
-        safe_print(f"[Worker] [5/5] ASR pipeline completed!")
-        safe_print(f"[Worker] - Number of speakers (from stats): {len(result.speaker_stats)}")
-        safe_print(f"[Worker] - Number of speakers (from diarization): {result.num_speakers}")
-        safe_print(f"[Worker] - Duration: {result.duration_seconds:.2f} seconds")
+        logger.info("[Worker] [5/5] ASR pipeline completed!")
+        logger.info(f"[Worker] - Number of speakers (from stats): {len(result.speaker_stats)}")
+        logger.info(f"[Worker] - Number of speakers (from diarization): {result.num_speakers}")
+        logger.info(f"[Worker] - Duration: {result.duration_seconds:.2f} seconds")
         if result.speaker_embeddings:
-            safe_print(f"[Worker] - Speaker embeddings extracted: {len(result.speaker_embeddings)} speakers")
+            logger.info(f"[Worker] - Speaker embeddings extracted: {len(result.speaker_embeddings)} speakers")
             for speaker, embedding in result.speaker_embeddings.items():
-                safe_print(f"[Worker]   - {speaker}: embedding dim={len(embedding)}")
+                logger.info(f"[Worker]   - {speaker}: embedding dim={len(embedding)}")
         else:
-            safe_print(f"[Worker] - No speaker embeddings extracted")
+            logger.info("[Worker] - No speaker embeddings extracted")
         if result.segment_embeddings:
-            safe_print(f"[Worker] - Segment embeddings extracted: {len(result.segment_embeddings)} segments")
+            logger.info(f"[Worker] - Segment embeddings extracted: {len(result.segment_embeddings)} segments")
             # 화자별 세그먼트 수 요약
             speaker_segment_counts = {}
             for seg_emb in result.segment_embeddings:
                 speaker = seg_emb.get("speaker", "UNKNOWN")
                 speaker_segment_counts[speaker] = speaker_segment_counts.get(speaker, 0) + 1
             for speaker, count in sorted(speaker_segment_counts.items()):
-                safe_print(f"[Worker]   - {speaker}: {count} segments with embeddings")
+                logger.info(f"[Worker]   - {speaker}: {count} segments with embeddings")
         else:
-            safe_print(f"[Worker] - No segment embeddings extracted")
+            logger.info("[Worker] - No segment embeddings extracted")
     except Exception as exc:
-        safe_print(f"[Worker] ERROR Error occurred: {exc}")
-        safe_print(f"[Worker] Updating status to FAILED...")
+        # 에러 로깅 (한 번만)
+        logger.error(f"[Worker] ERROR Error occurred: {exc}")
+        logger.error("[Worker] Updating status to FAILED...")
+        logger.exception("Processing failed for content_id={}", content_id)
+        
         # Windows에서 새로운 엔진 생성, Linux/Mac에서는 전역 엔진 사용
         error_engine = None
         if sys.platform == "win32":
@@ -348,7 +350,6 @@ async def _process_job(
                     logger.warning("Timeout disposing error engine")
                 except Exception as e:
                     logger.error("Error disposing error engine: {}", e)
-        logger.exception("Processing failed for content_id={}", content_id)
         raise
     finally:
         try:
@@ -358,7 +359,7 @@ async def _process_job(
             if temp_path.exists():
                 temp_path.unlink()
 
-    safe_print(f"[Worker] Post-processing: Merging consecutive speaker segments...")
+    logger.info("[Worker] Post-processing: Merging consecutive speaker segments...")
     original_segments = result.transcription.get("segments", [])
     processed_segments = merge_consecutive_speaker_segments(original_segments, max_duration=30.0)
 
@@ -386,7 +387,7 @@ async def _process_job(
         "segment_embeddings": result.segment_embeddings,  # 시간대별 세그먼트 embedding 벡터
     })
 
-    safe_print(f"[Worker] Saving results to database...")
+    logger.info("[Worker] Saving results to database...")
     # Windows에서 새로운 엔진 생성, Linux/Mac에서는 전역 엔진 사용
     result_engine = None
     if sys.platform == "win32":
@@ -475,18 +476,18 @@ async def _process_job(
                 logger.warning("Timeout disposing result engine")
             except Exception as e:
                 logger.error("Error disposing result engine: {}", e)
-    safe_print(f"[Worker] OK Database save completed, ready to enqueue summary job")
+    logger.info("[Worker] OK Database save completed, ready to enqueue summary job")
     logger.info("Processing completed for content_id={}", content_id)
-
+    
     # LLM 요약 작업 큐잉 (Task Queue Adapter 사용)
     try:
         from .task_queue_adapter import get_task_queue
         
         task_queue = get_task_queue()
         job_id = task_queue.enqueue_llm_job(content_id=content_id)
-        safe_print(f"[Worker] >> Summary job enqueued to LLM queue (content_id={content_id}, job_id={job_id})")
+        logger.info(f"[Worker] >> Summary job enqueued to LLM queue (content_id={content_id}, job_id={job_id})")
         logger.info("LLM job enqueued for content_id={}, job_id={}", content_id, job_id)
     except Exception as exc:
-        safe_print(f"[Worker] ERROR Failed to enqueue LLM job: {exc}")
+        logger.error(f"[Worker] ERROR Failed to enqueue LLM job: {exc}")
         logger.exception("Failed to enqueue LLM job for content_id={}", content_id)
 

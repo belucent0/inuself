@@ -1,6 +1,6 @@
 """Celery 큐 작업 취소 및 확인 유틸리티."""
 from ..core.config import get_settings
-from ..core.logging import logger, safe_print
+from ..core.logging import logger
 from .celery_app import celery_app
 
 
@@ -113,7 +113,7 @@ def cancel_celery_tasks_by_content_ids(content_ids: list[int]) -> int:
                             try:
                                 celery_app.control.revoke(task_id, terminate=True)
                                 cancelled_count += 1
-                                safe_print(f"[Celery] 활성 작업 취소: content_id={task_content_id}, task_id={task_id}")
+                                logger.info(f"[Celery] 활성 작업 취소: content_id={task_content_id}, task_id={task_id}")
                                 logger.info("Cancelled active Celery task: content_id=%s, task_id=%s", task_content_id, task_id)
                             except Exception as e:
                                 logger.warning("Failed to cancel active Celery task %s: %s", task_id, e)
@@ -139,7 +139,7 @@ def cancel_celery_tasks_by_content_ids(content_ids: list[int]) -> int:
                             try:
                                 celery_app.control.revoke(task_id, terminate=True)
                                 cancelled_count += 1
-                                safe_print(f"[Celery] 예약된 작업 취소: content_id={task_content_id}, task_id={task_id}")
+                                logger.info(f"[Celery] 예약된 작업 취소: content_id={task_content_id}, task_id={task_id}")
                                 logger.info("Cancelled reserved Celery task: content_id=%s, task_id=%s", task_content_id, task_id)
                             except Exception as e:
                                 logger.warning("Failed to cancel reserved Celery task %s: %s", task_id, e)
@@ -166,18 +166,18 @@ def cancel_celery_tasks_by_content_ids(content_ids: list[int]) -> int:
                             try:
                                 celery_app.control.revoke(task_id, terminate=True)
                                 cancelled_count += 1
-                                safe_print(f"[Celery] 스케줄된 작업 취소: content_id={task_content_id}, task_id={task_id}")
+                                logger.info(f"[Celery] 스케줄된 작업 취소: content_id={task_content_id}, task_id={task_id}")
                                 logger.info("Cancelled scheduled Celery task: content_id=%s, task_id=%s", task_content_id, task_id)
                             except Exception as e:
                                 logger.warning("Failed to cancel scheduled Celery task %s: %s", task_id, e)
         
         if cancelled_count > 0:
-            safe_print(f"[Celery] 총 {cancelled_count}개의 Celery 작업이 취소되었습니다.")
+            logger.info(f"[Celery] 총 {cancelled_count}개의 Celery 작업이 취소되었습니다.")
         else:
-            safe_print(f"[Celery] 취소할 Celery 작업이 없습니다.")
+            logger.info("[Celery] 취소할 Celery 작업이 없습니다.")
             
     except Exception as e:
         logger.error("Failed to cancel Celery tasks: %s", e)
-        safe_print(f"[Celery] 작업 취소 중 오류 발생: {e}")
+        logger.error(f"[Celery] 작업 취소 중 오류 발생: {e}")
     
     return cancelled_count

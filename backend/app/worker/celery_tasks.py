@@ -57,7 +57,31 @@ def process_asr_task(
         return {"status": "success", "content_id": content_id}
         
     except Exception as exc:
-        logger.exception("[Celery ASR] Task failed: content_id={}", content_id)
+        error_str = str(exc)
+        retry_count = self.request.retries
+        
+        # FileNotFoundError는 파일이 실제로 없을 가능성이 높으므로 재시도하지 않음
+        # (재시도해도 같은 에러가 발생할 가능성이 높음)
+        if isinstance(exc, FileNotFoundError) or "file not found" in error_str.lower():
+            logger.error(
+                "[Celery ASR] Task failed (no retry - file not found): content_id={}, error={}",
+                content_id,
+                error_str
+            )
+            return {"status": "failed", "content_id": content_id, "error": error_str}
+        
+        # 에러는 processor에서 이미 상세히 로깅되므로, 여기서는 간단히만 로깅
+        # (Celery가 자동으로 traceback을 출력하므로 logger.exception은 사용하지 않음)
+        if retry_count < self.max_retries:
+            logger.warning(
+                "[Celery ASR] Task failed (will retry {}/{}): content_id={}, error={}",
+                retry_count + 1,
+                self.max_retries,
+                content_id,
+                error_str
+            )
+        else:
+            logger.error("[Celery ASR] Task failed (no more retries): content_id={}, error={}", content_id, error_str)
         # 재시도 로직
         raise self.retry(exc=exc)
 
