@@ -8,6 +8,8 @@ from ..schemas.content import (
     ContentDetail,
     ContentListItem,
     ContentListResponse,
+    ReclusterSpeakersRequest,
+    ReclusterSpeakersResponse,
     UploadResponse,
 )
 from ..services.content_service import ContentService
@@ -59,7 +61,7 @@ async def delete_queued_contents(service: ContentService = Depends(get_service))
     """QUEUED 상태인 모든 콘텐츠 삭제."""
     try:
         count = await service.delete_queued_contents()
-        return {"deleted_count": count, "message": f"{count}개의 대기 중인 콘텐츠가 삭제되었습니다."}
+        return {"deleted_count": count, "message": f"{count} queued contents deleted."}
     except Exception as exc:
         import logging
         logger = logging.getLogger(__name__)
@@ -74,11 +76,11 @@ async def bulk_delete_contents(
     """체크박스로 선택된 콘텐츠를 상태에 관계없이 삭제."""
     try:
         deleted_ids, skipped_ids = await service.delete_contents_by_ids(payload.content_ids)
-        message = "선택한 콘텐츠를 삭제했습니다."
+        message = "Selected contents deleted."
         if not deleted_ids:
-            message = "삭제 가능한 콘텐츠가 없습니다."
+            message = "No deletable contents found."
         elif skipped_ids:
-            message = "일부 콘텐츠만 삭제되었습니다. (존재하지 않거나 이미 삭제된 항목 제외)"
+            message = "Some contents deleted. (Non-existent or already deleted items excluded)"
 
         return BulkDeleteResponse(
             deleted_count=len(deleted_ids),
@@ -115,5 +117,33 @@ async def retry_processing(
         logger = logging.getLogger(__name__)
         logger.exception("Retry processing failed")
         raise HTTPException(status_code=500, detail=f"재처리 실패: {str(exc)}") from exc
+
+
+@router.post("/{content_id}/recluster-speakers", response_model=ReclusterSpeakersResponse, tags=["contents"])
+async def recluster_speakers(
+    content_id: int,
+    request: ReclusterSpeakersRequest,
+    service: ContentService = Depends(get_service)
+):
+    """
+    저장된 세그먼트 임베딩을 기반으로 화자를 재클러스터링합니다.
+    
+    이 API는 GPU 연산 없이 CPU만으로 빠르게 화자 분리를 재조정합니다.
+    segment_embeddings가 저장된 콘텐츠에만 사용 가능합니다.
+    """
+    try:
+        result = await service.recluster_speakers(
+            content_id=content_id,
+            num_speakers=request.num_speakers,
+            similarity_threshold=request.similarity_threshold,
+        )
+        return ReclusterSpeakersResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Reclustering failed")
+        raise HTTPException(status_code=500, detail=f"재클러스터링 실패: {str(exc)}") from exc
 
 

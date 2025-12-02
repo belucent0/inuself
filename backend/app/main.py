@@ -222,7 +222,7 @@ def create_app() -> FastAPI:
                     pass
             
             return {
-                "message": f"{cleaned_count}개의 실패한 작업이 정리되었습니다.",
+                "message": f"{cleaned_count} failed jobs cleaned up.",
                 "cleaned_count": cleaned_count,
             }
         except Exception as e:
@@ -236,7 +236,7 @@ def create_app() -> FastAPI:
             
             requeued = await requeue_summarizing_contents()
             return {
-                "message": f"{requeued}개의 LLM 작업을 큐에 재등록했습니다.",
+                "message": f"{requeued} LLM jobs requeued.",
                 "requeued_count": requeued,
             }
         except Exception as e:

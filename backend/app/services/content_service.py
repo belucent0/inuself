@@ -228,7 +228,8 @@ class ContentService:
         retry_type = retry_type.lower()
         
         if retry_type == "asr":
-            if content.status != ContentStatus.ASR_FAILED:
+            # PROCESSING 상태에서 멈춘 경우도 재시도 가능
+            if content.status not in [ContentStatus.ASR_FAILED, ContentStatus.PROCESSING]:
                 raise ValueError(f"Cannot retry ASR for content with status: {content.status.value}")
             
             # 상태를 QUEUED로 변경
@@ -258,7 +259,7 @@ class ContentService:
             job_id = await loop.run_in_executor(None, enqueue_func)
             
             logger.info("Manual ASR retry enqueued: content_id=%s, job_id=%s", content_id, job_id)
-            return {"success": True, "message": "ASR 재처리가 시작되었습니다.", "job_id": job_id}
+            return {"success": True, "message": "ASR reprocessing started", "job_id": job_id}
         
         elif retry_type == "summary":
             if content.status != ContentStatus.SUMMARY_FAILED:
@@ -283,8 +284,112 @@ class ContentService:
             job_id = await loop.run_in_executor(None, enqueue_func)
             
             logger.info("Manual LLM retry enqueued: content_id=%s, job_id=%s", content_id, job_id)
-            return {"success": True, "message": "LLM 요약 재처리가 시작되었습니다.", "job_id": job_id}
+            return {"success": True, "message": "LLM summary reprocessing started", "job_id": job_id}
         
         else:
             raise ValueError(f"Invalid retry_type: {retry_type}. Must be 'asr' or 'summary'")
+    
+    async def recluster_speakers(
+        self,
+        content_id: int,
+        num_speakers: int | None = None,
+        similarity_threshold: float = 0.7,
+    ) -> dict[str, Any]:
+        """
+        저장된 세그먼트 임베딩을 기반으로 화자를 재클러스터링합니다.
+        
+        Args:
+            content_id: 콘텐츠 ID
+            num_speakers: 목표 화자 수 (None이면 자동 결정)
+            similarity_threshold: 코사인 유사도 임계값
+        
+        Returns:
+            재클러스터링 결과 딕셔너리
+        """
+        # 콘텐츠 조회 및 검증
+        content = await self.repo.get_content(content_id)
+        if not content:
+            raise ValueError("Content not found")
+        
+        if content.status != ContentStatus.COMPLETED:
+            raise ValueError(f"Content must be COMPLETED status. Current status: {content.status}")
+        
+        # transcription에서 segment_embeddings 확인
+        transcription = content.transcription
+        if not transcription:
+            raise ValueError("Transcription not found")
+        
+        diarization_metadata = transcription.get("diarization_metadata", {})
+        segment_embeddings = diarization_metadata.get("segment_embeddings", [])
+        
+        if not segment_embeddings:
+            raise ValueError("segment_embeddings not found. Please ensure the content has been processed with diarization.")
+        
+        logger.info(
+            "[Reclustering] Starting reclustering for content_id=%s, num_speakers=%s, threshold=%s",
+            content_id, num_speakers, similarity_threshold
+        )
+        
+        # 재클러스터링 수행 (torch 의존성 없는 별도 모듈 사용)
+        import sys
+        from pathlib import Path
+        backend_dir = Path(__file__).parent.parent.parent
+        if str(backend_dir) not in sys.path:
+            sys.path.insert(0, str(backend_dir))
+        from worker.reclustering import (
+            recluster_speakers_from_embeddings,
+            update_transcription_with_new_speakers,
+        )
+        
+        segment_to_speaker_mapping = recluster_speakers_from_embeddings(
+            segment_embeddings=segment_embeddings,
+            target_num_speakers=num_speakers,
+            similarity_threshold=similarity_threshold,
+        )
+        
+        # transcription 업데이트
+        updated_transcription = update_transcription_with_new_speakers(
+            transcription=transcription,
+            segment_to_speaker_mapping=segment_to_speaker_mapping,
+            segment_embeddings=segment_embeddings,
+        )
+        
+        # 새로운 화자 라벨 추출
+        new_speaker_labels = updated_transcription["diarization_metadata"]["speaker_labels"]
+        num_speakers_result = len(new_speaker_labels)
+        
+        # DB 업데이트
+        await self.repo.update_content_result(
+            content_id=content_id,
+            speakers=new_speaker_labels,
+            duration_seconds=content.duration_seconds,
+            transcription=updated_transcription,
+        )
+        await self.session.commit()
+        
+        # 로그 기록
+        await self.repo.add_log(
+            content_id=content_id,
+            log={
+                "event": "reclustering_completed",
+                "num_speakers": num_speakers_result,
+                "speaker_labels": new_speaker_labels,
+                "updated_segments_count": len(segment_to_speaker_mapping),
+                "similarity_threshold": similarity_threshold,
+            },
+            message=f"Speaker reclustering completed: {num_speakers_result} speakers",
+        )
+        await self.session.commit()
+        
+        logger.info(
+            "[Reclustering] Completed for content_id=%s, num_speakers=%s",
+            content_id, num_speakers_result
+        )
+        
+        return {
+            "message": f"Speaker reclustering completed. {num_speakers_result} speakers identified.",
+            "num_speakers": num_speakers_result,
+            "speaker_labels": new_speaker_labels,
+            "updated_segments_count": len(segment_to_speaker_mapping),
+        }
 
