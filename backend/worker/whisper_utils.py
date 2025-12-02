@@ -1,7 +1,9 @@
 """Whisper.cpp 기반 ASR 유틸리티."""
 import json
 import os
+import signal
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -11,6 +13,57 @@ import librosa
 import soundfile as sf
 
 from .config import get_whisper_cli_path, get_whispercpp_model_path
+
+# 전역 자식 프로세스 리스트 (종료 시 정리용)
+_active_child_processes: list[subprocess.Popen] = []
+
+
+def _cleanup_child_processes():
+    """실행 중인 모든 자식 프로세스 종료."""
+    global _active_child_processes
+    for proc in _active_child_processes:
+        if proc.poll() is None:  # 아직 실행 중인 프로세스
+            try:
+                if sys.platform == "win32":
+                    # Windows: 프로세스 그룹과 함께 종료
+                    import ctypes
+                    kernel32 = ctypes.windll.kernel32
+                    kernel32.TerminateProcess(proc._handle, 1)
+                else:
+                    # Unix: SIGTERM 전송
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+            except Exception as e:
+                print(f"[ASR] Warning: Failed to terminate child process {proc.pid}: {e}")
+    _active_child_processes.clear()
+
+
+def _register_signal_handlers():
+    """시그널 핸들러 등록 (한 번만 실행)."""
+    if hasattr(_register_signal_handlers, '_registered'):
+        return
+    _register_signal_handlers._registered = True
+    
+    def signal_handler(signum, frame):
+        """워커 종료 시 자식 프로세스 정리."""
+        print(f"[ASR] Received signal {signum}, cleaning up child processes...")
+        _cleanup_child_processes()
+        sys.exit(0)
+    
+    if sys.platform != "win32":
+        # Unix: SIGTERM, SIGINT 처리
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+    else:
+        # Windows: SIGINT만 처리 (SIGTERM은 없음)
+        signal.signal(signal.SIGINT, signal_handler)
+
+
+# 모듈 로드 시 시그널 핸들러 등록
+_register_signal_handlers()
 
 
 def parse_whispercpp_json(json_data: dict[str, Any]) -> dict[str, Any]:
@@ -168,14 +221,45 @@ def run_asr_transcription(
     # Vulkan 디바이스 선택 (기본값: 0)
     env.setdefault("GGML_VULKAN_DEVICE", "0")
     
+    # Windows에서 프로세스 그룹 생성 플래그 설정
+    creation_flags = 0
+    if sys.platform == "win32":
+        import subprocess as sp
+        # CREATE_NEW_PROCESS_GROUP: 프로세스 그룹 생성 (종료 시 자식 프로세스까지 종료 가능)
+        creation_flags = sp.CREATE_NEW_PROCESS_GROUP
+    
     try:
-        result = subprocess.run(
+        # subprocess.Popen을 사용하여 프로세스 핸들 추적
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding='utf-8',
-            errors='replace'
+            errors='replace',
+            env=env,
+            creationflags=creation_flags if sys.platform == "win32" else 0,
+        )
+        
+        # 전역 리스트에 추가 (종료 시 정리용)
+        global _active_child_processes
+        _active_child_processes.append(proc)
+        
+        try:
+            # 프로세스 완료 대기
+            stdout, stderr = proc.communicate()
+            returncode = proc.returncode
+        finally:
+            # 완료된 프로세스는 리스트에서 제거
+            if proc in _active_child_processes:
+                _active_child_processes.remove(proc)
+        
+        # subprocess.run()과 동일한 형식으로 결과 생성
+        result = subprocess.CompletedProcess(
+            cmd,
+            returncode,
+            stdout,
+            stderr,
         )
         
         # 출력 로그 (stdout과 stderr 모두 확인)

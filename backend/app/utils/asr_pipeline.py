@@ -328,16 +328,46 @@ def run_asr(*, audio_file: str, model_size: str) -> dict[str, Any]:
     env = os.environ.copy()
     env.setdefault("GGML_VULKAN_DEVICE", "0")  # Vulkan 디바이스 선택
     
-    result = subprocess.run(
+    # Windows에서 프로세스 그룹 생성 플래그 설정
+    creation_flags = 0
+    if sys.platform == "win32":
+        import subprocess as sp
+        # CREATE_NEW_PROCESS_GROUP: 프로세스 그룹 생성 (종료 시 자식 프로세스까지 종료 가능)
+        creation_flags = sp.CREATE_NEW_PROCESS_GROUP
+    
+    # subprocess.Popen을 사용하여 프로세스 핸들 추적
+    proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        check=False,
-        env=env,  # GPU 환경 변수 포함
+        env=env,
+        creationflags=creation_flags if sys.platform == "win32" else 0,
     )
+    
+    # 전역 리스트에 추가 (종료 시 정리용)
+    global _active_child_processes
+    _active_child_processes.append(proc)
+    
+    try:
+        # 프로세스 완료 대기
+        stdout, stderr = proc.communicate()
+        returncode = proc.returncode
+    finally:
+        # 완료된 프로세스는 리스트에서 제거
+        if proc in _active_child_processes:
+            _active_child_processes.remove(proc)
+    
+    # subprocess.run()과 동일한 형식으로 결과 생성
+    result = subprocess.CompletedProcess(
+        cmd,
+        returncode,
+        stdout,
+        stderr,
+    )
+    
     if result.returncode != 0:
         raise RuntimeError(f"whisper-cli failed: {result.stderr}")
 
