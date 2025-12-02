@@ -22,14 +22,21 @@ if (fs.existsSync(envPath)) {
   });
 }
 
+// Poetry 가상환경 Python 실행 파일 경로 (하드코딩)
+// 가상환경 경로가 변경되면 이 경로를 수정하세요
+// 경로 확인: cd backend && poetry env info --path
+const PYTHONW_PATH = 'C:\\Users\\jg\\AppData\\Local\\pypoetry\\Cache\\virtualenvs\\torch-asr-backend-D1eM01ne-py3.12\\Scripts\\pythonw.exe';
+
 module.exports = {
   apps: [
     {
       name: 'celery-worker',
       cwd: 'C:\\timblo\\torch-test\\backend',
-      script: 'C:\\Users\\jg\\AppData\\Local\\pypoetry\\Cache\\virtualenvs\\torch-asr-backend-D1eM01ne-py3.12\\Scripts\\python.exe',
+      script: PYTHONW_PATH,
       args: ['run_celery_worker.py'],
       env: {
+        // Python 출력 버퍼링 비활성화 (실시간 로그 출력)
+        PYTHONUNBUFFERED: '1',
         // 작업 큐 설정
         TASK_QUEUE_TYPE: envVars.TASK_QUEUE_TYPE || 'celery',
         NUM_ASR_WORKERS: envVars.NUM_ASR_WORKERS || '1',
@@ -63,7 +70,12 @@ module.exports = {
       watch: false,
       error_file: 'C:\\timblo\\torch-test\\logs\\celery-error.log',
       out_file: 'C:\\timblo\\torch-test\\logs\\celery-out.log',
+      // PM2 타임스탬프는 유지하되, Python logging의 타임스탬프는 제거하여 중복 방지
+      // PM2의 타임스탬프 형식: YYYY-MM-DD HH:mm:ss Z
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      merge_logs: false,
+      // Windows에서 콘솔 창 숨기기
+      windowsHide: true,
     }
   ]
 };
