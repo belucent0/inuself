@@ -368,6 +368,21 @@ def run_asr(*, audio_file: str, model_size: str) -> dict[str, Any]:
         stderr,
     )
     
+    # Whisper 출력 로그 (stdout과 stderr 모두 확인)
+    if result.stdout:
+        for line in result.stdout.strip().split('\n'):
+            if line.strip():
+                print(f"[ASR] {line}")
+    
+    if result.stderr:
+        for line in result.stderr.strip().split('\n'):
+            if line.strip():
+                # GPU 관련 메시지 강조
+                if 'vulkan' in line.lower() or 'gpu' in line.lower() or 'cuda' in line.lower():
+                    print(f"[ASR] [GPU] {line}")
+                else:
+                    print(f"[ASR] {line}")
+    
     if result.returncode != 0:
         raise RuntimeError(f"whisper-cli failed: {result.stderr}")
 

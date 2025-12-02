@@ -14,6 +14,20 @@ import soundfile as sf
 
 from .config import get_whisper_cli_path, get_whispercpp_model_path
 
+# logger import를 위한 경로 조정
+_backend_dir = Path(__file__).parent.parent
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
+
+try:
+    from app.core.logging import logger
+except ImportError:
+    # fallback: 직접 경로 구성
+    _app_dir = _backend_dir / "app"
+    if str(_app_dir) not in sys.path:
+        sys.path.insert(0, str(_app_dir))
+    from core.logging import logger
+
 # 전역 자식 프로세스 리스트 (종료 시 정리용)
 _active_child_processes: list[subprocess.Popen] = []
 
@@ -37,7 +51,7 @@ def _cleanup_child_processes():
                     except subprocess.TimeoutExpired:
                         proc.kill()
             except Exception as e:
-                print(f"[ASR] Warning: Failed to terminate child process {proc.pid}: {e}")
+                logger.warning(f"[ASR] Warning: Failed to terminate child process {proc.pid}: {e}")
     _active_child_processes.clear()
 
 
@@ -49,7 +63,7 @@ def _register_signal_handlers():
     
     def signal_handler(signum, frame):
         """워커 종료 시 자식 프로세스 정리."""
-        print(f"[ASR] Received signal {signum}, cleaning up child processes...")
+        logger.info(f"[ASR] Received signal {signum}, cleaning up child processes...")
         _cleanup_child_processes()
         sys.exit(0)
     
@@ -139,15 +153,15 @@ def run_asr_transcription(
     else:
         time_info = ""
     
-    print(f"{part_prefix} Using whisper-cli.exe with model: {model_size}{time_info}")
+    logger.info(f"{part_prefix} Using whisper-cli.exe with model: {model_size}{time_info}")
     
     # 모델 경로 찾기
     model_load_start = time.time()
     try:
         model_path = get_whispercpp_model_path(model_size, project_root)
-        print(f"{part_prefix} Model found: {model_path}")
+        logger.info(f"{part_prefix} Model found: {model_path}")
     except (ValueError, FileNotFoundError) as e:
-        print(f"{part_prefix} Error: {e}")
+        logger.error(f"{part_prefix} Error: {e}")
         raise
     
     model_load_time = time.time() - model_load_start
@@ -156,9 +170,9 @@ def run_asr_transcription(
     whisper_cli = get_whisper_cli_path()
     
     if time_range:
-        print(f"{part_prefix} Starting transcription for time range {time_range[0]:.2f}s - {time_range[1]:.2f}s...")
+        logger.info(f"{part_prefix} Starting transcription for time range {time_range[0]:.2f}s - {time_range[1]:.2f}s...")
     else:
-        print(f"{part_prefix} Starting transcription...")
+        logger.info(f"{part_prefix} Starting transcription...")
     
     # whisper.cpp는 WAV 파일만 읽을 수 있으므로, MP4 등 다른 형식은 WAV로 변환
     audio_path_obj = Path(audio_path)
@@ -167,7 +181,7 @@ def run_asr_transcription(
     
     if audio_path_obj.suffix.lower() not in ['.wav', '.wave']:
         # WAV가 아니면 임시 WAV 파일로 변환
-        print(f"{part_prefix} Converting audio to WAV format (whisper.cpp requires WAV)...")
+        logger.info(f"{part_prefix} Converting audio to WAV format (whisper.cpp requires WAV)...")
         temp_wav_path = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
         temp_wav_path.close()
         
@@ -177,10 +191,10 @@ def run_asr_transcription(
             sf.write(temp_wav_path.name, waveform, sample_rate)
             use_temp_wav = True
             actual_audio_path = temp_wav_path.name
-            print(f"{part_prefix} Audio converted to WAV: {actual_audio_path}")
+            logger.info(f"{part_prefix} Audio converted to WAV: {actual_audio_path}")
         except Exception as e:
             # 변환 실패 시 원본 파일 사용 (whisper.cpp가 읽을 수 있을 수도 있음)
-            print(f"{part_prefix} Warning: Failed to convert to WAV ({e}), using original file")
+            logger.warning(f"{part_prefix} Warning: Failed to convert to WAV ({e}), using original file")
             actual_audio_path = str(audio_path)
             if temp_wav_path and os.path.exists(temp_wav_path.name):
                 try:
@@ -212,7 +226,7 @@ def run_asr_transcription(
     # 프롬프트 옵션 추가 (문맥 주입)
     if prompt:
         cmd.extend(["--prompt", prompt])
-        print(f"{part_prefix} Using prompt context: {prompt[:100]}..." if len(prompt) > 100 else f"{part_prefix} Using prompt context: {prompt}")
+        logger.info(f"{part_prefix} Using prompt context: {prompt[:100]}..." if len(prompt) > 100 else f"{part_prefix} Using prompt context: {prompt}")
     
     cmd.append(actual_audio_path)
     
@@ -268,18 +282,18 @@ def run_asr_transcription(
                 if line.strip():
                     # GPU 관련 메시지 확인
                     if 'vulkan' in line.lower() or 'gpu' in line.lower():
-                        print(f"{part_prefix} [GPU] {line}")
+                        logger.info(f"{part_prefix} [GPU] {line}")
                     else:
-                        print(f"{part_prefix} {line}")
+                        logger.debug(f"{part_prefix} {line}")
         
         if result.stdout:
             for line in result.stdout.strip().split('\n'):
                 if line.strip():
-                    print(f"{part_prefix} {line}")
+                    logger.debug(f"{part_prefix} {line}")
         if result.stderr:
             for line in result.stderr.strip().split('\n'):
                 if line.strip():
-                    print(f"{part_prefix} {line}")
+                    logger.debug(f"{part_prefix} {line}")
         
         if result.returncode != 0:
             raise RuntimeError(f"whisper-cli.exe failed: {result.stderr}")
@@ -331,9 +345,9 @@ def run_asr_transcription(
                 pass
         
         if time_range:
-            print(f"{part_prefix} Transcription completed in {transcribe_time:.2f} seconds (time range: {time_range[0]:.2f}s - {time_range[1]:.2f}s)")
+            logger.info(f"{part_prefix} Transcription completed in {transcribe_time:.2f} seconds (time range: {time_range[0]:.2f}s - {time_range[1]:.2f}s)")
         else:
-            print(f"{part_prefix} Transcription completed in {transcribe_time:.2f} seconds")
+            logger.info(f"{part_prefix} Transcription completed in {transcribe_time:.2f} seconds")
         
         return asr_result, model_load_time, transcribe_time
         

@@ -62,12 +62,14 @@ if str(_backend_dir) not in sys.path:
 
 try:
     from app.core.config import get_settings
+    from app.core.logging import logger
 except ImportError:
     # fallback: 직접 경로 구성
     _app_dir = _backend_dir / "app"
     if str(_app_dir) not in sys.path:
         sys.path.insert(0, str(_app_dir))
     from core.config import get_settings
+    from core.logging import logger
 
 # 청킹 모듈 import
 from .chunked_asr import merge_asr_results, run_chunked_asr
@@ -118,19 +120,19 @@ def run_asr_diarization_pipeline(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cuda":
         gpu_name = torch.cuda.get_device_name(0)
-        print(f"[Pipeline] GPU: {gpu_name}")
+        logger.info(f"[Pipeline] GPU: {gpu_name}")
         torch.cuda.empty_cache()
     else:
-        print("[Pipeline] GPU not available, using CPU")
+        logger.info("[Pipeline] GPU not available, using CPU")
     
     audio_file_path = Path(audio_file_path)
     logs = []
     
     # 오디오 로드
-    print(f"[Pipeline] Loading audio file...")
+    logger.info("[Pipeline] Loading audio file...")
     waveform, sample_rate = librosa.load(str(audio_file_path), sr=16000)
     audio_duration = len(waveform) / sample_rate
-    print(f"[Pipeline] Audio loaded: {audio_duration:.2f} seconds")
+    logger.info(f"[Pipeline] Audio loaded: {audio_duration:.2f} seconds")
     
     logs.append({
         "event": "audio_loaded",
@@ -145,7 +147,7 @@ def run_asr_diarization_pipeline(
         chunk_duration_minutes = settings.asr_chunk_duration_minutes
         chunk_overlap_seconds = settings.asr_chunk_overlap_seconds
     except Exception as e:
-        print(f"[Pipeline] Warning: Failed to load settings, using defaults: {e}")
+        logger.warning(f"[Pipeline] Warning: Failed to load settings, using defaults: {e}")
         chunk_threshold_minutes = 60
         chunk_duration_minutes = 30
         chunk_overlap_seconds = 30
@@ -155,16 +157,16 @@ def run_asr_diarization_pipeline(
     use_chunking = audio_duration_minutes >= chunk_threshold_minutes
     
     if use_chunking:
-        print(f"[Pipeline] Audio duration ({audio_duration_minutes:.2f} min) >= threshold ({chunk_threshold_minutes} min)")
-        print(f"[Pipeline] Using chunked ASR processing (chunk size: {chunk_duration_minutes} min, overlap: {chunk_overlap_seconds} s)")
+        logger.info(f"[Pipeline] Audio duration ({audio_duration_minutes:.2f} min) >= threshold ({chunk_threshold_minutes} min)")
+        logger.info(f"[Pipeline] Using chunked ASR processing (chunk size: {chunk_duration_minutes} min, overlap: {chunk_overlap_seconds} s)")
         logs.append({
             "event": "chunking_enabled",
             "chunk_duration_minutes": chunk_duration_minutes,
             "chunk_overlap_seconds": chunk_overlap_seconds,
         })
     else:
-        print(f"[Pipeline] Audio duration ({audio_duration_minutes:.2f} min) < threshold ({chunk_threshold_minutes} min)")
-        print(f"[Pipeline] Using standard ASR processing (no chunking)")
+        logger.info(f"[Pipeline] Audio duration ({audio_duration_minutes:.2f} min) < threshold ({chunk_threshold_minutes} min)")
+        logger.info("[Pipeline] Using standard ASR processing (no chunking)")
     
     # Case 4: 화자분리와 ASR(전체 파일 또는 청킹) 병렬 처리
     if processing_mode == "case4":
@@ -203,17 +205,17 @@ def _run_case4_parallel_full_asr(
     max_speakers: int | None = None,
 ) -> PipelineResult:
     """Case 4: 화자분리와 ASR(전체 파일 또는 청킹) 병렬 처리."""
-    print(f"\n{'='*60}")
+    logger.info("=" * 60)
     if use_chunking:
-        print("[Case 4] Parallel Processing: Diarization and ASR (Chunked)")
+        logger.info("[Case 4] Parallel Processing: Diarization and ASR (Chunked)")
     else:
-        print("[Case 4] Parallel Processing: Diarization and ASR (Full File)")
-    print(f"{'='*60}")
+        logger.info("[Case 4] Parallel Processing: Diarization and ASR (Full File)")
+    logger.info("=" * 60)
     
     case_start = time.time()
     
     # 화자분리와 ASR을 동시에 실행
-    print(f"\n[Step 1] Starting Diarization and ASR simultaneously...")
+    logger.info("[Step 1] Starting Diarization and ASR simultaneously...")
     
     with ThreadPoolExecutor(max_workers=2) as executor:
         # 화자분리 작업 제출 (임베딩 및 pipeline 포함)
@@ -248,13 +250,13 @@ def _run_case4_parallel_full_asr(
             )
         
         # 화자분리 작업 완료 대기 (타임아웃: 30분)
-        print(f"[Parallel] Waiting for Diarization to complete...")
+        logger.info("[Parallel] Waiting for Diarization to complete...")
         try:
             # 화자 분리 작업에 타임아웃 설정 (30분)
             diarization_timeout = 30 * 60  # 30분
             diarization_result = diarization_future.result(timeout=diarization_timeout)
         except TimeoutError:
-            print(f"[Parallel] ERROR: Diarization task timed out after {diarization_timeout/60:.1f} minutes")
+            logger.error(f"[Parallel] ERROR: Diarization task timed out after {diarization_timeout/60:.1f} minutes")
             raise RuntimeError(f"Diarization task timed out after {diarization_timeout/60:.1f} minutes. The task may be stuck.")
         # return_embeddings=True, return_pipeline=True로 변경했으므로 결과 구조 확인
         if isinstance(diarization_result, tuple) and len(diarization_result) == 5:
@@ -268,12 +270,12 @@ def _run_case4_parallel_full_asr(
             embeddings_dict = None
             diarization_pipeline = None
         
-        print(f"[Parallel] Diarization completed, extracting segment embeddings before ASR completion...")
+        logger.info("[Parallel] Diarization completed, extracting segment embeddings before ASR completion...")
         
         # 화자분리 완료 후 즉시 세그먼트 임베딩 추출 (ASR 완료 전에)
         segment_embeddings = None
         if diarization_pipeline is not None:
-            print(f"[Embeddings] Extracting time-based segment embeddings...")
+            logger.info("[Embeddings] Extracting time-based segment embeddings...")
             audio_data_for_embeddings = {
                 "waveform": torch.from_numpy(waveform).unsqueeze(0).to(device),
                 "sample_rate": sample_rate
@@ -284,11 +286,11 @@ def _run_case4_parallel_full_asr(
                 # 각 세그먼트마다 GPU 연산이 필요하므로 시간이 오래 걸릴 수 있음
                 segment_count = len(list(diarization.itertracks(yield_label=True)))
                 if segment_count > 1000:
-                    print(f"[Embeddings] Warning: Too many segments ({segment_count}), skipping segment embeddings extraction to avoid timeout")
-                    print(f"[Embeddings] Consider using speaker embeddings instead for large files")
+                    logger.warning(f"[Embeddings] Warning: Too many segments ({segment_count}), skipping segment embeddings extraction to avoid timeout")
+                    logger.warning("[Embeddings] Consider using speaker embeddings instead for large files")
                     segment_embeddings = None
                 else:
-                    print(f"[Embeddings] Extracting embeddings for {segment_count} segments...")
+                    logger.info(f"[Embeddings] Extracting embeddings for {segment_count} segments...")
                     segment_embeddings = extract_segment_embeddings(
                         diarization_pipeline,
                         audio_data_for_embeddings,
@@ -296,29 +298,29 @@ def _run_case4_parallel_full_asr(
                         min_segment_duration=0.5,  # 최소 0.5초 세그먼트만 추출
                     )
             except Exception as e:
-                print(f"[Embeddings] ERROR: Segment embeddings extraction failed: {e}")
+                logger.error(f"[Embeddings] ERROR: Segment embeddings extraction failed: {e}")
                 import traceback
                 traceback.print_exc()
                 segment_embeddings = None
             
             # 세그먼트 임베딩 추출 완료 후 pipeline 해제 및 VRAM 정리
-            print(f"[Embeddings] Releasing diarization pipeline and freeing VRAM...")
+            logger.info("[Embeddings] Releasing diarization pipeline and freeing VRAM...")
             del diarization_pipeline
             diarization_pipeline = None
             if device == "cuda":
                 torch.cuda.empty_cache()
-                print(f"[Embeddings] VRAM freed")
+                logger.info("[Embeddings] VRAM freed")
             
             if segment_embeddings:
-                print(f"[Embeddings] Successfully extracted {len(segment_embeddings)} segment embeddings")
+                logger.info(f"[Embeddings] Successfully extracted {len(segment_embeddings)} segment embeddings")
             else:
-                print(f"[Embeddings] No segment embeddings extracted (returned None or empty list)")
+                logger.info("[Embeddings] No segment embeddings extracted (returned None or empty list)")
         else:
-            print(f"[Embeddings] Cannot extract segment embeddings: diarization_pipeline is None")
+            logger.warning("[Embeddings] Cannot extract segment embeddings: diarization_pipeline is None")
             segment_embeddings = None
         
         # 이제 ASR 완료 대기
-        print(f"[Parallel] Waiting for ASR to complete...")
+        logger.info("[Parallel] Waiting for ASR to complete...")
         if use_chunking:
             # 청킹 결과는 리스트로 반환됨
             chunk_results = asr_future.result()
@@ -332,16 +334,16 @@ def _run_case4_parallel_full_asr(
     
     execution_time = time.time() - case_start
     
-    print(f"\n[Case 4] All tasks completed in {execution_time:.2f} seconds")
-    print(f"  - Diarization (load + process): {diarization_load_time + diarization_time:.2f}s")
+    logger.info(f"[Case 4] All tasks completed in {execution_time:.2f} seconds")
+    logger.info(f"  - Diarization (load + process): {diarization_load_time + diarization_time:.2f}s")
     if use_chunking:
-        print(f"  - ASR (chunked, total): {transcribe_time:.2f}s")
+        logger.info(f"  - ASR (chunked, total): {transcribe_time:.2f}s")
     else:
-        print(f"  - ASR (load + transcribe): {model_load_time + transcribe_time:.2f}s")
+        logger.info(f"  - ASR (load + transcribe): {model_load_time + transcribe_time:.2f}s")
     
     # 화자 정보 병합
-    print(f"\n[Merging] Combining ASR and diarization results...")
-    print(f"[Merging] Splitting overlapping speech segments...")
+    logger.info("[Merging] Combining ASR and diarization results...")
+    logger.info("[Merging] Splitting overlapping speech segments...")
     merged_segments = merge_segments_with_speakers(
         asr_result.get("segments", []),
         diarization,
@@ -375,31 +377,31 @@ def _run_case4_parallel_full_asr(
     
     # 임베딩이 없으면 수동 추출 시도
     if embeddings_dict is None:
-        print(f"[Pipeline] Embeddings not returned, attempting manual extraction...")
+        logger.info("[Pipeline] Embeddings not returned, attempting manual extraction...")
         try:
             # pipeline 객체를 다시 로드해야 하므로, 여기서는 None으로 유지
             # 대신 로그에 기록
-            print(f"[Pipeline] Warning: Embeddings extraction skipped (requires pipeline object)")
+            logger.warning("[Pipeline] Warning: Embeddings extraction skipped (requires pipeline object)")
         except Exception as e:
-            print(f"[Pipeline] Warning: Failed to extract embeddings: {e}")
+            logger.warning(f"[Pipeline] Warning: Failed to extract embeddings: {e}")
     
     # 임베딩 정보 로깅
     if embeddings_dict:
-        print(f"\n[Pipeline] Speaker embeddings extracted:")
-        print(f"  - Number of speakers with embeddings: {len(embeddings_dict)}")
+        logger.info("[Pipeline] Speaker embeddings extracted:")
+        logger.info(f"  - Number of speakers with embeddings: {len(embeddings_dict)}")
         for speaker, embedding in embeddings_dict.items():
             embedding_dim = len(embedding) if isinstance(embedding, list) else 0
-            print(f"  - {speaker}: embedding dimension = {embedding_dim}")
+            logger.info(f"  - {speaker}: embedding dimension = {embedding_dim}")
             # 처음 5개 값만 표시
             if isinstance(embedding, list) and len(embedding) > 0:
                 preview = embedding[:5]
-                print(f"    Preview: {preview}...")
+                logger.debug(f"    Preview: {preview}...")
     else:
-        print(f"[Pipeline] No embeddings extracted")
+        logger.info("[Pipeline] No embeddings extracted")
     
-    print(f"\n[Pipeline] Diarization summary:")
-    print(f"  - Total speakers detected: {num_speakers}")
-    print(f"  - Speaker labels: {sorted(unique_speakers)}")
+    logger.info("[Pipeline] Diarization summary:")
+    logger.info(f"  - Total speakers detected: {num_speakers}")
+    logger.info(f"  - Speaker labels: {sorted(unique_speakers)}")
     
     # 최종 transcription 구성
     transcription = {

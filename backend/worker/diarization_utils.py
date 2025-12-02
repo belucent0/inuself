@@ -1,5 +1,7 @@
 """화자분리 유틸리티."""
+import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from . import rocm_env as _rocm_env  # noqa: F401  # sys.path side-effect
@@ -7,6 +9,20 @@ from . import rocm_env as _rocm_env  # noqa: F401  # sys.path side-effect
 import numpy as np
 import torch
 from pyannote.audio import Pipeline as DiarizationPipeline
+
+# logger import를 위한 경로 조정
+_backend_dir = Path(__file__).parent.parent
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
+
+try:
+    from app.core.logging import logger
+except ImportError:
+    # fallback: 직접 경로 구성
+    _app_dir = _backend_dir / "app"
+    if str(_app_dir) not in sys.path:
+        sys.path.insert(0, str(_app_dir))
+    from core.logging import logger
 
 # HuggingFace Hub 호환성 패치: use_auth_token -> token
 # pyannote.audio가 사용하는 오래된 API를 최신 API로 변환
@@ -66,20 +82,20 @@ def run_diarization(
         - pipeline: return_pipeline=True일 때만 제공
     """
     if audio_duration:
-        print(f"[Diarization] Starting speaker diarization for entire audio file...")
-        print(f"[Diarization] Processing time range: 0.00s - {audio_duration:.2f}s ({audio_duration:.2f}s)")
+        logger.info("[Diarization] Starting speaker diarization for entire audio file...")
+        logger.info(f"[Diarization] Processing time range: 0.00s - {audio_duration:.2f}s ({audio_duration:.2f}s)")
     else:
-        print(f"[Diarization] Starting speaker diarization...")
+        logger.info("[Diarization] Starting speaker diarization...")
     
-    print(f"[Diarization] Loading speaker diarization model...")
+    logger.info("[Diarization] Loading speaker diarization model...")
     
     diarization_load_start = time.time()
     diarization_pipeline = DiarizationPipeline.from_pretrained("pyannote/speaker-diarization-3.1")
     diarization_pipeline.to(torch.device(device))
     diarization_load_time = time.time() - diarization_load_start
     
-    print(f"[Diarization] Model loaded in {diarization_load_time:.2f} seconds")
-    print(f"[Diarization] Starting speaker diarization...")
+    logger.info(f"[Diarization] Model loaded in {diarization_load_time:.2f} seconds")
+    logger.info("[Diarization] Starting speaker diarization...")
     
     audio_data = {
         "waveform": torch.from_numpy(waveform).unsqueeze(0).to(device),
@@ -92,13 +108,13 @@ def run_diarization(
         pipeline_kwargs = {}
         if num_speakers is not None:
             pipeline_kwargs['num_speakers'] = num_speakers
-            print(f"[Diarization] Using fixed number of speakers: {num_speakers}")
+            logger.info(f"[Diarization] Using fixed number of speakers: {num_speakers}")
         elif min_speakers is not None or max_speakers is not None:
             if min_speakers is not None:
                 pipeline_kwargs['min_speakers'] = min_speakers
             if max_speakers is not None:
                 pipeline_kwargs['max_speakers'] = max_speakers
-            print(f"[Diarization] Using speaker range: min={min_speakers}, max={max_speakers}")
+            logger.info(f"[Diarization] Using speaker range: min={min_speakers}, max={max_speakers}")
         
         if return_embeddings:
             # embedding도 함께 반환하는 경우
@@ -115,13 +131,13 @@ def run_diarization(
                             embeddings_dict[speaker] = embeddings[i].tolist() if isinstance(embeddings[i], np.ndarray) else embeddings[i]
                     else:
                         # 다른 형태의 embeddings 처리
-                        print(f"[Diarization] Warning: Unexpected embeddings shape: {embeddings.shape}")
+                        logger.warning(f"[Diarization] Warning: Unexpected embeddings shape: {embeddings.shape}")
                         embeddings_dict = None
                 else:
                     embeddings_dict = None
             except TypeError:
                 # return_embeddings 파라미터를 지원하지 않는 경우
-                print(f"[Diarization] return_embeddings not supported, extracting manually...")
+                logger.info("[Diarization] return_embeddings not supported, extracting manually...")
                 result = diarization_pipeline(audio_data, **pipeline_kwargs)
                 embeddings_dict = extract_speaker_embeddings(
                     diarization_pipeline, audio_data, result
@@ -131,7 +147,7 @@ def run_diarization(
             embeddings_dict = None
     diarization_time = time.time() - diarization_start
     
-    print(f"[Diarization] Completed in {diarization_time:.2f} seconds")
+    logger.info(f"[Diarization] Completed in {diarization_time:.2f} seconds")
     
     if return_pipeline:
         return result, diarization_load_time, diarization_time, embeddings_dict, diarization_pipeline
@@ -158,20 +174,20 @@ def extract_segment_embeddings(
         [{"start": float, "end": float, "speaker": str, "embedding": list[float]}, ...] 형태의 리스트 또는 None
     """
     try:
-        print(f"[Diarization] Starting segment embeddings extraction...")
-        print(f"[Diarization] Pipeline type: {type(pipeline)}")
-        print(f"[Diarization] Pipeline has _embedding: {hasattr(pipeline, '_embedding')}")
+        logger.info("[Diarization] Starting segment embeddings extraction...")
+        logger.debug(f"[Diarization] Pipeline type: {type(pipeline)}")
+        logger.debug(f"[Diarization] Pipeline has _embedding: {hasattr(pipeline, '_embedding')}")
         
         # pipeline 내부의 embedding 모델에 접근
         if not hasattr(pipeline, '_embedding'):
-            print("[Diarization] Pipeline does not have _embedding attribute")
+            logger.warning("[Diarization] Pipeline does not have _embedding attribute")
             return None
         
         embedding_model = pipeline._embedding
-        print(f"[Diarization] Embedding model type: {type(embedding_model)}")
-        print(f"[Diarization] Embedding model has 'model' attribute: {hasattr(embedding_model, 'model')}")
-        print(f"[Diarization] Embedding model has 'model_' attribute: {hasattr(embedding_model, 'model_')}")
-        print(f"[Diarization] Embedding model is callable: {callable(embedding_model)}")
+        logger.debug(f"[Diarization] Embedding model type: {type(embedding_model)}")
+        logger.debug(f"[Diarization] Embedding model has 'model' attribute: {hasattr(embedding_model, 'model')}")
+        logger.debug(f"[Diarization] Embedding model has 'model_' attribute: {hasattr(embedding_model, 'model_')}")
+        logger.debug(f"[Diarization] Embedding model is callable: {callable(embedding_model)}")
         
         # PyannoteAudioPretrainedSpeakerEmbedding은 model_ 속성을 사용하거나 직접 호출 가능
         if hasattr(embedding_model, 'model_'):
@@ -184,20 +200,20 @@ def extract_segment_embeddings(
             actual_model = embedding_model
             use_callable = True
         else:
-            print("[Diarization] Embedding model not found (no model, model_, or callable)")
+            logger.warning("[Diarization] Embedding model not found (no model, model_, or callable)")
             return None
         
         segment_embeddings = []
         waveform = audio_data["waveform"]
         sample_rate = audio_data["sample_rate"]
         
-        print(f"[Diarization] Waveform shape: {waveform.shape}, sample_rate: {sample_rate}")
+        logger.debug(f"[Diarization] Waveform shape: {waveform.shape}, sample_rate: {sample_rate}")
         
         # 전체 세그먼트 수 미리 계산 (진행 상황 표시용)
         all_segments = list(diarization_result.itertracks(yield_label=True))
         total_segments_count = len(all_segments)
-        print(f"[Diarization] Total segments to process: {total_segments_count}")
-        print(f"[Diarization] Extracting embeddings for each segment (min_duration={min_segment_duration}s)...")
+        logger.info(f"[Diarization] Total segments to process: {total_segments_count}")
+        logger.info(f"[Diarization] Extracting embeddings for each segment (min_duration={min_segment_duration}s)...")
         
         total_segments = 0
         skipped_short = 0
@@ -209,7 +225,7 @@ def extract_segment_embeddings(
             
             # 진행 상황 출력 (10개마다 또는 마지막)
             if idx % 10 == 0 or idx == total_segments_count:
-                print(f"[Diarization] Processing segment {idx}/{total_segments_count}...")
+                logger.info(f"[Diarization] Processing segment {idx}/{total_segments_count}...")
             
             start_time = turn.start
             end_time = turn.end
@@ -292,22 +308,22 @@ def extract_segment_embeddings(
                     "embedding": embedding,
                 })
             except Exception as seg_e:
-                print(f"[Diarization] Error extracting embedding for segment {start_time:.2f}s-{end_time:.2f}s (segment {idx}/{total_segments_count}): {seg_e}")
+                logger.error(f"[Diarization] Error extracting embedding for segment {start_time:.2f}s-{end_time:.2f}s (segment {idx}/{total_segments_count}): {seg_e}")
                 import traceback
                 traceback.print_exc()
                 skipped_invalid += 1
                 continue
         
-        print(f"[Diarization] Segment embedding extraction summary:")
-        print(f"  - Total segments: {total_segments}")
-        print(f"  - Extracted: {len(segment_embeddings)}")
-        print(f"  - Skipped (too short): {skipped_short}")
-        print(f"  - Skipped (invalid): {skipped_invalid}")
+        logger.info("[Diarization] Segment embedding extraction summary:")
+        logger.info(f"  - Total segments: {total_segments}")
+        logger.info(f"  - Extracted: {len(segment_embeddings)}")
+        logger.info(f"  - Skipped (too short): {skipped_short}")
+        logger.info(f"  - Skipped (invalid): {skipped_invalid}")
         
         return segment_embeddings if segment_embeddings else None
     
     except Exception as e:
-        print(f"[Diarization] Error extracting segment embeddings: {e}")
+        logger.error(f"[Diarization] Error extracting segment embeddings: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -332,7 +348,7 @@ def extract_speaker_embeddings(
     try:
         # pipeline 내부의 embedding 모델에 접근
         if not hasattr(pipeline, '_embedding'):
-            print("[Diarization] Pipeline does not have _embedding attribute")
+            logger.warning("[Diarization] Pipeline does not have _embedding attribute")
             return None
         
         embedding_model = pipeline._embedding
@@ -348,7 +364,7 @@ def extract_speaker_embeddings(
             actual_model = embedding_model
             use_callable = True
         else:
-            print("[Diarization] Embedding model not found (no model, model_, or callable)")
+            logger.warning("[Diarization] Embedding model not found (no model, model_, or callable)")
             return None
         
         # 각 화자별로 대표 세그먼트를 선택하여 embedding 추출
@@ -411,7 +427,7 @@ def extract_speaker_embeddings(
         return speaker_embeddings if speaker_embeddings else None
     
     except Exception as e:
-        print(f"[Diarization] Error extracting embeddings: {e}")
+        logger.error(f"[Diarization] Error extracting embeddings: {e}")
         return None
 
 
@@ -574,13 +590,13 @@ def find_optimal_split_points(
         if candidates:
             candidates.sort(key=lambda x: (abs(x["point"] - target), -x["gap"]))
             selected = candidates[0]["point"]
-            print(
+            logger.info(
                 f"[Split] Using speaker transition near {target:.2f}s -> {selected:.2f}s "
                 f"(gap {candidates[0]['gap']:.2f}s)"
             )
         else:
             selected = target
-            print(
+            logger.info(
                 f"[Split] No transition near {target:.2f}s, using target as boundary."
             )
         boundaries.append(max(0.0, min(audio_duration, selected)))
@@ -709,7 +725,7 @@ def refine_diarization_with_confidence(
         else:
             # 신뢰도가 낮은 세그먼트는 인접 세그먼트와 병합 고려
             # 여기서는 단순히 제외하지만, 필요시 병합 로직 추가 가능
-            print(
+            logger.debug(
                 f"[Diarization] Low confidence segment filtered: "
                 f"{seg['start']:.2f}s-{seg['end']:.2f}s "
                 f"(confidence={seg_with_confidence['overall_confidence']:.2f})"
@@ -861,13 +877,13 @@ def refine_speaker_assignment_with_embeddings(
                         best_similarity = similarity
                         best_speaker = speaker
                 except Exception as e:
-                    print(f"[Diarization] Error computing similarity: {e}")
+                    logger.error(f"[Diarization] Error computing similarity: {e}")
                     continue
             
             # 유사도가 임계값 이상이고 원래 화자와 다른 경우 재할당
             if best_similarity >= similarity_threshold and best_speaker != original_speaker:
                 reassigned_count += 1
-                print(
+                logger.info(
                     f"[Diarization] Reassigned segment {seg_emb['start']:.2f}s-{seg_emb['end']:.2f}s: "
                     f"{original_speaker} -> {best_speaker} (similarity={best_similarity:.3f})"
                 )
@@ -875,15 +891,15 @@ def refine_speaker_assignment_with_embeddings(
             refined_result[seg_emb['start']:seg_emb['end'], best_speaker] = True
         
         if reassigned_count > 0:
-            print(f"[Diarization] Reassigned {reassigned_count} segments based on embedding similarity")
+            logger.info(f"[Diarization] Reassigned {reassigned_count} segments based on embedding similarity")
         
         return refined_result
     
     except ImportError:
-        print("[Diarization] scipy not available, skipping embedding-based refinement")
+        logger.warning("[Diarization] scipy not available, skipping embedding-based refinement")
         return diarization_result
     except Exception as e:
-        print(f"[Diarization] Error in embedding-based refinement: {e}")
+        logger.error(f"[Diarization] Error in embedding-based refinement: {e}")
         import traceback
         traceback.print_exc()
         return diarization_result
@@ -946,12 +962,12 @@ def merge_adjacent_segments(
                 merged_result[start:end, speaker] = True
         
         if merged_count > 0:
-            print(f"[Diarization] Merged {merged_count} adjacent segments")
+            logger.info(f"[Diarization] Merged {merged_count} adjacent segments")
         
         return merged_result
     
     except Exception as e:
-        print(f"[Diarization] Error in segment merging: {e}")
+        logger.error(f"[Diarization] Error in segment merging: {e}")
         import traceback
         traceback.print_exc()
         return diarization_result
@@ -982,8 +998,8 @@ def recluster_speakers_from_embeddings(
             return {}
         
         num_segments = len(segment_embeddings)
-        print(f"[Reclustering] Starting reclustering for {num_segments} segments")
-        print(f"[Reclustering] Target speakers: {target_num_speakers}, Similarity threshold: {similarity_threshold}")
+        logger.info(f"[Reclustering] Starting reclustering for {num_segments} segments")
+        logger.info(f"[Reclustering] Target speakers: {target_num_speakers}, Similarity threshold: {similarity_threshold}")
         
         # 임베딩 벡터 추출
         embeddings = []
@@ -992,7 +1008,7 @@ def recluster_speakers_from_embeddings(
             embeddings.append(emb)
         
         embeddings = np.array(embeddings)
-        print(f"[Reclustering] Embeddings shape: {embeddings.shape}")
+        logger.debug(f"[Reclustering] Embeddings shape: {embeddings.shape}")
         
         # 코사인 유사도 행렬 계산
         similarity_matrix = np.zeros((num_segments, num_segments))
@@ -1024,7 +1040,7 @@ def recluster_speakers_from_embeddings(
             
             groups.append(current_group)
         
-        print(f"[Reclustering] Initial groups: {len(groups)}")
+        logger.info(f"[Reclustering] Initial groups: {len(groups)}")
         
         # 목표 화자 수에 맞춰 그룹 조정
         if target_num_speakers is not None:
@@ -1032,7 +1048,7 @@ def recluster_speakers_from_embeddings(
             
             if current_num_groups > target_num_speakers:
                 # 그룹 수가 많으면 병합 필요
-                print(f"[Reclustering] Merging {current_num_groups} groups to {target_num_speakers}")
+                logger.info(f"[Reclustering] Merging {current_num_groups} groups to {target_num_speakers}")
                 
                 # 그룹 간 평균 유사도 계산
                 group_embeddings = []
@@ -1083,7 +1099,7 @@ def recluster_speakers_from_embeddings(
                 
             elif current_num_groups < target_num_speakers:
                 # 그룹 수가 적으면 분리 필요
-                print(f"[Reclustering] Splitting groups from {current_num_groups} to {target_num_speakers}")
+                logger.info(f"[Reclustering] Splitting groups from {current_num_groups} to {target_num_speakers}")
                 
                 # 가장 큰 그룹부터 분리
                 while len(groups) < target_num_speakers:
@@ -1144,16 +1160,16 @@ def recluster_speakers_from_embeddings(
             for seg_idx in group:
                 segment_to_speaker[seg_idx] = speaker_label
         
-        print(f"[Reclustering] Final groups: {len(groups)}")
-        print(f"[Reclustering] New speaker labels: {new_labels}")
+        logger.info(f"[Reclustering] Final groups: {len(groups)}")
+        logger.info(f"[Reclustering] New speaker labels: {new_labels}")
         
         return segment_to_speaker
     
     except ImportError:
-        print("[Reclustering] scipy not available, cannot perform reclustering")
+        logger.error("[Reclustering] scipy not available, cannot perform reclustering")
         raise ImportError("scipy is required for reclustering. Install it with: pip install scipy")
     except Exception as e:
-        print(f"[Reclustering] Error in reclustering: {e}")
+        logger.error(f"[Reclustering] Error in reclustering: {e}")
         import traceback
         traceback.print_exc()
         raise
@@ -1183,7 +1199,7 @@ def update_transcription_with_new_speakers(
     new_speaker_labels = sorted(set(segment_to_speaker_mapping.values()))
     num_speakers = len(new_speaker_labels)
     
-    print(f"[Update] Updating transcription with {num_speakers} speakers: {new_speaker_labels}")
+    logger.info(f"[Update] Updating transcription with {num_speakers} speakers: {new_speaker_labels}")
     
     # 1. segments의 speaker 필드 업데이트
     if 'segments' in updated_transcription:
@@ -1238,8 +1254,8 @@ def update_transcription_with_new_speakers(
     
     metadata['speaker_embeddings'] = speaker_embeddings
     
-    print(f"[Update] Updated {len(segment_to_speaker_mapping)} segments")
-    print(f"[Update] New speaker embeddings: {list(speaker_embeddings.keys())}")
+    logger.info(f"[Update] Updated {len(segment_to_speaker_mapping)} segments")
+    logger.info(f"[Update] New speaker embeddings: {list(speaker_embeddings.keys())}")
     
     return updated_transcription
 

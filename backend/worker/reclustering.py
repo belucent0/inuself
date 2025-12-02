@@ -1,6 +1,22 @@
 """화자 재클러스터링 유틸리티 (torch 의존성 없음)."""
+import sys
+from pathlib import Path
 from typing import Any
 import numpy as np
+
+# logger import를 위한 경로 조정
+_backend_dir = Path(__file__).parent.parent
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
+
+try:
+    from app.core.logging import logger
+except ImportError:
+    # fallback: 직접 경로 구성
+    _app_dir = _backend_dir / "app"
+    if str(_app_dir) not in sys.path:
+        sys.path.insert(0, str(_app_dir))
+    from core.logging import logger
 
 
 def recluster_speakers_from_embeddings(
@@ -27,8 +43,8 @@ def recluster_speakers_from_embeddings(
             return {}
         
         num_segments = len(segment_embeddings)
-        print(f"[Reclustering] Starting reclustering for {num_segments} segments")
-        print(f"[Reclustering] Target speakers: {target_num_speakers}, Similarity threshold: {similarity_threshold}")
+        logger.info(f"[Reclustering] Starting reclustering for {num_segments} segments")
+        logger.info(f"[Reclustering] Target speakers: {target_num_speakers}, Similarity threshold: {similarity_threshold}")
         
         # 임베딩 벡터 추출
         embeddings = []
@@ -37,7 +53,7 @@ def recluster_speakers_from_embeddings(
             embeddings.append(emb)
         
         embeddings = np.array(embeddings)
-        print(f"[Reclustering] Embeddings shape: {embeddings.shape}")
+        logger.debug(f"[Reclustering] Embeddings shape: {embeddings.shape}")
         
         # 코사인 유사도 행렬 계산
         similarity_matrix = np.zeros((num_segments, num_segments))
@@ -69,7 +85,7 @@ def recluster_speakers_from_embeddings(
             
             groups.append(current_group)
         
-        print(f"[Reclustering] Initial groups: {len(groups)}")
+        logger.info(f"[Reclustering] Initial groups: {len(groups)}")
         
         # 목표 화자 수에 맞춰 그룹 조정
         if target_num_speakers is not None:
@@ -77,7 +93,7 @@ def recluster_speakers_from_embeddings(
             
             if current_num_groups > target_num_speakers:
                 # 그룹 수가 많으면 병합 필요
-                print(f"[Reclustering] Merging {current_num_groups} groups to {target_num_speakers}")
+                logger.info(f"[Reclustering] Merging {current_num_groups} groups to {target_num_speakers}")
                 
                 # 그룹 간 평균 유사도 계산
                 group_embeddings = []
@@ -128,7 +144,7 @@ def recluster_speakers_from_embeddings(
                 
             elif current_num_groups < target_num_speakers:
                 # 그룹 수가 적으면 분리 필요
-                print(f"[Reclustering] Splitting groups from {current_num_groups} to {target_num_speakers}")
+                logger.info(f"[Reclustering] Splitting groups from {current_num_groups} to {target_num_speakers}")
                 
                 # 가장 큰 그룹부터 분리
                 while len(groups) < target_num_speakers:
@@ -189,16 +205,16 @@ def recluster_speakers_from_embeddings(
             for seg_idx in group:
                 segment_to_speaker[seg_idx] = speaker_label
         
-        print(f"[Reclustering] Final groups: {len(groups)}")
-        print(f"[Reclustering] New speaker labels: {new_labels}")
+        logger.info(f"[Reclustering] Final groups: {len(groups)}")
+        logger.info(f"[Reclustering] New speaker labels: {new_labels}")
         
         return segment_to_speaker
     
     except ImportError:
-        print("[Reclustering] scipy not available, cannot perform reclustering")
+        logger.error("[Reclustering] scipy not available, cannot perform reclustering")
         raise ImportError("scipy is required for reclustering. Install it with: pip install scipy")
     except Exception as e:
-        print(f"[Reclustering] Error in reclustering: {e}")
+        logger.error(f"[Reclustering] Error in reclustering: {e}")
         import traceback
         traceback.print_exc()
         raise
@@ -228,7 +244,7 @@ def update_transcription_with_new_speakers(
     new_speaker_labels = sorted(set(segment_to_speaker_mapping.values()))
     num_speakers = len(new_speaker_labels)
     
-    print(f"[Update] Updating transcription with {num_speakers} speakers: {new_speaker_labels}")
+    logger.info(f"[Update] Updating transcription with {num_speakers} speakers: {new_speaker_labels}")
     
     # 1. segments의 speaker 필드 업데이트
     if 'segments' in updated_transcription:
@@ -283,8 +299,8 @@ def update_transcription_with_new_speakers(
     
     metadata['speaker_embeddings'] = speaker_embeddings
     
-    print(f"[Update] Updated {len(segment_to_speaker_mapping)} segments")
-    print(f"[Update] New speaker embeddings: {list(speaker_embeddings.keys())}")
+    logger.info(f"[Update] Updated {len(segment_to_speaker_mapping)} segments")
+    logger.info(f"[Update] New speaker embeddings: {list(speaker_embeddings.keys())}")
     
     return updated_transcription
 
