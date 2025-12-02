@@ -198,58 +198,16 @@ async def _process_job(
     min_speakers: int | None = None,
     max_speakers: int | None = None,
 ) -> None:
-    safe_print(f"[Worker] [1/5] Updating status to PROCESSING...")
+    """
+    ASR 작업 처리 함수.
+    
+    실제 처리 중인 작업만 PROCESSING 상태로 표시하기 위해,
+    상태 변경은 파일 다운로드 완료 후 파이프라인이 실제로 시작될 때 수행합니다.
+    """
     logger.info("Processing job content_id={} key={}", content_id, storage_key)
+    safe_print(f"[Worker] [1/5] Starting job: content_id={content_id}, file={original_filename}")
     
-    # Windows에서 각 작업마다 새로운 이벤트 루프를 사용하므로
-    # 현재 이벤트 루프에서 새로운 DB 엔진과 세션을 생성해야 함
-    # 전역 엔진은 다른 이벤트 루프의 연결을 사용할 수 있어 충돌 발생 가능
-    current_engine = None
-    if sys.platform == "win32":
-        # 현재 이벤트 루프에서 새로운 엔진 생성
-        current_engine = create_async_engine(
-            settings.postgres_dsn,
-            echo=settings.debug,
-            future=True,
-            pool_pre_ping=True,  # 연결 상태 체크
-            pool_recycle=3600,   # 1시간마다 연결 재생성
-        )
-        CurrentAsyncSessionLocal = async_sessionmaker(
-            current_engine,
-            expire_on_commit=False,
-        )
-        session = CurrentAsyncSessionLocal()
-    else:
-        # Linux/Mac에서는 전역 엔진 사용
-        session = AsyncSessionLocal()
-    
-    try:
-        repo = ContentRepository(session)
-        # content 존재 여부 확인
-        content = await repo.get_content(content_id)
-        if not content:
-            logger.warning("Content not found: content_id={}, skipping status update and log", content_id)
-            return
-        
-        await repo.update_content_status(content_id, ContentStatus.PROCESSING)
-        log_entry = await repo.add_log(
-            content_id=content_id,
-            log={"event": "started", "file": original_filename},
-            message="ASR processing started",
-        )
-        if not log_entry:
-            logger.warning("Failed to add log: content_id={} (content may have been deleted)", content_id)
-        await session.commit()
-    finally:
-        await session.close()
-        # Windows에서 생성한 엔진도 타임아웃과 함께 정리
-        if current_engine:
-            try:
-                await asyncio.wait_for(current_engine.dispose(), timeout=10.0)
-            except asyncio.TimeoutError:
-                logger.warning("Timeout disposing database engine after status update")
-            except Exception as e:
-                logger.error("Error disposing database engine: {}", e)
+    # 파일 다운로드 먼저 수행 (상태 변경 전)
     safe_print(f"[Worker] [2/5] Downloading file: {storage_key}")
 
     temp_root = settings.upload_dir
@@ -261,7 +219,61 @@ async def _process_job(
     try:
         download_file(storage_key, destination=temp_path)
         safe_print(f"[Worker] [3/5] File download completed: {temp_path}")
-        safe_print(f"[Worker] [4/5] Running ASR pipeline... (this may take some time)")
+        
+        # 파일 다운로드 완료 후, 실제 파이프라인 시작 전에 상태를 PROCESSING으로 변경
+        # 이 시점이 실제 처리 작업이 시작되는 시점입니다.
+        safe_print(f"[Worker] [4/5] Updating status to PROCESSING and starting ASR pipeline...")
+        
+        # Windows에서 각 작업마다 새로운 이벤트 루프를 사용하므로
+        # 현재 이벤트 루프에서 새로운 DB 엔진과 세션을 생성해야 함
+        # 전역 엔진은 다른 이벤트 루프의 연결을 사용할 수 있어 충돌 발생 가능
+        current_engine = None
+        if sys.platform == "win32":
+            # 현재 이벤트 루프에서 새로운 엔진 생성
+            current_engine = create_async_engine(
+                settings.postgres_dsn,
+                echo=settings.debug,
+                future=True,
+                pool_pre_ping=True,  # 연결 상태 체크
+                pool_recycle=3600,   # 1시간마다 연결 재생성
+            )
+            CurrentAsyncSessionLocal = async_sessionmaker(
+                current_engine,
+                expire_on_commit=False,
+            )
+            session = CurrentAsyncSessionLocal()
+        else:
+            # Linux/Mac에서는 전역 엔진 사용
+            session = AsyncSessionLocal()
+        
+        try:
+            repo = ContentRepository(session)
+            # content 존재 여부 확인
+            content = await repo.get_content(content_id)
+            if not content:
+                logger.warning("Content not found: content_id={}, skipping status update and log", content_id)
+                return
+            
+            # 실제 처리 작업이 시작되는 시점에 상태를 PROCESSING으로 변경
+            await repo.update_content_status(content_id, ContentStatus.PROCESSING)
+            log_entry = await repo.add_log(
+                content_id=content_id,
+                log={"event": "started", "file": original_filename},
+                message="ASR processing started",
+            )
+            if not log_entry:
+                logger.warning("Failed to add log: content_id={} (content may have been deleted)", content_id)
+            await session.commit()
+        finally:
+            await session.close()
+            # Windows에서 생성한 엔진도 타임아웃과 함께 정리
+            if current_engine:
+                try:
+                    await asyncio.wait_for(current_engine.dispose(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout disposing database engine after status update")
+                except Exception as e:
+                    logger.error("Error disposing database engine: {}", e)
         
         # 프로젝트 루트 경로 계산 (backend/app/worker -> backend -> project_root)
         project_root = backend_dir.parent

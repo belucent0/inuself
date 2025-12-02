@@ -247,8 +247,8 @@ def _run_case4_parallel_full_asr(
                 project_root=project_root,
             )
         
-        # 두 작업 모두 완료 대기 (타임아웃: 30분)
-        print(f"[Parallel] Waiting for both Diarization and ASR to complete...")
+        # 화자분리 작업 완료 대기 (타임아웃: 30분)
+        print(f"[Parallel] Waiting for Diarization to complete...")
         try:
             # 화자 분리 작업에 타임아웃 설정 (30분)
             diarization_timeout = 30 * 60  # 30분
@@ -268,6 +268,57 @@ def _run_case4_parallel_full_asr(
             embeddings_dict = None
             diarization_pipeline = None
         
+        print(f"[Parallel] Diarization completed, extracting segment embeddings before ASR completion...")
+        
+        # 화자분리 완료 후 즉시 세그먼트 임베딩 추출 (ASR 완료 전에)
+        segment_embeddings = None
+        if diarization_pipeline is not None:
+            print(f"[Embeddings] Extracting time-based segment embeddings...")
+            audio_data_for_embeddings = {
+                "waveform": torch.from_numpy(waveform).unsqueeze(0).to(device),
+                "sample_rate": sample_rate
+            }
+            # 세그먼트 임베딩 추출 (세그먼트 수가 너무 많으면 건너뛰기)
+            try:
+                # 세그먼트가 너무 많으면 (1000개 이상) 임베딩 추출 건너뛰기
+                # 각 세그먼트마다 GPU 연산이 필요하므로 시간이 오래 걸릴 수 있음
+                segment_count = len(list(diarization.itertracks(yield_label=True)))
+                if segment_count > 1000:
+                    print(f"[Embeddings] Warning: Too many segments ({segment_count}), skipping segment embeddings extraction to avoid timeout")
+                    print(f"[Embeddings] Consider using speaker embeddings instead for large files")
+                    segment_embeddings = None
+                else:
+                    print(f"[Embeddings] Extracting embeddings for {segment_count} segments...")
+                    segment_embeddings = extract_segment_embeddings(
+                        diarization_pipeline,
+                        audio_data_for_embeddings,
+                        diarization,
+                        min_segment_duration=0.5,  # 최소 0.5초 세그먼트만 추출
+                    )
+            except Exception as e:
+                print(f"[Embeddings] ERROR: Segment embeddings extraction failed: {e}")
+                import traceback
+                traceback.print_exc()
+                segment_embeddings = None
+            
+            # 세그먼트 임베딩 추출 완료 후 pipeline 해제 및 VRAM 정리
+            print(f"[Embeddings] Releasing diarization pipeline and freeing VRAM...")
+            del diarization_pipeline
+            diarization_pipeline = None
+            if device == "cuda":
+                torch.cuda.empty_cache()
+                print(f"[Embeddings] VRAM freed")
+            
+            if segment_embeddings:
+                print(f"[Embeddings] Successfully extracted {len(segment_embeddings)} segment embeddings")
+            else:
+                print(f"[Embeddings] No segment embeddings extracted (returned None or empty list)")
+        else:
+            print(f"[Embeddings] Cannot extract segment embeddings: diarization_pipeline is None")
+            segment_embeddings = None
+        
+        # 이제 ASR 완료 대기
+        print(f"[Parallel] Waiting for ASR to complete...")
         if use_chunking:
             # 청킹 결과는 리스트로 반환됨
             chunk_results = asr_future.result()
@@ -287,46 +338,6 @@ def _run_case4_parallel_full_asr(
         print(f"  - ASR (chunked, total): {transcribe_time:.2f}s")
     else:
         print(f"  - ASR (load + transcribe): {model_load_time + transcribe_time:.2f}s")
-    
-    # 시간대별 세그먼트 임베딩 추출
-    segment_embeddings = None
-    print(f"\n[Embeddings] Checking pipeline for segment embeddings extraction...")
-    print(f"[Embeddings] diarization_pipeline is None: {diarization_pipeline is None}")
-    if diarization_pipeline is not None:
-        print(f"[Embeddings] Pipeline type: {type(diarization_pipeline)}")
-        print(f"[Embeddings] Extracting time-based segment embeddings...")
-        audio_data_for_embeddings = {
-            "waveform": torch.from_numpy(waveform).unsqueeze(0).to(device),
-            "sample_rate": sample_rate
-        }
-        # 세그먼트 임베딩 추출 (세그먼트 수가 너무 많으면 건너뛰기)
-        try:
-            # 세그먼트가 너무 많으면 (1000개 이상) 임베딩 추출 건너뛰기
-            # 각 세그먼트마다 GPU 연산이 필요하므로 시간이 오래 걸릴 수 있음
-            segment_count = len(list(diarization.itertracks(yield_label=True)))
-            if segment_count > 1000:
-                print(f"[Embeddings] Warning: Too many segments ({segment_count}), skipping segment embeddings extraction to avoid timeout")
-                print(f"[Embeddings] Consider using speaker embeddings instead for large files")
-                segment_embeddings = None
-            else:
-                print(f"[Embeddings] Extracting embeddings for {segment_count} segments...")
-                segment_embeddings = extract_segment_embeddings(
-                    diarization_pipeline,
-                    audio_data_for_embeddings,
-                    diarization,
-                    min_segment_duration=0.5,  # 최소 0.5초 세그먼트만 추출
-                )
-        except Exception as e:
-            print(f"[Embeddings] ERROR: Segment embeddings extraction failed: {e}")
-            import traceback
-            traceback.print_exc()
-            segment_embeddings = None
-        if segment_embeddings:
-            print(f"[Embeddings] Successfully extracted {len(segment_embeddings)} segment embeddings")
-        else:
-            print(f"[Embeddings] No segment embeddings extracted (returned None or empty list)")
-    else:
-        print(f"[Embeddings] Cannot extract segment embeddings: diarization_pipeline is None")
     
     # 화자 정보 병합
     print(f"\n[Merging] Combining ASR and diarization results...")
