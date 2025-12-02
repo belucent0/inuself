@@ -32,8 +32,7 @@ class LlmSummaryService:
                     content_id,
                     len(content.summary_md)
                 )
-                from ..core.logging import safe_print
-                safe_print(f"[LLM] SKIP Content already completed: content_id={content_id}, summary_length={len(content.summary_md)}")
+                logger.info(f"[LLM] SKIP Content already completed: content_id={content_id}, summary_length={len(content.summary_md)}")
                 return
             else:
                 # 상태는 COMPLETED인데 summary_md가 없는 경우는 이상하지만 재처리
@@ -41,13 +40,12 @@ class LlmSummaryService:
                     "Content {} status is COMPLETED but summary_md is empty, reprocessing",
                     content_id
                 )
-                from ..core.logging import safe_print
-                safe_print(f"[LLM] WARNING Status is COMPLETED but summary_md is empty, reprocessing: content_id={content_id}")
+                logger.warning(f"[LLM] WARNING Status is COMPLETED but summary_md is empty, reprocessing: content_id={content_id}")
 
         transcription = content.transcription or {}
         transcript_text = str(transcription.get("text") or "").strip()
         if not transcript_text:
-            raise ValueError("전사 텍스트가 비어 있어 요약할 수 없습니다.")
+            raise ValueError("Transcription text is empty, cannot summarize.")
 
         # 이미 SUMMARIZING 상태인 경우는 재시도 케이스 (로그만 추가)
         # 그 외 상태는 SUMMARIZING으로 변경

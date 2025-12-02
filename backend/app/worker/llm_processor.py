@@ -2,7 +2,7 @@ import asyncio
 import sys
 
 from ..core.config import get_settings
-from ..core.logging import logger, safe_print
+from ..core.logging import logger
 from ..db.session import AsyncSessionLocal
 from ..services.llm_summary_service import LlmSummaryService
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -14,8 +14,8 @@ _worker_loop: asyncio.AbstractEventLoop | None = None
 
 def process_llm_job(*, content_id: int) -> None:
     """RQ 워커가 호출하는 요약 작업 진입점."""
-    safe_print(f"[LLM] ========================================")
-    safe_print(f"[LLM] Summary job started: content_id={content_id}")
+    logger.info("[LLM] ========================================")
+    logger.info(f"[LLM] Summary job started: content_id={content_id}")
     logger.info("LLM job started for content_id={}", content_id)
     
     # Windows에서는 매 작업마다 새로운 이벤트 루프를 생성 (ASR 워커와 동일)
@@ -69,12 +69,12 @@ def process_llm_job(*, content_id: int) -> None:
         loop = _ensure_worker_loop()
     
     try:
-        safe_print(f"[LLM] Running event loop...")
+        logger.info("[LLM] Running event loop...")
         loop.run_until_complete(_process_job(content_id=content_id))
-        safe_print(f"[LLM] OK Summary job completed: content_id={content_id}")
+        logger.info(f"[LLM] OK Summary job completed: content_id={content_id}")
         logger.info("LLM job completed for content_id={}", content_id)
     except Exception as exc:
-        safe_print(f"[LLM] ERROR Summary job failed: content_id={content_id}, error={exc}")
+        logger.error(f"[LLM] ERROR Summary job failed: content_id={content_id}, error={exc}")
         logger.exception("LLM job failed for content_id={}", content_id)
         raise
     finally:
@@ -129,7 +129,7 @@ def _ensure_worker_loop() -> asyncio.AbstractEventLoop:
 
 
 async def _process_job(*, content_id: int) -> None:
-    safe_print(f"[LLM] Creating DB session...")
+    logger.info("[LLM] Creating DB session...")
     
     # Windows에서 각 작업마다 새로운 이벤트 루프를 사용하므로
     # 현재 이벤트 루프에서 새로운 DB 엔진과 세션을 생성해야 함
@@ -154,13 +154,13 @@ async def _process_job(*, content_id: int) -> None:
         session = AsyncSessionLocal()
     
     try:
-        safe_print(f"[LLM] Initializing LlmSummaryService...")
+        logger.info("[LLM] Initializing LlmSummaryService...")
         service = LlmSummaryService(session)
-        safe_print(f"[LLM] Calling summarize function...")
+        logger.info("[LLM] Calling summarize function...")
         await service.summarize(content_id)
-        safe_print(f"[LLM] Summarize function completed")
+        logger.info("[LLM] Summarize function completed")
     finally:
-        safe_print(f"[LLM] Closing DB session...")
+        logger.info("[LLM] Closing DB session...")
         await session.close()
         # Windows에서 생성한 엔진도 타임아웃과 함께 정리
         if current_engine:
