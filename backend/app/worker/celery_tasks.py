@@ -96,10 +96,12 @@ def process_llm_task(self, content_id: int):
         # 1. 컨텍스트 길이 초과
         # 2. LM Studio 모델 로드 실패 (400 Bad Request, GPU 메모리 부족 등)
         # 3. 모델 초기화 실패
+        # 4. 존재하지 않는 콘텐츠 (삭제된 콘텐츠 등)
         no_retry_keywords = [
             "context", "token", "overflow",
             "400 bad request", "failed to load model", "gpu", "vram", "memory",
-            "failed to initialize", "allocation failed", "outofdevicememory"
+            "failed to initialize", "allocation failed", "outofdevicememory",
+            "content", "not found"  # 존재하지 않는 콘텐츠는 재시도하지 않음
         ]
         
         should_retry = not any(keyword in error_str.lower() for keyword in no_retry_keywords)

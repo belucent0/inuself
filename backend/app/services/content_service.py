@@ -14,8 +14,7 @@ from ..core.storage import delete_file, upload_fileobj, get_public_media_url
 from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
 from ..schemas.content import ContentDetail, ContentListItem, ContentListResponse, UploadResponse
-from ..worker.queue import cancel_jobs_by_content_ids  # RQ용 취소만 남김
-from ..worker.llm_queue import cancel_llm_jobs_by_content_ids
+from ..worker.celery_queue import cancel_celery_tasks_by_content_ids
 
 
 class ContentService:
@@ -113,7 +112,7 @@ class ContentService:
         print(f"[Upload] [4/4] 큐에 작업 등록 중: content_id={content.id}")
         try:
             loop = asyncio.get_running_loop()
-            # Task Queue Adapter 사용 (RQ 또는 Celery)
+            # Task Queue Adapter 사용 (Celery)
             from functools import partial
             from ..worker.task_queue_adapter import get_task_queue
             
@@ -203,13 +202,10 @@ class ContentService:
         loop = asyncio.get_running_loop()
 
         if content_ids:
-            cancelled_count = await loop.run_in_executor(None, cancel_jobs_by_content_ids, content_ids)
-            if cancelled_count:
-                logger.info("Cancelled %s jobs for deleted contents", cancelled_count)
-
-            llm_cancelled = await loop.run_in_executor(None, cancel_llm_jobs_by_content_ids, content_ids)
-            if llm_cancelled:
-                logger.info("Cancelled %s LLM jobs for deleted contents", llm_cancelled)
+            # Celery 큐 작업 취소
+            celery_cancelled = await loop.run_in_executor(None, cancel_celery_tasks_by_content_ids, content_ids)
+            if celery_cancelled:
+                logger.info("Cancelled %s Celery tasks for deleted contents", celery_cancelled)
 
         for object_key in object_keys:
             try:

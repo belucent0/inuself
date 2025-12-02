@@ -9,9 +9,8 @@ from ..core.config import get_settings
 from ..db.models import Content, ContentStatus
 from ..db.session import AsyncSessionLocal
 from ..repositories.content_repository import ContentRepository
-from .llm_queue import is_llm_job_in_queue
-from .queue import enqueue_transcription_job
 from .task_queue_adapter import get_task_queue
+from .celery_queue import is_celery_task_in_queue
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,9 @@ async def requeue_processing_contents() -> int:
             )
             await session.commit()
 
-            enqueue_transcription_job(
+            # Task Queue Adapter 사용 (Celery)
+            task_queue = get_task_queue()
+            task_queue.enqueue_asr_job(
                 content_id=content.id,
                 storage_key=content.object_key,
                 original_filename=content.filename,
@@ -98,7 +99,7 @@ async def requeue_summarizing_contents() -> int:
 
     for content in contents:
         # 이미 큐에 있는 작업은 재큐잉하지 않음 (중복 방지)
-        if is_llm_job_in_queue(content_id=content.id):
+        if is_celery_task_in_queue(content_id=content.id, task_name="process_llm_task"):
             logger.debug("LLM job already in queue for content_id=%s, skipping requeue", content.id)
             continue
         
@@ -121,7 +122,7 @@ async def requeue_summarizing_contents() -> int:
             
             await session.commit()
 
-            # Task Queue Adapter 사용 (RQ 또는 Celery)
+            # Task Queue Adapter 사용 (Celery)
             task_queue = get_task_queue()
             job_id = task_queue.enqueue_llm_job(content_id=content.id)
             requeued += 1

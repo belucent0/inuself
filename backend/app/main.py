@@ -24,41 +24,7 @@ class HealthCheckLogFilter(logging.Filter):
         return True  # 다른 로그는 정상 출력
 
 
-def start_worker_background() -> None:
-    """백그라운드에서 RQ 워커 시작 (subprocess로 실행)."""
-    import logging
-    
-    logger = logging.getLogger(__name__)
-    
-    # backend 디렉토리 경로
-    backend_dir = Path(__file__).parent.parent
-    
-    # Poetry 환경에서 Python 실행 파일 경로 찾기
-    python_executable = sys.executable
-    
-    # 워커 모듈 실행
-    worker_module = "app.worker.run_worker"
-    
-    try:
-        logger.info("Starting worker as subprocess")
-        safe_print("[Worker] 워커를 subprocess로 시작합니다...")
-        
-        # subprocess로 워커 실행 (Windows에서 signal 문제 해결)
-        # stdout/stderr를 None으로 설정하여 현재 터미널에 출력되도록 함
-        process = subprocess.Popen(
-            [python_executable, "-m", worker_module],
-            cwd=str(backend_dir),
-            stdout=None,  # 현재 터미널에 출력
-            stderr=None,  # 현재 터미널에 출력
-        )
-        
-        logger.info("Worker subprocess started with PID: %s", process.pid)
-        safe_print(f"[Worker] 워커 프로세스 시작됨 (PID: {process.pid})")
-        safe_print(f"[Worker] 워커는 별도 프로세스로 실행 중입니다.")
-        
-    except Exception as e:
-        logger.exception("Failed to start worker subprocess")
-        safe_print(f"[Worker] 워커 시작 실패: {e}")
+# RQ 워커는 제거되었습니다. Celery 워커는 PM2로 관리합니다.
         import traceback
         traceback.print_exc()
 
@@ -157,77 +123,6 @@ def create_app() -> FastAPI:
     async def healthcheck():
         return {"status": "ok"}
 
-    @app.get(f"{settings.api_prefix}/queue/status", tags=["system"])
-    async def queue_status():
-        """큐 상태 확인."""
-        try:
-            from rq import Queue
-            from rq.registry import FailedJobRegistry
-            from .core.redis import get_redis_connection
-            from .worker.queue import QUEUE_NAME
-            
-            redis = get_redis_connection()
-            queue = Queue(QUEUE_NAME, connection=redis)
-            failed_registry = FailedJobRegistry(queue=queue)
-            
-            # 실패한 작업의 에러 메시지 확인 (최근 5개)
-            failed_jobs_info = []
-            failed_job_ids = failed_registry.get_job_ids(0, 4)  # 최근 5개
-            for job_id in failed_job_ids:
-                try:
-                    job = queue.fetch_job(job_id)
-                    if job:
-                        failed_jobs_info.append({
-                            "job_id": job_id,
-                            "error": str(job.exc_info) if job.exc_info else "Unknown error",
-                            "ended_at": job.ended_at.isoformat() if job.ended_at else None,
-                        })
-                except Exception:
-                    pass
-            
-            return {
-                "queue_name": QUEUE_NAME,
-                "queued_jobs": len(queue),
-                "started_jobs": len(queue.started_job_registry),
-                "finished_jobs": len(queue.finished_job_registry),
-                "failed_jobs": len(queue.failed_job_registry),
-                "recent_failed_jobs": failed_jobs_info,
-            }
-        except Exception as e:
-            return {"error": str(e)}
-    
-    @app.post(f"{settings.api_prefix}/queue/cleanup-failed", tags=["system"])
-    async def cleanup_failed_jobs():
-        """실패한 작업들을 정리합니다."""
-        try:
-            from rq import Queue
-            from rq.registry import FailedJobRegistry
-            from .core.redis import get_redis_connection
-            from .worker.queue import QUEUE_NAME
-            
-            redis = get_redis_connection()
-            queue = Queue(QUEUE_NAME, connection=redis)
-            failed_registry = FailedJobRegistry(queue=queue)
-            
-            failed_job_ids = failed_registry.get_job_ids()
-            cleaned_count = 0
-            
-            for job_id in failed_job_ids:
-                try:
-                    job = queue.fetch_job(job_id)
-                    if job:
-                        job.delete()
-                        cleaned_count += 1
-                except Exception:
-                    pass
-            
-            return {
-                "message": f"{cleaned_count} failed jobs cleaned up.",
-                "cleaned_count": cleaned_count,
-            }
-        except Exception as e:
-            return {"error": str(e)}
-    
     @app.post(f"{settings.api_prefix}/queue/requeue-llm", tags=["system"])
     async def requeue_llm_jobs():
         """SUMMARIZING 또는 SUMMARY_FAILED 상태의 콘텐츠를 LLM 큐에 재등록합니다."""
@@ -241,45 +136,6 @@ def create_app() -> FastAPI:
             }
         except Exception as e:
             logger.exception("Failed to requeue LLM jobs")
-            return {"error": str(e)}
-    
-    @app.get(f"{settings.api_prefix}/queue/llm-status", tags=["system"])
-    async def llm_queue_status():
-        """LLM 큐 상태 확인."""
-        try:
-            from rq import Queue
-            from rq.registry import FailedJobRegistry
-            from .core.redis import get_redis_connection
-            from .worker.llm_queue import LLM_QUEUE_NAME
-            
-            redis = get_redis_connection()
-            queue = Queue(LLM_QUEUE_NAME, connection=redis)
-            failed_registry = FailedJobRegistry(queue=queue)
-            
-            # 실패한 작업의 에러 메시지 확인 (최근 5개)
-            failed_jobs_info = []
-            failed_job_ids = failed_registry.get_job_ids(0, 4)  # 최근 5개
-            for job_id in failed_job_ids:
-                try:
-                    job = queue.fetch_job(job_id)
-                    if job:
-                        failed_jobs_info.append({
-                            "job_id": job_id,
-                            "error": str(job.exc_info) if job.exc_info else "Unknown error",
-                            "ended_at": job.ended_at.isoformat() if job.ended_at else None,
-                        })
-                except Exception:
-                    pass
-            
-            return {
-                "queue_name": LLM_QUEUE_NAME,
-                "queued_jobs": len(queue),
-                "started_jobs": len(queue.started_job_registry),
-                "finished_jobs": len(queue.finished_job_registry),
-                "failed_jobs": len(queue.failed_job_registry),
-                "recent_failed_jobs": failed_jobs_info,
-            }
-        except Exception as e:
             return {"error": str(e)}
 
     return app
