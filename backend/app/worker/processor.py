@@ -34,6 +34,8 @@ def process_transcription_job(
     model_size: str,
     processing_mode: str,
     num_asr_chunks: int,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
 ) -> None:
     """RQ 워커가 호출하는 진입점."""
     safe_print(f"[Worker] ========================================")
@@ -41,8 +43,11 @@ def process_transcription_job(
     safe_print(f"[Worker] File: {original_filename}")
     safe_print(f"[Worker] Storage key: {storage_key}")
     safe_print(f"[Worker] Model: {model_size}, Mode: {processing_mode}")
+    if min_speakers is not None or max_speakers is not None:
+        safe_print(f"[Worker] Speaker range: min={min_speakers}, max={max_speakers}")
     safe_print(f"[Worker] ========================================")
-    logger.info("Job started: content_id={}, file={}, key={}", content_id, original_filename, storage_key)
+    logger.info("Job started: content_id={}, file={}, key={}, min_speakers={}, max_speakers={}", 
+               content_id, original_filename, storage_key, min_speakers, max_speakers)
     
     # Windows에서는 매 작업마다 새로운 이벤트 루프를 생성 (이벤트 루프 닫힘 문제 방지)
     # asyncpg는 Windows에서 ProactorEventLoop를 사용해야 함
@@ -117,6 +122,8 @@ def process_transcription_job(
                 model_size=model_size,
                 processing_mode=processing_mode,
                 num_asr_chunks=num_asr_chunks,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
             )
         )
         safe_print(f"[Worker] OK Job completed: content_id={content_id}")
@@ -188,6 +195,8 @@ async def _process_job(
     model_size: str,
     processing_mode: str,
     num_asr_chunks: int,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
 ) -> None:
     safe_print(f"[Worker] [1/5] Updating status to PROCESSING...")
     logger.info("Processing job content_id={} key={}", content_id, storage_key)
@@ -266,6 +275,8 @@ async def _process_job(
                 processing_mode=processing_mode,
                 num_asr_chunks=num_asr_chunks,
                 project_root=project_root,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
             ),
         )
         safe_print(f"[Worker] [5/5] ASR pipeline completed!")

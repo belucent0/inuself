@@ -17,20 +17,28 @@ def process_asr_task(
     model_size: str,
     processing_mode: str,
     num_asr_chunks: int,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
+    **kwargs
 ):
     """
     ASR 작업 처리 Celery 태스크.
     
     기존 RQ의 process_transcription_job을 재사용합니다.
+    
+    Args:
+        **kwargs: 호환성을 위한 추가 인자 (무시됨)
     """
     try:
         # Lazy import: API 서버에서는 torch가 없으므로 실행 시점에만 import
         from .processor import process_transcription_job
         
         logger.info(
-            "[Celery ASR] Starting task: content_id={}, task_id={}",
+            "[Celery ASR] Starting task: content_id={}, task_id={}, min_speakers={}, max_speakers={}",
             content_id,
             self.request.id,
+            min_speakers,
+            max_speakers,
         )
         
         # 기존 RQ 프로세서 재사용
@@ -41,6 +49,8 @@ def process_asr_task(
             model_size=model_size,
             processing_mode=processing_mode,
             num_asr_chunks=num_asr_chunks,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
         )
         
         logger.info("[Celery ASR] Task completed: content_id={}", content_id)
