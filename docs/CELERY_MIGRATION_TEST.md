@@ -90,3 +90,5 @@ poetry run celery -A app.worker.celery_app flower
 
 
 
+
+
