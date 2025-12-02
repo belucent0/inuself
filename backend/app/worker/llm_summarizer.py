@@ -198,6 +198,9 @@ def _summarize_chunk_with_llama_cpp(chunk: str, chunk_index: int, total_chunks: 
                 llama_logger.setLevel(logging.ERROR)  # WARNING 이상만 억제
                 
                 try:
+                    import time
+                    load_start = time.time()
+                    logger.info("LLM 모델 인스턴스 생성 시작...")
                     llama = Llama(
                         model_path=config.model_path,
                         n_ctx=config.context_length,
@@ -208,7 +211,8 @@ def _summarize_chunk_with_llama_cpp(chunk: str, chunk_index: int, total_chunks: 
                         n_gpu_layers=n_gpu_layers,  # Vulkan GPU 가속 사용
                         verbose=False,  # chat template 경고 억제
                     )
-                    logger.info("LLM 모델 로드 완료: n_ctx=%d", config.context_length)
+                    load_elapsed = time.time() - load_start
+                    logger.info("LLM 모델 로드 완료: n_ctx=%d, 로딩 시간=%.2f초", config.context_length, load_elapsed)
                     return llama
                 finally:
                     # 로거 레벨 복원
@@ -295,6 +299,8 @@ def _summarize_chunk_with_llama_cpp(chunk: str, chunk_index: int, total_chunks: 
         original_level = llama_logger.level
         llama_logger.setLevel(logging.ERROR)
         try:
+            logger.info("청크 %d/%d 요약 시작: 프롬프트 길이=%d chars, max_tokens=%d", 
+                       chunk_index, total_chunks, len(prompt), cfg.max_tokens)
             response = llama.create_completion(
                 prompt=prompt,
                 max_tokens=cfg.max_tokens,
@@ -303,6 +309,7 @@ def _summarize_chunk_with_llama_cpp(chunk: str, chunk_index: int, total_chunks: 
                 stream=False,
                 echo=False,
             )
+            logger.info("청크 %d/%d create_completion 완료", chunk_index, total_chunks)
         finally:
             llama_logger.setLevel(original_level)
         
