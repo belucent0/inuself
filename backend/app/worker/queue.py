@@ -23,6 +23,8 @@ def enqueue_transcription_job(
     model_size: str,
     processing_mode: str,
     num_asr_chunks: int,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
 ) -> None:
     """작업을 큐에 등록."""
     try:
@@ -42,6 +44,8 @@ def enqueue_transcription_job(
             model_size=model_size,
             processing_mode=processing_mode,
             num_asr_chunks=num_asr_chunks,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
         )
         
         # 등록 후 큐 크기

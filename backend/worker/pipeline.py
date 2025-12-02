@@ -93,6 +93,8 @@ def run_asr_diarization_pipeline(
     processing_mode: str = "case4",
     num_asr_chunks: int = 2,
     project_root: Path | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
 ) -> PipelineResult:
     """
     ASR + 화자분리 파이프라인 실행.
@@ -103,6 +105,8 @@ def run_asr_diarization_pipeline(
         processing_mode: 처리 모드 ("case1", "case2", "case3", "case4")
         num_asr_chunks: ASR 병렬 조각 수
         project_root: 프로젝트 루트 경로 (모델 경로 찾기용)
+        min_speakers: 최소 화자 수 (선택사항)
+        max_speakers: 최대 화자 수 (선택사항)
     
     Returns:
         PipelineResult
@@ -176,6 +180,8 @@ def run_asr_diarization_pipeline(
             use_chunking=use_chunking,
             chunk_duration_seconds=chunk_duration_minutes * 60,
             chunk_overlap_seconds=chunk_overlap_seconds,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
         )
     else:
         raise ValueError(f"Unsupported processing mode: {processing_mode}")
@@ -193,6 +199,8 @@ def _run_case4_parallel_full_asr(
     use_chunking: bool = False,
     chunk_duration_seconds: float = 1800.0,  # 30분 기본값
     chunk_overlap_seconds: float = 30.0,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
 ) -> PipelineResult:
     """Case 4: 화자분리와 ASR(전체 파일 또는 청킹) 병렬 처리."""
     print(f"\n{'='*60}")
@@ -217,6 +225,8 @@ def _run_case4_parallel_full_asr(
             audio_duration=audio_duration,
             return_embeddings=True,  # 임베딩 추출 활성화
             return_pipeline=True,  # pipeline 객체도 반환 (시간대별 임베딩 추출용)
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
         )
         
         # ASR 작업 제출 (전체 파일 또는 청킹)
@@ -237,9 +247,15 @@ def _run_case4_parallel_full_asr(
                 project_root=project_root,
             )
         
-        # 두 작업 모두 완료 대기
+        # 두 작업 모두 완료 대기 (타임아웃: 30분)
         print(f"[Parallel] Waiting for both Diarization and ASR to complete...")
-        diarization_result = diarization_future.result()
+        try:
+            # 화자 분리 작업에 타임아웃 설정 (30분)
+            diarization_timeout = 30 * 60  # 30분
+            diarization_result = diarization_future.result(timeout=diarization_timeout)
+        except TimeoutError:
+            print(f"[Parallel] ERROR: Diarization task timed out after {diarization_timeout/60:.1f} minutes")
+            raise RuntimeError(f"Diarization task timed out after {diarization_timeout/60:.1f} minutes. The task may be stuck.")
         # return_embeddings=True, return_pipeline=True로 변경했으므로 결과 구조 확인
         if isinstance(diarization_result, tuple) and len(diarization_result) == 5:
             diarization, diarization_load_time, diarization_time, embeddings_dict, diarization_pipeline = diarization_result
@@ -283,12 +299,28 @@ def _run_case4_parallel_full_asr(
             "waveform": torch.from_numpy(waveform).unsqueeze(0).to(device),
             "sample_rate": sample_rate
         }
-        segment_embeddings = extract_segment_embeddings(
-            diarization_pipeline,
-            audio_data_for_embeddings,
-            diarization,
-            min_segment_duration=0.5,  # 최소 0.5초 세그먼트만 추출
-        )
+        # 세그먼트 임베딩 추출 (세그먼트 수가 너무 많으면 건너뛰기)
+        try:
+            # 세그먼트가 너무 많으면 (1000개 이상) 임베딩 추출 건너뛰기
+            # 각 세그먼트마다 GPU 연산이 필요하므로 시간이 오래 걸릴 수 있음
+            segment_count = len(list(diarization.itertracks(yield_label=True)))
+            if segment_count > 1000:
+                print(f"[Embeddings] Warning: Too many segments ({segment_count}), skipping segment embeddings extraction to avoid timeout")
+                print(f"[Embeddings] Consider using speaker embeddings instead for large files")
+                segment_embeddings = None
+            else:
+                print(f"[Embeddings] Extracting embeddings for {segment_count} segments...")
+                segment_embeddings = extract_segment_embeddings(
+                    diarization_pipeline,
+                    audio_data_for_embeddings,
+                    diarization,
+                    min_segment_duration=0.5,  # 최소 0.5초 세그먼트만 추출
+                )
+        except Exception as e:
+            print(f"[Embeddings] ERROR: Segment embeddings extraction failed: {e}")
+            import traceback
+            traceback.print_exc()
+            segment_embeddings = None
         if segment_embeddings:
             print(f"[Embeddings] Successfully extracted {len(segment_embeddings)} segment embeddings")
         else:
@@ -298,10 +330,12 @@ def _run_case4_parallel_full_asr(
     
     # 화자 정보 병합
     print(f"\n[Merging] Combining ASR and diarization results...")
+    print(f"[Merging] Splitting overlapping speech segments...")
     merged_segments = merge_segments_with_speakers(
         asr_result.get("segments", []),
         diarization,
         embeddings_dict=embeddings_dict,
+        split_overlaps=True,  # 겹치는 발화 구간을 별도 세그먼트로 분리
     )
     
     # 화자별 통계

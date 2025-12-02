@@ -65,7 +65,12 @@ class ContentService:
         detail.media_url = get_public_media_url(content.object_key)
         return detail
 
-    async def upload_and_enqueue(self, file: UploadFile) -> UploadResponse:
+    async def upload_and_enqueue(
+        self, 
+        file: UploadFile,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None
+    ) -> UploadResponse:
         logger.info("[Upload] 파일 업로드 시작: filename=%s", file.filename)
         print(f"[Upload] [1/4] 파일 업로드 시작: {file.filename}")
         
@@ -125,6 +130,8 @@ class ContentService:
                 model_size=self.settings.whisper_model_default,
                 processing_mode="case4",
                 num_asr_chunks=self.settings.max_workers,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
             )
             job_id = await loop.run_in_executor(None, enqueue_func)
             logger.info("[Upload] 큐에 작업 등록 성공: content_id=%s, job_id=%s", content.id, job_id)
@@ -210,13 +217,21 @@ class ContentService:
             except Exception as exc:
                 logger.warning("Failed to delete file from storage: %s, error: %s", object_key, exc)
 
-    async def retry_processing(self, content_id: int, retry_type: str) -> dict:
+    async def retry_processing(
+        self, 
+        content_id: int, 
+        retry_type: str,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None
+    ) -> dict:
         """
         실패한 콘텐츠를 재처리합니다.
         
         Args:
             content_id: 콘텐츠 ID
             retry_type: "asr" 또는 "summary"
+            min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
+            max_speakers: 최대 화자 수 (선택사항, ASR 재처리 시에만 사용)
         
         Returns:
             {"success": True, "message": "...", "job_id": "..."}
@@ -228,15 +243,24 @@ class ContentService:
         retry_type = retry_type.lower()
         
         if retry_type == "asr":
-            # PROCESSING 상태에서 멈춘 경우도 재시도 가능
-            if content.status not in [ContentStatus.ASR_FAILED, ContentStatus.PROCESSING]:
+            # PROCESSING, QUEUED 상태에서 멈춘 경우도 재시도 가능
+            if content.status not in [ContentStatus.ASR_FAILED, ContentStatus.PROCESSING, ContentStatus.QUEUED]:
                 raise ValueError(f"Cannot retry ASR for content with status: {content.status.value}")
+            
+            # 화자수 범위 검증
+            if min_speakers is not None and max_speakers is not None and min_speakers > max_speakers:
+                raise ValueError("min_speakers must be less than or equal to max_speakers")
             
             # 상태를 QUEUED로 변경
             await self.repo.update_content_status(content_id, ContentStatus.QUEUED)
+            log_data = {"event": "manual_retry", "type": "asr"}
+            if min_speakers is not None:
+                log_data["min_speakers"] = min_speakers
+            if max_speakers is not None:
+                log_data["max_speakers"] = max_speakers
             await self.repo.add_log(
                 content_id=content_id,
-                log={"event": "manual_retry", "type": "asr"},
+                log=log_data,
                 message="Manual ASR retry requested by user",
             )
             await self.session.commit()
@@ -255,10 +279,13 @@ class ContentService:
                 model_size=self.settings.whisper_model_default,
                 processing_mode="case4",
                 num_asr_chunks=self.settings.max_workers,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
             )
             job_id = await loop.run_in_executor(None, enqueue_func)
             
-            logger.info("Manual ASR retry enqueued: content_id=%s, job_id=%s", content_id, job_id)
+            logger.info("Manual ASR retry enqueued: content_id=%s, job_id=%s, min_speakers=%s, max_speakers=%s", 
+                       content_id, job_id, min_speakers, max_speakers)
             return {"success": True, "message": "ASR reprocessing started", "job_id": job_id}
         
         elif retry_type == "summary":

@@ -39,14 +39,20 @@ async def get_content(content_id: int, service: ContentService = Depends(get_ser
 
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload_content(file: UploadFile, service: ContentService = Depends(get_service)):
+async def upload_content(
+    file: UploadFile,
+    min_speakers: int | None = Query(None, ge=1, description="최소 화자 수 (선택사항)"),
+    max_speakers: int | None = Query(None, ge=1, description="최대 화자 수 (선택사항)"),
+    service: ContentService = Depends(get_service)
+):
     from ..core.logging import logger
     
-    logger.info("[Upload] File upload request received: filename={}, content_type={}", file.filename, file.content_type)
-    print(f"[Upload] 파일 업로드 요청: {file.filename} ({file.content_type})")
+    logger.info("[Upload] File upload request received: filename={}, content_type={}, min_speakers={}, max_speakers={}", 
+               file.filename, file.content_type, min_speakers, max_speakers)
+    print(f"[Upload] 파일 업로드 요청: {file.filename} ({file.content_type}), min_speakers={min_speakers}, max_speakers={max_speakers}")
     
     try:
-        result = await service.upload_and_enqueue(file)
+        result = await service.upload_and_enqueue(file, min_speakers=min_speakers, max_speakers=max_speakers)
         logger.info("[Upload] File upload successful: content_id={}, filename={}", result.content_id, file.filename)
         print(f"[Upload] OK 파일 업로드 완료: content_id={result.content_id}, filename={file.filename}")
         return result
@@ -99,6 +105,8 @@ async def bulk_delete_contents(
 async def retry_processing(
     content_id: int,
     type: str = Query(..., description="재처리 타입: 'asr' (ASR 재처리) 또는 'summary' (LLM 요약 재처리)"),
+    min_speakers: int | None = Query(None, ge=1, description="최소 화자 수 (ASR 재처리 시에만 사용)"),
+    max_speakers: int | None = Query(None, ge=1, description="최대 화자 수 (ASR 재처리 시에만 사용)"),
     service: ContentService = Depends(get_service)
 ):
     """
@@ -106,9 +114,11 @@ async def retry_processing(
     
     Query Parameters:
         type: "asr" (ASR 재처리) 또는 "summary" (LLM 요약 재처리)
+        min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
+        max_speakers: 최대 화자 수 (선택사항, ASR 재처리 시에만 사용)
     """
     try:
-        result = await service.retry_processing(content_id, type)
+        result = await service.retry_processing(content_id, type, min_speakers=min_speakers, max_speakers=max_speakers)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

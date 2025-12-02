@@ -16,6 +16,8 @@ class TaskQueueAdapter(ABC):
         model_size: str,
         processing_mode: str,
         num_asr_chunks: int,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
     ) -> str:
         """ASR 작업을 큐에 등록하고 작업 ID를 반환."""
         pass
@@ -42,6 +44,8 @@ class RQAdapter(TaskQueueAdapter):
         model_size: str,
         processing_mode: str,
         num_asr_chunks: int,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
     ) -> str:
         from .queue import enqueue_transcription_job
         
@@ -53,6 +57,8 @@ class RQAdapter(TaskQueueAdapter):
             model_size=model_size,
             processing_mode=processing_mode,
             num_asr_chunks=num_asr_chunks,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
         )
         return f"rq_{content_id}"  # RQ는 job_id를 별도 추적 안 함
     
@@ -78,6 +84,8 @@ class CeleryAdapter(TaskQueueAdapter):
         model_size: str,
         processing_mode: str,
         num_asr_chunks: int,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
     ) -> str:
         # Lazy import: celery_tasks가 processor를 import하므로 실행 시점에만 로드
         from .celery_tasks import process_asr_task
@@ -89,6 +97,8 @@ class CeleryAdapter(TaskQueueAdapter):
             model_size=model_size,
             processing_mode=processing_mode,
             num_asr_chunks=num_asr_chunks,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
         )
         return result.id
     

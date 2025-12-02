@@ -36,6 +36,7 @@ class ContentBaseSchema(BaseModel):
     summary_md: str | None = None
     title: str | None = None
     created_at: datetime
+    updated_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -73,4 +74,16 @@ class ContentListResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class ReclusterSpeakersRequest(BaseModel):
+    num_speakers: int | None = Field(None, ge=1, description="목표 화자 수 (None이면 자동 결정)")
+    similarity_threshold: float = Field(0.7, ge=0.0, le=1.0, description="코사인 유사도 임계값")
+
+
+class ReclusterSpeakersResponse(BaseModel):
+    message: str
+    num_speakers: int
+    speaker_labels: list[str]
+    updated_segments_count: int
 
