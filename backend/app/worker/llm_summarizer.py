@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from ..core.config import get_settings
-from .lmstudio_client import LMStudioClientError, request_chat_completion
+from .llamacpp_server_client import LlamaServerClientError, request_chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,9 @@ def summarize_transcription(text: str) -> tuple[str, str]:
     # LLM 호출
     if settings.llm_provider == "llama_cpp":
         raw_response = _summarize_with_llama_cpp(normalized, settings)
-    elif settings.llm_provider == "lmstudio":
+    elif settings.llm_provider in ("lmstudio", "llamacpp_server"):
+        # "lmstudio"는 deprecated이지만 하위 호환성 유지
+        # "llamacpp_server"는 llama.cpp 서버를 명시적으로 사용
         raw_response = _summarize_with_lmstudio(normalized, settings)
     else:
         raise ValueError(f"지원하지 않는 LLM provider: {settings.llm_provider}")
@@ -218,16 +220,40 @@ def _summarize_chunk_with_llama_cpp(chunk: str, chunk_index: int, total_chunks: 
                     # 로거 레벨 복원
                     llama_logger.setLevel(original_level)
         except Exception as e:
+            # 원본 예외의 상세 정보를 포함
+            import traceback
+            error_details = traceback.format_exc()
+            error_type = type(e).__name__
+            
+            # Qwen3-VL 모델 호환성 체크
+            model_name = str(config.model_path).lower()
+            is_vision_model = "vl" in model_name or "vision" in model_name
+            
             error_msg = (
-                f"LLM model loading failed: {e}\n"
-                f"Possible causes:\n"
+                f"LLM model loading failed: {error_type}: {e}\n"
+                f"Model path: {config.model_path}\n"
+                f"Error type: {error_type}\n"
+            )
+            
+            if is_vision_model:
+                error_msg += (
+                    f"\n⚠️ WARNING: This appears to be a Vision-Language model (Qwen3-VL).\n"
+                    f"llama-cpp-python may not fully support Vision-Language models.\n"
+                    f"Consider using a text-only Qwen model instead (e.g., Qwen2.5-32B-Instruct).\n"
+                )
+            
+            error_msg += (
+                f"\nPossible causes:\n"
                 f"1. Model file is corrupted or incompatible format\n"
                 f"2. llama-cpp-python build does not properly support Vulkan\n"
                 f"3. Model format is incompatible with llama-cpp-python version\n"
-                f"Solutions:\n"
+                f"4. Vision-Language models may not be supported by llama-cpp-python\n"
+                f"\nSolutions:\n"
+                f"- Try using a text-only model (not Vision-Language)\n"
                 f"- Re-download the model file or\n"
                 f"- Rebuild llama-cpp-python with Vulkan support:\n"
-                f"  CMAKE_ARGS='-DGGML_VULKAN=ON' pip install --force-reinstall llama-cpp-python"
+                f"  CMAKE_ARGS='-DGGML_VULKAN=ON' pip install --force-reinstall llama-cpp-python\n"
+                f"\nFull traceback:\n{error_details}"
             )
             logger.error(error_msg)
             raise RuntimeError(error_msg) from e
@@ -501,41 +527,43 @@ def _split_text_into_chunks(text: str, max_tokens_per_chunk: int = 10000, overla
 
 
 def _summarize_chunk_with_lmstudio(chunk: str, chunk_index: int, total_chunks: int, settings) -> str:
-    """단일 청크를 LM Studio로 요약합니다."""
+    """단일 청크를 OpenAI 호환 API 서버(llama.cpp 서버, LM Studio 등)로 요약합니다."""
     prompt = DEFAULT_SUMMARY_PROMPT.format(transcript=chunk)
     system_prompt = settings.llm_system_prompt.strip()
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": prompt},
-    ]
+    
+    # system_prompt가 비어있지 않을 때만 system 메시지 추가
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
 
     try:
         raw_response = request_chat_completion(settings=settings, messages=messages, stream=False)
         raw_response = raw_response.strip()
         if not raw_response:
-            raise RuntimeError("LM Studio summarization result is empty.")
+            raise RuntimeError("LLM API summarization result is empty.")
         logger.info("Chunk %d/%d response completed (length: %d chars)", chunk_index, total_chunks, len(raw_response))
         return raw_response
-    except LMStudioClientError as exc:
+    except LlamaServerClientError as exc:
         error_str = str(exc)
         # 컨텍스트 길이 초과 에러는 재시도하지 않도록 특별 처리
         if "context" in error_str.lower() or "token" in error_str.lower() or "overflow" in error_str.lower():
-            error_msg = f"LM Studio context length exceeded (chunk {chunk_index}/{total_chunks}): {exc}"
+            error_msg = f"LLM API context length exceeded (chunk {chunk_index}/{total_chunks}): {exc}"
             logger.error(error_msg)
             raise RuntimeError(error_msg) from exc
-        error_msg = f"LM Studio summarization failed (chunk {chunk_index}/{total_chunks}): {exc}"
+        error_msg = f"LLM API summarization failed (chunk {chunk_index}/{total_chunks}): {exc}"
         logger.error(error_msg)
         raise RuntimeError(error_msg) from exc
 
 
 def _summarize_with_lmstudio(text: str, settings) -> str:
     """
-    LM Studio Chat Completions API를 통한 요약.
+    OpenAI 호환 API 서버(llama.cpp 서버, LM Studio 등) Chat Completions API를 통한 요약.
     긴 텍스트는 청킹하여 처리합니다.
     """
     # 실제 사용 가능한 컨텍스트 길이 계산
     # 시스템 프롬프트 + 사용자 프롬프트 템플릿 + 응답 공간
-    # LM Studio에서 실제 로드된 컨텍스트 길이를 고려
+    # LLM API 서버에서 실제 로드된 컨텍스트 길이를 고려
     # 프롬프트 템플릿 오버헤드: 시스템 프롬프트 + 프롬프트 템플릿 (약 200-300 토큰)
     # 안전 마진: max_tokens + 추가 오버헤드 (약 2000 토큰)
     # 실제 모델 컨텍스트가 15016 토큰이므로 더 보수적으로 계산
@@ -654,7 +682,7 @@ def _summarize_with_lmstudio(text: str, settings) -> str:
         raw_response = request_chat_completion(settings=settings, messages=messages, stream=False)
         raw_response = raw_response.strip()
         if not raw_response:
-            raise RuntimeError("LM Studio merge summarization result is empty.")
+            raise RuntimeError("LLM API merge summarization result is empty.")
         
         logger.info("Chunked summarization completed (final response length: %d chars)", len(raw_response))
         return raw_response
@@ -691,7 +719,7 @@ def extract_title(summary_md: str, transcript_text: str) -> str:
 중요:
 - 반드시 한글로만 작성하세요
 - 회의의 핵심 주제를 반영하는 간결한 제목
-- 50자 이내로 작성
+- 30자 이내로 작성
 - 제목만 출력하고 다른 설명, 영어, 프롬프트 지시사항은 절대 포함하지 마세요
 - 마크다운 형식이나 따옴표 없이 순수 한글 텍스트로만 출력
 
@@ -705,7 +733,9 @@ def extract_title(summary_md: str, transcript_text: str) -> str:
     try:
         if settings.llm_provider == "llama_cpp":
             title = _extract_title_with_llama_cpp(prompt, settings)
-        elif settings.llm_provider == "lmstudio":
+        elif settings.llm_provider in ("lmstudio", "llamacpp_server"):
+            # "lmstudio"는 deprecated이지만 하위 호환성 유지
+            # "llamacpp_server"는 llama.cpp 서버를 명시적으로 사용
             title = _extract_title_with_lmstudio(prompt, settings)
         else:
             logger.warning("Title extraction failed with unsupported LLM provider: %s", settings.llm_provider)
@@ -837,7 +867,28 @@ def _extract_title_with_llama_cpp(prompt: str, settings) -> str:
                     # 로거 레벨 복원
                     llama_logger.setLevel(original_level)
         except Exception as e:
-            error_msg = f"Failed to load LLM model for title extraction: {e}"
+            # 원본 예외의 상세 정보를 포함
+            import traceback
+            error_details = traceback.format_exc()
+            error_type = type(e).__name__
+            
+            # Qwen3-VL 모델 호환성 체크
+            model_name = str(config.model_path).lower()
+            is_vision_model = "vl" in model_name or "vision" in model_name
+            
+            error_msg = (
+                f"Failed to load LLM model for title extraction: {error_type}: {e}\n"
+                f"Model path: {config.model_path}\n"
+            )
+            
+            if is_vision_model:
+                error_msg += (
+                    f"\n⚠️ WARNING: This appears to be a Vision-Language model (Qwen3-VL).\n"
+                    f"llama-cpp-python may not fully support Vision-Language models.\n"
+                    f"Consider using a text-only Qwen model instead (e.g., Qwen2.5-32B-Instruct).\n"
+                )
+            
+            error_msg += f"\nFull traceback:\n{error_details}"
             logger.error(error_msg)
             raise RuntimeError(error_msg) from e
     
@@ -868,8 +919,8 @@ def _extract_title_with_llama_cpp(prompt: str, settings) -> str:
 
 
 def _extract_title_with_lmstudio(prompt: str, settings) -> str:
-    """LM Studio를 사용한 제목 추출."""
-    from .lmstudio_client import request_chat_completion
+    """OpenAI 호환 API 서버(llama.cpp 서버, LM Studio 등)를 사용한 제목 추출."""
+    from .llamacpp_server_client import request_chat_completion
     
     system_prompt = "당신은 회의록 요약에서 제목을 추출하는 도우미입니다. 한글로만 제목을 출력하세요. 다른 설명이나 영어는 절대 포함하지 마세요."
     messages = [

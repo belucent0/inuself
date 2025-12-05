@@ -214,9 +214,9 @@ LM Studio는 Windows에서 실행되는 LLM 서버입니다.
 2. 모델을 로드하고 Local Server를 시작합니다 (포트 1234)
 3. `.env` 파일 설정:
    ```env
-   LLM_PROVIDER=lmstudio
-   LMSTUDIO_BASE_URL=http://localhost:1234
-   LMSTUDIO_MODEL_NAME=gpt-oss-20b
+   LLM_PROVIDER=llamacpp_server
+   LLM_BASE_URL=http://localhost:1234
+   LLM_MODEL_NAME=gpt-oss-20b
    ```
 
 #### 옵션 B: llama-cpp-python 직접 사용
@@ -271,12 +271,12 @@ LM Studio는 Windows에서 실행되는 LLM 서버입니다.
 | `LLM_MAX_TOKENS` | `1024` | 최대 토큰 수 |
 | `LLM_N_THREADS` | `8` | CPU 스레드 수 (llama_cpp 사용 시) |
 
-#### LM Studio 전용 설정
+#### LLM API 서버 설정 (llama.cpp 서버, LM Studio 등)
 
 | 설정 | 기본값 | 설명 |
 | --- | --- | --- |
-| `LMSTUDIO_BASE_URL` | `http://localhost:1234` | LM Studio API 엔드포인트 |
-| `LMSTUDIO_MODEL_NAME` | `gpt-oss-20b` | LM Studio에서 사용할 모델 이름 |
+| `LLM_BASE_URL` | `http://localhost:8080` | LLM API 서버 엔드포인트 (llama.cpp 서버, LM Studio 등) |
+| `LLM_MODEL_NAME` | `Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf` | LLM API 서버에서 사용할 모델 이름 |
 
 #### llama_cpp 전용 설정
 
