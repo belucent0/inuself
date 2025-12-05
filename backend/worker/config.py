@@ -46,11 +46,30 @@ def setup_rocm_environment() -> None:
             os.environ['MIOPEN_DISABLE_CACHE'] = '1'
             os.environ['MIOPEN_DEBUG_DISABLE_FIND_DB'] = '1'
             
-            import torch
-            torch.backends.cudnn.benchmark = True
+            # PyTorch import를 안전하게 처리 (DLL 로드 오류 방지)
+            try:
+                import torch
+                # ROCm이 사용 가능한 경우에만 cudnn 설정 (ROCm은 CUDA 호환 레이어 제공)
+                if torch.cuda.is_available():
+                    try:
+                        # cudnn이 있는 경우에만 설정 (ROCm에서는 miopen 사용)
+                        if hasattr(torch.backends, 'cudnn'):
+                            torch.backends.cudnn.benchmark = True
+                    except (AttributeError, OSError, RuntimeError) as e:
+                        # cudnn 접근 실패 시 경고만 출력하고 계속 진행
+                        import warnings
+                        warnings.warn(f"Failed to set cudnn.benchmark: {e}")
+            except (OSError, ImportError, RuntimeError) as torch_error:
+                # PyTorch import 자체가 실패한 경우 (DLL 로드 실패 등)
+                import warnings
+                warnings.warn(f"PyTorch import failed during ROCm setup: {torch_error}. GPU features may not work.")
         except ImportError:
             # ROCm SDK가 없으면 CPU 모드로 진행
             pass
+        except Exception as e:
+            # 기타 오류 (DLL 로드 실패 등) 발생 시에도 계속 진행
+            import warnings
+            warnings.warn(f"ROCm environment setup failed: {e}, continuing with available mode")
 
 
 def get_whispercpp_model_path(model_size: str, project_root: Optional[Path] = None) -> str:

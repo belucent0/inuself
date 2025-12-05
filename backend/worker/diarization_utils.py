@@ -7,8 +7,7 @@ from typing import Any
 from . import rocm_env as _rocm_env  # noqa: F401  # sys.path side-effect
 
 import numpy as np
-import torch
-from pyannote.audio import Pipeline as DiarizationPipeline
+# PyTorch와 pyannote.audio는 lazy import로 처리 (torchaudio DLL 로드 오류 방지)
 
 # logger import를 위한 경로 조정
 _backend_dir = Path(__file__).parent.parent
@@ -70,7 +69,7 @@ def run_diarization(
     Args:
         waveform: 오디오 웨이브폼 데이터 (numpy array)
         sample_rate: 샘플레이트
-        device: 디바이스 ("cuda" 또는 "cpu")
+        device: 디바이스 ("cuda" 또는 "cpu", ROCm 환경에서는 "cuda" 사용)
         audio_duration: 오디오 길이 (초), 로그용
         return_embeddings: embedding 벡터도 반환할지 여부
         return_pipeline: pipeline 객체도 반환할지 여부 (시간대별 임베딩 추출용)
@@ -81,6 +80,25 @@ def run_diarization(
           {speaker_label: embedding_vector} 형태
         - pipeline: return_pipeline=True일 때만 제공
     """
+    # Lazy import: torchaudio DLL 로드 오류 방지
+    try:
+        import torch
+    except (OSError, ImportError, RuntimeError) as e:
+        raise RuntimeError(
+            f"Failed to import PyTorch: {e}\n"
+            "This may be due to missing DLLs or incompatible PyTorch installation.\n"
+            "Please ensure PyTorch with ROCm support is properly installed."
+        ) from e
+    
+    try:
+        from pyannote.audio import Pipeline as DiarizationPipeline
+    except (OSError, ImportError, RuntimeError) as e:
+        raise RuntimeError(
+            f"Failed to import pyannote.audio: {e}\n"
+            "This may be due to torchaudio DLL loading issues.\n"
+            "Please ensure torchaudio with ROCm support is properly installed."
+        ) from e
+    
     if audio_duration:
         logger.info("[Diarization] Starting speaker diarization for entire audio file...")
         logger.info(f"[Diarization] Processing time range: 0.00s - {audio_duration:.2f}s ({audio_duration:.2f}s)")
@@ -276,7 +294,7 @@ def extract_segment_embeddings(
                         # 이미 (batch, channels, samples) 형태
                         segment_waveform_input = segment_waveform
                     
-                    # GPU 메모리 정리 (매 50개 세그먼트마다)
+                    # GPU 메모리 정리 (매 50개 세그먼트마다, ROCm 환경에서도 작동)
                     if idx % 50 == 0 and torch.cuda.is_available():
                         torch.cuda.empty_cache()
                     
