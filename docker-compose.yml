@@ -23,28 +23,28 @@ services:
     #   docker run --rm --network host minio/mc \
     #     alias set local http://127.0.0.1:9000 torchdev torchdev-secret
 
-  minio-bootstrap:
-    image: minio/mc:latest
-    container_name: asr-minio-bootstrap
-    depends_on:
-      minio:
-        condition: service_healthy
-    environment:
-      MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
-    command: ["mb", "--ignore-existing", "local/asr-media"]
-    restart: "no"
+  # minio-bootstrap:
+  #   image: minio/mc:latest
+  #   container_name: asr-minio-bootstrap
+  #   depends_on:
+  #     minio:
+  #       condition: service_healthy
+  #   environment:
+  #     MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
+  #   command: ["mb", "--ignore-existing", "local/asr-media"]
+  #   restart: "no"
 
-  minio-policy-setup:
-    image: minio/mc:latest
-    container_name: asr-minio-policy-setup
-    depends_on:
-      minio-bootstrap:
-        condition: service_completed_successfully
-    environment:
-      MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
-    entrypoint: /bin/sh
-    command: -c "mc anonymous set download local/asr-media"
-    restart: "no"
+  # minio-policy-setup:
+  #   image: minio/mc:latest
+  #   container_name: asr-minio-policy-setup
+  #   depends_on:
+  #     minio-bootstrap:
+  #       condition: service_completed_successfully
+  #   environment:
+  #     MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
+  #   entrypoint: /bin/sh
+  #   command: -c "mc anonymous set download local/asr-media"
+  #   restart: "no"
 
 
   redis:
@@ -63,17 +63,17 @@ services:
       timeout: 5s
       retries: 5
 
-  redis-insight:
-    image: redis/redisinsight:latest
-    container_name: asr-redis-insight
-    depends_on:
-      redis:
-        condition: service_healthy
-    ports:
-      - "5540:5540"
-    volumes:
-      - redis-insight-data:/data
-    restart: unless-stopped
+  # redis-insight:
+  #   image: redis/redisinsight:latest
+  #   container_name: asr-redis-insight
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   ports:
+  #     - "5540:5540"
+  #   volumes:
+  #     - redis-insight-data:/data
+  #   restart: unless-stopped
 
   postgres:
     image: postgres:18.1
@@ -116,8 +116,8 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./backend/data:/app/data
-      # Windows 호스트의 PM2 워커 시작 트리거 파일 공유
-      - ./backend/data:/app/data
+      # 코드 변경사항 실시간 반영 (개발 환경)
+      - ./backend/app:/app/app:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -153,6 +153,11 @@ services:
     container_name: asr-frontend
     ports:
       - "3000:3000"
+    environment:
+      # 서버 사이드에서 사용할 API URL (Docker 내부 네트워크)
+      API_BASE_URL: http://asr-backend:8000/api
+      # 클라이언트 사이드에서 사용할 API URL (브라우저 접근 가능)
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
     depends_on:
       backend:
         condition: service_healthy
