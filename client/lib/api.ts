@@ -1,4 +1,24 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000/api'
+// 서버 사이드(SSR/SSG)와 클라이언트 사이드를 구분
+// 서버 사이드: Docker 내부 네트워크 사용 (asr-backend)
+// 클라이언트 사이드: 브라우저에서 접근 가능한 URL 사용 (nginx 프록시 또는 절대 URL)
+const getApiBase = (): string => {
+  // 서버 사이드인지 확인 (Node.js 환경)
+  if (typeof window === 'undefined') {
+    // 서버 사이드: Docker 내부 네트워크 사용
+    // Next.js standalone 빌드에서는 런타임 환경 변수가 제한적이므로 하드코딩
+    return 'http://asr-backend:8000/api'
+  }
+  // 클라이언트 사이드: 브라우저에서 접근 가능한 URL
+  // 상대 경로를 사용하면 nginx를 통해 프록시됨
+  const clientUrl = process.env.NEXT_PUBLIC_API_BASE_URL
+  if (clientUrl) {
+    return clientUrl
+  }
+  // 기본값: 상대 경로 (nginx 프록시 사용)
+  return '/api'
+}
+
+const API_BASE = getApiBase()
 
 export type SttLog = {
   id: number

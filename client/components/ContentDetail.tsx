@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
 import { ContentDetail as ContentDetailType, retryProcessing, reclusterSpeakers } from '@/lib/api'
+import { formatToKST } from '@/lib/utils'
 
 type Props = {
   content: ContentDetailType
@@ -354,7 +355,7 @@ export default function ContentDetail({ content }: Props) {
             <div key={log.id} className="segment">
               <strong style={{ fontSize: '0.9rem' }}>{log.message || '로그'}</strong>
               <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8rem', overflowX: 'auto', wordBreak: 'break-word' }}>{JSON.stringify(log.log, null, 2)}</pre>
-              <small style={{ fontSize: '0.85rem', color: '#666' }}>{new Date(log.created_at).toLocaleString()}</small>
+              <small style={{ fontSize: '0.85rem', color: '#666' }}>{formatToKST(log.created_at)}</small>
             </div>
         ))}
       </section>
@@ -365,7 +366,7 @@ export default function ContentDetail({ content }: Props) {
             <div key={log.id} className="segment">
               <strong style={{ fontSize: '0.9rem' }}>{log.message || '로그'}</strong>
               <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8rem', overflowX: 'auto', wordBreak: 'break-word' }}>{JSON.stringify(log.log, null, 2)}</pre>
-              <small style={{ fontSize: '0.85rem', color: '#666' }}>{new Date(log.created_at).toLocaleString()}</small>
+              <small style={{ fontSize: '0.85rem', color: '#666' }}>{formatToKST(log.created_at)}</small>
             </div>
           ))
         ) : (

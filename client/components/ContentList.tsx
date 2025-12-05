@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ContentSummary, ContentStatus, deleteContentsBulk, retryProcessing } from '@/lib/api'
+import { formatToKST } from '@/lib/utils'
 
 type PaginationProps = {
   currentPage: number
@@ -232,7 +233,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
                 </span>
                 화자 수: {item.speakers.length || 0} · 재생 길이: {item.duration_seconds.toFixed(1)}초
               </p>
-              <small style={{ fontSize: '0.85rem', color: '#666' }}>{new Date(item.created_at).toLocaleString()}</small>
+              <small style={{ fontSize: '0.85rem', color: '#666' }}>{formatToKST(item.created_at)}</small>
             </Link>
             {item.status === 'ASR_FAILED' && (
               <button
