@@ -153,29 +153,7 @@ cd C:\path\to\llama.cpp\build\bin\Release
 pause
 ```
 
-### Qwen3-VL 모델용 스크립트
-
-`start_qwen3vl_server.bat` 파일 생성:
-
-```batch
-@echo off
-cd C:\path\to\llama.cpp\build\bin\Release
-.\llama-server.exe ^
-  --model C:\timblo\torch-test\models\Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf ^
-  --mmproj C:\timblo\torch-test\models\mmproj-F32.gguf ^
-  --n-gpu-layers 99 ^
-  --host 0.0.0.0 ^
-  --port 8080 ^
-  --ctx-size 8192 ^
-  --threads 8 ^
-  --jinja
-pause
-```
-
-**주의사항:**
-- `C:\path\to\llama.cpp\build\bin\Release` 경로를 실제 llama.cpp 빌드 경로로 변경하세요
-- 모델 파일 경로도 실제 경로로 변경하세요
-- 서버가 실행되면 `http://localhost:8080`에서 OpenAI 호환 API를 제공합니다
+**참고**: 현재 시스템은 `worker-llm`이 요청을 받을 때마다 llama-server를 subprocess로 자동 시작/종료하므로, 수동으로 서버를 실행할 필요가 없습니다. 위 스크립트는 테스트 목적으로만 사용할 수 있습니다.
 
 ## 6. 장단점 비교
 
