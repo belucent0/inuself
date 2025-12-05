@@ -21,7 +21,8 @@ backend_dir = Path(__file__).parent.parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from worker.pipeline import PipelineResult, run_asr_diarization_pipeline
+# worker.pipeline은 lazy import (torchaudio DLL 로드 오류 방지)
+# 함수 내부에서 import하여 사용
 
 settings = get_settings()
 
@@ -277,6 +278,9 @@ async def _process_job(
         # 프로젝트 루트 경로 계산 (backend/app/worker -> backend -> project_root)
         project_root = backend_dir.parent
         
+        # Lazy import: torchaudio DLL 로드 오류 방지
+        from worker.pipeline import PipelineResult, run_asr_diarization_pipeline
+        
         loop = asyncio.get_running_loop()
         result: PipelineResult = await loop.run_in_executor(
             None,
@@ -288,29 +292,16 @@ async def _process_job(
                 project_root=project_root,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
+                content_id=content_id,  # 락 회복을 위해 content_id 전달
             ),
         )
         logger.info("[Worker] [5/5] ASR pipeline completed!")
-        logger.info(f"[Worker] - Number of speakers (from stats): {len(result.speaker_stats)}")
-        logger.info(f"[Worker] - Number of speakers (from diarization): {result.num_speakers}")
+        num_speakers = len(result.speaker_stats)
+        logger.info(f"[Worker] - Number of speakers (from stats): {num_speakers}")
+        # diarization_segments에서 고유 화자 수 계산
+        unique_speakers = set(seg.get("speaker", "UNKNOWN") for seg in result.diarization_segments)
+        logger.info(f"[Worker] - Number of speakers (from diarization): {len(unique_speakers)}")
         logger.info(f"[Worker] - Duration: {result.duration_seconds:.2f} seconds")
-        if result.speaker_embeddings:
-            logger.info(f"[Worker] - Speaker embeddings extracted: {len(result.speaker_embeddings)} speakers")
-            for speaker, embedding in result.speaker_embeddings.items():
-                logger.info(f"[Worker]   - {speaker}: embedding dim={len(embedding)}")
-        else:
-            logger.info("[Worker] - No speaker embeddings extracted")
-        if result.segment_embeddings:
-            logger.info(f"[Worker] - Segment embeddings extracted: {len(result.segment_embeddings)} segments")
-            # 화자별 세그먼트 수 요약
-            speaker_segment_counts = {}
-            for seg_emb in result.segment_embeddings:
-                speaker = seg_emb.get("speaker", "UNKNOWN")
-                speaker_segment_counts[speaker] = speaker_segment_counts.get(speaker, 0) + 1
-            for speaker, count in sorted(speaker_segment_counts.items()):
-                logger.info(f"[Worker]   - {speaker}: {count} segments with embeddings")
-        else:
-            logger.info("[Worker] - No segment embeddings extracted")
     except Exception as exc:
         # 에러 로깅 (한 번만)
         logger.error(f"[Worker] ERROR Error occurred: {exc}")
@@ -377,14 +368,13 @@ async def _process_job(
                 }
             )
     
-    # 임베딩 정보를 transcription에 추가
+    # 화자 정보를 transcription에 추가
+    num_speakers = len(result.speaker_stats)
     if not result.transcription.get("diarization_metadata"):
         result.transcription["diarization_metadata"] = {}
     result.transcription["diarization_metadata"].update({
-        "num_speakers": result.num_speakers,
+        "num_speakers": num_speakers,
         "speaker_labels": sorted(result.speaker_stats.keys()),
-        "speaker_embeddings": result.speaker_embeddings,  # 화자별 embedding 벡터
-        "segment_embeddings": result.segment_embeddings,  # 시간대별 세그먼트 embedding 벡터
     })
 
     logger.info("[Worker] Saving results to database...")
@@ -412,59 +402,17 @@ async def _process_job(
             transcription=result.transcription,
         )
         await repo.update_content_status(content_id, ContentStatus.SUMMARIZING)
-        # 임베딩 정보를 로그에 포함 (전체 임베딩은 크기가 크므로 요약만 포함)
-        embeddings_summary = None
-        if result.speaker_embeddings:
-            embeddings_summary = {
-                speaker: {
-                    "dimension": len(embedding) if isinstance(embedding, list) else 0,
-                    "preview": embedding[:5] if isinstance(embedding, list) and len(embedding) > 0 else [],
-                }
-                for speaker, embedding in result.speaker_embeddings.items()
-            }
-        
-        # 시간대별 세그먼트 임베딩 요약 (로깅용)
-        segment_embeddings_summary = None
-        if result.segment_embeddings:
-            # 화자별로 그룹화하여 요약
-            speaker_segment_info = {}
-            for seg_emb in result.segment_embeddings:
-                speaker = seg_emb.get("speaker", "UNKNOWN")
-                if speaker not in speaker_segment_info:
-                    speaker_segment_info[speaker] = {
-                        "count": 0,
-                        "total_duration": 0.0,
-                        "sample_segments": [],  # 처음 3개만 저장
-                    }
-                speaker_segment_info[speaker]["count"] += 1
-                speaker_segment_info[speaker]["total_duration"] += seg_emb.get("duration", 0.0)
-                # 처음 3개 세그먼트만 저장 (시간 범위와 임베딩 미리보기)
-                if len(speaker_segment_info[speaker]["sample_segments"]) < 3:
-                    embedding = seg_emb.get("embedding", [])
-                    speaker_segment_info[speaker]["sample_segments"].append({
-                        "start": seg_emb.get("start"),
-                        "end": seg_emb.get("end"),
-                        "duration": seg_emb.get("duration"),
-                        "embedding_dim": len(embedding),
-                        "embedding_preview": embedding[:5] if len(embedding) > 0 else [],
-                    })
-            segment_embeddings_summary = speaker_segment_info
         
         await repo.add_log(
             content_id,
             log={
                 "event": "completed",
                 "speaker_stats": result.speaker_stats,
-                "num_speakers": result.num_speakers,
+                "num_speakers": num_speakers,
                 "speaker_labels": sorted(result.speaker_stats.keys()),
-                "embeddings_extracted": result.speaker_embeddings is not None,
-                "embeddings_summary": embeddings_summary,  # 전체 임베딩 대신 요약만 저장
-                "segment_embeddings_extracted": result.segment_embeddings is not None,
-                "num_segment_embeddings": len(result.segment_embeddings) if result.segment_embeddings else 0,
-                "segment_embeddings_summary": segment_embeddings_summary,  # 시간대별 임베딩 요약
                 "logs": result.logs,
             },
-            message=f"ASR processing completed (speakers: {result.num_speakers}, embeddings: {'yes' if result.speaker_embeddings else 'no'}, segment_embeddings: {len(result.segment_embeddings) if result.segment_embeddings else 0})",
+            message=f"ASR processing completed (speakers: {num_speakers})",
         )
         await session.commit()
     finally:

@@ -333,7 +333,8 @@ def run_asr(*, audio_file: str, model_size: str) -> dict[str, Any]:
     if sys.platform == "win32":
         import subprocess as sp
         # CREATE_NEW_PROCESS_GROUP: 프로세스 그룹 생성 (종료 시 자식 프로세스까지 종료 가능)
-        creation_flags = sp.CREATE_NEW_PROCESS_GROUP
+        # CREATE_NO_WINDOW: 콘솔 창 숨기기
+        creation_flags = sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW
     
     # subprocess.Popen을 사용하여 프로세스 핸들 추적
     proc = subprocess.Popen(
