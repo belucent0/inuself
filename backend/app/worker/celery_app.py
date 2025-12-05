@@ -30,6 +30,15 @@ celery_app.conf.update(
     result_expires=3600,  # 결과 1시간 보관
     task_acks_late=True,  # 작업 완료 후 ack
     task_reject_on_worker_lost=True,  # 워커 죽으면 작업 재시도
+    # 큐 라우팅 설정 (태스크 이름을 정확히 지정)
+    task_routes={
+        "process_asr_task": {"queue": "asr"},
+        "process_llm_task": {"queue": "llm"},
+    },
+    # 기본 큐 비활성화 (명시적 큐만 사용)
+    task_default_queue="asr",  # 기본값을 asr로 설정 (하지만 명시적 라우팅 사용)
+    # 큐 자동 생성 활성화
+    task_create_missing_queues=True,
 )
 
 # Windows에서 동작하도록 설정

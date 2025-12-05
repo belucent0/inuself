@@ -50,15 +50,20 @@ class CeleryAdapter(TaskQueueAdapter):
         # Lazy import: celery_tasks가 processor를 import하므로 실행 시점에만 로드
         from .celery_tasks import process_asr_task
         
-        result = process_asr_task.delay(
-            content_id=content_id,
-            storage_key=storage_key,
-            original_filename=original_filename,
-            model_size=model_size,
-            processing_mode=processing_mode,
-            num_asr_chunks=num_asr_chunks,
-            min_speakers=min_speakers,
-            max_speakers=max_speakers,
+        # 큐를 명시적으로 지정하여 작업 전송
+        result = process_asr_task.apply_async(
+            args=(),
+            kwargs={
+                "content_id": content_id,
+                "storage_key": storage_key,
+                "original_filename": original_filename,
+                "model_size": model_size,
+                "processing_mode": processing_mode,
+                "num_asr_chunks": num_asr_chunks,
+                "min_speakers": min_speakers,
+                "max_speakers": max_speakers,
+            },
+            queue="asr",  # 큐를 명시적으로 지정
         )
         return result.id
     
@@ -66,7 +71,12 @@ class CeleryAdapter(TaskQueueAdapter):
         # Lazy import: celery_tasks가 llm_processor를 import하므로 실행 시점에만 로드
         from .celery_tasks import process_llm_task
         
-        result = process_llm_task.delay(content_id=content_id)
+        # 큐를 명시적으로 지정하여 작업 전송
+        result = process_llm_task.apply_async(
+            args=(),
+            kwargs={"content_id": content_id},
+            queue="llm",  # 큐를 명시적으로 지정
+        )
         return result.id
     
     def get_job_status(self, job_id: str) -> str:
