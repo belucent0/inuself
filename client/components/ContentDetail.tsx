@@ -1,7 +1,7 @@
 'use client'
 
 import ReactMarkdown from 'react-markdown'
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
 import { ContentDetail as ContentDetailType, retryProcessing, reclusterSpeakers } from '@/lib/api'
@@ -27,6 +27,12 @@ export default function ContentDetail({ content }: Props) {
   const [similarityThreshold, setSimilarityThreshold] = useState<number>(0.7)
   const [minSpeakers, setMinSpeakers] = useState<string>('')
   const [maxSpeakers, setMaxSpeakers] = useState<string>('')
+  const [currentSegmentId, setCurrentSegmentId] = useState<number | null>(null)
+  const [autoScroll, setAutoScroll] = useState<boolean>(false)
+  const [showScrollTop, setShowScrollTop] = useState<boolean>(false)
+  const previousSegmentIdRef = useRef<number | null>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
   
   const handleRetry = async (type: 'asr' | 'summary') => {
     const typeLabel = type === 'asr' ? 'ASR 처리' : 'LLM 요약'
@@ -102,6 +108,87 @@ export default function ContentDetail({ content }: Props) {
       setIsReclustering(false)
     }
   }
+
+  const handleSeekToTime = (startTime: number) => {
+    if (!content.media_url) {
+      return
+    }
+    const mediaElement = isAudioFile(content.filename) ? audioRef.current : videoRef.current
+    if (mediaElement) {
+      mediaElement.currentTime = startTime
+      mediaElement.play().catch((error) => {
+        console.error('재생 실패:', error)
+      })
+    }
+  }
+
+  const handleScrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  // 스크롤 위치 추적
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowScrollTop(window.scrollY > 300)
+    }
+
+    window.addEventListener('scroll', handleScroll)
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  // 미디어 재생 시간 추적 및 세그먼트 하이라이트
+  useEffect(() => {
+    if (!content.media_url || !content.transcription.segments) {
+      return
+    }
+
+    const mediaElement = isAudioFile(content.filename) ? audioRef.current : videoRef.current
+    if (!mediaElement) {
+      return
+    }
+
+    const handleTimeUpdate = () => {
+      const currentTime = mediaElement.currentTime
+      const activeSegment = content.transcription.segments?.find(
+        (seg) => currentTime >= seg.start && currentTime <= seg.end
+      )
+      const newSegmentId = activeSegment?.id ?? null
+      
+      // 세그먼트가 실제로 변경되었을 때만 업데이트 및 스크롤
+      if (newSegmentId !== previousSegmentIdRef.current) {
+        setCurrentSegmentId(newSegmentId)
+        previousSegmentIdRef.current = newSegmentId
+        
+        // 자동 스크롤이 활성화되어 있고 세그먼트가 변경되었을 때 스크롤
+        if (autoScroll && newSegmentId !== null) {
+          const segmentElement = document.getElementById(`segment-${newSegmentId}`)
+          if (segmentElement) {
+            segmentElement.scrollIntoView({ 
+              behavior: 'smooth', 
+              block: 'center' 
+            })
+          }
+        }
+      }
+    }
+
+    mediaElement.addEventListener('timeupdate', handleTimeUpdate)
+    
+    // 재생이 멈췄을 때 하이라이트 제거
+    const handlePause = () => {
+      setCurrentSegmentId(null)
+      previousSegmentIdRef.current = null
+    }
+    
+    mediaElement.addEventListener('pause', handlePause)
+    mediaElement.addEventListener('ended', handlePause)
+
+    return () => {
+      mediaElement.removeEventListener('timeupdate', handleTimeUpdate)
+      mediaElement.removeEventListener('pause', handlePause)
+      mediaElement.removeEventListener('ended', handlePause)
+    }
+  }, [content.media_url, content.filename, content.transcription.segments, autoScroll])
   
   return (
     <div className="card">
@@ -116,6 +203,7 @@ export default function ContentDetail({ content }: Props) {
           <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>미디어 재생</h3>
           {isAudioFile(content.filename) ? (
             <audio 
+              ref={audioRef}
               controls 
               src={content.media_url} 
               style={{ width: '100%', maxWidth: '600px' }}
@@ -125,6 +213,7 @@ export default function ContentDetail({ content }: Props) {
             </audio>
           ) : (
             <video 
+              ref={videoRef}
               controls 
               src={content.media_url} 
               style={{ width: '100%', maxHeight: '500px' }}
@@ -133,6 +222,41 @@ export default function ContentDetail({ content }: Props) {
               브라우저가 비디오 재생을 지원하지 않습니다.
             </video>
           )}
+          <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <button
+              type="button"
+              onClick={() => setAutoScroll(!autoScroll)}
+              style={{
+                position: 'relative',
+                width: '44px',
+                height: '24px',
+                backgroundColor: autoScroll ? '#000' : '#d1d5db',
+                border: 'none',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                padding: '0',
+                transition: 'background-color 0.2s'
+              }}
+              aria-label={autoScroll ? '자동 스크롤 활성화' : '자동 스크롤 비활성화'}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  top: '2px',
+                  left: autoScroll ? '22px' : '2px',
+                  width: '20px',
+                  height: '20px',
+                  backgroundColor: '#fff',
+                  borderRadius: '50%',
+                  transition: 'left 0.2s',
+                  boxShadow: '0 1px 2px rgba(0, 0, 0, 0.1)'
+                }}
+              />
+            </button>
+            <span style={{ fontSize: '0.9rem', color: '#333' }}>
+              스크립트 자동 스크롤
+            </span>
+          </div>
         </section>
       )}
       
@@ -249,12 +373,45 @@ export default function ContentDetail({ content }: Props) {
       )}
       <section style={{ marginTop: '1.5rem' }}>
         <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>세그먼트</h3>
-        {content.transcription.segments?.map((seg) => (
-          <div key={seg.id} className="segment">
-            <strong style={{ fontSize: '0.9rem' }}>{seg.speaker || 'UNKNOWN'}</strong> <span style={{ fontSize: '0.85rem', color: '#666' }}>[{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]</span>
-            <p style={{ marginTop: '0.25rem', fontSize: '0.9rem', lineHeight: '1.5', wordBreak: 'break-word' }}>{seg.text}</p>
-          </div>
-        ))}
+        {content.transcription.segments?.map((seg) => {
+          const isActive = currentSegmentId === seg.id
+          return (
+            <div 
+              key={seg.id}
+              id={`segment-${seg.id}`}
+              className="segment"
+              style={{
+                backgroundColor: isActive ? '#E3F2FD' : 'transparent',
+                borderRadius: isActive ? '4px' : undefined,
+                transition: 'background-color 0.2s ease'
+              }}
+            >
+              <strong style={{ fontSize: '0.9rem' }}>{seg.speaker || 'UNKNOWN'}</strong>{' '}
+              <span 
+                onClick={() => handleSeekToTime(seg.start)}
+                style={{ 
+                  fontSize: '0.85rem', 
+                  color: '#666',
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  textDecorationColor: '#999',
+                  transition: 'color 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = '#2196F3'
+                  e.currentTarget.style.textDecorationColor = '#2196F3'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = '#666'
+                  e.currentTarget.style.textDecorationColor = '#999'
+                }}
+              >
+                [{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]
+              </span>
+              <p style={{ marginTop: '0.25rem', fontSize: '0.9rem', lineHeight: '1.5', wordBreak: 'break-word' }}>{seg.text}</p>
+            </div>
+          )
+        })}
       </section>
       {content.transcription.diarization_metadata && (
         <section style={{ marginTop: '1.5rem' }}>
@@ -373,6 +530,43 @@ export default function ContentDetail({ content }: Props) {
           <p>LLM 로그가 없습니다.</p>
         )}
       </section>
+      {showScrollTop && (
+        <button
+          type="button"
+          onClick={handleScrollToTop}
+          style={{
+            position: 'fixed',
+            bottom: '2rem',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: '48px',
+            height: '48px',
+            backgroundColor: '#111827',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '50%',
+            cursor: 'pointer',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '20px',
+            zIndex: 1000,
+            transition: 'opacity 0.3s ease, transform 0.2s ease'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.opacity = '0.9'
+            e.currentTarget.style.transform = 'translateX(-50%) translateY(-2px)'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.opacity = '1'
+            e.currentTarget.style.transform = 'translateX(-50%) translateY(0)'
+          }}
+          aria-label="맨 위로"
+        >
+          ↑
+        </button>
+      )}
     </div>
   )
 }
