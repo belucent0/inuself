@@ -108,11 +108,9 @@ const apps = [
       LLM_MAX_TOKENS: envVars.LLM_MAX_TOKENS || '1024',
       LLM_N_THREADS: envVars.LLM_N_THREADS || '8',
       
-      // LLM API 서버 설정 (llama.cpp 서버, LM Studio 등 모든 OpenAI 호환 API)
-      // LLM_BASE_URL과 LLM_MODEL_NAME 사용 권장
-      // 하위 호환성: LLAMACPP_* 또는 LMSTUDIO_* 설정도 지원
-      LLM_BASE_URL: envVars.LLM_BASE_URL || envVars.LLAMACPP_BASE_URL || envVars.LMSTUDIO_BASE_URL || 'http://localhost:8080',
-      LLM_MODEL_NAME: envVars.LLM_MODEL_NAME || envVars.LLAMACPP_MODEL_NAME || envVars.LMSTUDIO_MODEL_NAME || 'Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf',
+      // LLM API 서버 설정 (모든 OpenAI 호환 API, provider와 무관)
+      LLM_BASE_URL: envVars.LLM_BASE_URL || 'http://localhost:8080',
+      LLM_MODEL_NAME: envVars.LLM_MODEL_NAME || 'Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf',
       
       // llama_cpp 전용 설정 (.env에서 읽어옴, llama-cpp-python 직접 사용 시)
       LLM_MODEL_PATH: envVars.LLM_MODEL_PATH || '',

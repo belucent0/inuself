@@ -384,8 +384,13 @@ def _summarize_with_llama_cpp(text: str, settings) -> str:
     )
     
     # 텍스트를 더 작은 청크로 분할하여 컨텍스트 초과 방지
-    # 안전하게 7000 토큰으로 제한 (프롬프트 오버헤드 고려)
-    chunks = _split_text_into_chunks(text, max_tokens_per_chunk=7000, overlap_tokens=500)
+    # available_tokens의 60%만 사용하여 안전 마진 확보 (프롬프트 오버헤드 고려)
+    safe_chunk_tokens = int(available_tokens * 0.6)
+    logger.info(
+        "[LLM Summarizer] Using safe chunk size: %d tokens (60%% of available %d tokens)",
+        safe_chunk_tokens, available_tokens
+    )
+    chunks = _split_text_into_chunks(text, max_tokens_per_chunk=safe_chunk_tokens, overlap_tokens=500)
     logger.info("Split text into %d chunks.", len(chunks))
     
     # 각 청크 요약
@@ -562,12 +567,13 @@ def _summarize_with_lmstudio(text: str, settings) -> str:
     긴 텍스트는 청킹하여 처리합니다.
     """
     # 실제 사용 가능한 컨텍스트 길이 계산
-    # 시스템 프롬프트 + 사용자 프롬프트 템플릿 + 응답 공간
-    # LLM API 서버에서 실제 로드된 컨텍스트 길이를 고려
-    # 프롬프트 템플릿 오버헤드: 시스템 프롬프트 + 프롬프트 템플릿 (약 200-300 토큰)
-    # 안전 마진: max_tokens + 추가 오버헤드 (약 2000 토큰)
-    # 실제 모델 컨텍스트가 15016 토큰이므로 더 보수적으로 계산
-    actual_context = min(settings.llm_context_length, 15000)
+    # 환경변수 LLM_CONTEXT_LENGTH를 사용 (provider와 무관하게 동일한 값 사용)
+    actual_context = settings.llm_context_length
+    logger.info(
+        "[LLM Summarizer] Using context length: %d tokens (from LLM_CONTEXT_LENGTH)",
+        actual_context
+    )
+    
     # 프롬프트 오버헤드를 더 크게 고려 (시스템 프롬프트 + 프롬프트 템플릿 + 안전 마진)
     prompt_overhead = 2500  # 시스템 프롬프트 + 프롬프트 템플릿 + 안전 마진
     available_tokens = actual_context - settings.llm_max_tokens - prompt_overhead
@@ -598,13 +604,19 @@ def _summarize_with_lmstudio(text: str, settings) -> str:
     )
     
     # 텍스트를 더 작은 청크로 분할하여 컨텍스트 초과 방지
-    # 안전하게 7000 토큰으로 제한 (프롬프트 오버헤드 고려)
-    chunks = _split_text_into_chunks(text, max_tokens_per_chunk=7000, overlap_tokens=500)
+    # available_tokens의 60%만 사용하여 안전 마진 확보 (프롬프트 오버헤드 고려)
+    safe_chunk_tokens = int(available_tokens * 0.6)
+    logger.info(
+        "[LLM Summarizer] Using safe chunk size: %d tokens (60%% of available %d tokens)",
+        safe_chunk_tokens, available_tokens
+    )
+    chunks = _split_text_into_chunks(text, max_tokens_per_chunk=safe_chunk_tokens, overlap_tokens=500)
     logger.info("Split text into %d chunks.", len(chunks))
     
     # 각 청크 요약
     successful_chunks = []
     failed_chunks = []
+    chunk_errors = []  # 실패한 청크의 에러 정보 수집
     for i, chunk in enumerate(chunks, 1):
         logger.info("Summarizing chunk %d/%d... (length: %d chars)", i, len(chunks), len(chunk))
         try:
@@ -615,12 +627,18 @@ def _summarize_with_lmstudio(text: str, settings) -> str:
             })
             logger.info("Chunk %d/%d summarization succeeded", i, len(chunks))
         except Exception as exc:
-            logger.error("Chunk %d summarization failed: %s", i, exc)
+            error_msg = str(exc)
+            logger.error("Chunk %d summarization failed: %s", i, error_msg)
             failed_chunks.append(i)
-            # 실패한 청크는 건너뛰고 계속 진행 (에러 메시지는 포함하지 않음)
+            chunk_errors.append(f"Chunk {i}/{len(chunks)}: {error_msg}")
+            # 실패한 청크는 건너뛰고 계속 진행
     
     if not successful_chunks:
-        raise RuntimeError("All chunk summarizations failed.")
+        # 모든 청크가 실패한 경우, 첫 번째 에러를 포함한 상세 메시지 생성
+        error_details = "; ".join(chunk_errors[:3])  # 최대 3개 에러만 표시
+        if len(chunk_errors) > 3:
+            error_details += f" ... and {len(chunk_errors) - 3} more errors"
+        raise RuntimeError(f"All chunk summarizations failed ({len(chunks)} chunks). First errors: {error_details}")
     
     # 실패한 청크가 있으면 경고 로그
     if failed_chunks:

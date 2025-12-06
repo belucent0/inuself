@@ -73,45 +73,32 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 1024
     llm_n_threads: int = 8
     
-    # LLM API 서버 설정 (공통 - llama.cpp 서버, LM Studio 등 모든 OpenAI 호환 API 사용)
+    # LLM API 서버 설정 (공통 - 모든 OpenAI 호환 API 사용, provider와 무관)
     llm_base_url: str = "http://localhost:8080"
     llm_model_name: str = "Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf"
     
-    # 하위 호환성을 위한 deprecated 설정 (LLM_BASE_URL, LLM_MODEL_NAME 사용 권장)
-    llamacpp_base_url: str = ""
-    llamacpp_model_name: str = ""
-    lmstudio_base_url: str = "http://localhost:1234"
-    lmstudio_model_name: str = "gpt-oss-20b"
-    
-    # llama_cpp 전용 설정 (llama-cpp-python 직접 사용 시)
+    # llama_cpp provider 전용 설정 (llama-cpp-python 직접 사용 시)
     llm_model_path: Path = Path("models/gpt-oss-20b-Q4_K_S.gguf")
     llm_n_gpu_layers: int = -1  # GPU 레이어 설정 (-1: 모든 레이어 GPU, 0: CPU만, 양수: 지정된 레이어 수만큼 GPU)
     
-    # llama-server 설정 (요청마다 시작/종료)
-    llama_server_path: str = ""  # llama-server.exe 경로 (.env의 LLAMA_SERVER_PATH)
-    llama_server_model: str = ""  # 모델 파일 경로 (.env의 LLAMA_SERVER_MODEL)
-    llama_server_mmproj: str = ""  # Vision 모델용 mmproj 파일 경로 (.env의 LLAMA_SERVER_MMPROJ)
-    llama_server_port: int = 8080  # 서버 포트 (.env의 LLAMA_SERVER_PORT)
-    llama_server_ctx_size: int = 8192  # 컨텍스트 크기 (.env의 LLAMA_SERVER_CTX_SIZE)
-    llama_server_threads: int = 8  # 스레드 수 (.env의 LLAMA_SERVER_THREADS)
-    llama_server_gpu_layers: int = 99  # GPU 레이어 수 (.env의 LLAMA_SERVER_GPU_LAYERS)
-    llama_server_batch_size: int = 512  # 배치 크기 (.env의 LLAMA_SERVER_BATCH_SIZE)
+    # LLM 서버 설정 (요청마다 시작/종료, provider와 무관)
+    llm_server_path: str = Field("", validation_alias="LLM_SERVER_PATH")  # 서버 실행 파일 경로
+    llm_server_model: str = Field("", validation_alias="LLM_SERVER_MODEL")  # 모델 파일 경로
+    llm_server_mmproj: str = Field("", validation_alias="LLM_SERVER_MMPROJ")  # Vision 모델용 mmproj 파일 경로
+    llm_server_port: int = Field(8080, validation_alias="LLM_SERVER_PORT")  # 서버 포트
+    llm_server_threads: int = Field(8, validation_alias="LLM_SERVER_THREADS")  # 스레드 수
+    llm_server_gpu_layers: int = Field(99, validation_alias="LLM_SERVER_GPU_LAYERS")  # GPU 레이어 수
+    llm_server_batch_size: int = Field(512, validation_alias="LLM_SERVER_BATCH_SIZE")  # 배치 크기
     
     @property
     def llm_api_base_url(self) -> str:
-        """LLM API 서버 URL (llm_base_url 우선, 없으면 하위 호환성 설정 사용)"""
-        if self.llm_base_url:
-            return self.llm_base_url
-        # 하위 호환성: llamacpp_base_url 또는 lmstudio_base_url
-        return self.llamacpp_base_url if self.llamacpp_base_url else self.lmstudio_base_url
+        """LLM API 서버 URL (환경변수 LLM_BASE_URL 사용)"""
+        return self.llm_base_url
     
     @property
     def llm_api_model_name(self) -> str:
-        """LLM API 모델 이름 (llm_model_name 우선, 없으면 하위 호환성 설정 사용)"""
-        if self.llm_model_name:
-            return self.llm_model_name
-        # 하위 호환성: llamacpp_model_name 또는 lmstudio_model_name
-        return self.llamacpp_model_name if self.llamacpp_model_name else self.lmstudio_model_name
+        """LLM API 모델 이름 (환경변수 LLM_MODEL_NAME 사용)"""
+        return self.llm_model_name
 
     # 관리자 인증 설정
     admin_username: str = "admin"

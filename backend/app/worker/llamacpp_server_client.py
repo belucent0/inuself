@@ -30,33 +30,33 @@ def _llama_server_process(settings: Settings):
         yield None
         return
     
-    # llama-server 설정 확인
-    if not settings.llama_server_path or not Path(settings.llama_server_path).exists():
-        logger.warning("llama-server path is not set or file does not exist. Using existing server.")
+    # LLM 서버 설정 확인
+    if not settings.llm_server_path or not Path(settings.llm_server_path).exists():
+        logger.warning("LLM server path is not set or file does not exist. Using existing server.")
         yield None
         return
     
-    if not settings.llama_server_model or not Path(settings.llama_server_model).exists():
-        logger.warning("llama-server model path is not set or file does not exist. Using existing server.")
+    if not settings.llm_server_model or not Path(settings.llm_server_model).exists():
+        logger.warning("LLM server model path is not set or file does not exist. Using existing server.")
         yield None
         return
     
-    # llama-server 명령어 구성
+    # LLM 서버 명령어 구성
     cmd = [
-        settings.llama_server_path,
-        '--model', settings.llama_server_model,
-        '--n-gpu-layers', str(settings.llama_server_gpu_layers),
+        settings.llm_server_path,
+        '--model', settings.llm_server_model,
+        '--n-gpu-layers', str(settings.llm_server_gpu_layers),
         '--host', '0.0.0.0',
-        '--port', str(settings.llama_server_port),
-        '--ctx-size', str(settings.llama_server_ctx_size),
-        '--threads', str(settings.llama_server_threads),
-        '--batch-size', str(settings.llama_server_batch_size),
+        '--port', str(settings.llm_server_port),
+        '--ctx-size', str(settings.llm_context_length),  # LLM_CONTEXT_LENGTH 사용
+        '--threads', str(settings.llm_server_threads),
+        '--batch-size', str(settings.llm_server_batch_size),
         '--parallel', '1',
     ]
     
     # Vision 모델인 경우 mmproj 추가
-    if settings.llama_server_mmproj and Path(settings.llama_server_mmproj).exists():
-        cmd.extend(['--mmproj', settings.llama_server_mmproj, '--jinja'])
+    if settings.llm_server_mmproj and Path(settings.llm_server_mmproj).exists():
+        cmd.extend(['--mmproj', settings.llm_server_mmproj, '--jinja'])
     
     logger.info(f"[LLM] Starting llama-server: {' '.join(cmd)}")
     
@@ -78,7 +78,7 @@ def _llama_server_process(settings: Settings):
         creationflags=creation_flags if sys.platform == "win32" else 0,
     )
     
-    base_url = f"http://localhost:{settings.llama_server_port}"
+    base_url = f"http://localhost:{settings.llm_server_port}"
     # llama.cpp 서버는 /v1/models 엔드포인트를 사용하여 헬스체크
     health_url = f"{base_url}/v1/models"
     
