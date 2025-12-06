@@ -34,6 +34,16 @@ a {
   transition: width 0.3s ease, padding 0.3s ease;
 }
 
+.sidebar-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.sidebar-top {
+  flex: 0 0 auto;
+}
+
 .sidebar h1 {
   font-size: clamp(1rem, 1.2vw, 1.2rem);
   margin: 0;
@@ -44,7 +54,7 @@ a {
   display: block;
   padding: 0.5rem 0;
   color: #cbd5f5;
-  font-size: clamp(0.85rem, 0.9vw, 0.95rem);
+  font-size: clamp(1rem, 1.1vw, 1.15rem);
   transition: color 0.2s ease;
 }
 
@@ -152,6 +162,10 @@ a {
 
   .sidebar h1 {
     font-size: 1rem;
+  }
+
+  .sidebar nav a {
+    font-size: 1.1rem;
   }
 
   /* 모바일 메뉴 토글 버튼 */

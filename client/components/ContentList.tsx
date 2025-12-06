@@ -217,7 +217,6 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
                   height: '20px',
                 }}
               />
-              <span>선택</span>
             </label>
             <Link href={`/contents/${item.id}`} className="card-link" style={{ textDecoration: 'none', color: 'inherit' }}>
               <h3 style={{ margin: '0.5rem 0', fontSize: '1.1rem', wordBreak: 'break-word' }}>{item.title || item.filename}</h3>
