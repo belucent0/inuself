@@ -1,7 +1,16 @@
 """Celery 태스크 정의 - ASR 및 LLM 처리."""
+import asyncio
+import sys
+
 from ..core.logging import logger
+from ..db.session import AsyncSessionLocal
+from ..repositories.content_repository import ContentRepository
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from .celery_app import celery_app
 from .distributed_lock import acquire_lock  # LLM 워커용
+from ..core.config import get_settings
+
+settings = get_settings()
 
 
 @celery_app.task(
@@ -91,6 +100,76 @@ def process_asr_task(
         raise self.retry(exc=exc)
 
 
+def _get_content_duration_sync(content_id: int) -> float:
+    """
+    Content의 duration_seconds를 동기적으로 가져옵니다.
+    락 TTL 계산을 위해 사용됩니다.
+    """
+    try:
+        # Windows에서는 새로운 이벤트 루프 생성
+        if sys.platform == "win32":
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        else:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        
+        async def _get_duration():
+            # Windows에서는 각 작업마다 새로운 엔진 생성
+            current_engine = None
+            if sys.platform == "win32":
+                current_engine = create_async_engine(
+                    settings.postgres_dsn,
+                    echo=settings.debug,
+                    future=True,
+                )
+                CurrentAsyncSessionLocal = async_sessionmaker(
+                    current_engine,
+                    expire_on_commit=False,
+                )
+                session = CurrentAsyncSessionLocal()
+            else:
+                session = AsyncSessionLocal()
+            
+            try:
+                repo = ContentRepository(session)
+                content = await repo.get_content(content_id)
+                if content:
+                    return content.duration_seconds or 0.0
+                return 0.0
+            finally:
+                await session.close()
+                if current_engine:
+                    try:
+                        await asyncio.wait_for(current_engine.dispose(), timeout=5.0)
+                    except Exception:
+                        pass
+        
+        duration = loop.run_until_complete(_get_duration())
+        
+        # Windows에서는 루프 정리
+        if sys.platform == "win32":
+            try:
+                pending = asyncio.all_tasks(loop)
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
+            try:
+                loop.close()
+            except Exception:
+                pass
+            asyncio.set_event_loop(None)
+        
+        return duration
+    except Exception as e:
+        logger.warning("Failed to get content duration for content_id={}, using default: {}", content_id, e)
+        return 0.0
+
+
 @celery_app.task(
     name="process_llm_task",
     bind=True,
@@ -107,7 +186,25 @@ def process_llm_task(self, content_id: int):
     # 분산 락을 사용하여 LLM 워커가 한 번에 하나의 작업만 처리하도록 제한
     lock_key = "lock:llm:global"
     
-    with acquire_lock(lock_key, timeout=3600.0, blocking_timeout=0.0) as acquired:
+    # 음성 파일 길이에 따라 락 TTL 동적 계산
+    duration_seconds = _get_content_duration_sync(content_id)
+    if duration_seconds > 0:
+        # duration_seconds의 1/2를 락 TTL로 사용 (최소 5분, 최대 30분)
+        lock_ttl = max(300.0, min(duration_seconds / 2, 1800.0))
+        logger.info(
+            "[Celery LLM] Calculated lock TTL: duration={:.1f}s, lock_ttl={:.1f}s",
+            duration_seconds,
+            lock_ttl
+        )
+    else:
+        # duration을 가져올 수 없으면 기본값 사용 (30분)
+        lock_ttl = 1800.0
+        logger.warning(
+            "[Celery LLM] Could not get content duration, using default lock TTL: {}s",
+            lock_ttl
+        )
+    
+    with acquire_lock(lock_key, timeout=lock_ttl, blocking_timeout=0.0) as acquired:
         if not acquired:
             logger.warning(
                 "[Celery LLM] Task skipped (LLM worker is busy): content_id={}, task_id={}",

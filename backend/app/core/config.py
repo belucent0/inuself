@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # ASR 청킹 설정 (긴 오디오 파일 처리용)
     asr_chunk_duration_minutes: int = 30  # 청크 크기 (분)
     asr_chunk_overlap_seconds: int = 0  # 오버랩 크기 (초) - 테스트용 0으로 설정
-    asr_chunk_threshold_minutes: int = 60  # 이 길이 이상인 파일만 청킹 적용
+    asr_chunk_threshold_minutes: int = 25  # 이 길이 이상인 파일만 청킹 적용 (30분 = 1800초)
 
     # LLM 요약 설정 (llama_cpp/llama.cpp 서버)
     llm_provider: str = "llama_cpp"  # "llama_cpp", "llamacpp_server" (또는 "lmstudio" - deprecated)

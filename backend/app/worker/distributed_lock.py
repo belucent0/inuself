@@ -130,3 +130,86 @@ def is_locked(lock_key: str) -> bool:
         logger.warning("락 확인 중 오류 발생: {}, error={}", lock_key, e)
         return False
 
+
+def _check_celery_task_active() -> bool:
+    """
+    Celery에서 LLM 작업이 실제로 진행 중인지 확인합니다.
+    
+    Returns:
+        작업이 진행 중이면 True, 아니면 False
+    """
+    try:
+        from .celery_app import celery_app
+        
+        # Celery inspect를 사용하여 활성 작업 확인
+        inspect = celery_app.control.inspect()
+        active_tasks = inspect.active()
+        
+        if not active_tasks:
+            return False
+        
+        # 모든 워커의 활성 작업 확인
+        for worker_name, tasks in active_tasks.items():
+            for task in tasks:
+                # LLM 작업이 진행 중인지 확인
+                if task.get("name") == "process_llm_task":
+                    logger.info("LLM task is active: worker={}, task_id={}", worker_name, task.get("id"))
+                    return True
+        
+        return False
+    except Exception as e:
+        logger.warning("Failed to check Celery active tasks: {}", e)
+        # 확인 실패 시 안전하게 True 반환 (작업이 진행 중일 수 있으므로)
+        return True
+
+
+def force_release_lock(lock_key: str, check_active: bool = True) -> bool:
+    """
+    락을 강제로 해제합니다.
+    
+    Args:
+        lock_key: 해제할 락 키
+        check_active: True일 때 실제 작업 진행 여부를 확인하고, 진행 중이면 해제하지 않음
+    
+    Returns:
+        락이 해제되었으면 True, 해제하지 못했으면 False
+    """
+    redis_client = _get_redis_client()
+    if redis_client is None:
+        logger.warning("Redis가 없어 락을 강제 해제할 수 없습니다: {}", lock_key)
+        return False
+    
+    try:
+        # 락이 존재하는지 확인
+        if not redis_client.exists(lock_key):
+            logger.info("락이 존재하지 않습니다: {}", lock_key)
+            return False
+        
+        # check_active가 True일 때 실제 작업 진행 여부 확인
+        if check_active:
+            if _check_celery_task_active():
+                logger.warning(
+                    "LLM 작업이 진행 중이므로 락을 강제 해제하지 않습니다: {}",
+                    lock_key
+                )
+                return False
+        
+        # 락 강제 해제
+        # Redis Lock은 소유권을 확인하므로, 강제 해제를 위해서는 키를 직접 삭제
+        try:
+            # 락 키와 관련된 모든 키 삭제 (Redis Lock은 여러 키를 사용할 수 있음)
+            # 기본적으로 lock_key 자체를 삭제
+            deleted = redis_client.delete(lock_key)
+            if deleted > 0:
+                logger.info("락 키 삭제 완료: {} (deleted={})", lock_key, deleted)
+                return True
+            else:
+                logger.warning("락 키가 이미 존재하지 않습니다: {}", lock_key)
+                return False
+        except Exception as e:
+            logger.error("락 키 삭제 실패: {}, error={}", lock_key, e)
+            return False
+    
+    except Exception as e:
+        logger.error("락 강제 해제 중 오류 발생: {}, error={}", lock_key, e)
+        return False

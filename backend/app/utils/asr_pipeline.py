@@ -49,9 +49,6 @@ class PipelineResult:
 
 
 class ProcessingMode(str, Enum):
-    CASE1 = "case1"
-    CASE2 = "case2"
-    CASE3 = "case3"
     CASE4 = "case4"
 
 
@@ -125,84 +122,10 @@ class AsrPipelineRunner:
 
     def _run_mode(self):
         match self.processing_mode:
-            case ProcessingMode.CASE1:
-                return self._run_case1()
-            case ProcessingMode.CASE2:
-                return self._run_case2()
-            case ProcessingMode.CASE3:
-                return self._run_case3()
             case ProcessingMode.CASE4:
                 return self._run_case4()
             case _:
                 raise ValueError(f"Unsupported processing mode {self.processing_mode}")
-
-    def _run_case1(self):
-        _log(self.logs, "case1_start")
-        diarization_result, diar_stats = self._run_diarization()
-        asr_result, asr_stats = self._run_full_file_asr()
-        stats = {**diar_stats, **asr_stats}
-        _log(self.logs, "case1_end", stats=stats)
-        return asr_result, diarization_result, stats
-
-    def _run_case2(self):
-        _log(self.logs, "case2_start")
-        diarization_result, diar_stats = self._run_diarization()
-        split_points = find_optimal_split_points(diarization_result, self.audio_duration, self.num_asr_chunks)
-        nominal_ranges = build_nominal_ranges(self.audio_duration, split_points)
-        chunk_infos = split_audio_into_chunks(
-            self.waveform,
-            self.sample_rate,
-            self.audio_duration,
-            str(self.audio_path),
-            nominal_ranges,
-            str(self.temp_dir),
-            ASR_OVERLAP_SECONDS,
-        )
-        chunked_results, parallel_time, sequential_time = run_parallel_asr_chunks(
-            chunk_infos, self.model_size, max_workers=self.num_asr_chunks
-        )
-        asr_result = merge_chunked_asr_results(chunked_results)
-        stats = {
-            "asr_parallel_time": parallel_time,
-            "asr_sequential_estimate": sequential_time,
-            **diar_stats,
-        }
-        _log(self.logs, "case2_end", stats=stats)
-        cleanup_temp_chunks(chunk_infos)
-        return asr_result, diarization_result, stats
-
-    def _run_case3(self):
-        _log(self.logs, "case3_start")
-        chunk_boundaries = [self.audio_duration * i / self.num_asr_chunks for i in range(1, self.num_asr_chunks)]
-        nominal_ranges = build_nominal_ranges(self.audio_duration, chunk_boundaries)
-        chunk_infos = split_audio_into_chunks(
-            self.waveform,
-            self.sample_rate,
-            self.audio_duration,
-            str(self.audio_path),
-            nominal_ranges,
-            str(self.temp_dir),
-            ASR_OVERLAP_SECONDS,
-        )
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            diar_future = executor.submit(self._run_diarization)
-            asr_future = executor.submit(
-                run_parallel_asr_chunks, chunk_infos, self.model_size, self.num_asr_chunks
-            )
-            diarization_result, diar_stats = diar_future.result()
-            chunked_results, parallel_time, sequential_time = asr_future.result()
-
-        asr_result = merge_chunked_asr_results(chunked_results)
-        stats = {
-            "diarization_parallel_time": diar_stats["diarization_time"],
-            "asr_parallel_time": parallel_time,
-            "asr_sequential_estimate": sequential_time,
-        }
-        cleanup_temp_chunks(chunk_infos)
-
-        _log(self.logs, "case3_end", stats=stats)
-        return asr_result, diarization_result, stats
 
     def _run_case4(self):
         _log(self.logs, "case4_start")
