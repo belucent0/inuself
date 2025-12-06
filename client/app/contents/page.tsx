@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import ContentList from '@/components/ContentList'
-import DeleteQueuedButton from '@/components/DeleteQueuedButton'
 import { listContents, ContentListResponse } from '@/lib/api'
 
 export default function ContentsPage() {
@@ -84,7 +83,6 @@ export default function ContentsPage() {
   return (
     <section>
       <h2>전사된 콘텐츠</h2>
-      <DeleteQueuedButton />
       <ContentList 
         contents={data.items} 
         pagination={{

@@ -331,7 +331,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
                       style={{
                         padding: '0.5rem 0.75rem',
                         border: '1px solid #ccc',
-                        backgroundColor: pageNum === pagination.currentPage ? '#2196F3' : '#fff',
+                        backgroundColor: pageNum === pagination.currentPage ? '#111827' : '#fff',
                         color: pageNum === pagination.currentPage ? '#fff' : '#000',
                         cursor: 'pointer',
                         borderRadius: '4px',
