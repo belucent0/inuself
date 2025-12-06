@@ -93,6 +93,30 @@ a {
   border-bottom: none;
 }
 
+.segment-container {
+  /* 기본 스타일은 인라인으로 정의되어 있음 */
+}
+
+/* 세그먼트 컨테이너 반응형 높이 조정 */
+@media (min-width: 1025px) {
+  .segment-container {
+    max-height: 800px !important; /* 세그먼트 10개 */
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+  .segment-container {
+    max-height: 640px !important; /* 세그먼트 8개 */
+  }
+}
+
+@media (max-width: 768px) {
+  .segment-container {
+    max-height: 480px !important; /* 세그먼트 6개 */
+    top: 0.5rem !important;
+  }
+}
+
 /* 모바일 반응형 스타일 */
 @media (max-width: 768px) {
   .layout {

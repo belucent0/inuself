@@ -33,6 +33,7 @@ export default function ContentDetail({ content }: Props) {
   const previousSegmentIdRef = useRef<number | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const segmentContainerRef = useRef<HTMLDivElement>(null)
   
   const handleRetry = async (type: 'asr' | 'summary') => {
     const typeLabel = type === 'asr' ? 'ASR 처리' : 'LLM 요약'
@@ -162,10 +163,19 @@ export default function ContentDetail({ content }: Props) {
         // 자동 스크롤이 활성화되어 있고 세그먼트가 변경되었을 때 스크롤
         if (autoScroll && newSegmentId !== null) {
           const segmentElement = document.getElementById(`segment-${newSegmentId}`)
-          if (segmentElement) {
-            segmentElement.scrollIntoView({ 
-              behavior: 'smooth', 
-              block: 'center' 
+          const container = segmentContainerRef.current
+          if (segmentElement && container) {
+            // 컨테이너 내부 스크롤로 이동
+            const containerRect = container.getBoundingClientRect()
+            const elementRect = segmentElement.getBoundingClientRect()
+            const scrollTop = container.scrollTop
+            const elementOffsetTop = elementRect.top - containerRect.top + scrollTop
+            const containerCenter = container.clientHeight / 2
+            const targetScrollTop = elementOffsetTop - containerCenter + (elementRect.height / 2)
+            
+            container.scrollTo({
+              top: targetScrollTop,
+              behavior: 'smooth'
             })
           }
         }
@@ -373,45 +383,62 @@ export default function ContentDetail({ content }: Props) {
       )}
       <section style={{ marginTop: '1.5rem' }}>
         <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>세그먼트</h3>
-        {content.transcription.segments?.map((seg) => {
-          const isActive = currentSegmentId === seg.id
-          return (
-            <div 
-              key={seg.id}
-              id={`segment-${seg.id}`}
-              className="segment"
-              style={{
-                backgroundColor: isActive ? '#E3F2FD' : 'transparent',
-                borderRadius: isActive ? '4px' : undefined,
-                transition: 'background-color 0.2s ease'
-              }}
-            >
-              <strong style={{ fontSize: '0.9rem' }}>{seg.speaker || 'UNKNOWN'}</strong>{' '}
-              <span 
-                onClick={() => handleSeekToTime(seg.start)}
-                style={{ 
-                  fontSize: '0.85rem', 
-                  color: '#666',
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                  textDecorationColor: '#999',
-                  transition: 'color 0.2s ease'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = '#2196F3'
-                  e.currentTarget.style.textDecorationColor = '#2196F3'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = '#666'
-                  e.currentTarget.style.textDecorationColor = '#999'
+        <div
+          ref={segmentContainerRef}
+          className="segment-container"
+          style={{
+            position: 'sticky',
+            top: '1rem',
+            maxHeight: '800px',
+            overflowY: 'auto',
+            border: '1px solid #e5e7eb',
+            borderRadius: '8px',
+            padding: '0.5rem',
+            backgroundColor: '#fff',
+            zIndex: 10
+          }}
+        >
+          {content.transcription.segments?.map((seg) => {
+            const isActive = currentSegmentId === seg.id
+            return (
+              <div 
+                key={seg.id}
+                id={`segment-${seg.id}`}
+                className="segment"
+                style={{
+                  backgroundColor: isActive ? '#E3F2FD' : 'transparent',
+                  borderRadius: isActive ? '4px' : undefined,
+                  transition: 'background-color 0.2s ease',
+                  padding: '0.75rem 0'
                 }}
               >
-                [{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]
-              </span>
-              <p style={{ marginTop: '0.25rem', fontSize: '0.9rem', lineHeight: '1.5', wordBreak: 'break-word' }}>{seg.text}</p>
-            </div>
-          )
-        })}
+                <strong style={{ fontSize: '0.9rem' }}>{seg.speaker || 'UNKNOWN'}</strong>{' '}
+                <span 
+                  onClick={() => handleSeekToTime(seg.start)}
+                  style={{ 
+                    fontSize: '0.85rem', 
+                    color: '#666',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                    textDecorationColor: '#999',
+                    transition: 'color 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = '#2196F3'
+                    e.currentTarget.style.textDecorationColor = '#2196F3'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = '#666'
+                    e.currentTarget.style.textDecorationColor = '#999'
+                  }}
+                >
+                  [{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]
+                </span>
+                <p style={{ marginTop: '0.25rem', fontSize: '0.9rem', lineHeight: '1.5', wordBreak: 'break-word' }}>{seg.text}</p>
+              </div>
+            )
+          })}
+        </div>
       </section>
       {content.transcription.diarization_metadata && (
         <section style={{ marginTop: '1.5rem' }}>
