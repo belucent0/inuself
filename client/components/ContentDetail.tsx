@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation'
 
 import { ContentDetail as ContentDetailType, retryProcessing, reclusterSpeakers } from '@/lib/api'
 import { formatToKST } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 
 type Props = {
   content: ContentDetailType
@@ -233,36 +235,12 @@ export default function ContentDetail({ content }: Props) {
             </video>
           )}
           <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <button
-              type="button"
-              onClick={() => setAutoScroll(!autoScroll)}
-              style={{
-                position: 'relative',
-                width: '44px',
-                height: '24px',
-                backgroundColor: autoScroll ? '#000' : '#d1d5db',
-                border: 'none',
-                borderRadius: '12px',
-                cursor: 'pointer',
-                padding: '0',
-                transition: 'background-color 0.2s'
-              }}
+            <Switch
+              checked={autoScroll}
+              onCheckedChange={setAutoScroll}
+              className="touch-manipulation"
               aria-label={autoScroll ? '자동 스크롤 활성화' : '자동 스크롤 비활성화'}
-            >
-              <span
-                style={{
-                  position: 'absolute',
-                  top: '2px',
-                  left: autoScroll ? '22px' : '2px',
-                  width: '20px',
-                  height: '20px',
-                  backgroundColor: '#fff',
-                  borderRadius: '50%',
-                  transition: 'left 0.2s',
-                  boxShadow: '0 1px 2px rgba(0, 0, 0, 0.1)'
-                }}
-              />
-            </button>
+            />
             <span style={{ fontSize: '0.9rem', color: '#333' }}>
               스크립트 자동 스크롤
             </span>
@@ -297,7 +275,9 @@ export default function ContentDetail({ content }: Props) {
           </div>
         )}
         {content.summary_md ? (
-          <ReactMarkdown>{content.summary_md}</ReactMarkdown>
+          <div className="markdown-content">
+            <ReactMarkdown>{content.summary_md}</ReactMarkdown>
+          </div>
         ) : (
           content.status !== 'SUMMARIZING' &&
           content.status !== 'SUMMARY_FAILED' && <p>요약이 아직 준비되지 않았습니다.</p>
@@ -558,41 +538,15 @@ export default function ContentDetail({ content }: Props) {
         )}
       </section>
       {showScrollTop && (
-        <button
+        <Button
           type="button"
           onClick={handleScrollToTop}
-          style={{
-            position: 'fixed',
-            bottom: '2rem',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: '48px',
-            height: '48px',
-            backgroundColor: '#111827',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '50%',
-            cursor: 'pointer',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '20px',
-            zIndex: 1000,
-            transition: 'opacity 0.3s ease, transform 0.2s ease'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.opacity = '0.9'
-            e.currentTarget.style.transform = 'translateX(-50%) translateY(-2px)'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.opacity = '1'
-            e.currentTarget.style.transform = 'translateX(-50%) translateY(0)'
-          }}
+          size="icon"
+          className="hidden md:flex fixed bottom-8 left-1/2 -translate-x-1/2 w-12 h-12 rounded-full shadow-lg z-[1000] min-h-[48px] min-w-[48px] touch-manipulation hover:opacity-90 hover:-translate-y-0.5 hover:translate-x-[-50%] transition-all"
           aria-label="맨 위로"
         >
           ↑
-        </button>
+        </Button>
       )}
     </div>
   )

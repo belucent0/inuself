@@ -1,3 +1,10 @@
+import { type ClassValue, clsx } from "clsx"
+import { twMerge } from "tailwind-merge"
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs))
+}
+
 /**
  * UTC 시간 문자열을 KST(한국 표준시, UTC+9)로 변환하여 포맷팅합니다.
  * @param utcDateString UTC 시간 문자열 (ISO 8601 형식)
