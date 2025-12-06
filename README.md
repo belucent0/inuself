@@ -533,6 +533,33 @@ The script will:
 - ✅ Batch processing support for multiple media files
 - ✅ Parallel processing (ASR and diarization run simultaneously)
 
+## 🗺️ 로드맵
+
+### 현재 개발 중인 항목
+
+| 항목 | 설명 |
+|------|------|
+| ASR 청킹 오버랩 후처리 | ASR 처리 시 청킹된 결과의 오버랩 부분을 후처리하여 정확도 향상 |
+| .pdf 및 .docx 문서 파일의 요약 및 뷰어 기능 | 문서 파일 업로드 및 LLM 기반 요약, 뷰어 기능 제공 |
+| 저품질 음성 파일의 ASR시 환각 제거 혹은 후처리 | 낮은 품질의 음성 파일 처리 시 발생하는 환각 현상 제거 및 후처리 |
+| 화자분리 pyannote.audio 버전 업데이트 (community-1) | pyannote.audio를 최신 community 버전으로 업데이트 |
+
+### 개발 고려 중인 항목
+
+| 항목 | 설명 |
+|------|------|
+| ASR 전사 정확도 LLM 후처리 | ASR 결과를 LLM으로 후처리하여 전사 정확도 향상 |
+| 음성 프로필을 통한 화자 인식 | 화자의 음성 프로필을 학습하여 화자 자동 인식 기능 제공 |
+| LLM 처리시 NPU 가속 | LLM 처리 성능 향상을 위한 NPU 가속 지원 |
+
+### 장기 도전 과제
+
+| 항목 | 설명 |
+|------|------|
+| ASR 처리시 NPU 가속 | ASR 처리 성능 향상을 위한 NPU 가속 지원 |
+| Linux 기반 GPU 가속 ASR 워커 지원 | Linux 환경에서 GPU 가속을 활용한 ASR 워커 지원 |
+| Whisper 모델 경량화 | Whisper 모델의 크기 및 연산량 최적화를 통한 경량화 |
+
 ## ⚡ Performance Optimization
 
 ### Test Environment
@@ -802,26 +829,67 @@ print(torch.cuda.get_device_name(0))  # Should print GPU name
 
 ```
 torch-test/
-├── src/
+├── backend/                  # FastAPI 백엔드
+│   ├── app/                  # 메인 애플리케이션
+│   │   ├── controllers/      # API 컨트롤러
+│   │   ├── core/             # 핵심 설정 (config, logging, redis, storage)
+│   │   ├── db/               # 데이터베이스 모델 및 세션
+│   │   ├── repositories/     # 데이터 접근 계층
+│   │   ├── schemas/          # Pydantic 스키마
+│   │   ├── services/         # 비즈니스 로직
+│   │   ├── utils/            # 유틸리티 함수
+│   │   ├── worker/           # 워커 모듈 (Celery, LLM 처리)
+│   │   └── main.py           # FastAPI 앱 진입점
+│   ├── worker/               # 워커 실행 스크립트
+│   ├── alembic/              # 데이터베이스 마이그레이션
+│   ├── tests/                # 테스트 코드
+│   ├── scripts/              # 유틸리티 스크립트
+│   └── pyproject.toml        # Poetry 의존성 관리
+├── client/                   # Next.js 클라이언트
+│   ├── app/                  # Next.js 앱 라우터
+│   │   ├── contents/         # 콘텐츠 목록/상세 페이지
+│   │   ├── layout.tsx        # 레이아웃
+│   │   └── page.tsx          # 메인 페이지
+│   ├── components/           # React 컴포넌트
+│   │   ├── ContentDetail.tsx
+│   │   ├── ContentList.tsx
+│   │   ├── UploadForm.tsx
+│   │   └── Sidebar.tsx
+│   ├── lib/                  # 유틸리티 라이브러리
+│   │   ├── api.ts            # API 클라이언트
+│   │   └── utils.ts          # 유틸리티 함수
+│   └── package.json          # npm 의존성 관리
+├── src/                      # ASR/화자분리 모듈
 │   ├── asr/                  # ASR (음성 인식) 모듈
 │   │   ├── models/          # 모델 파일들
 │   │   ├── logs/            # ASR 로그 파일들
 │   │   └── test_asr.py      # ASR 테스트 스크립트
 │   ├── diarization/         # 화자분리 모듈
 │   │   ├── test_pyannote.py
-│   │   ├── test_asr_with_diarization.py
 │   │   └── diarization_logger.py
-│   └── utils/               # 유틸리티 모듈
+│   ├── llm/                  # LLM 요약 모듈
+│   │   └── summarizer.py
+│   ├── pipeline/             # 통합 파이프라인
+│   │   └── test_asr_with_diarization.py
+│   └── utils/                # 유틸리티 모듈
 │       └── media_converter.py  # 미디어 파일 변환 도구
 ├── docs/                     # 연구/테스트/결과 문서
 │   ├── GPU_OPTIMIZATION_RESEARCH.md
 │   ├── BOTTLENECK_ANALYSIS.md
 │   ├── performance_analysis.md
 │   ├── PARALLEL_PROCESSING_RESULTS.md
-│   └── transcription_comparison.md
+│   ├── transcription_comparison.md
+│   └── ...                   # 기타 문서들
+├── infra/                    # 인프라 설정
+│   ├── nginx/                # Nginx 설정
+│   └── redis/                # Redis 설정
 ├── media/                    # 미디어 파일 폴더
 │   ├── upload/              # 입력 미디어 파일 (원본)
 │   └── wav/                 # 변환된 WAV 파일
+├── models/                   # LLM 모델 파일
+├── logs/                     # 애플리케이션 로그
+├── scripts/                  # 실행 스크립트
+├── docker-compose.yml        # Docker Compose 설정
 ├── README.md                 # 이 파일
 └── .gitignore               # Git ignore 파일 목록
 ```
