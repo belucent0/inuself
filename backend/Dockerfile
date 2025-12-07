@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     g++ \
     libsndfile1 \
     ffmpeg \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Poetry 설치
