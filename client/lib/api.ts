@@ -36,11 +36,15 @@ export type SttLog = {
 export type ContentStatus = 
   | 'QUEUED' // 처리 대기중 (큐에 등록됨)
   | 'PROCESSING' // 처리중 (ASR/화자분리 진행 중)
+  | 'OCR_PROCESSING' // OCR 처리 중
   | 'SUMMARIZING' // LLM 요약 진행 중
   | 'COMPLETED' // 전체 파이프라인 완료
   | 'ASR_FAILED' // ASR/화자분리 단계 실패
+  | 'OCR_FAILED' // OCR 처리 실패
   | 'SUMMARY_FAILED' // LLM 요약 실패
   | 'CANCELLED' // 취소됨 (사용자 취소 또는 타임아웃)
+
+export type ContentType = 'AUDIO' | 'DOCUMENT'
 
 export type ContentSummary = {
   id: number
@@ -54,6 +58,21 @@ export type ContentSummary = {
   title?: string | null
   created_at: string
   updated_at?: string | null
+  content_type?: ContentType // 파일 타입 (선택적, 하위 호환성)
+  transcription?: {
+    id: number
+    file_id: number
+    speakers: string[]
+    duration_seconds: number
+    transcription: Record<string, unknown>
+  } | null
+  document?: {
+    id: number
+    file_id: number
+    ocr_text: string
+    page_count: number
+    ocr_metadata: Record<string, unknown>
+  } | null
 }
 
 export type LlmLog = {
@@ -85,7 +104,14 @@ export type ContentDetail = ContentSummary & {
         embedding: number[]
       }>
     }
-  }
+  } | null
+  document?: {
+    id: number
+    file_id: number
+    ocr_text: string
+    page_count: number
+    ocr_metadata: Record<string, unknown>
+  } | null
   logs: SttLog[]
   llm_logs: LlmLog[]
 }
@@ -209,7 +235,7 @@ export async function uploadContent(
 
 export async function retryProcessing(
   contentId: number, 
-  type: 'asr' | 'summary',
+  type: 'asr' | 'summary' | 'ocr',
   minSpeakers?: number,
   maxSpeakers?: number
 ): Promise<{ success: boolean; message: string; job_id?: string }> {

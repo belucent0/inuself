@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import DocumentViewer from '@/components/DocumentViewer'
 
 type Props = {
   content: ContentDetailType
@@ -23,9 +24,38 @@ type Props = {
 
 // 오디오 파일인지 확인하는 헬퍼 함수
 function isAudioFile(filename: string): boolean {
-  const audioExtensions = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.wma']
+  const audioExtensions = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.wma', '.mp4', '.avi', '.mkv', '.mov', '.webm']
   const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
   return audioExtensions.includes(ext)
+}
+
+// 문서 파일인지 확인하는 헬퍼 함수
+function isDocumentFile(filename: string): boolean {
+  const documentExtensions = ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
+  const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
+  return documentExtensions.includes(ext)
+}
+
+// 파일 확장자 가져오기
+function getFileExtension(filename: string): string {
+  return filename.toLowerCase().substring(filename.lastIndexOf('.'))
+}
+
+// 이미지 파일인지 확인
+function isImageFile(filename: string): boolean {
+  const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']
+  return imageExtensions.includes(getFileExtension(filename))
+}
+
+// PDF 파일인지 확인
+function isPdfFile(filename: string): boolean {
+  return getFileExtension(filename) === '.pdf'
+}
+
+// DOCX 파일인지 확인
+function isDocxFile(filename: string): boolean {
+  const ext = getFileExtension(filename)
+  return ext === '.docx' || ext === '.doc'
 }
 
 export default function ContentDetail({ content }: Props) {
@@ -46,8 +76,9 @@ export default function ContentDetail({ content }: Props) {
   const segmentContainerRef = useRef<HTMLDivElement>(null)
   const segmentViewportRef = useRef<HTMLDivElement | null>(null)
   
-  const handleRetry = async (type: 'asr' | 'summary') => {
-    const typeLabel = type === 'asr' ? 'ASR 처리' : 'LLM 요약'
+  const handleRetry = async (type: 'asr' | 'summary' | 'ocr') => {
+    const isDocument = isDocumentFile(content.filename)
+    const typeLabel = type === 'ocr' ? 'OCR 처리' : type === 'asr' ? (isDocument ? 'OCR 처리' : 'ASR 처리') : 'LLM 요약'
     if (!confirm(`${typeLabel}를 다시 시도하시겠습니까?`)) {
       return
     }
@@ -56,7 +87,8 @@ export default function ContentDetail({ content }: Props) {
       let minSpeakersValue: number | undefined = undefined
       let maxSpeakersValue: number | undefined = undefined
       
-      if (type === 'asr') {
+      // 문서 타입이 아닐 때만 화자 수 처리
+      if (type === 'asr' && !isDocument) {
         if (minSpeakers.trim()) {
           const parsed = parseInt(minSpeakers.trim())
           if (isNaN(parsed) || parsed < 1) {
@@ -86,7 +118,7 @@ export default function ContentDetail({ content }: Props) {
   }
   
   const handleRecluster = async () => {
-    if (!content.transcription.diarization_metadata?.segment_embeddings || 
+    if (!content.transcription?.diarization_metadata?.segment_embeddings || 
         content.transcription.diarization_metadata.segment_embeddings.length === 0) {
       setReclusterMessage('세그먼트 임베딩이 없습니다. 먼저 화자 분리를 완료해주세요.')
       return
@@ -176,7 +208,7 @@ export default function ContentDetail({ content }: Props) {
 
   // 미디어 재생 시간 추적 및 세그먼트 하이라이트
   useEffect(() => {
-    if (!content.media_url || !content.transcription.segments) {
+    if (!content.media_url || !content.transcription?.segments) {
       return
     }
 
@@ -187,7 +219,7 @@ export default function ContentDetail({ content }: Props) {
 
     const handleTimeUpdate = () => {
       const currentTime = mediaElement.currentTime
-      const activeSegment = content.transcription.segments?.find(
+      const activeSegment = content.transcription?.segments?.find(
         (seg) => currentTime >= seg.start && currentTime <= seg.end
       )
       const newSegmentId = activeSegment?.id ?? null
@@ -234,7 +266,7 @@ export default function ContentDetail({ content }: Props) {
       mediaElement.removeEventListener('pause', handlePause)
       mediaElement.removeEventListener('ended', handlePause)
     }
-  }, [content.media_url, content.filename, content.transcription.segments, autoScroll])
+  }, [content.media_url, content.filename, content.transcription?.segments, autoScroll])
   
   return (
     <div className="space-y-6">
@@ -242,7 +274,10 @@ export default function ContentDetail({ content }: Props) {
         <CardHeader>
           <CardTitle className="text-xl break-words">{content.title || content.filename}</CardTitle>
           <CardDescription>
-            총 재생 길이 {content.duration_seconds.toFixed(1)}초 · 화자 {content.speakers.join(', ') || '분석 중'}
+            {isDocumentFile(content.filename) 
+              ? `문서 파일 · ${content.document ? `페이지 수: ${content.document.page_count}페이지` : '처리 중'}`
+              : `총 재생 길이 ${content.duration_seconds.toFixed(1)}초 · 화자 ${content.speakers.join(', ') || '분석 중'}`
+            }
           </CardDescription>
           <p className="text-xs text-muted-foreground break-all mt-2">저장 키: {content.object_key}</p>
         </CardHeader>
@@ -250,8 +285,44 @@ export default function ContentDetail({ content }: Props) {
         {content.media_url && (
           <CardContent className="space-y-4">
             <div>
-              <h3 className="text-sm font-semibold mb-2">미디어 재생</h3>
-              {isAudioFile(content.filename) ? (
+              <h3 className="text-sm font-semibold mb-2">
+                {isDocumentFile(content.filename) ? '문서 뷰어' : '미디어 재생'}
+              </h3>
+              {isDocumentFile(content.filename) ? (
+                // 문서 뷰어
+                <div className="w-full border rounded-lg overflow-hidden bg-muted/50">
+                  {isPdfFile(content.filename) || isDocxFile(content.filename) ? (
+                    <DocumentViewer
+                      fileUrl={content.media_url}
+                      filename={content.filename}
+                      isPdf={isPdfFile(content.filename)}
+                      isDocx={isDocxFile(content.filename)}
+                    />
+                  ) : isImageFile(content.filename) ? (
+                    <div className="flex justify-center items-center p-4">
+                      <img
+                        src={content.media_url}
+                        alt={content.filename}
+                        className="max-w-full max-h-[800px] object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <div className="p-8 text-center">
+                      <p className="text-muted-foreground mb-4">
+                        이 파일 형식은 브라우저에서 직접 미리보기를 지원하지 않습니다.
+                      </p>
+                      <Button
+                        type="button"
+                        onClick={handleDownload}
+                        variant="default"
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        파일 다운로드
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ) : isAudioFile(content.filename) ? (
                 <audio 
                   ref={audioRef}
                   controls 
@@ -274,20 +345,22 @@ export default function ContentDetail({ content }: Props) {
               )}
             </div>
             <div className="flex items-center gap-3 flex-wrap">
-              <div className="flex items-center gap-2">
-                <Switch
-                  checked={autoScroll}
-                  onCheckedChange={setAutoScroll}
-                  className="touch-manipulation"
-                  aria-label={autoScroll ? '자동 스크롤 활성화' : '자동 스크롤 비활성화'}
-                />
-                <Label className="text-sm">스크립트 자동 스크롤</Label>
-              </div>
+              {!isDocumentFile(content.filename) && (
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={autoScroll}
+                    onCheckedChange={setAutoScroll}
+                    className="touch-manipulation"
+                    aria-label={autoScroll ? '자동 스크롤 활성화' : '자동 스크롤 비활성화'}
+                  />
+                  <Label className="text-sm">스크립트 자동 스크롤</Label>
+                </div>
+              )}
               <Button
                 type="button"
                 onClick={handleDownload}
                 variant="default"
-                className="ml-auto"
+                className={isDocumentFile(content.filename) ? "w-full" : "ml-auto"}
               >
                 <Download className="mr-2 h-4 w-4" />
                 파일 다운로드
@@ -331,59 +404,64 @@ export default function ContentDetail({ content }: Props) {
         </CardContent>
       </Card>
 
-      {(content.status === 'ASR_FAILED' || content.status === 'PROCESSING' || content.status === 'QUEUED') && (
+      {(content.status === 'ASR_FAILED' || content.status === 'PROCESSING' || content.status === 'QUEUED' || 
+        content.status === 'OCR_FAILED' || content.status === 'OCR_PROCESSING') && (
         <Card className={cn(
-          content.status === 'ASR_FAILED' && "border-destructive",
-          content.status === 'QUEUED' && "border-primary"
+          (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "border-destructive",
+          (content.status === 'QUEUED' || content.status === 'OCR_PROCESSING') && "border-primary"
         )}>
           <CardHeader>
             <CardTitle className={cn(
               "text-base",
-              content.status === 'ASR_FAILED' && "text-destructive",
-              content.status === 'QUEUED' && "text-primary"
+              (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "text-destructive",
+              (content.status === 'QUEUED' || content.status === 'OCR_PROCESSING') && "text-primary"
             )}>
-              {content.status === 'ASR_FAILED' 
-                ? 'ASR 처리가 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.'
-                : content.status === 'QUEUED'
-                ? 'ASR 처리가 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.'
-                : 'ASR 처리가 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.'}
+              {content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED'
+                ? `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.`
+                : content.status === 'QUEUED' || content.status === 'OCR_PROCESSING'
+                ? `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`
+                : `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="minSpeakers">최소 화자 수 (선택사항)</Label>
-                <Input
-                  id="minSpeakers"
-                  type="number"
-                  min="1"
-                  value={minSpeakers}
-                  onChange={(e) => setMinSpeakers(e.target.value)}
-                  placeholder="자동 결정"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="maxSpeakers">최대 화자 수 (선택사항)</Label>
-                <Input
-                  id="maxSpeakers"
-                  type="number"
-                  min="1"
-                  value={maxSpeakers}
-                  onChange={(e) => setMaxSpeakers(e.target.value)}
-                  placeholder="자동 결정"
-                />
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              화자 수 범위를 지정하지 않으면 자동으로 결정됩니다.
-            </p>
+            {!isDocumentFile(content.filename) && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="minSpeakers">최소 화자 수 (선택사항)</Label>
+                    <Input
+                      id="minSpeakers"
+                      type="number"
+                      min="1"
+                      value={minSpeakers}
+                      onChange={(e) => setMinSpeakers(e.target.value)}
+                      placeholder="자동 결정"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="maxSpeakers">최대 화자 수 (선택사항)</Label>
+                    <Input
+                      id="maxSpeakers"
+                      type="number"
+                      min="1"
+                      value={maxSpeakers}
+                      onChange={(e) => setMaxSpeakers(e.target.value)}
+                      placeholder="자동 결정"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  화자 수 범위를 지정하지 않으면 자동으로 결정됩니다.
+                </p>
+              </>
+            )}
             <Button
               type="button"
-              onClick={() => handleRetry('asr')}
+              onClick={() => handleRetry(isDocumentFile(content.filename) ? 'ocr' : 'asr')}
               variant="default"
               className="w-full"
             >
-              ASR 재처리
+              {isDocumentFile(content.filename) ? 'OCR 재처리' : 'ASR 재처리'}
             </Button>
           </CardContent>
         </Card>
@@ -398,18 +476,20 @@ export default function ContentDetail({ content }: Props) {
         </div>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>세그먼트</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ScrollArea
-            ref={segmentContainerRef}
-            viewportRef={segmentViewportRef}
-            className="h-[700px] md:h-[850px] rounded-lg border px-1 py-4"
-          >
-            <div className="space-y-4">
-              {content.transcription.segments?.map((seg) => {
+      {/* 오디오 타입: 세그먼트 표시 */}
+      {content.transcription && content.transcription.segments && (
+        <Card>
+          <CardHeader>
+            <CardTitle>세그먼트</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea
+              ref={segmentContainerRef}
+              viewportRef={segmentViewportRef}
+              className="h-[700px] md:h-[850px] rounded-lg border px-1 py-4"
+            >
+              <div className="space-y-4">
+                {content.transcription.segments.map((seg) => {
                 const isActive = currentSegmentId === seg.id
                 return (
                   <div 
@@ -432,13 +512,33 @@ export default function ContentDetail({ content }: Props) {
                     <p className="text-base leading-relaxed break-words">{seg.text}</p>
                   </div>
                 )
-              })}
-            </div>
-          </ScrollArea>
-        </CardContent>
-      </Card>
+                })}
+              </div>
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
 
-      {content.transcription.diarization_metadata && (
+      {/* 문서 타입: OCR 결과 표시 */}
+      {content.document && (
+        <Card>
+          <CardHeader>
+            <CardTitle>OCR 결과</CardTitle>
+            <CardDescription>
+              페이지 수: {content.document.page_count}페이지
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="h-[700px] md:h-[850px] rounded-lg border px-4 py-4">
+              <div className="whitespace-pre-wrap break-words text-base leading-relaxed">
+                {content.document.ocr_text || 'OCR 결과가 없습니다.'}
+              </div>
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
+
+      {content.transcription?.diarization_metadata && (
         <Card>
           <CardHeader>
             <CardTitle>화자 분리 메타데이터</CardTitle>
@@ -454,7 +554,7 @@ export default function ContentDetail({ content }: Props) {
         </Card>
       )}
 
-      {content.transcription.diarization_metadata?.segment_embeddings && 
+      {content.transcription?.diarization_metadata?.segment_embeddings && 
        content.transcription.diarization_metadata.segment_embeddings.length > 0 && (
         <Card>
           <CardHeader>

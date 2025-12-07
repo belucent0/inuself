@@ -37,9 +37,11 @@ type Props = {
 const statusLabels: Record<ContentStatus, string> = {
   QUEUED: '대기중',
   PROCESSING: '인식중',
+  OCR_PROCESSING: 'OCR 처리중',
   SUMMARIZING: '요약중',
   COMPLETED: '완료',
   ASR_FAILED: 'ASR 실패',
+  OCR_FAILED: 'OCR 실패',
   SUMMARY_FAILED: '요약 실패',
   CANCELLED: '취소됨',
 }

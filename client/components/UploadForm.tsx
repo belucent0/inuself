@@ -21,12 +21,46 @@ export default function UploadForm() {
   const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const isAudioFile = (filename: string): boolean => {
+    const audioExtensions = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.wma', '.mp4', '.avi', '.mkv', '.mov', '.webm']
+    const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
+    return audioExtensions.includes(ext)
+  }
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null
     if (file) {
       setSelectedFile(file)
-      setShowModal(true)
-      setSpeakerRange(null)
+      // 오디오 파일인 경우에만 화자 수 선택 모달 표시
+      if (isAudioFile(file.name)) {
+        setShowModal(true)
+        setSpeakerRange(null)
+      } else {
+        // 문서 파일인 경우 바로 업로드
+        handleUploadDirect(file)
+      }
+    }
+  }
+
+  const handleUploadDirect = async (file: File) => {
+    setUploading(true)
+    setStatus('업로드 중...')
+    try {
+      await uploadContent(file)
+      setStatus('업로드 완료! 큐에 등록되었습니다.')
+      setSelectedFile(null)
+      
+      // 파일 입력 필드 초기화
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+      
+      // 목록 페이지로 이동하고 자동 새로고침
+      router.push(`/contents?refresh=${Date.now()}`)
+    } catch (error) {
+      setStatus('업로드 실패. 다시 시도해 주세요.')
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -100,7 +134,7 @@ export default function UploadForm() {
             <Input
               ref={fileInputRef}
               type="file"
-              accept="audio/*,video/*"
+              accept="audio/*,video/*,.pdf,.png,.jpg,.jpeg,.gif,.bmp,.tiff,.webp,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
               onChange={handleFileSelect}
               disabled={isUploading}
               className="hidden"
