@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from pydantic import BaseModel, Field
 
-from ..db.models import ContentStatus
+from ..db.models import ContentStatus, ContentType
 
 
 class SttLogSchema(BaseModel):
@@ -36,18 +36,26 @@ class ContentBaseSchema(BaseModel):
     summary_md: str | None = None
     title: str | None = None
     created_at: datetime
-    updated_at: datetime | None = None
+    updated_at: datetime | None = Field(None)  # File 모델에는 없지만 하위 호환성을 위해 유지
+    # 파일 타입 (선택적, 하위 호환성)
+    file_type: str | None = None  # "AUDIO" 또는 "DOCUMENT"
+    content_type: ContentType | None = None  # ContentType enum
 
     class Config:
         from_attributes = True
 
 
 class ContentListItem(ContentBaseSchema):
-    pass
+    # 타입별 콘텐츠 (선택적) - lazy import로 순환 참조 방지
+    transcription_content: dict[str, Any] | None = None
+    document_content: dict[str, Any] | None = None
 
 
 class ContentDetail(ContentBaseSchema):
     transcription: dict[str, Any]
+    # 타입별 콘텐츠 (선택적)
+    transcription_content: dict[str, Any] | None = None
+    document_content: dict[str, Any] | None = None
     logs: list[SttLogSchema] = Field(default_factory=list)
     llm_logs: list[LlmLogSchema] = Field(default_factory=list)
 

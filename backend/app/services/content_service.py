@@ -224,19 +224,66 @@ class ContentService:
         실패한 콘텐츠를 재처리합니다.
         
         Args:
-            content_id: 콘텐츠 ID
-            retry_type: "asr" 또는 "summary"
+            content_id: 콘텐츠 ID (또는 File ID)
+            retry_type: "asr", "summary", 또는 "ocr"
             min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
             max_speakers: 최대 화자 수 (선택사항, ASR 재처리 시에만 사용)
         
         Returns:
             {"success": True, "message": "...", "job_id": "..."}
         """
+        from ..repositories.file_repository import FileRepository
+        from ..db.models import FileStatus, ContentType
+        
+        retry_type = retry_type.lower()
+        
+        # 먼저 File로 시도 (새로운 구조)
+        file_repo = FileRepository(self.session)
+        file_obj = await file_repo.get_file(content_id)
+        
+        if file_obj:
+            # File 기반 처리
+            if retry_type == "ocr":
+                # OCR 재처리
+                if file_obj.content_type != ContentType.DOCUMENT:
+                    raise ValueError(f"Cannot retry OCR for non-document file (content_type: {file_obj.content_type.value})")
+                
+                if file_obj.status not in [FileStatus.OCR_FAILED, FileStatus.OCR_PROCESSING, FileStatus.QUEUED]:
+                    raise ValueError(f"Cannot retry OCR for file with status: {file_obj.status.value}")
+                
+                # 상태를 QUEUED로 변경
+                await file_repo.update_file_status(content_id, FileStatus.QUEUED)
+                await file_repo.add_log(
+                    file_id=content_id,
+                    log={"event": "manual_retry", "type": "ocr"},
+                    message="Manual OCR retry requested by user",
+                )
+                await self.session.commit()
+                
+                # OCR 작업 큐잉
+                loop = asyncio.get_running_loop()
+                from functools import partial
+                from ..worker.task_queue_adapter import get_task_queue
+                
+                task_queue = get_task_queue()
+                enqueue_func = partial(
+                    task_queue.enqueue_ocr_job,
+                    file_id=content_id,
+                    storage_key=file_obj.object_key,
+                    original_filename=file_obj.filename,
+                )
+                job_id = await loop.run_in_executor(None, enqueue_func)
+                
+                logger.info("Manual OCR retry enqueued: file_id=%s, job_id=%s", content_id, job_id)
+                return {"success": True, "message": "OCR reprocessing started", "job_id": job_id}
+            else:
+                # ASR/Summary는 File 기반으로 처리 (기존 로직과 유사)
+                raise ValueError(f"File-based retry for {retry_type} not yet implemented. Use Content-based retry.")
+        
+        # 하위 호환성: Content 기반 처리
         content = await self.repo.get_content(content_id)
         if not content:
             raise ValueError("Content not found")
-        
-        retry_type = retry_type.lower()
         
         if retry_type == "asr":
             # PROCESSING, QUEUED 상태에서 멈춘 경우도 재시도 가능

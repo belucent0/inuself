@@ -1,5 +1,5 @@
 from typing import Sequence
-from sqlalchemy import select, update
+from sqlalchemy import select, update, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import models
@@ -92,7 +92,18 @@ class ContentRepository:
         self, content_id: int, status: models.ContentStatus
     ) -> None:
         """콘텐츠 상태 업데이트."""
-        stmt = update(models.Content).where(models.Content.id == content_id).values(status=status)
+        # enum 값을 문자열로 변환한 후 contentstatus 타입으로 캐스팅
+        # SQLAlchemy가 FileStatus enum을 filestatus로 인식하는 문제 해결
+        status_value = status.value if hasattr(status, 'value') else str(status)
+        # PostgreSQL의 ::contentstatus 캐스팅을 사용하여 타입 불일치 해결
+        # 파라미터 바인딩을 사용하여 SQL injection 방지
+        # SQLAlchemy가 enum 타입을 추론하지 않도록 명시적으로 contentstatus로 캐스팅
+        stmt = text(
+            "UPDATE content SET status = CAST(:status_value AS contentstatus) WHERE content.id = :content_id"
+        ).bindparams(
+            status_value=status_value,
+            content_id=content_id
+        )
         await self.session.execute(stmt)
         await self.session.flush()
 
