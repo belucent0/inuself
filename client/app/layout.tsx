@@ -1,14 +1,44 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
+import { Menu } from 'lucide-react'
 import './globals.css'
 import Sidebar from '@/components/Sidebar'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Sheet, SheetContent } from '@/components/ui/sheet'
 
 // 클라이언트 환경변수에서 관리자 계정 정보 읽기
 const ADMIN_USERNAME = process.env.NEXT_PUBLIC_ADMIN_USERNAME || 'admin'
 const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || 'admin123'
 
+// 페이지 제목 매핑
+const pageTitles: Record<string, string> = {
+  '/contents': '전사된 콘텐츠',
+  '/roadmap': '로드맵',
+}
+
+function getPageTitle(pathname: string | null): string {
+  if (!pathname) return 'ASR 파이프라인'
+  
+  // 정확한 경로 매칭
+  if (pageTitles[pathname]) {
+    return pageTitles[pathname]
+  }
+  
+  // /contents/[id] 같은 동적 라우트 처리
+  if (pathname.startsWith('/contents/')) {
+    return '콘텐츠 상세'
+  }
+  
+  return 'ASR 파이프라인'
+}
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname()
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isChecking, setIsChecking] = useState(true)
   const [username, setUsername] = useState('')
@@ -44,7 +74,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     return (
       <html lang="ko">
         <body>
-          <div style={{ padding: '2rem', textAlign: 'center' }}>로딩 중...</div>
+          <div className="flex items-center justify-center min-h-screen">
+            <p className="text-muted-foreground">로딩 중...</p>
+          </div>
         </body>
       </html>
     )
@@ -54,86 +86,43 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     return (
       <html lang="ko">
         <body>
-          <div style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}>
-            <div style={{
-              backgroundColor: 'white',
-              padding: '2rem',
-              borderRadius: '8px',
-              minWidth: '300px',
-              width: '100%',
-              maxWidth: '400px',
-            }} className="login-modal">
-              <h2 style={{ marginBottom: '1rem' }}>관리자 로그인</h2>
-              <form onSubmit={handleLogin}>
-                <div style={{ marginBottom: '1rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem' }}>
-                    계정
-                  </label>
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    required
-                    autoFocus
-                    style={{
-                      width: '100%',
-                      padding: '0.5rem',
-                      border: '1px solid #ccc',
-                      borderRadius: '4px',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                </div>
-                <div style={{ marginBottom: '1rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.5rem' }}>
-                    비밀번호
-                  </label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    style={{
-                      width: '100%',
-                      padding: '0.5rem',
-                      border: '1px solid #ccc',
-                      borderRadius: '4px',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                </div>
-                {error && (
-                  <p style={{ color: 'red', marginBottom: '1rem', fontSize: '0.9rem' }}>{error}</p>
-                )}
-                <button
-                  type="submit"
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem',
-                    backgroundColor: '#2196F3',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '1rem',
-                  }}
-                >
-                  로그인
-                </button>
-              </form>
-            </div>
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+            <Dialog open={true}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>관리자 로그인</DialogTitle>
+                </DialogHeader>
+                <form onSubmit={handleLogin} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="username">계정</Label>
+                    <Input
+                      id="username"
+                      type="text"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      required
+                      autoFocus
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="password">비밀번호</Label>
+                    <Input
+                      id="password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                    />
+                  </div>
+                  {error && (
+                    <p className="text-sm text-destructive">{error}</p>
+                  )}
+                  <Button type="submit" className="w-full">
+                    로그인
+                  </Button>
+                </form>
+              </DialogContent>
+            </Dialog>
           </div>
         </body>
       </html>
@@ -143,46 +132,36 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="ko">
       <body>
-        <button
-          className="mobile-menu-toggle"
-          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-          aria-label="메뉴 토글"
-        >
-          <svg
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            {isMobileMenuOpen ? (
-              <>
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </>
-            ) : (
-              <>
-                <line x1="3" y1="12" x2="21" y2="12"></line>
-                <line x1="3" y1="6" x2="21" y2="6"></line>
-                <line x1="3" y1="18" x2="21" y2="18"></line>
-              </>
-            )}
-          </svg>
-        </button>
-        <div
-          className={`mobile-overlay ${isMobileMenuOpen ? 'open' : ''}`}
-          onClick={() => setIsMobileMenuOpen(false)}
-        />
-        <div className="layout">
-          <Sidebar isOpen={isMobileMenuOpen} onClose={() => setIsMobileMenuOpen(false)} />
-          <main className="main">{children}</main>
+        <div className="flex min-h-screen">
+          {/* 데스크톱 사이드바 */}
+          <Sidebar />
+          
+          {/* 모바일 헤더 */}
+          <header className="md:hidden fixed top-0 left-0 right-0 z-40 h-14 border-b bg-background flex items-center gap-3 px-4">
+            <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
+              <SheetContent side="left" className="w-3/4 max-w-sm p-0 h-full">
+                <Sidebar isMobileSheet />
+              </SheetContent>
+            </Sheet>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              aria-label="메뉴 토글"
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+            <h1 className="text-lg font-semibold flex-1 truncate">
+              {getPageTitle(pathname)}
+            </h1>
+          </header>
+          
+          {/* 메인 콘텐츠 */}
+          <main className="flex-1 md:ml-64 pt-14 md:pt-0 p-4 md:p-8">
+            {children}
+          </main>
         </div>
       </body>
     </html>
   )
 }
-
-
