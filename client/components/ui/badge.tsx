@@ -15,6 +15,12 @@ const badgeVariants = cva(
         destructive:
           "border-transparent bg-destructive text-destructive-foreground shadow hover:bg-destructive/80",
         outline: "text-foreground",
+        success:
+          "border-transparent bg-green-500/10 text-green-700 dark:bg-green-500/20 dark:text-green-400 border-green-500/20 dark:border-green-500/30",
+        warning:
+          "border-transparent bg-orange-500/10 text-orange-700 dark:bg-orange-500/20 dark:text-orange-400 border-orange-500/20 dark:border-orange-500/30",
+        info:
+          "border-transparent bg-blue-500/10 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400 border-blue-500/20 dark:border-blue-500/30",
       },
     },
     defaultVariants: {

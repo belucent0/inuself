@@ -9,6 +9,14 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
+import { ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight } from 'lucide-react'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
 type PaginationProps = {
@@ -17,6 +25,7 @@ type PaginationProps = {
   total: number
   pageSize: number
   onPageChange: (page: number) => void
+  onPageSizeChange?: (pageSize: number) => void
 }
 
 type Props = {
@@ -27,7 +36,7 @@ type Props = {
 
 const statusLabels: Record<ContentStatus, string> = {
   QUEUED: '대기중',
-  PROCESSING: '처리중',
+  PROCESSING: '인식중',
   SUMMARIZING: '요약중',
   COMPLETED: '완료',
   ASR_FAILED: 'ASR 실패',
@@ -35,16 +44,20 @@ const statusLabels: Record<ContentStatus, string> = {
   CANCELLED: '취소됨',
 }
 
-const getStatusVariant = (status: ContentStatus): 'default' | 'secondary' | 'destructive' | 'outline' => {
+const getStatusVariant = (status: ContentStatus): 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' => {
   switch (status) {
     case 'COMPLETED':
-      return 'default'
+      return 'success'
     case 'ASR_FAILED':
-    case 'SUMMARY_FAILED':
       return 'destructive'
+    case 'SUMMARY_FAILED':
+      return 'warning'
     case 'PROCESSING':
     case 'SUMMARIZING':
-      return 'secondary'
+      return 'info'
+    case 'QUEUED':
+    case 'CANCELLED':
+      return 'outline'
     default:
       return 'outline'
   }
@@ -188,31 +201,31 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
         </div>
       )}
       
-      <div className="space-y-4">
+      <div className="space-y-2.5 md:space-y-4">
         {contents.map((item) => (
           <Card key={item.id} className="hover:shadow-md transition-shadow">
-            <CardHeader className="pb-3">
-              <div className="flex items-start gap-3">
+            <CardHeader className="pb-2.5 md:pb-3 px-4 md:px-6 pt-4 md:pt-6">
+              <div className="flex items-start gap-2.5 md:gap-3">
                 <Checkbox
                   checked={selectedIds.has(item.id)}
                   onCheckedChange={() => toggleSelection(item.id)}
                   onClick={(e) => e.stopPropagation()}
-                  className="mt-1"
+                  className="mt-0.5 md:mt-1"
                 />
                 <div className="flex-1 min-w-0">
                   <Link href={`/contents/${item.id}`} className="block">
-                    <CardTitle className="text-lg mb-2 break-words">
+                    <CardTitle className="text-[15px] md:text-lg mb-1.5 md:mb-2 break-words leading-snug">
                       {item.title || item.filename}
                     </CardTitle>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant={getStatusVariant(item.status)}>
+                    <div className="flex items-center gap-1.5 md:gap-2 flex-wrap">
+                      <Badge variant={getStatusVariant(item.status)} className="text-xs">
                         {statusLabels[item.status]}
                       </Badge>
-                      <span className="text-sm text-muted-foreground">
+                      <span className="text-[13px] md:text-sm text-muted-foreground">
                         화자 수: {item.speakers.length || 0} · 재생 길이: {item.duration_seconds.toFixed(1)}초
                       </span>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-2">
+                    <p className="text-[11px] md:text-xs text-muted-foreground mt-1.5 md:mt-2">
                       {formatToKST(item.created_at)}
                     </p>
                   </Link>
@@ -220,12 +233,12 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
               </div>
             </CardHeader>
             {(item.status === 'ASR_FAILED' || item.status === 'SUMMARY_FAILED') && (
-              <CardContent className="pt-0">
+              <CardContent className="pt-0 px-4 md:px-6 pb-3 md:pb-6">
                 <Button
                   type="button"
                   variant={item.status === 'ASR_FAILED' ? 'default' : 'secondary'}
                   onClick={(e) => handleRetry(item.id, item.status === 'ASR_FAILED' ? 'asr' : 'summary', e)}
-                  className="w-full"
+                  className="w-full h-8 md:h-10 text-xs md:text-sm"
                 >
                   {item.status === 'ASR_FAILED' ? 'ASR 재처리' : '요약 재처리'}
                 </Button>
@@ -235,56 +248,82 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
         ))}
       </div>
       
-      {pagination && pagination.totalPages > 1 && (
-        <div className="flex flex-col items-center gap-4 mt-8">
-          <div className="flex items-center gap-2 flex-wrap justify-center">
+      {pagination && (
+        <div className="relative flex items-center justify-between px-2 py-4">
+          {/* 왼쪽: 행 수 */}
+          <div className="flex items-center gap-2">
+            <Select 
+              value={pagination.pageSize.toString()} 
+              onValueChange={(value) => {
+                if (pagination.onPageSizeChange) {
+                  pagination.onPageSizeChange(parseInt(value, 10))
+                }
+              }}
+            >
+              <SelectTrigger className="h-8 w-[70px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="5">5</SelectItem>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="20">20</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+              </SelectContent>
+            </Select>
+              <span className="hidden md:inline text-sm text-muted-foreground">개 행</span>
+          </div>
+
+          {/* 중앙: 네비게이션 버튼들 (정중앙) */}
+          <div className="absolute left-1/2 transform -translate-x-1/2 flex items-center gap-2">
             <Button
-              type="button"
               variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => pagination.onPageChange(1)}
+              disabled={pagination.currentPage === 1}
+              title="Go to first page"
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
               onClick={() => pagination.onPageChange(pagination.currentPage - 1)}
               disabled={pagination.currentPage === 1}
+              title="Go to previous page"
             >
-              이전
+              <ChevronLeft className="h-4 w-4" />
             </Button>
-            <div className="flex items-center gap-1">
-              {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
-                .filter((pageNum) => {
-                  const diff = Math.abs(pageNum - pagination.currentPage)
-                  return diff <= 2 || pageNum === 1 || pageNum === pagination.totalPages
-                })
-                .map((pageNum, index, array) => {
-                  const showEllipsis = index > 0 && pageNum - array[index - 1] > 1
-                  return (
-                    <div key={pageNum} className="flex items-center gap-1">
-                      {showEllipsis && (
-                        <span className="px-2 text-muted-foreground">...</span>
-                      )}
-                      <Button
-                        type="button"
-                        variant={pageNum === pagination.currentPage ? 'default' : 'outline'}
-                        size="icon"
-                        onClick={() => pagination.onPageChange(pageNum)}
-                        className="min-w-[44px]"
-                      >
-                        {pageNum}
-                      </Button>
-                    </div>
-                  )
-                })}
-            </div>
             <Button
-              type="button"
               variant="outline"
+              size="icon"
+              className="h-8 w-8"
               onClick={() => pagination.onPageChange(pagination.currentPage + 1)}
               disabled={pagination.currentPage === pagination.totalPages}
+              title="Go to next page"
             >
-              다음
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => pagination.onPageChange(pagination.totalPages)}
+              disabled={pagination.currentPage === pagination.totalPages}
+              title="Go to last page"
+            >
+              <ChevronsRight className="h-4 w-4" />
             </Button>
           </div>
-          <p className="text-sm text-muted-foreground">
-            전체 {pagination.total}개 중 {((pagination.currentPage - 1) * pagination.pageSize) + 1}-
-            {Math.min(pagination.currentPage * pagination.pageSize, pagination.total)}개 표시
-          </p>
+
+          {/* 오른쪽: 선택된 항목 수 - 데스크톱만 표시 */}
+          <div className="hidden md:block text-sm text-muted-foreground">
+            {selectedIds.size} / {pagination.total} 행 선택됨
+          </div>
+          {/* 모바일: 빈 공간 (중앙 정렬을 위해) */}
+          <div className="md:hidden w-[70px]"></div>
         </div>
       )}
     </div>

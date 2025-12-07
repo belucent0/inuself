@@ -10,11 +10,33 @@ import PageHeader from '@/components/PageHeader'
 export default function ContentsPage() {
   const [data, setData] = useState<ContentListResponse | null>(null)
   const [page, setPage] = useState(1)
+  // 모바일에서는 5, 데스크톱에서는 10을 기본값으로 설정
+  const [pageSize, setPageSize] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 768 ? 5 : 10
+    }
+    return 10
+  })
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const searchParams = useSearchParams()
 
-  const pageSize = 10
+  // 모바일/데스크톱 전환 시 페이지 크기 조정
+  useEffect(() => {
+    const handleResize = () => {
+      const isMobile = window.innerWidth < 768
+      if (isMobile && pageSize !== 5) {
+        setPageSize(5)
+        setPage(1)
+      } else if (!isMobile && pageSize === 5) {
+        setPageSize(10)
+        setPage(1)
+      }
+    }
+
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [pageSize])
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -110,6 +132,10 @@ export default function ContentsPage() {
           total: data.total,
           pageSize: data.page_size,
           onPageChange: setPage,
+          onPageSizeChange: (newPageSize) => {
+            setPageSize(newPageSize)
+            setPage(1) // 페이지 크기 변경 시 첫 페이지로 이동
+          },
         }}
         onRefresh={handleRefresh}
       />
