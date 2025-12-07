@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, FileText, Music, CheckCircle2, XCircle } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { Spinner } from '@/components/ui/spinner'
 
 type PaginationProps = {
   currentPage: number
@@ -62,6 +63,25 @@ const getStatusVariant = (status: ContentStatus): 'default' | 'secondary' | 'des
       return 'outline'
     default:
       return 'outline'
+  }
+}
+
+const getStatusIcon = (status: ContentStatus) => {
+  switch (status) {
+    case 'QUEUED':
+    case 'PROCESSING':
+    case 'OCR_PROCESSING':
+    case 'SUMMARIZING':
+      return <Spinner className="size-3" />
+    case 'COMPLETED':
+      return <CheckCircle2 className="size-3" />
+    case 'ASR_FAILED':
+    case 'OCR_FAILED':
+    case 'SUMMARY_FAILED':
+    case 'CANCELLED':
+      return <XCircle className="size-3" />
+    default:
+      return null
   }
 }
 
@@ -216,16 +236,26 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
                 />
                 <div className="flex-1 min-w-0">
                   <Link href={`/contents/${item.id}`} className="block">
-                    <CardTitle className="text-[15px] md:text-lg mb-1.5 md:mb-2 break-words leading-snug">
-                      {item.title || item.filename}
-                    </CardTitle>
+                    <div className="flex items-center gap-2 mb-1.5 md:mb-2">
+                      {item.content_type === 'DOCUMENT' ? (
+                        <FileText className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground flex-shrink-0" />
+                      ) : item.content_type === 'AUDIO' ? (
+                        <Music className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground flex-shrink-0" />
+                      ) : null}
+                      <CardTitle className="text-[15px] md:text-lg break-words leading-snug">
+                        {item.title || item.filename}
+                      </CardTitle>
+                    </div>
                     <div className="flex items-center gap-1.5 md:gap-2 flex-wrap">
-                      <Badge variant={getStatusVariant(item.status)} className="text-xs">
+                      <Badge variant={getStatusVariant(item.status)} className="text-xs flex items-center gap-1.5">
+                        {getStatusIcon(item.status)}
                         {statusLabels[item.status]}
                       </Badge>
-                      <span className="text-[13px] md:text-sm text-muted-foreground">
-                        화자 수: {item.speakers.length || 0} · 재생 길이: {item.duration_seconds.toFixed(1)}초
-                      </span>
+                      {item.content_type !== 'DOCUMENT' && (
+                        <span className="text-[13px] md:text-sm text-muted-foreground">
+                          화자 수: {item.speakers.length || 0} · 재생 길이: {item.duration_seconds.toFixed(1)}초
+                        </span>
+                      )}
                     </div>
                     <p className="text-[11px] md:text-xs text-muted-foreground mt-1.5 md:mt-2">
                       {formatToKST(item.created_at)}

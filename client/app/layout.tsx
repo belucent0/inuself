@@ -17,7 +17,7 @@ const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || 'admin123'
 
 // 페이지 제목 매핑
 const pageTitles: Record<string, string> = {
-  '/contents': '전사된 콘텐츠',
+  '/contents': '콘텐츠',
   '/roadmap': '로드맵',
 }
 

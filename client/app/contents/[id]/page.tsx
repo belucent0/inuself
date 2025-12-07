@@ -13,7 +13,7 @@ export default async function ContentDetailPage({ params }: Props) {
   const content = await getContentDetail(id)
   const breadcrumbItems = [
     { label: '홈', href: '/' },
-    { label: '전사된 콘텐츠', href: '/contents' },
+    { label: '콘텐츠', href: '/contents' },
     { label: '콘텐츠 상세' },
   ]
 

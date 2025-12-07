@@ -32,7 +32,7 @@ export default function Sidebar({ isOpen = false, onClose, isMobileSheet = false
   }
 
   const navItems = [
-    { href: '/contents', label: '전사된 콘텐츠', icon: FileText },
+    { href: '/contents', label: '콘텐츠', icon: FileText },
     { href: '/roadmap', label: '로드맵', icon: Map },
   ]
 

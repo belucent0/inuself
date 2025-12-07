@@ -27,16 +27,48 @@ export default function UploadForm() {
     return audioExtensions.includes(ext)
   }
 
+  const isDocumentFile = (filename: string): boolean => {
+    const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
+    // 허용된 문서 파일: 이미지 파일과 txt
+    const allowedDocumentExtensions = ['.txt', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']
+    return allowedDocumentExtensions.includes(ext)
+  }
+
+  const isBlockedDocumentFile = (filename: string): boolean => {
+    const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
+    // 차단된 문서 파일: PDF, Word, Excel, PowerPoint 등
+    const blockedDocumentExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
+    return blockedDocumentExtensions.includes(ext)
+  }
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null
     if (file) {
+      // 차단된 문서 파일 체크
+      if (isBlockedDocumentFile(file.name)) {
+        setStatus('PDF, Word, Excel, PowerPoint 등의 문서 파일은 지원하지 않습니다. 이미지 파일(.png, .jpg 등)과 txt 파일만 업로드 가능합니다.')
+        if (fileInputRef.current) {
+          fileInputRef.current.value = ''
+        }
+        return
+      }
+      
+      // 허용되지 않은 파일 체크
+      if (!isAudioFile(file.name) && !isDocumentFile(file.name)) {
+        setStatus('지원하지 않는 파일 형식입니다. 오디오/비디오 파일, 이미지 파일, 또는 txt 파일만 업로드 가능합니다.')
+        if (fileInputRef.current) {
+          fileInputRef.current.value = ''
+        }
+        return
+      }
+      
       setSelectedFile(file)
       // 오디오 파일인 경우에만 화자 수 선택 모달 표시
       if (isAudioFile(file.name)) {
         setShowModal(true)
         setSpeakerRange(null)
       } else {
-        // 문서 파일인 경우 바로 업로드
+        // 문서 파일(이미지, txt)인 경우 바로 업로드
         handleUploadDirect(file)
       }
     }
@@ -134,7 +166,7 @@ export default function UploadForm() {
             <Input
               ref={fileInputRef}
               type="file"
-              accept="audio/*,video/*,.pdf,.png,.jpg,.jpeg,.gif,.bmp,.tiff,.webp,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+              accept="audio/*,video/*,.txt,.png,.jpg,.jpeg,.gif,.bmp,.tiff,.webp"
               onChange={handleFileSelect}
               disabled={isUploading}
               className="hidden"

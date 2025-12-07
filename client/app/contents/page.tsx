@@ -66,7 +66,7 @@ export default function ContentsPage() {
 
   const breadcrumbItems = [
     { label: '홈', href: '/' },
-    { label: '전사된 콘텐츠' },
+    { label: '콘텐츠' },
   ]
 
   if (isLoading && !data) {

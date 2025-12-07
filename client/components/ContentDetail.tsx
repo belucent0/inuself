@@ -3,7 +3,7 @@
 import ReactMarkdown from 'react-markdown'
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowUp, Download } from 'lucide-react'
+import { ArrowUp, Download, FileText, Music } from 'lucide-react'
 
 import { ContentDetail as ContentDetailType, retryProcessing, reclusterSpeakers } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -31,7 +31,7 @@ function isAudioFile(filename: string): boolean {
 
 // 문서 파일인지 확인하는 헬퍼 함수
 function isDocumentFile(filename: string): boolean {
-  const documentExtensions = ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
+  const documentExtensions = ['.txt', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
   const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
   return documentExtensions.includes(ext)
 }
@@ -56,6 +56,11 @@ function isPdfFile(filename: string): boolean {
 function isDocxFile(filename: string): boolean {
   const ext = getFileExtension(filename)
   return ext === '.docx' || ext === '.doc'
+}
+
+// TXT 파일인지 확인
+function isTxtFile(filename: string): boolean {
+  return getFileExtension(filename) === '.txt'
 }
 
 export default function ContentDetail({ content }: Props) {
@@ -272,7 +277,14 @@ export default function ContentDetail({ content }: Props) {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-xl break-words">{content.title || content.filename}</CardTitle>
+          <div className="flex items-center gap-2">
+            {content.content_type === 'DOCUMENT' ? (
+              <FileText className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+            ) : content.content_type === 'AUDIO' ? (
+              <Music className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+            ) : null}
+            <CardTitle className="text-xl break-words">{content.title || content.filename}</CardTitle>
+          </div>
           <CardDescription>
             {isDocumentFile(content.filename) 
               ? `문서 파일 · ${content.document ? `페이지 수: ${content.document.page_count}페이지` : '처리 중'}`
@@ -291,7 +303,22 @@ export default function ContentDetail({ content }: Props) {
               {isDocumentFile(content.filename) ? (
                 // 문서 뷰어
                 <div className="w-full border rounded-lg overflow-hidden bg-muted/50">
-                  {isPdfFile(content.filename) || isDocxFile(content.filename) ? (
+                  {isTxtFile(content.filename) ? (
+                    // txt 파일: 문서 뷰어는 생략하고 아래 "문서 내용" 섹션에서 표시
+                    <div className="p-8 text-center">
+                      <p className="text-muted-foreground mb-4">
+                        텍스트 파일은 아래 "문서 내용" 섹션에서 확인할 수 있습니다.
+                      </p>
+                      <Button
+                        type="button"
+                        onClick={handleDownload}
+                        variant="default"
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        파일 다운로드
+                      </Button>
+                    </div>
+                  ) : isPdfFile(content.filename) || isDocxFile(content.filename) ? (
                     <DocumentViewer
                       fileUrl={content.media_url}
                       filename={content.filename}
@@ -523,15 +550,20 @@ export default function ContentDetail({ content }: Props) {
       {content.document && (
         <Card>
           <CardHeader>
-            <CardTitle>OCR 결과</CardTitle>
+            <CardTitle>{isTxtFile(content.filename) ? '문서 내용' : 'OCR 결과'}</CardTitle>
             <CardDescription>
-              페이지 수: {content.document.page_count}페이지
+              {isTxtFile(content.filename) 
+                ? '텍스트 파일 내용'
+                : `페이지 수: ${content.document.page_count}페이지`}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <ScrollArea className="h-[700px] md:h-[850px] rounded-lg border px-4 py-4">
-              <div className="whitespace-pre-wrap break-words text-base leading-relaxed">
-                {content.document.ocr_text || 'OCR 결과가 없습니다.'}
+              <div className={cn(
+                "whitespace-pre-wrap break-words text-base leading-relaxed",
+                isTxtFile(content.filename) && "font-mono"
+              )}>
+                {content.document.ocr_text || (isTxtFile(content.filename) ? '내용이 없습니다.' : 'OCR 결과가 없습니다.')}
               </div>
             </ScrollArea>
           </CardContent>
