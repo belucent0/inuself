@@ -100,12 +100,18 @@ def _llama_server_process(settings: Settings):
                             models = models_data.get("data", [])
                             if models:
                                 logger.info(f"[LLM] llama-server is ready on {base_url} (models loaded: {len(models)})")
+                                # 서버가 완전히 준비될 때까지 추가 대기 (Vision 모델 초기화 시간 고려)
+                                logger.info(f"[LLM] Waiting additional 5 seconds for server to be fully ready...")
+                                time.sleep(5)
                                 break
                             else:
                                 logger.info(f"[LLM] llama-server responded but no models loaded yet...")
                         except Exception:
                             # JSON 파싱 실패해도 서버가 응답했으므로 계속 진행
                             logger.info(f"[LLM] llama-server is responding on {base_url}")
+                            # 서버가 완전히 준비될 때까지 추가 대기
+                            logger.info(f"[LLM] Waiting additional 5 seconds for server to be fully ready...")
+                            time.sleep(5)
                             break
             except (httpx.HTTPError, httpx.ConnectError):
                 # 서버가 아직 준비되지 않음

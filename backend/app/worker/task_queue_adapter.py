@@ -28,6 +28,16 @@ class TaskQueueAdapter(ABC):
         pass
     
     @abstractmethod
+    def enqueue_ocr_job(
+        self,
+        file_id: int,
+        storage_key: str,
+        original_filename: str,
+    ) -> str:
+        """OCR 작업을 큐에 등록하고 작업 ID를 반환."""
+        pass
+    
+    @abstractmethod
     def get_job_status(self, job_id: str) -> str:
         """작업 상태 조회."""
         pass
@@ -76,6 +86,27 @@ class CeleryAdapter(TaskQueueAdapter):
             args=(),
             kwargs={"content_id": content_id},
             queue="llm",  # 큐를 명시적으로 지정
+        )
+        return result.id
+    
+    def enqueue_ocr_job(
+        self,
+        file_id: int,
+        storage_key: str,
+        original_filename: str,
+    ) -> str:
+        # Lazy import: celery_tasks가 ocr_processor를 import하므로 실행 시점에만 로드
+        from .celery_tasks import process_ocr_task
+        
+        # 큐를 명시적으로 지정하여 작업 전송
+        result = process_ocr_task.apply_async(
+            args=(),
+            kwargs={
+                "file_id": file_id,
+                "storage_key": storage_key,
+                "original_filename": original_filename,
+            },
+            queue="ocr",  # 큐를 명시적으로 지정
         )
         return result.id
     

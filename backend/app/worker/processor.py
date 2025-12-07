@@ -6,9 +6,11 @@ from uuid import uuid4
 from ..core.config import get_settings
 from ..core.logging import logger
 from ..core.storage import download_file
-from ..db.models import ContentStatus
+from ..db.models import ContentStatus, FileStatus
 from ..db.session import AsyncSessionLocal, engine
 from ..repositories.content_repository import ContentRepository
+from ..repositories.file_repository import FileRepository
+from ..repositories.transcription_repository import TranscriptionRepository
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from ..services.transcription_postprocess import (
     merge_consecutive_speaker_segments,
@@ -203,8 +205,11 @@ async def _process_job(
     
     실제 처리 중인 작업만 PROCESSING 상태로 표시하기 위해,
     상태 변경은 파일 다운로드 완료 후 파이프라인이 실제로 시작될 때 수행합니다.
+    
+    content_id는 content 테이블의 id이거나 file 테이블의 id일 수 있습니다 (하위 호환성).
     """
     logger.info("Processing job content_id={} key={}", content_id, storage_key)
+    is_file_based = False  # file 테이블 사용 여부
     logger.info(f"[Worker] [1/5] Starting job: content_id={content_id}, file={original_filename}")
     
     # 파일 다운로드 먼저 수행 (상태 변경 전)
@@ -247,22 +252,44 @@ async def _process_job(
             session = AsyncSessionLocal()
         
         try:
-            repo = ContentRepository(session)
-            # content 존재 여부 확인
-            content = await repo.get_content(content_id)
+            # content 또는 file 존재 여부 확인 (하위 호환성)
+            content_repo = ContentRepository(session)
+            file_repo = FileRepository(session)
+            
+            content = await content_repo.get_content(content_id)
+            file_obj = None
+            is_file_based = False
+            
             if not content:
-                logger.warning("Content not found: content_id={}, skipping status update and log", content_id)
-                return
+                # content 테이블에 없으면 file 테이블에서 조회
+                file_obj = await file_repo.get_file(content_id)
+                if file_obj:
+                    is_file_based = True
+                    logger.info("Found file_id={} in file table (using file-based processing)", content_id)
+                else:
+                    logger.error("Content/File not found: content_id={}, cannot process job", content_id)
+                    raise ValueError(f"Content/File not found: content_id={content_id}")
+            else:
+                logger.info("Found content_id={} in content table (using content-based processing)", content_id)
             
             # 실제 처리 작업이 시작되는 시점에 상태를 PROCESSING으로 변경
-            await repo.update_content_status(content_id, ContentStatus.PROCESSING)
-            log_entry = await repo.add_log(
-                content_id=content_id,
-                log={"event": "started", "file": original_filename},
-                message="ASR processing started",
-            )
+            if is_file_based:
+                await file_repo.update_file_status(content_id, FileStatus.PROCESSING)
+                log_entry = await file_repo.add_log(
+                    file_id=content_id,
+                    log={"event": "started", "file": original_filename},
+                    message="ASR processing started",
+                )
+            else:
+                await content_repo.update_content_status(content_id, ContentStatus.PROCESSING)
+                log_entry = await content_repo.add_log(
+                    content_id=content_id,
+                    log={"event": "started", "file": original_filename},
+                    message="ASR processing started",
+                )
+            
             if not log_entry:
-                logger.warning("Failed to add log: content_id={} (content may have been deleted)", content_id)
+                logger.warning("Failed to add log: content_id={} (content/file may have been deleted)", content_id)
             await session.commit()
         finally:
             await session.close()
@@ -324,13 +351,31 @@ async def _process_job(
         else:
             session = AsyncSessionLocal()
         try:
-            repo = ContentRepository(session)
-            await repo.update_content_status(content_id, ContentStatus.ASR_FAILED)
-            await repo.add_log(
-                content_id=content_id,
-                log={"event": "error", "details": str(exc)},
-                message="ASR pipeline failed",
-            )
+            # content 또는 file 테이블 확인
+            content_repo = ContentRepository(session)
+            file_repo = FileRepository(session)
+            
+            content = await content_repo.get_content(content_id)
+            if not content:
+                # content 테이블에 없으면 file 테이블에서 조회
+                file_obj = await file_repo.get_file(content_id)
+                if file_obj:
+                    is_file_based = True
+                    await file_repo.update_file_status(content_id, FileStatus.ASR_FAILED)
+                    await file_repo.add_log(
+                        file_id=content_id,
+                        log={"event": "error", "details": str(exc)},
+                        message="ASR pipeline failed",
+                    )
+                else:
+                    logger.warning("Cannot update status: content/file not found: content_id={}", content_id)
+            else:
+                await content_repo.update_content_status(content_id, ContentStatus.ASR_FAILED)
+                await content_repo.add_log(
+                    content_id=content_id,
+                    log={"event": "error", "details": str(exc)},
+                    message="ASR pipeline failed",
+                )
             await session.commit()
         finally:
             await session.close()
@@ -394,26 +439,58 @@ async def _process_job(
     else:
         session = AsyncSessionLocal()
     try:
-        repo = ContentRepository(session)
-        await repo.update_content_result(
-            content_id,
-            speakers=list(result.speaker_stats.keys()),
-            duration_seconds=result.duration_seconds,
-            transcription=result.transcription,
-        )
-        await repo.update_content_status(content_id, ContentStatus.SUMMARIZING)
+        # content 또는 file 테이블 확인
+        content_repo = ContentRepository(session)
+        file_repo = FileRepository(session)
+        transcription_repo = TranscriptionRepository(session)
         
-        await repo.add_log(
-            content_id,
-            log={
-                "event": "completed",
-                "speaker_stats": result.speaker_stats,
-                "num_speakers": num_speakers,
-                "speaker_labels": sorted(result.speaker_stats.keys()),
-                "logs": result.logs,
-            },
-            message=f"ASR processing completed (speakers: {num_speakers})",
-        )
+        content = await content_repo.get_content(content_id)
+        if not content:
+            # content 테이블에 없으면 file 테이블에서 조회
+            file_obj = await file_repo.get_file(content_id)
+            if file_obj:
+                # file 테이블 사용: Transcription 테이블에 저장
+                await transcription_repo.update_transcription(
+                    file_id=content_id,
+                    speakers=list(result.speaker_stats.keys()),
+                    duration_seconds=result.duration_seconds,
+                    transcription=result.transcription,
+                )
+                await file_repo.update_file_status(content_id, FileStatus.SUMMARIZING)
+                await file_repo.add_log(
+                    file_id=content_id,
+                    log={
+                        "event": "completed",
+                        "speaker_stats": result.speaker_stats,
+                        "num_speakers": num_speakers,
+                        "speaker_labels": sorted(result.speaker_stats.keys()),
+                        "logs": result.logs,
+                    },
+                    message=f"ASR processing completed (speakers: {num_speakers})",
+                )
+            else:
+                logger.error("Content/File not found: content_id={}, cannot save results", content_id)
+                raise ValueError(f"Content/File not found: content_id={content_id}")
+        else:
+            # content 테이블 사용: 기존 방식
+            await content_repo.update_content_result(
+                content_id,
+                speakers=list(result.speaker_stats.keys()),
+                duration_seconds=result.duration_seconds,
+                transcription=result.transcription,
+            )
+            await content_repo.update_content_status(content_id, ContentStatus.SUMMARIZING)
+            await content_repo.add_log(
+                content_id,
+                log={
+                    "event": "completed",
+                    "speaker_stats": result.speaker_stats,
+                    "num_speakers": num_speakers,
+                    "speaker_labels": sorted(result.speaker_stats.keys()),
+                    "logs": result.logs,
+                },
+                message=f"ASR processing completed (speakers: {num_speakers})",
+            )
         await session.commit()
     finally:
         await session.close()

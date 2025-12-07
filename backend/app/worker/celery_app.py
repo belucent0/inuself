@@ -34,6 +34,7 @@ celery_app.conf.update(
     task_routes={
         "process_asr_task": {"queue": "asr"},
         "process_llm_task": {"queue": "llm"},
+        "process_ocr_task": {"queue": "ocr"},
     },
     # 기본 큐 비활성화 (명시적 큐만 사용)
     task_default_queue="asr",  # 기본값을 asr로 설정 (하지만 명시적 라우팅 사용)

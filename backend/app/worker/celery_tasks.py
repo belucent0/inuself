@@ -254,3 +254,69 @@ def process_llm_task(self, content_id: int):
             # 재시도 로직
             raise self.retry(exc=exc)
 
+
+@celery_app.task(
+    name="process_ocr_task",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    queue="ocr",
+)
+def process_ocr_task(
+    self,
+    file_id: int,
+    storage_key: str,
+    original_filename: str,
+    **kwargs
+):
+    """
+    OCR 작업 처리 Celery 태스크.
+    
+    Args:
+        **kwargs: 호환성을 위한 추가 인자 (무시됨)
+    """
+    try:
+        # Lazy import: API 서버에서는 torch가 없으므로 실행 시점에만 import
+        from .ocr_processor import process_ocr_job
+        
+        logger.info(
+            "[Celery OCR] Starting task: file_id={}, task_id={}",
+            file_id,
+            self.request.id,
+        )
+        
+        process_ocr_job(
+            file_id=file_id,
+            storage_key=storage_key,
+            original_filename=original_filename,
+        )
+        
+        logger.info("[Celery OCR] Task completed: file_id={}", file_id)
+        return {"status": "success", "file_id": file_id}
+        
+    except Exception as exc:
+        error_str = str(exc)
+        retry_count = self.request.retries
+        
+        # FileNotFoundError는 파일이 실제로 없을 가능성이 높으므로 재시도하지 않음
+        if isinstance(exc, FileNotFoundError) or "file not found" in error_str.lower():
+            logger.error(
+                "[Celery OCR] Task failed (no retry - file not found): file_id={}, error={}",
+                file_id,
+                error_str
+            )
+            return {"status": "failed", "file_id": file_id, "error": error_str}
+        
+        if retry_count < self.max_retries:
+            logger.warning(
+                "[Celery OCR] Task failed (will retry {}/{}): file_id={}, error={}",
+                retry_count + 1,
+                self.max_retries,
+                file_id,
+                error_str
+            )
+        else:
+            logger.error("[Celery OCR] Task failed (no more retries): file_id={}, error={}", file_id, error_str)
+        # 재시도 로직
+        raise self.retry(exc=exc)
+
