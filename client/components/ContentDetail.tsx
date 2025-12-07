@@ -44,6 +44,7 @@ export default function ContentDetail({ content }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const segmentContainerRef = useRef<HTMLDivElement>(null)
+  const segmentViewportRef = useRef<HTMLDivElement | null>(null)
   
   const handleRetry = async (type: 'asr' | 'summary') => {
     const typeLabel = type === 'asr' ? 'ASR 처리' : 'LLM 요약'
@@ -199,17 +200,16 @@ export default function ContentDetail({ content }: Props) {
         // 자동 스크롤이 활성화되어 있고 세그먼트가 변경되었을 때 스크롤
         if (autoScroll && newSegmentId !== null) {
           const segmentElement = document.getElementById(`segment-${newSegmentId}`)
-          const container = segmentContainerRef.current
-          if (segmentElement && container) {
-            // 컨테이너 내부 스크롤로 이동
-            const containerRect = container.getBoundingClientRect()
+          const viewport = segmentViewportRef.current
+          if (segmentElement && viewport) {
+            const containerRect = viewport.getBoundingClientRect()
             const elementRect = segmentElement.getBoundingClientRect()
-            const scrollTop = container.scrollTop
+            const scrollTop = viewport.scrollTop
             const elementOffsetTop = elementRect.top - containerRect.top + scrollTop
-            const containerCenter = container.clientHeight / 2
+            const containerCenter = viewport.clientHeight / 2
             const targetScrollTop = elementOffsetTop - containerCenter + (elementRect.height / 2)
             
-            container.scrollTo({
+            viewport.scrollTo({
               top: targetScrollTop,
               behavior: 'smooth'
             })
@@ -405,6 +405,7 @@ export default function ContentDetail({ content }: Props) {
         <CardContent>
           <ScrollArea
             ref={segmentContainerRef}
+            viewportRef={segmentViewportRef}
             className="h-[700px] md:h-[850px] rounded-lg border px-1 py-4"
           >
             <div className="space-y-4">
