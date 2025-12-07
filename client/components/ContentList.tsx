@@ -159,7 +159,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
     selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id))
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2 md:space-y-4 pt-2 md:pt-0">
       <div className="flex gap-2 flex-wrap">
         <Button
           type="button"
