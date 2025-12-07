@@ -7,6 +7,19 @@ const nextConfig = {
   allowedDevOrigins: process.env.ALLOWED_DEV_ORIGINS 
     ? process.env.ALLOWED_DEV_ORIGINS.split(',')
     : ['asr.timblo.io'],
+  // Next.js 16에서 Turbopack이 기본이지만, webpack 설정이 있으므로 webpack 사용 명시
+  // 빈 turbopack 설정을 추가하여 webpack 사용을 명시적으로 지정
+  turbopack: {},
+  webpack: (config, { isServer }) => {
+    // react-pdf를 위한 설정 (canvas는 서버 사이드에서만 false로 설정)
+    if (!isServer) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        canvas: false,
+      }
+    }
+    return config
+  },
 }
 
 module.exports = nextConfig

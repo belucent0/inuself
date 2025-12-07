@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "node -e \"const fs=require('fs'),path=require('path');try{fs.mkdirSync('public',{recursive:true});fs.copyFileSync('node_modules/pdfjs-dist/build/pdf.worker.min.mjs','public/pdf.worker.min.mjs');console.log('PDF.js worker copied to public/');}catch(e){console.warn('PDF.js worker copy failed:',e.message);}\"",
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "next lint"
   },
@@ -26,6 +27,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^9.1.0",
+    "react-pdf": "^9.1.0",
+    "docx-preview": "^0.1.8",
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {

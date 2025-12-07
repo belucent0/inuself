@@ -88,7 +88,7 @@ const apps = [
       '--loglevel=info',
       '--concurrency=1',
       '--max-tasks-per-child=100',
-      '--queues=llm',
+      '--queues=llm,ocr',  // LLM 요약 + OCR 처리 (둘 다 Qwen3-VL API 사용)
       '--hostname=worker-llm@%h'
     ],
     env: {

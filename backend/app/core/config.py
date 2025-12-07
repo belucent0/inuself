@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     llm_server_gpu_layers: int = Field(99, validation_alias="LLM_SERVER_GPU_LAYERS")  # GPU 레이어 수
     llm_server_batch_size: int = Field(512, validation_alias="LLM_SERVER_BATCH_SIZE")  # 배치 크기
     
+    # OCR 설정 (poppler 경로)
+    poppler_path: str = Field("", validation_alias="POPPLER_PATH")  # poppler bin 디렉토리 경로 (예: C:\poppler\bin)
+    
     @property
     def llm_api_base_url(self) -> str:
         """LLM API 서버 URL (환경변수 LLM_BASE_URL 사용)"""
