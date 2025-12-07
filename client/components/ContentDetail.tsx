@@ -3,11 +3,19 @@
 import ReactMarkdown from 'react-markdown'
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { ArrowUp, Download } from 'lucide-react'
 
 import { ContentDetail as ContentDetailType, retryProcessing, reclusterSpeakers } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { formatToKST } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Separator } from '@/components/ui/separator'
 
 type Props = {
   content: ContentDetailType
@@ -129,6 +137,32 @@ export default function ContentDetail({ content }: Props) {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  const handleDownload = async () => {
+    if (!content.media_url) {
+      return
+    }
+    
+    try {
+      const response = await fetch(content.media_url)
+      if (!response.ok) {
+        throw new Error('파일 다운로드 실패')
+      }
+      
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = content.filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('다운로드 오류:', error)
+      alert('파일 다운로드에 실패했습니다.')
+    }
+  }
+
   // 스크롤 위치 추적
   useEffect(() => {
     const handleScroll = () => {
@@ -203,352 +237,340 @@ export default function ContentDetail({ content }: Props) {
   }, [content.media_url, content.filename, content.transcription.segments, autoScroll])
   
   return (
-    <div className="card">
-      <h2 style={{ fontSize: '1.2rem', wordBreak: 'break-word', marginBottom: '0.5rem' }}>{content.title || content.filename}</h2>
-      <p style={{ fontSize: '0.9rem', marginBottom: '0.5rem', lineHeight: '1.5' }}>
-        총 재생 길이 {content.duration_seconds.toFixed(1)}초 · 화자 {content.speakers.join(', ') || '분석 중'}
-      </p>
-      <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '1rem', wordBreak: 'break-all' }}>저장 키: {content.object_key}</p>
-      
-      {content.media_url && (
-        <section style={{ marginTop: '1rem', marginBottom: '1rem' }}>
-          <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>미디어 재생</h3>
-          {isAudioFile(content.filename) ? (
-            <audio 
-              ref={audioRef}
-              controls 
-              src={content.media_url} 
-              style={{ width: '100%', maxWidth: '600px' }}
-              preload="metadata"
-            >
-              브라우저가 오디오 재생을 지원하지 않습니다.
-            </audio>
-          ) : (
-            <video 
-              ref={videoRef}
-              controls 
-              src={content.media_url} 
-              style={{ width: '100%', maxHeight: '500px' }}
-              preload="metadata"
-            >
-              브라우저가 비디오 재생을 지원하지 않습니다.
-            </video>
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-xl break-words">{content.title || content.filename}</CardTitle>
+          <CardDescription>
+            총 재생 길이 {content.duration_seconds.toFixed(1)}초 · 화자 {content.speakers.join(', ') || '분석 중'}
+          </CardDescription>
+          <p className="text-xs text-muted-foreground break-all mt-2">저장 키: {content.object_key}</p>
+        </CardHeader>
+        
+        {content.media_url && (
+          <CardContent className="space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold mb-2">미디어 재생</h3>
+              {isAudioFile(content.filename) ? (
+                <audio 
+                  ref={audioRef}
+                  controls 
+                  src={content.media_url} 
+                  className="w-full max-w-2xl"
+                  preload="metadata"
+                >
+                  브라우저가 오디오 재생을 지원하지 않습니다.
+                </audio>
+              ) : (
+                <video 
+                  ref={videoRef}
+                  controls 
+                  src={content.media_url} 
+                  className="w-full max-h-[500px]"
+                  preload="metadata"
+                >
+                  브라우저가 비디오 재생을 지원하지 않습니다.
+                </video>
+              )}
+            </div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={autoScroll}
+                  onCheckedChange={setAutoScroll}
+                  className="touch-manipulation"
+                  aria-label={autoScroll ? '자동 스크롤 활성화' : '자동 스크롤 비활성화'}
+                />
+                <Label className="text-sm">스크립트 자동 스크롤</Label>
+              </div>
+              <Button
+                type="button"
+                onClick={handleDownload}
+                variant="default"
+                className="ml-auto"
+              >
+                <Download className="mr-2 h-4 w-4" />
+                파일 다운로드
+              </Button>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>LLM 요약</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {content.status === 'SUMMARIZING' && (
+            <p className="text-muted-foreground">LLM이 요약을 생성하는 중입니다. 잠시만 기다려 주세요.</p>
           )}
-          <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <Switch
-              checked={autoScroll}
-              onCheckedChange={setAutoScroll}
-              className="touch-manipulation"
-              aria-label={autoScroll ? '자동 스크롤 활성화' : '자동 스크롤 비활성화'}
-            />
-            <span style={{ fontSize: '0.9rem', color: '#333' }}>
-              스크립트 자동 스크롤
-            </span>
-          </div>
-        </section>
-      )}
-      
-      <section style={{ marginTop: '1.5rem' }}>
-        <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>LLM 요약</h3>
-        {content.status === 'SUMMARIZING' && <p>LLM이 요약을 생성하는 중입니다. 잠시만 기다려 주세요.</p>}
-        {content.status === 'SUMMARY_FAILED' && (
-          <div>
-            <p style={{ color: '#E53935' }}>요약 생성에 실패했습니다. 다시 시도하려면 아래 버튼을 클릭하세요.</p>
-            <button
-              type="button"
-              onClick={() => handleRetry('summary')}
-              style={{
-                padding: '0.5rem 1rem',
-                backgroundColor: '#673AB7',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                marginTop: '0.5rem',
-                minHeight: '44px',
-                width: '100%',
-                fontSize: '0.9rem',
-              }}
-            >
-              LLM 요약 재처리
-            </button>
-          </div>
-        )}
-        {content.summary_md ? (
-          <div className="markdown-content">
-            <ReactMarkdown>{content.summary_md}</ReactMarkdown>
-          </div>
-        ) : (
-          content.status !== 'SUMMARIZING' &&
-          content.status !== 'SUMMARY_FAILED' && <p>요약이 아직 준비되지 않았습니다.</p>
-        )}
-      </section>
+          {content.status === 'SUMMARY_FAILED' && (
+            <div className="space-y-4">
+              <p className="text-destructive">요약 생성에 실패했습니다. 다시 시도하려면 아래 버튼을 클릭하세요.</p>
+              <Button
+                type="button"
+                onClick={() => handleRetry('summary')}
+                variant="secondary"
+                className="w-full"
+              >
+                LLM 요약 재처리
+              </Button>
+            </div>
+          )}
+          {content.summary_md ? (
+            <div className="markdown-content">
+              <ReactMarkdown>{content.summary_md}</ReactMarkdown>
+            </div>
+          ) : (
+            content.status !== 'SUMMARIZING' &&
+            content.status !== 'SUMMARY_FAILED' && (
+              <p className="text-muted-foreground">요약이 아직 준비되지 않았습니다.</p>
+            )
+          )}
+        </CardContent>
+      </Card>
+
       {(content.status === 'ASR_FAILED' || content.status === 'PROCESSING' || content.status === 'QUEUED') && (
-        <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: content.status === 'ASR_FAILED' ? '#ffebee' : content.status === 'QUEUED' ? '#e3f2fd' : '#fff3e0', borderRadius: '4px' }}>
-          <p style={{ color: content.status === 'ASR_FAILED' ? '#E53935' : content.status === 'QUEUED' ? '#1976D2' : '#F57C00', marginBottom: '0.5rem' }}>
-            {content.status === 'ASR_FAILED' 
-              ? 'ASR 처리가 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.'
-              : content.status === 'QUEUED'
-              ? 'ASR 처리가 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.'
-              : 'ASR 처리가 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.'}
-          </p>
-          <div style={{ marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
-              <div style={{ flex: '1', minWidth: '150px' }}>
-                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 'bold' }}>
-                  최소 화자 수 (선택사항):
-                </label>
-                <input
+        <Card className={cn(
+          content.status === 'ASR_FAILED' && "border-destructive",
+          content.status === 'QUEUED' && "border-primary"
+        )}>
+          <CardHeader>
+            <CardTitle className={cn(
+              "text-base",
+              content.status === 'ASR_FAILED' && "text-destructive",
+              content.status === 'QUEUED' && "text-primary"
+            )}>
+              {content.status === 'ASR_FAILED' 
+                ? 'ASR 처리가 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.'
+                : content.status === 'QUEUED'
+                ? 'ASR 처리가 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.'
+                : 'ASR 처리가 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.'}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="minSpeakers">최소 화자 수 (선택사항)</Label>
+                <Input
+                  id="minSpeakers"
                   type="number"
                   min="1"
                   value={minSpeakers}
                   onChange={(e) => setMinSpeakers(e.target.value)}
                   placeholder="자동 결정"
-                  style={{
-                    width: '100%',
-                    padding: '0.5rem',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    fontSize: '0.9rem'
-                  }}
                 />
               </div>
-              <div style={{ flex: '1', minWidth: '150px' }}>
-                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 'bold' }}>
-                  최대 화자 수 (선택사항):
-                </label>
-                <input
+              <div className="space-y-2">
+                <Label htmlFor="maxSpeakers">최대 화자 수 (선택사항)</Label>
+                <Input
+                  id="maxSpeakers"
                   type="number"
                   min="1"
                   value={maxSpeakers}
                   onChange={(e) => setMaxSpeakers(e.target.value)}
                   placeholder="자동 결정"
-                  style={{
-                    width: '100%',
-                    padding: '0.5rem',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    fontSize: '0.9rem'
-                  }}
                 />
               </div>
             </div>
-            <p style={{ fontSize: '0.8rem', color: '#999', marginTop: '0.25rem' }}>
+            <p className="text-xs text-muted-foreground">
               화자 수 범위를 지정하지 않으면 자동으로 결정됩니다.
             </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => handleRetry('asr')}
-            style={{
-              padding: '0.5rem 1rem',
-              backgroundColor: '#2196F3',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              minHeight: '44px',
-              width: '100%',
-              fontSize: '0.9rem',
-            }}
-          >
-            ASR 재처리
-          </button>
-        </div>
+            <Button
+              type="button"
+              onClick={() => handleRetry('asr')}
+              variant="default"
+              className="w-full"
+            >
+              ASR 재처리
+            </Button>
+          </CardContent>
+        </Card>
       )}
+
       {message && (
-        <p style={{ marginTop: '1rem', color: message.includes('실패') ? '#F44336' : '#4CAF50' }}>
+        <div className={cn(
+          "p-3 rounded-md text-sm",
+          message.includes('실패') ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary"
+        )}>
           {message}
-        </p>
-      )}
-      <section style={{ marginTop: '1.5rem' }}>
-        <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>세그먼트</h3>
-        <div
-          ref={segmentContainerRef}
-          className="segment-container"
-          style={{
-            position: 'sticky',
-            top: '1rem',
-            maxHeight: '800px',
-            overflowY: 'auto',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
-            padding: '0.5rem',
-            backgroundColor: '#fff',
-            zIndex: 10
-          }}
-        >
-          {content.transcription.segments?.map((seg) => {
-            const isActive = currentSegmentId === seg.id
-            return (
-              <div 
-                key={seg.id}
-                id={`segment-${seg.id}`}
-                className="segment"
-                style={{
-                  backgroundColor: isActive ? '#E3F2FD' : 'transparent',
-                  borderRadius: isActive ? '4px' : undefined,
-                  transition: 'background-color 0.2s ease',
-                  padding: '0.75rem 0'
-                }}
-              >
-                <strong style={{ fontSize: '0.9rem' }}>{seg.speaker || 'UNKNOWN'}</strong>{' '}
-                <span 
-                  onClick={() => handleSeekToTime(seg.start)}
-                  style={{ 
-                    fontSize: '0.85rem', 
-                    color: '#666',
-                    cursor: 'pointer',
-                    textDecoration: 'underline',
-                    textDecorationColor: '#999',
-                    transition: 'color 0.2s ease'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.color = '#2196F3'
-                    e.currentTarget.style.textDecorationColor = '#2196F3'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.color = '#666'
-                    e.currentTarget.style.textDecorationColor = '#999'
-                  }}
-                >
-                  [{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]
-                </span>
-                <p style={{ marginTop: '0.25rem', fontSize: '0.9rem', lineHeight: '1.5', wordBreak: 'break-word' }}>{seg.text}</p>
-              </div>
-            )
-          })}
         </div>
-      </section>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>세그먼트</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ScrollArea
+            ref={segmentContainerRef}
+            className="h-[700px] md:h-[850px] rounded-lg border px-1 py-4"
+          >
+            <div className="space-y-4">
+              {content.transcription.segments?.map((seg) => {
+                const isActive = currentSegmentId === seg.id
+                return (
+                  <div 
+                    key={seg.id}
+                    id={`segment-${seg.id}`}
+                    className={cn(
+                      "pb-4 border-b last:border-b-0 transition-colors rounded-md px-2 py-3",
+                      isActive && "bg-primary/10"
+                    )}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Badge variant="outline">{seg.speaker || 'UNKNOWN'}</Badge>
+                      <button
+                        onClick={() => handleSeekToTime(seg.start)}
+                        className="text-xs text-muted-foreground hover:text-primary underline underline-offset-2 transition-colors"
+                      >
+                        [{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]
+                      </button>
+                    </div>
+                    <p className="text-base leading-relaxed break-words">{seg.text}</p>
+                  </div>
+                )
+              })}
+            </div>
+          </ScrollArea>
+        </CardContent>
+      </Card>
+
       {content.transcription.diarization_metadata && (
-        <section style={{ marginTop: '1.5rem' }}>
-          <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>화자 분리 메타데이터</h3>
-          <div style={{ padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px', fontSize: '0.9rem' }}>
-            <p style={{ marginBottom: '0.5rem' }}>
+        <Card>
+          <CardHeader>
+            <CardTitle>화자 분리 메타데이터</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-sm">
               <strong>구분된 화자 수:</strong> {content.transcription.diarization_metadata.num_speakers}명
             </p>
-            <p style={{ marginBottom: '0.5rem' }}>
+            <p className="text-sm">
               <strong>화자 라벨:</strong> {content.transcription.diarization_metadata.speaker_labels.join(', ')}
             </p>
-          </div>
-        </section>
+          </CardContent>
+        </Card>
       )}
+
       {content.transcription.diarization_metadata?.segment_embeddings && 
        content.transcription.diarization_metadata.segment_embeddings.length > 0 && (
-        <section style={{ marginTop: '1.5rem' }}>
-          <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>화자 재분류</h3>
-          <div style={{ padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px', fontSize: '0.9rem' }}>
-            <p style={{ marginBottom: '1rem', color: '#666', fontSize: '0.85rem' }}>
+        <Card>
+          <CardHeader>
+            <CardTitle>화자 재분류</CardTitle>
+            <CardDescription>
               저장된 세그먼트 임베딩을 기반으로 화자를 재클러스터링합니다. GPU 연산 없이 빠르게 처리됩니다.
-            </p>
-            <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-                화자 수 (선택사항):
-              </label>
-              <input
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="numSpeakers">화자 수 (선택사항)</Label>
+              <Input
+                id="numSpeakers"
                 type="number"
                 min="1"
                 value={numSpeakers}
                 onChange={(e) => setNumSpeakers(e.target.value)}
                 placeholder="자동 결정"
-                style={{
-                  width: '200px',
-                  padding: '0.5rem',
-                  border: '1px solid #ddd',
-                  borderRadius: '4px',
-                  fontSize: '0.9rem'
-                }}
+                className="max-w-xs"
                 disabled={isReclustering}
               />
-              <p style={{ fontSize: '0.8rem', color: '#999', marginTop: '0.25rem' }}>
+              <p className="text-xs text-muted-foreground">
                 비워두면 자동으로 결정됩니다.
               </p>
             </div>
-            <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+            <div className="space-y-2">
+              <Label htmlFor="similarityThreshold">
                 유사도 임계값: {similarityThreshold.toFixed(2)}
-              </label>
+              </Label>
               <input
+                id="similarityThreshold"
                 type="range"
                 min="0"
                 max="1"
                 step="0.05"
                 value={similarityThreshold}
                 onChange={(e) => setSimilarityThreshold(parseFloat(e.target.value))}
-                style={{ width: '100%', maxWidth: '400px' }}
+                className="w-full max-w-md"
                 disabled={isReclustering}
               />
-              <p style={{ fontSize: '0.8rem', color: '#999', marginTop: '0.25rem' }}>
+              <p className="text-xs text-muted-foreground">
                 0.0 (낮음) ~ 1.0 (높음) - 유사도가 이 값 이상인 세그먼트를 같은 화자로 묶습니다.
               </p>
             </div>
-            <button
+            <Button
               onClick={handleRecluster}
               disabled={isReclustering}
-              style={{
-                padding: '0.75rem 1.5rem',
-                backgroundColor: isReclustering ? '#ccc' : '#673AB7',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                fontSize: '0.9rem',
-                cursor: isReclustering ? 'not-allowed' : 'pointer',
-                fontWeight: 'bold'
-              }}
+              variant="secondary"
+              className="w-full"
             >
               {isReclustering ? '재클러스터링 중...' : '재클러스터링 실행'}
-            </button>
+            </Button>
             {reclusterMessage && (
-              <p style={{ 
-                marginTop: '1rem', 
-                padding: '0.75rem',
-                backgroundColor: reclusterMessage.includes('✅') ? '#e8f5e9' : '#ffebee',
-                color: reclusterMessage.includes('✅') ? '#2e7d32' : '#c62828',
-                borderRadius: '4px',
-                fontSize: '0.85rem'
-              }}>
+              <div className={cn(
+                "p-3 rounded-md text-sm",
+                reclusterMessage.includes('✅') 
+                  ? "bg-primary/10 text-primary" 
+                  : "bg-destructive/10 text-destructive"
+              )}>
                 {reclusterMessage}
-              </p>
+              </div>
             )}
-          </div>
-        </section>
+          </CardContent>
+        </Card>
       )}
-      <section style={{ marginTop: '1.5rem' }}>
-        <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>로그</h3>
-        {content.logs?.map((log) => (
-            <div key={log.id} className="segment">
-              <strong style={{ fontSize: '0.9rem' }}>{log.message || '로그'}</strong>
-              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8rem', overflowX: 'auto', wordBreak: 'break-word' }}>{JSON.stringify(log.log, null, 2)}</pre>
-              <small style={{ fontSize: '0.85rem', color: '#666' }}>{formatToKST(log.created_at)}</small>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>로그</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {content.logs?.map((log) => (
+            <div key={log.id} className="pb-4 border-b last:border-b-0">
+              <p className="text-sm font-semibold mb-2">{log.message || '로그'}</p>
+              <pre className="text-xs overflow-x-auto break-words whitespace-pre-wrap bg-muted p-3 rounded-md">
+                {JSON.stringify(log.log, null, 2)}
+              </pre>
+              <p className="text-xs text-muted-foreground mt-2">{formatToKST(log.created_at)}</p>
             </div>
-        ))}
-      </section>
-      <section style={{ marginTop: '1.5rem' }}>
-        <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>LLM 로그</h3>
-        {content.llm_logs?.length ? (
-          content.llm_logs.map((log) => (
-            <div key={log.id} className="segment">
-              <strong style={{ fontSize: '0.9rem' }}>{log.message || '로그'}</strong>
-              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8rem', overflowX: 'auto', wordBreak: 'break-word' }}>{JSON.stringify(log.log, null, 2)}</pre>
-              <small style={{ fontSize: '0.85rem', color: '#666' }}>{formatToKST(log.created_at)}</small>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>LLM 로그</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {content.llm_logs?.length ? (
+            <div className="space-y-4">
+              {content.llm_logs.map((log) => (
+                <div key={log.id} className="pb-4 border-b last:border-b-0">
+                  <p className="text-sm font-semibold mb-2">{log.message || '로그'}</p>
+                  <pre className="text-xs overflow-x-auto break-words whitespace-pre-wrap bg-muted p-3 rounded-md">
+                    {JSON.stringify(log.log, null, 2)}
+                  </pre>
+                  <p className="text-xs text-muted-foreground mt-2">{formatToKST(log.created_at)}</p>
+                </div>
+              ))}
             </div>
-          ))
-        ) : (
-          <p>LLM 로그가 없습니다.</p>
-        )}
-      </section>
+          ) : (
+            <p className="text-muted-foreground">LLM 로그가 없습니다.</p>
+          )}
+        </CardContent>
+      </Card>
+
       {showScrollTop && (
         <Button
           type="button"
           onClick={handleScrollToTop}
           size="icon"
-          className="hidden md:flex fixed bottom-8 left-1/2 -translate-x-1/2 w-12 h-12 rounded-full shadow-lg z-[1000] min-h-[48px] min-w-[48px] touch-manipulation hover:opacity-90 hover:-translate-y-0.5 hover:translate-x-[-50%] transition-all"
+          className="fixed bottom-8 left-1/2 -translate-x-1/2 w-12 h-12 rounded-full shadow-lg z-[1000] hidden md:flex"
           aria-label="맨 위로"
         >
-          ↑
+          <ArrowUp className="h-5 w-5" />
         </Button>
       )}
     </div>
   )
 }
-
