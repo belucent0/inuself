@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Card, CardContent } from '@/components/ui/card'
+import PageHeader from '@/components/PageHeader'
 
 type TabType = 'developing' | 'considering' | 'longterm'
 
@@ -59,38 +61,45 @@ export default function RoadmapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab])
 
-  return (
-    <section>
-      <h2>로드맵</h2>
-      <div className="card">
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as TabType)} className="w-full">
-          <TabsList className="grid w-full grid-cols-3 mb-6 h-14 md:h-10 p-1.5 md:p-1">
-            {(['developing', 'considering', 'longterm'] as TabType[]).map((tab) => (
-              <TabsTrigger 
-                key={tab} 
-                value={tab}
-                className="flex-1 min-w-0 py-2 md:py-1.5"
-              >
-                <span className="truncate">{tabLabels[tab]}</span>
-              </TabsTrigger>
-            ))}
-          </TabsList>
+  const breadcrumbItems = [
+    { label: '홈', href: '/' },
+    { label: '로드맵' },
+  ]
 
-          {(['developing', 'considering', 'longterm'] as TabType[]).map((tab) => (
-            <TabsContent key={tab} value={tab} className="mt-0">
-              {loadingTabs.has(tab) ? (
-                <p>로딩 중...</p>
-              ) : error && !markdownCache[tab] ? (
-                <p className="text-red-600">{error}</p>
-              ) : markdownCache[tab] ? (
-                <div className="markdown-content">
-                  <ReactMarkdown>{markdownCache[tab]}</ReactMarkdown>
-                </div>
-              ) : null}
-            </TabsContent>
-          ))}
-        </Tabs>
-      </div>
-    </section>
+  return (
+    <div>
+      <PageHeader items={breadcrumbItems} />
+      <Card>
+        <CardContent className="pt-6">
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as TabType)} className="w-full">
+            <TabsList className="grid w-full grid-cols-3 mb-6 h-11 md:h-10 p-1">
+              {(['developing', 'considering', 'longterm'] as TabType[]).map((tab) => (
+                <TabsTrigger 
+                  key={tab} 
+                  value={tab}
+                  className="flex-1 min-w-0 py-2 md:py-1.5"
+                >
+                  <span className="truncate">{tabLabels[tab]}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+
+            {(['developing', 'considering', 'longterm'] as TabType[]).map((tab) => (
+              <TabsContent key={tab} value={tab} className="mt-0">
+                {loadingTabs.has(tab) ? (
+                  <p className="text-muted-foreground">로딩 중...</p>
+                ) : error && !markdownCache[tab] ? (
+                  <p className="text-destructive">{error}</p>
+                ) : markdownCache[tab] ? (
+                  <div className="markdown-content">
+                    <ReactMarkdown>{markdownCache[tab]}</ReactMarkdown>
+                  </div>
+                ) : null}
+              </TabsContent>
+            ))}
+          </Tabs>
+        </CardContent>
+      </Card>
+    </div>
   )
 }
