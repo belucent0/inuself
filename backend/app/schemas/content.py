@@ -48,14 +48,14 @@ class ContentBaseSchema(BaseModel):
 class ContentListItem(ContentBaseSchema):
     # 타입별 콘텐츠 (선택적) - lazy import로 순환 참조 방지
     transcription_content: dict[str, Any] | None = None
-    document_content: dict[str, Any] | None = None
+    document: dict[str, Any] | None = None
 
 
 class ContentDetail(ContentBaseSchema):
     transcription: dict[str, Any]
     # 타입별 콘텐츠 (선택적)
     transcription_content: dict[str, Any] | None = None
-    document_content: dict[str, Any] | None = None
+    document: dict[str, Any] | None = None
     logs: list[SttLogSchema] = Field(default_factory=list)
     llm_logs: list[LlmLogSchema] = Field(default_factory=list)
 

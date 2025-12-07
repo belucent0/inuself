@@ -208,12 +208,47 @@ async def _process_ocr_job(
         
         # OCR 처리
         logger.info("[OCR] Starting OCR processing...")
-        ocr_service = OcrService()
-        ocr_result = ocr_service.process_document(temp_path)
         
-        logger.info("[OCR] OCR processing completed!")
-        logger.info(f"[OCR] - Extracted text length: {len(ocr_result['ocr_text'])} chars")
-        logger.info(f"[OCR] - Page count: {ocr_result['page_count']}")
+        # txt 파일인 경우 OCR을 건너뛰고 파일 내용을 직접 읽기
+        if temp_path.suffix.lower() == '.txt':
+            logger.info("[OCR] Text file detected, skipping OCR and reading file directly...")
+            try:
+                # UTF-8로 먼저 시도
+                used_encoding = "utf-8"
+                try:
+                    with open(temp_path, 'r', encoding='utf-8') as f:
+                        ocr_text = f.read()
+                except UnicodeDecodeError:
+                    # UTF-8 실패 시 CP949 (한글 윈도우 기본 인코딩) 시도
+                    logger.warning("[OCR] UTF-8 decoding failed, trying CP949...")
+                    used_encoding = "cp949"
+                    with open(temp_path, 'r', encoding='cp949') as f:
+                        ocr_text = f.read()
+                
+                ocr_result = {
+                    "ocr_text": ocr_text,
+                    "page_count": 1,  # txt 파일은 페이지 개념이 없지만 1로 설정
+                    "ocr_metadata": {
+                        "file_path": str(temp_path),
+                        "file_type": ".txt",
+                        "page_count": 1,
+                        "processing_method": "direct_read",
+                        "encoding": used_encoding
+                    }
+                }
+                logger.info("[OCR] Text file read completed!")
+                logger.info(f"[OCR] - Extracted text length: {len(ocr_result['ocr_text'])} chars")
+            except Exception as e:
+                logger.error(f"[OCR] Failed to read text file: {e}")
+                raise
+        else:
+            # 이미지나 PDF 파일인 경우 OCR 서비스 사용
+            ocr_service = OcrService()
+            ocr_result = ocr_service.process_document(temp_path)
+            
+            logger.info("[OCR] OCR processing completed!")
+            logger.info(f"[OCR] - Extracted text length: {len(ocr_result['ocr_text'])} chars")
+            logger.info(f"[OCR] - Page count: {ocr_result['page_count']}")
         
     except Exception as exc:
         logger.error(f"[OCR] ERROR Error occurred: {exc}")
@@ -280,12 +315,24 @@ async def _process_ocr_job(
         file_repo = FileRepository(session)
         document_repo = DocumentRepository(session)
         
-        await document_repo.update_document(
-            file_id=file_id,
-            ocr_text=ocr_result["ocr_text"],
-            page_count=ocr_result["page_count"],
-            ocr_metadata=ocr_result["ocr_metadata"],
-        )
+        # document가 없으면 생성, 있으면 업데이트
+        existing_document = await document_repo.get_by_file_id(file_id)
+        if existing_document:
+            await document_repo.update_document(
+                file_id=file_id,
+                ocr_text=ocr_result["ocr_text"],
+                page_count=ocr_result["page_count"],
+                ocr_metadata=ocr_result["ocr_metadata"],
+            )
+        else:
+            # document가 없는 경우 생성 (txt 파일 등에서 발생할 수 있음)
+            logger.warning("[OCR] Document not found, creating new document for file_id={}", file_id)
+            await document_repo.create_document(
+                file_id=file_id,
+                ocr_text=ocr_result["ocr_text"],
+                page_count=ocr_result["page_count"],
+                ocr_metadata=ocr_result["ocr_metadata"],
+            )
         await file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
         
         await file_repo.add_log(

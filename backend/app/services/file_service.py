@@ -74,7 +74,7 @@ class FileService:
                 }
             # 문서 파일인 경우 document 정보 추가
             elif row.content_type == ContentType.DOCUMENT and row.document:
-                item_dict["document_content"] = {
+                item_dict["document"] = {
                     "id": row.document.id,
                     "file_id": row.document.file_id,
                     "ocr_text": row.document.ocr_text,
@@ -104,9 +104,6 @@ class FileService:
         file_obj = await self.file_repo.get_file(file_id)
         if not file_obj:
             raise ValueError("File not found")
-        
-        # 관계 로드
-        await self.session.refresh(file_obj, ["transcription", "document", "logs", "llm_logs"])
         
         # ContentDetail로 변환
         detail_dict = {
@@ -138,22 +135,30 @@ class FileService:
                 "transcription": file_obj.transcription.transcription,
             }
         # 문서 파일인 경우 document 정보 추가
-        if file_obj.content_type == ContentType.DOCUMENT and file_obj.document:
-            detail_dict["document_content"] = {
-                "id": file_obj.document.id,
-                "file_id": file_obj.document.file_id,
-                "ocr_text": file_obj.document.ocr_text,
-                "page_count": file_obj.document.page_count,
-                "ocr_metadata": file_obj.document.ocr_metadata,
-            }
-        elif file_obj.content_type == ContentType.DOCUMENT:
-            detail_dict["document_content"] = {
-                "id": file_obj.document.id,
-                "file_id": file_obj.document.file_id,
-                "ocr_text": file_obj.document.ocr_text,
-                "page_count": file_obj.document.page_count,
-                "ocr_metadata": file_obj.document.ocr_metadata,
-            }
+        if file_obj.content_type == ContentType.DOCUMENT:
+            # file_obj.document가 로드되지 않았거나 None인 경우 명시적으로 조회
+            if file_obj.document is None:
+                document_obj = await self.document_repo.get_by_file_id(file_id)
+                if document_obj:
+                    detail_dict["document"] = {
+                        "id": document_obj.id,
+                        "file_id": document_obj.file_id,
+                        "ocr_text": document_obj.ocr_text,
+                        "page_count": document_obj.page_count,
+                        "ocr_metadata": document_obj.ocr_metadata,
+                    }
+                else:
+                    # document가 아직 생성되지 않은 경우 (처리 중)
+                    detail_dict["document"] = None
+            else:
+                # file_obj.document가 이미 로드된 경우
+                detail_dict["document"] = {
+                    "id": file_obj.document.id,
+                    "file_id": file_obj.document.file_id,
+                    "ocr_text": file_obj.document.ocr_text,
+                    "page_count": file_obj.document.page_count,
+                    "ocr_metadata": file_obj.document.ocr_metadata,
+                }
         
         # 로그 추가
         detail_dict["logs"] = [
@@ -189,17 +194,19 @@ class FileService:
         
         # 오디오 파일 확장자
         audio_extensions = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma", ".mp4", ".avi", ".mkv", ".mov", ".webm"}
-        # 문서 파일 확장자
-        document_extensions = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"}
+        # 허용된 문서 파일 확장자 (이미지 파일과 txt)
+        allowed_document_extensions = {".txt", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"}
+        # 차단된 문서 파일 확장자 (페이지가 많은 문서 파일들 - OCR이 불안정)
+        blocked_document_extensions = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"}
         
         if extension in audio_extensions:
             return ContentType.AUDIO
-        elif extension in document_extensions:
+        elif extension in allowed_document_extensions:
             return ContentType.DOCUMENT
+        elif extension in blocked_document_extensions:
+            raise ValueError(f"PDF, Word, Excel, PowerPoint 등의 문서 파일은 지원하지 않습니다. 이미지 파일(.png, .jpg 등)과 txt 파일만 업로드 가능합니다. (확장자: {extension})")
         else:
-            # 기본값은 문서로 처리 (확장 가능성 고려)
-            logger.warning(f"Unknown file extension: {extension}, treating as DOCUMENT")
-            return ContentType.DOCUMENT
+            raise ValueError(f"지원하지 않는 파일 형식입니다. (확장자: {extension})")
 
     def _build_object_key(self, filename: str) -> str:
         """안전한 파일명으로 object_key 생성 (비ASCII 문자 제거)."""

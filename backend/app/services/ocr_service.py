@@ -56,41 +56,65 @@ class OcrService:
                 "Install with: pip install PyMuPDF (recommended) or pip install pdf2image"
             )
     
-    def _pdf_to_images_pymupdf(self, pdf_path: Path) -> list[Image.Image]:
-        """PyMuPDF를 사용하여 PDF를 이미지로 변환 (크로스 플랫폼, 의존성 없음)."""
+    def _pdf_to_images_pymupdf(self, pdf_path: Path, max_dpi: int = 150) -> list[Image.Image]:
+        """
+        PyMuPDF를 사용하여 PDF를 이미지로 변환 (크로스 플랫폼, 의존성 없음).
+        
+        Args:
+            pdf_path: PDF 파일 경로
+            max_dpi: 최대 DPI (기본값 150, 성능 우선)
+                     150: 성능 우선 (품질 약간 저하 가능) ⭐ 기본값
+                     200: 권장 (품질과 성능의 좋은 균형)
+                     250-300: 고품질 (메모리/처리 부담 증가)
+        """
         try:
             doc = fitz.open(str(pdf_path))
             images: list[Image.Image] = []
             
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
-                # 300 DPI로 렌더링 (OCR에 최적화)
-                mat = fitz.Matrix(300 / 72, 300 / 72)  # 72 DPI를 300 DPI로 변환
+                # DPI 제한 (메모리 및 처리 시간 최적화)
+                # 200 DPI는 OCR 품질과 성능의 좋은 균형점
+                # 300 DPI는 매우 큰 이미지를 생성하므로 메모리 부담 증가
+                mat = fitz.Matrix(max_dpi / 72, max_dpi / 72)
                 pix = page.get_pixmap(matrix=mat)
                 
                 # PIL Image로 변환
                 img_data = pix.tobytes("png")
                 img = Image.open(BytesIO(img_data))
                 images.append(img)
+                
+                # 메모리 정리
+                pix = None
+                img_data = None
             
             doc.close()
-            logger.info(f"Converted PDF to {len(images)} images using PyMuPDF")
+            logger.info(f"Converted PDF to {len(images)} images using PyMuPDF (DPI: {max_dpi})")
             return images
         except Exception as e:
             logger.error(f"Failed to convert PDF to images using PyMuPDF: {e}")
             raise
     
-    def _pdf_to_images_pdf2image(self, pdf_path: Path) -> list[Image.Image]:
-        """pdf2image를 사용하여 PDF를 이미지로 변환 (poppler 필요, 하위 호환성)."""
+    def _pdf_to_images_pdf2image(self, pdf_path: Path, max_dpi: int = 150) -> list[Image.Image]:
+        """
+        pdf2image를 사용하여 PDF를 이미지로 변환 (poppler 필요, 하위 호환성).
+        
+        Args:
+            pdf_path: PDF 파일 경로
+            max_dpi: 최대 DPI (기본값 150, 성능 우선)
+                     150: 성능 우선 (품질 약간 저하 가능) ⭐ 기본값
+                     200: 권장 (품질과 성능의 좋은 균형)
+                     250-300: 고품질 (메모리/처리 부담 증가)
+        """
         try:
             # poppler 경로가 설정되어 있으면 사용
             poppler_path = self.settings.poppler_path if self.settings.poppler_path else None
             if poppler_path:
                 logger.info(f"Using poppler from: {poppler_path}")
-                images = convert_from_path(str(pdf_path), dpi=300, poppler_path=poppler_path)
+                images = convert_from_path(str(pdf_path), dpi=max_dpi, poppler_path=poppler_path)
             else:
-                images = convert_from_path(str(pdf_path), dpi=300)
-            logger.info(f"Converted PDF to {len(images)} images using pdf2image")
+                images = convert_from_path(str(pdf_path), dpi=max_dpi)
+            logger.info(f"Converted PDF to {len(images)} images using pdf2image (DPI: {max_dpi})")
             return images
         except PDFInfoNotInstalledError as e:
             error_msg = (
@@ -115,15 +139,48 @@ class OcrService:
             logger.error(f"Failed to load image: {e}")
             raise
 
-    def _image_to_base64(self, image: Image.Image) -> str:
-        """이미지를 base64 문자열로 변환."""
+    def _image_to_base64(self, image: Image.Image, max_size: tuple[int, int] = (1536, 1536), quality: int = 75) -> str:
+        """
+        이미지를 base64 문자열로 변환.
+        
+        Args:
+            image: PIL Image 객체
+            max_size: 최대 이미지 크기 (width, height). 초과 시 리사이즈
+                     기본값 1536x1536으로 설정 (메모리 및 처리 부하 감소)
+            quality: JPEG 압축 품질 (1-100, 낮을수록 파일 크기 작음)
+                     기본값 75로 설정 (메모리 사용량 감소)
+        """
+        import gc
+        
         buffered = BytesIO()
-        # RGB 모드로 변환 (PNG의 경우 RGBA일 수 있음)
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        image.save(buffered, format="JPEG", quality=95)
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        return img_str
+        try:
+            # RGB 모드로 변환 (PNG의 경우 RGBA일 수 있음)
+            # 원본 이미지를 수정하지 않기 위해 복사본 생성
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            
+            # 이미지 크기 제한 (메모리 및 처리 시간 최적화)
+            # 1536x1536으로 제한하여 Vision Encoder 처리 부하 감소
+            original_size = image.size
+            if original_size[0] > max_size[0] or original_size[1] > max_size[1]:
+                # 비율 유지하며 리사이즈
+                image.thumbnail(max_size, Image.Resampling.LANCZOS)
+                logger.info(
+                    f"Image resized from {original_size} to {image.size} "
+                    f"(max_size={max_size})"
+                )
+            
+            # JPEG로 저장 (품질 낮춰서 파일 크기 및 메모리 사용량 감소)
+            # quality=75로 설정하여 메모리 사용량 감소
+            image.save(buffered, format="JPEG", quality=quality, optimize=True)
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            
+            return img_str
+        finally:
+            # 메모리 정리
+            buffered.close()
+            # 명시적 가비지 컬렉션으로 메모리 해제 촉진
+            gc.collect()
 
     def _call_llm_api(self, prompt: str, image_base64: str | None = None, server_process=None) -> str:
         """
@@ -278,17 +335,20 @@ class OcrService:
             for page_idx, image in enumerate(images):
                 logger.info(f"Processing page {page_idx + 1}/{page_count}")
                 
-                # 이미지를 base64로 변환
-                image_base64 = self._image_to_base64(image)
-                
-                # OCR 프롬프트
-                prompt = """이 이미지에서 모든 텍스트를 정확하게 추출해주세요. 
+                image_base64 = None
+                try:
+                    # 이미지를 base64로 변환 (크기 제한 및 압축 적용)
+                    # 1536x1536으로 제한하여 Vision Encoder 처리 부하 감소
+                    # quality=75로 설정하여 메모리 사용량 감소
+                    image_base64 = self._image_to_base64(image, max_size=(1536, 1536), quality=75)
+                    
+                    # OCR 프롬프트
+                    prompt = """이 이미지에서 모든 텍스트를 정확하게 추출해주세요. 
 이미지에 있는 모든 텍스트, 숫자, 기호를 그대로 추출하되, 
 원본의 형식과 구조를 최대한 유지해주세요.
 표나 목록이 있다면 그 구조도 유지해주세요.
 추출된 텍스트만 반환하고, 설명이나 주석은 포함하지 마세요."""
-                
-                try:
+                    
                     # LLM API 호출 (이미 시작된 서버 사용)
                     page_text = self._call_llm_api(prompt, image_base64, server_process=server_process)
                     all_texts.append(page_text)
@@ -315,6 +375,18 @@ class OcrService:
                             f"OCR failed for first page (likely LLM API connection issue): {e}. "
                             f"Please ensure LLM API server is running at {self.settings.llm_api_base_url}"
                         ) from e
+                finally:
+                    # 메모리 정리: 이미지 데이터 즉시 해제
+                    import gc
+                    try:
+                        image.close()
+                    except Exception:
+                        pass
+                    # base64 데이터 해제
+                    image_base64 = None
+                    # 명시적 가비지 컬렉션으로 메모리 해제 촉진
+                    # Vision Encoder 처리 후 메모리 정리를 위해 필요
+                    gc.collect()
         
         # 모든 페이지 텍스트 결합
         ocr_text = "\n\n--- Page Break ---\n\n".join(all_texts)
