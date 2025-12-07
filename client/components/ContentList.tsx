@@ -5,6 +5,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ContentSummary, ContentStatus, deleteContentsBulk, retryProcessing } from '@/lib/api'
 import { formatToKST } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
+import { cn } from '@/lib/utils'
 
 type PaginationProps = {
   currentPage: number
@@ -30,14 +35,19 @@ const statusLabels: Record<ContentStatus, string> = {
   CANCELLED: '취소됨',
 }
 
-const statusColors: Record<ContentStatus, string> = {
-  QUEUED: '#666',
-  PROCESSING: '#2196F3',
-  SUMMARIZING: '#673AB7',
-  COMPLETED: '#4CAF50',
-  ASR_FAILED: '#F44336',
-  SUMMARY_FAILED: '#E91E63',
-  CANCELLED: '#FF9800',
+const getStatusVariant = (status: ContentStatus): 'default' | 'secondary' | 'destructive' | 'outline' => {
+  switch (status) {
+    case 'COMPLETED':
+      return 'default'
+    case 'ASR_FAILED':
+    case 'SUMMARY_FAILED':
+      return 'destructive'
+    case 'PROCESSING':
+    case 'SUMMARIZING':
+      return 'secondary'
+    default:
+      return 'outline'
+  }
 }
 
 export default function ContentList({ contents, pagination, onRefresh }: Props) {
@@ -136,246 +146,147 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
   }
 
   if (!contents.length) {
-    return <p>아직 처리된 콘텐츠가 없습니다. 파일을 업로드해 보세요.</p>
+    return (
+      <Card>
+        <CardContent className="pt-6">
+          <p className="text-muted-foreground">아직 처리된 콘텐츠가 없습니다. 파일을 업로드해 보세요.</p>
+        </CardContent>
+      </Card>
+    )
   }
 
   const allSelected =
     selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id))
 
   return (
-    <div>
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-        <button
+    <div className="space-y-4">
+      <div className="flex gap-2 flex-wrap">
+        <Button
           type="button"
+          variant={allSelected ? 'secondary' : 'outline'}
           onClick={handleSelectAll}
           disabled={!selectableIds.length}
-          style={{
-            padding: '0.5rem 1rem',
-            border: '1px solid #ccc',
-            backgroundColor: allSelected ? '#e0e0e0' : '#fff',
-            cursor: selectableIds.length ? 'pointer' : 'not-allowed',
-            minHeight: '44px',
-            fontSize: '0.9rem',
-          }}
         >
           {allSelected ? '선택 해제' : '전체 선택'}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="destructive"
           onClick={handleBulkDelete}
           disabled={isDeleting || selectedIds.size === 0}
-          style={{
-            padding: '0.5rem 1rem',
-            backgroundColor: '#F44336',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: isDeleting || selectedIds.size === 0 ? 'not-allowed' : 'pointer',
-            opacity: isDeleting || selectedIds.size === 0 ? 0.6 : 1,
-            minHeight: '44px',
-            fontSize: '0.9rem',
-          }}
         >
           {isDeleting ? '삭제 중...' : `선택 삭제 (${selectedIds.size}개)`}
-        </button>
+        </Button>
       </div>
+      
       {message && (
-        <p style={{ marginBottom: '1rem', color: message.includes('실패') ? '#F44336' : '#4CAF50' }}>
+        <div className={cn(
+          "p-3 rounded-md text-sm",
+          message.includes('실패') ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary"
+        )}>
           {message}
-        </p>
+        </div>
       )}
-      <div className="list">
+      
+      <div className="space-y-4">
         {contents.map((item) => (
-          <div
-            key={item.id}
-            className="card"
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.5rem',
-            }}
-          >
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.3rem',
-                fontSize: '0.9rem',
-                minHeight: '44px',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={selectedIds.has(item.id)}
-                onChange={(event) => {
-                  event.stopPropagation()
-                  toggleSelection(item.id)
-                }}
-                onClick={(event) => event.stopPropagation()}
-                style={{
-                  width: '20px',
-                  height: '20px',
-                }}
-              />
-            </label>
-            <Link href={`/contents/${item.id}`} className="card-link" style={{ textDecoration: 'none', color: 'inherit' }}>
-              <h3 style={{ margin: '0.5rem 0', fontSize: '1.1rem', wordBreak: 'break-word' }}>{item.title || item.filename}</h3>
-              <p style={{ margin: '0.5rem 0', fontSize: '0.9rem', lineHeight: '1.5' }}>
-                <span
-                  style={{
-                    color: statusColors[item.status],
-                    fontWeight: 'bold',
-                    marginRight: '0.5rem',
-                  }}
+          <Card key={item.id} className="hover:shadow-md transition-shadow">
+            <CardHeader className="pb-3">
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  checked={selectedIds.has(item.id)}
+                  onCheckedChange={() => toggleSelection(item.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="mt-1"
+                />
+                <div className="flex-1 min-w-0">
+                  <Link href={`/contents/${item.id}`} className="block">
+                    <CardTitle className="text-lg mb-2 break-words">
+                      {item.title || item.filename}
+                    </CardTitle>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant={getStatusVariant(item.status)}>
+                        {statusLabels[item.status]}
+                      </Badge>
+                      <span className="text-sm text-muted-foreground">
+                        화자 수: {item.speakers.length || 0} · 재생 길이: {item.duration_seconds.toFixed(1)}초
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      {formatToKST(item.created_at)}
+                    </p>
+                  </Link>
+                </div>
+              </div>
+            </CardHeader>
+            {(item.status === 'ASR_FAILED' || item.status === 'SUMMARY_FAILED') && (
+              <CardContent className="pt-0">
+                <Button
+                  type="button"
+                  variant={item.status === 'ASR_FAILED' ? 'default' : 'secondary'}
+                  onClick={(e) => handleRetry(item.id, item.status === 'ASR_FAILED' ? 'asr' : 'summary', e)}
+                  className="w-full"
                 >
-                  [{statusLabels[item.status]}]
-                </span>
-                화자 수: {item.speakers.length || 0} · 재생 길이: {item.duration_seconds.toFixed(1)}초
-              </p>
-              <small style={{ fontSize: '0.85rem', color: '#666' }}>{formatToKST(item.created_at)}</small>
-            </Link>
-            {item.status === 'ASR_FAILED' && (
-              <button
-                type="button"
-                onClick={(e) => handleRetry(item.id, 'asr', e)}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#2196F3',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '0.9rem',
-                  minHeight: '44px',
-                  width: '100%',
-                }}
-              >
-                ASR 재처리
-              </button>
+                  {item.status === 'ASR_FAILED' ? 'ASR 재처리' : '요약 재처리'}
+                </Button>
+              </CardContent>
             )}
-            {item.status === 'SUMMARY_FAILED' && (
-              <button
-                type="button"
-                onClick={(e) => handleRetry(item.id, 'summary', e)}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#673AB7',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '0.9rem',
-                  minHeight: '44px',
-                  width: '100%',
-                }}
-              >
-                요약 재처리
-              </button>
-            )}
-          </div>
+          </Card>
         ))}
       </div>
+      
       {pagination && pagination.totalPages > 1 && (
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            gap: '0.5rem',
-            marginTop: '2rem',
-            flexWrap: 'wrap',
-          }}
-        >
-          <button
-            type="button"
-            onClick={() => pagination.onPageChange(pagination.currentPage - 1)}
-            disabled={pagination.currentPage === 1}
-            style={{
-              padding: '0.5rem 1rem',
-              border: '1px solid #ccc',
-              backgroundColor: pagination.currentPage === 1 ? '#f5f5f5' : '#fff',
-              cursor: pagination.currentPage === 1 ? 'not-allowed' : 'pointer',
-              borderRadius: '4px',
-              minHeight: '44px',
-              fontSize: '0.9rem',
-              opacity: pagination.currentPage === 1 ? 0.6 : 1,
-            }}
-          >
-            이전
-          </button>
-          <div
-            style={{
-              display: 'flex',
-              gap: '0.25rem',
-              alignItems: 'center',
-            }}
-          >
-            {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
-              .filter((pageNum) => {
-                // 현재 페이지 주변 2페이지씩만 표시
-                const diff = Math.abs(pageNum - pagination.currentPage)
-                return diff <= 2 || pageNum === 1 || pageNum === pagination.totalPages
-              })
-              .map((pageNum, index, array) => {
-                // 생략 표시 추가
-                const showEllipsis = index > 0 && pageNum - array[index - 1] > 1
-                return (
-                  <div key={pageNum} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                    {showEllipsis && (
-                      <span style={{ padding: '0 0.5rem', color: '#666' }}>...</span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => pagination.onPageChange(pageNum)}
-                      style={{
-                        padding: '0.5rem 0.75rem',
-                        border: '1px solid #ccc',
-                        backgroundColor: pageNum === pagination.currentPage ? '#111827' : '#fff',
-                        color: pageNum === pagination.currentPage ? '#fff' : '#000',
-                        cursor: 'pointer',
-                        borderRadius: '4px',
-                        minHeight: '44px',
-                        minWidth: '44px',
-                        fontSize: '0.9rem',
-                        fontWeight: pageNum === pagination.currentPage ? 'bold' : 'normal',
-                      }}
-                    >
-                      {pageNum}
-                    </button>
-                  </div>
-                )
-              })}
+        <div className="flex flex-col items-center gap-4 mt-8">
+          <div className="flex items-center gap-2 flex-wrap justify-center">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => pagination.onPageChange(pagination.currentPage - 1)}
+              disabled={pagination.currentPage === 1}
+            >
+              이전
+            </Button>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
+                .filter((pageNum) => {
+                  const diff = Math.abs(pageNum - pagination.currentPage)
+                  return diff <= 2 || pageNum === 1 || pageNum === pagination.totalPages
+                })
+                .map((pageNum, index, array) => {
+                  const showEllipsis = index > 0 && pageNum - array[index - 1] > 1
+                  return (
+                    <div key={pageNum} className="flex items-center gap-1">
+                      {showEllipsis && (
+                        <span className="px-2 text-muted-foreground">...</span>
+                      )}
+                      <Button
+                        type="button"
+                        variant={pageNum === pagination.currentPage ? 'default' : 'outline'}
+                        size="icon"
+                        onClick={() => pagination.onPageChange(pageNum)}
+                        className="min-w-[44px]"
+                      >
+                        {pageNum}
+                      </Button>
+                    </div>
+                  )
+                })}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => pagination.onPageChange(pagination.currentPage + 1)}
+              disabled={pagination.currentPage === pagination.totalPages}
+            >
+              다음
+            </Button>
           </div>
-          <button
-            type="button"
-            onClick={() => pagination.onPageChange(pagination.currentPage + 1)}
-            disabled={pagination.currentPage === pagination.totalPages}
-            style={{
-              padding: '0.5rem 1rem',
-              border: '1px solid #ccc',
-              backgroundColor: pagination.currentPage === pagination.totalPages ? '#f5f5f5' : '#fff',
-              cursor: pagination.currentPage === pagination.totalPages ? 'not-allowed' : 'pointer',
-              borderRadius: '4px',
-              minHeight: '44px',
-              fontSize: '0.9rem',
-              opacity: pagination.currentPage === pagination.totalPages ? 0.6 : 1,
-            }}
-          >
-            다음
-          </button>
-          <span
-            style={{
-              marginLeft: '1rem',
-              fontSize: '0.9rem',
-              color: '#666',
-            }}
-          >
+          <p className="text-sm text-muted-foreground">
             전체 {pagination.total}개 중 {((pagination.currentPage - 1) * pagination.pageSize) + 1}-
             {Math.min(pagination.currentPage * pagination.pageSize, pagination.total)}개 표시
-          </span>
+          </p>
         </div>
       )}
     </div>
   )
 }
-

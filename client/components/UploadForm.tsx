@@ -3,6 +3,12 @@
 import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { uploadContent } from '@/lib/api'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 type SpeakerRange = '1-2' | '3-6' | '7-10' | '11+' | null
 
@@ -82,142 +88,93 @@ export default function UploadForm() {
     }
   }
 
+  const handleButtonClick = () => {
+    fileInputRef.current?.click()
+  }
+
   return (
     <>
-      <form>
-        <h2 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>파일 업로드</h2>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="audio/*,video/*"
-          onChange={handleFileSelect}
-          disabled={isUploading}
-          style={{
-            width: '100%',
-            padding: '0.5rem',
-            marginBottom: '0.5rem',
-            fontSize: '0.9rem',
-            minHeight: '44px',
-          }}
-        />
-        {status && <p style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}>{status}</p>}
-      </form>
+      <Card>
+        <CardContent className="pt-6">
+          <div className="space-y-2">
+            <Input
+              ref={fileInputRef}
+              type="file"
+              accept="audio/*,video/*"
+              onChange={handleFileSelect}
+              disabled={isUploading}
+              className="hidden"
+            />
+            <Button
+              type="button"
+              onClick={handleButtonClick}
+              disabled={isUploading}
+              className="w-full"
+            >
+              파일 업로드
+            </Button>
+            {status && (
+              <p className={status.includes('실패') ? 'text-sm text-destructive' : 'text-sm text-primary'}>
+                {status}
+              </p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
-      {showModal && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={handleModalClose}
-        >
-          <div
-            style={{
-              backgroundColor: '#fff',
-              padding: '2rem',
-              borderRadius: '8px',
-              maxWidth: '500px',
-              width: '90%',
-              maxHeight: '90vh',
-              overflow: 'auto',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem', fontWeight: 'bold' }}>
-              참석자 수
-              <span style={{ fontSize: '0.85rem', color: '#2196F3', marginLeft: '0.5rem', fontWeight: 'normal' }}>
-                *실제 발화자를 기준으로 입력하면 인식률이 향상됩니다.
-              </span>
-            </h2>
-            
-            <div style={{ marginBottom: '1.5rem' }}>
-              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+      <Dialog open={showModal} onOpenChange={setShowModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>참석자 수</DialogTitle>
+            <DialogDescription>
+              *실제 발화자를 기준으로 입력하면 인식률이 향상됩니다.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4">
+            <RadioGroup
+              value={speakerRange || ''}
+              onValueChange={(value) => setSpeakerRange(value as SpeakerRange)}
+            >
+              <div className="grid grid-cols-2 gap-3">
                 {[
-                  { value: '1-2' as const, label: '1~2명' },
-                  { value: '3-6' as const, label: '3~6명' },
-                  { value: '7-10' as const, label: '7~10명' },
-                  { value: '11+' as const, label: '11명 이상' },
+                  { value: '1-2', label: '1~2명' },
+                  { value: '3-6', label: '3~6명' },
+                  { value: '7-10', label: '7~10명' },
+                  { value: '11+', label: '11명 이상' },
                 ].map((option) => (
-                  <label
+                  <Label
                     key={option.value}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                      padding: '0.5rem 1rem',
-                      border: speakerRange === option.value ? '2px solid #2196F3' : '2px solid #ddd',
-                      borderRadius: '4px',
-                      backgroundColor: speakerRange === option.value ? '#e3f2fd' : '#fff',
-                      transition: 'all 0.2s',
-                      color: '#333',
-                    }}
+                    htmlFor={option.value}
+                    className="flex items-center space-x-2 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
                   >
-                    <input
-                      type="radio"
-                      name="speakerRange"
-                      value={option.value}
-                      checked={speakerRange === option.value}
-                      onChange={(e) => setSpeakerRange(e.target.value as SpeakerRange)}
-                      style={{
-                        marginRight: '0.5rem',
-                        width: '18px',
-                        height: '18px',
-                        cursor: 'pointer',
-                      }}
-                    />
-                    <span style={{ fontSize: '0.9rem', color: '#333' }}>{option.label}</span>
-                  </label>
+                    <RadioGroupItem value={option.value} id={option.value} />
+                    <span className="text-sm font-normal">{option.label}</span>
+                  </Label>
                 ))}
               </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={handleModalClose}
-                disabled={isUploading}
-                style={{
-                  padding: '0.75rem 1.5rem',
-                  backgroundColor: '#f5f5f5',
-                  color: '#333',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: isUploading ? 'not-allowed' : 'pointer',
-                  fontSize: '0.9rem',
-                }}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={handleUpload}
-                disabled={isUploading}
-                style={{
-                  padding: '0.75rem 1.5rem',
-                  backgroundColor: isUploading ? '#ccc' : '#2196F3',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: isUploading ? 'not-allowed' : 'pointer',
-                  fontSize: '0.9rem',
-                }}
-              >
-                {isUploading ? '업로드 중...' : '업로드'}
-              </button>
-            </div>
+            </RadioGroup>
           </div>
-        </div>
-      )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleModalClose}
+              disabled={isUploading}
+            >
+              취소
+            </Button>
+            <Button
+              type="button"
+              onClick={handleUpload}
+              disabled={isUploading}
+            >
+              {isUploading ? '업로드 중...' : '업로드'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
-
-
