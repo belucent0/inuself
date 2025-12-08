@@ -2,7 +2,7 @@
 
 ## 개요
 
-API 서버와 GPU 워커의 의존성을 분리하여 각각 최적화된 환경에서 실행할 수 있도록 구성했습니다.
+API 서버와 워커의 의존성을 분리하여 각각 최적화된 환경에서 실행할 수 있도록 구성했습니다. 워커는 ASR, LLM, OCR로 분리되어 각각 필요한 패키지만 설치합니다.
 
 ## 아키텍처
 
@@ -12,17 +12,31 @@ API 서버와 GPU 워커의 의존성을 분리하여 각각 최적화된 환경
 │  - FastAPI, SQLAlchemy, Redis, Celery       │
 │  - 가벼운 웹 서비스 패키지만 포함            │
 │  - librosa, soundfile (오디오 처리 기본)     │
-│  - torch/pyannote 등 GPU 관련 패키지 제외    │
+│  - torch/pyannote/docling 등 워커 패키지 제외│
 │  - 빌드 시간: 30초~1분                       │
 │  - 이미지 크기: ~500MB                       │
 └─────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────┐
-│  GPU 워커 (Windows + PM2)                    │
+│  ASR 워커 (Windows + PM2)                    │
 │  - torch, pyannote.audio                     │
-│  - whisper, diarization, LLM 등              │
-│  - GPU 가속 기능 전부 포함                   │
+│  - whisper, diarization                      │
+│  - GPU 가속 기능 포함                        │
 │  - ROCm/Vulkan 지원                          │
+└─────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────┐
+│  LLM 워커 (Windows + PM2)                    │
+│  - llama-server (서브프로세스로 관리)        │
+│  - LLM 요약 처리                             │
+│  - llama-cpp-python 불필요                   │
+└─────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────┐
+│  OCR 워커 (Windows + PM2)                    │
+│  - docling                                    │
+│  - PyMuPDF, pillow                            │
+│  - 문서 구조 파싱 및 HTML 추출                │
 └─────────────────────────────────────────────┘
 ```
 
@@ -45,13 +59,19 @@ redis = "^5.0.4"
 librosa = "^0.10.0"
 soundfile = "^0.12.0"
 
-# GPU 워커 전용 (선택적 설치)
-torch = {version = "*", optional = true}
-"pyannote.audio" = {version = "^3.1.0", optional = true}
-llama-cpp-python = {version = "^0.2.80", optional = true}
+# 워커별 선택적 의존성 (선택적 설치)
+torch = {version = "*", optional = true}  # ASR 워커용
+"pyannote.audio" = {version = "^3.1.0", optional = true}  # ASR 워커용
+llama-cpp-python = {version = "^0.2.80", optional = true}  # llama_cpp provider용 (deprecated, llamacpp_server 사용 권장)
+docling = {version = "^2.0.0", optional = true}  # OCR 워커용
 
 [tool.poetry.extras]
-gpu_worker = ["torch", "pyannote.audio", "llama-cpp-python"]
+# 워커별 extras 그룹
+asr_worker = ["torch", "pyannote.audio"]
+llm_worker = []  # llama-server를 서브프로세스로 관리하므로 패키지 불필요
+ocr_worker = ["docling"]
+# 전체 워커 (하위 호환성)
+gpu_worker = ["torch", "pyannote.audio", "docling"]
 ```
 
 ### 2. `backend/Dockerfile`
@@ -60,7 +80,7 @@ API 컨테이너는 GPU 관련 패키지 없이 설치 (librosa/soundfile은 기
 
 ```dockerfile
 RUN poetry install --no-interaction --no-ansi --no-root --without dev
-# --extras gpu_worker 옵션 없음 → GPU 전용 패키지(torch, pyannote) 설치 안 됨
+# --extras 옵션 없음 → 워커 전용 패키지(torch, pyannote, llama-cpp-python, docling) 설치 안 됨
 ```
 
 ### 3. `backend/app/worker/queue.py` & `llm_queue.py`
@@ -127,12 +147,38 @@ docker-compose build backend
 # Dockerfile에서 자동으로 가벼운 환경만 설치
 ```
 
-### GPU 워커용 (Windows 호스트)
+### ASR 워커용 (Windows 호스트)
+
+```bash
+cd C:\timblo\torch-test\backend
+poetry install --no-root --extras asr_worker
+# torch, pyannote.audio 설치
+```
+
+### LLM 워커용 (Windows 호스트)
+
+```bash
+cd C:\timblo\torch-test\backend
+poetry install --no-root --extras llm_worker
+# llama-server를 서브프로세스로 관리하므로 추가 패키지 불필요
+# llama-server 실행 파일은 별도로 준비해야 함 (LLM_SERVER_PATH 환경변수 설정)
+```
+
+### OCR 워커용 (Windows 호스트)
+
+```bash
+cd C:\timblo\torch-test\backend
+poetry install --no-root --extras ocr_worker
+# docling 설치
+```
+
+### 전체 워커용 (하위 호환성)
 
 ```bash
 cd C:\timblo\torch-test\backend
 poetry install --no-root --extras gpu_worker
-# torch, pyannote.audio 등 모든 GPU 관련 패키지 설치
+# 모든 워커 패키지 설치 (torch, pyannote.audio, docling)
+# llama-cpp-python은 llama_cpp provider 사용 시에만 필요 (deprecated)
 ```
 
 ---
@@ -150,7 +196,7 @@ poetry run python -c "import torch"
 # ImportError 발생 → 정상 (GPU 패키지 없음)
 ```
 
-### GPU 워커 환경 확인 (모든 패키지 있어야 함)
+### ASR 워커 환경 확인
 
 ```bash
 cd backend
@@ -159,9 +205,23 @@ poetry run python -c "import torch; print('Torch version:', torch.__version__)"
 
 poetry run python -c "import pyannote.audio; print('Pyannote OK')"
 # Pyannote OK
+```
 
-poetry run python -c "import librosa; print('Librosa OK')"
-# Librosa OK
+### LLM 워커 환경 확인
+
+```bash
+cd backend
+# llama-server 실행 파일 확인
+# LLM_SERVER_PATH 환경변수가 설정되어 있고 실행 파일이 존재하는지 확인
+# llama-server는 서브프로세스로 실행되므로 Python 패키지 불필요
+```
+
+### OCR 워커 환경 확인
+
+```bash
+cd backend
+poetry run python -c "from docling.document_converter import DocumentConverter; print('Docling OK')"
+# Docling OK
 ```
 
 ---
@@ -171,14 +231,19 @@ poetry run python -c "import librosa; print('Librosa OK')"
 환경 분리 후 PM2 워커를 재시작해야 합니다:
 
 ```bash
-# PM2 워커 재시작
-pm2 restart celery-worker
+# 모든 PM2 워커 재시작
+pm2 restart all
 
 # 또는 처음 시작하는 경우
 pm2 start ecosystem.config.js
 
 # 로그 확인
-pm2 logs celery-worker
+pm2 logs
+
+# 특정 워커 로그 확인
+pm2 logs worker-asr
+pm2 logs worker-llm
+pm2 logs worker-ocr
 ```
 
 ---
@@ -204,14 +269,22 @@ pm2 logs celery-worker
 
 ## 트러블슈팅
 
-### Q: 워커에서 "ModuleNotFoundError: No module named 'torch'" 에러
+### Q: 워커에서 "ModuleNotFoundError" 에러
 
-A: GPU 워커 환경에서 `--extras gpu_worker` 옵션으로 재설치:
+A: 해당 워커에 맞는 extras로 재설치:
 
 ```bash
 cd backend
-poetry install --no-root --extras gpu_worker
-pm2 restart celery-worker
+# ASR 워커
+poetry install --no-root --extras asr_worker
+pm2 restart worker-asr
+
+# LLM 워커 (추가 패키지 불필요, llama-server는 서브프로세스로 관리)
+pm2 restart worker-llm
+
+# OCR 워커
+poetry install --no-root --extras ocr_worker
+pm2 restart worker-ocr
 ```
 
 ### Q: API 서버에서 torch 관련 import 에러
@@ -224,8 +297,11 @@ A: API 서버에서는 GPU 관련 기능을 직접 사용하지 않아야 합니
 1. `pyproject.toml` 수정
 2. `poetry lock` 실행
 3. API 환경: `poetry install --no-root --without dev`
-4. GPU 환경: `poetry install --no-root --extras gpu_worker`
-5. 서비스 재시작
+4. 워커별 환경:
+   - ASR 워커: `poetry install --no-root --extras asr_worker`
+   - LLM 워커: `poetry install --no-root --extras llm_worker`
+   - OCR 워커: `poetry install --no-root --extras ocr_worker`
+5. 서비스 재시작: `pm2 restart all`
 
 ---
 
@@ -242,5 +318,6 @@ A: API 서버에서는 GPU 관련 기능을 직접 사용하지 않아야 합니
 
 - API 서버: `DEPLOYMENT.md` 참조
 - Docker 빌드: `docker-compose build backend`
-- 워커 관리: `pm2 status`, `pm2 logs celery-worker`
+- 워커 관리: `pm2 status`, `pm2 logs`
+- 워커 구성: `ecosystem.config.js` 참조
 

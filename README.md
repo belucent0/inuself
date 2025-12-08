@@ -219,42 +219,6 @@ LM Studio는 Windows에서 실행되는 LLM 서버입니다.
    LLM_MODEL_NAME=gpt-oss-20b
    ```
 
-#### 옵션 B: llama-cpp-python 직접 사용
-
-로컬에서 llama-cpp-python을 직접 사용합니다 (Vulkan 지원 빌드 필요).
-
-**설정:**
-
-1. **llama-cpp-python 설치 (Vulkan 지원):**
-   
-   Windows에서 Vulkan 지원 빌드:
-   ```bash
-   cd backend
-   poetry add llama-cpp-python --optional
-   # 또는 직접 pip로 설치 (Vulkan 지원 빌드)
-   CMAKE_ARGS='-DGGML_VULKAN=ON' pip install --force-reinstall llama-cpp-python
-   ```
-   
-   > ⚠️ **참고**: Vulkan 지원 빌드가 필요합니다. 기본 pip 설치 버전은 CPU만 지원할 수 있습니다.
-
-2. **모델 파일 준비:**
-   
-   모델 파일을 프로젝트 루트의 `models/` 디렉토리에 배치합니다:
-   - 예: `models/gpt-oss-20b-Q4_K_S.gguf`
-
-3. **`.env` 파일 설정:**
-   ```env
-   LLM_PROVIDER=llama_cpp
-   LLM_MODEL_PATH=models/gpt-oss-20b-Q4_K_S.gguf
-   LLM_CONTEXT_LENGTH=4096
-   LLM_TEMPERATURE=0.4
-   LLM_TOP_P=0.9
-   LLM_MAX_TOKENS=1024
-   LLM_N_THREADS=8
-   ```
-   
-   > 📝 **참고**: `LLM_MODEL_PATH`는 프로젝트 루트 기준 상대 경로 또는 절대 경로를 사용할 수 있습니다.
-
 ### 2. 환경 변수 / 설정
 
 `backend/app/core/config.py`에 다음 설정이 추가되었습니다. 필요 시 `.env`에서 오버라이드하면 됩니다.
@@ -263,7 +227,7 @@ LM Studio는 Windows에서 실행되는 LLM 서버입니다.
 
 | 설정 | 기본값 | 설명 |
 | --- | --- | --- |
-| `LLM_PROVIDER` | `llama_cpp` | LLM provider: `lmstudio` 또는 `llama_cpp` |
+| `LLM_PROVIDER` | `llamacpp_server` | LLM provider: `llamacpp_server` (권장) 또는 `lmstudio` (deprecated) |
 | `LLM_SYSTEM_PROMPT` | (기본값 참조) | 시스템 프롬프트 (모든 provider에서 사용) |
 | `LLM_CONTEXT_LENGTH` | `15016` | Context window (토큰 수) |
 | `LLM_TEMPERATURE` | `0.4` | 생성 온도 (0.0 ~ 1.0) |

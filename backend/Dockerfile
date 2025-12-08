@@ -18,7 +18,13 @@ RUN pip install --no-cache-dir poetry==1.7.1
 # Poetry 설정 (가상환경을 만들지 않음)
 RUN poetry config virtualenvs.create false
 
-# 의존성 파일 복사 및 설치 (API 서버용 - GPU 관련 제외)
+# 의존성 파일 복사 및 설치 (API 서버용 - 워커 전용 패키지 제외)
+# API 서버는 기본 의존성만 설치 (torch, pyannote.audio, docling 제외)
+# 워커별 설치 방법:
+#   - ASR 워커: poetry install --extras asr_worker
+#   - LLM 워커: poetry install --extras llm_worker (추가 패키지 불필요, llama-server는 서브프로세스로 관리)
+#   - OCR 워커: poetry install --extras ocr_worker
+#   - 전체 워커: poetry install --extras gpu_worker
 COPY pyproject.toml poetry.lock ./
 RUN poetry install --no-interaction --no-ansi --no-root --without dev
 

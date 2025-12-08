@@ -88,7 +88,7 @@ const apps = [
       '--loglevel=info',
       '--concurrency=1',
       '--max-tasks-per-child=100',
-      '--queues=llm,ocr',  // LLM 요약 + OCR 처리 (둘 다 Qwen3-VL API 사용)
+      '--queues=llm',  // LLM 요약만 처리
       '--hostname=worker-llm@%h'
     ],
     env: {
@@ -123,6 +123,47 @@ const apps = [
     watch: false,
     error_file: 'C:\\timblo\\torch-test\\logs\\worker-llm-error.log',
     out_file: 'C:\\timblo\\torch-test\\logs\\worker-llm-out.log',
+    // PM2 타임스탬프는 유지하되, Python logging의 타임스탬프는 제거하여 중복 방지
+    // PM2의 타임스탬프 형식: YYYY-MM-DD HH:mm:ss Z
+    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    merge_logs: false,
+    // Windows에서 콘솔 창 숨기기
+    windowsHide: true,
+  },
+  {
+    name: 'worker-ocr',
+    cwd: 'C:\\timblo\\torch-test\\backend',
+    script: CELERY_PATH,
+    args: [
+      '-m', 'celery',
+      '-A', 'app.worker.celery_app',
+      'worker',
+      '--pool=solo',
+      '--loglevel=info',
+      '--concurrency=1',
+      '--max-tasks-per-child=100',
+      '--queues=ocr',  // OCR 처리만 (기본 모드: Qwen3-VL API, Docling 모드: Docling)
+      '--hostname=worker-ocr@%h'
+    ],
+    env: {
+      // Python 출력 버퍼링 비활성화 (실시간 로그 출력)
+      PYTHONUNBUFFERED: '1',
+      // 워커 타입 설정
+      WORKER_TYPE: 'ocr',
+      // 순차 처리 설정 (기본값: true)
+      SEQUENTIAL_PROCESSING: envVars.SEQUENTIAL_PROCESSING || 'true',
+      
+      // LLM API 서버 설정 (기본 모드에서 Qwen3-VL API 사용)
+      LLM_BASE_URL: envVars.LLM_BASE_URL || 'http://localhost:8080',
+      LLM_MODEL_NAME: envVars.LLM_MODEL_NAME || 'Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf',
+    },
+    autorestart: true,
+    max_restarts: 10,
+    min_uptime: '10s',
+    restart_delay: 4000,
+    watch: false,
+    error_file: 'C:\\timblo\\torch-test\\logs\\worker-ocr-error.log',
+    out_file: 'C:\\timblo\\torch-test\\logs\\worker-ocr-out.log',
     // PM2 타임스탬프는 유지하되, Python logging의 타임스탬프는 제거하여 중복 방지
     // PM2의 타임스탬프 형식: YYYY-MM-DD HH:mm:ss Z
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',

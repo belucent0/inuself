@@ -99,30 +99,7 @@ LLAMA_SERVER_THREADS=8
 LLAMA_SERVER_GPU_LAYERS=99
 ```
 
-### 시나리오 3: llama-cpp-python 직접 사용
-
-llama-cpp-python을 직접 사용하는 경우 (텍스트 전용 모델만 지원):
-
-```env
-# ... (데이터베이스, Redis 등 동일) ...
-
-LLM_PROVIDER=llama_cpp
-
-# llama-cpp-python 직접 사용 설정
-LLM_MODEL_PATH=models/gpt-oss-20b-Q4_K_S.gguf
-LLM_N_GPU_LAYERS=-1
-
-# 공통 LLM 설정
-LLM_CONTEXT_LENGTH=15000  # 메모리 사용량 최적화
-LLM_TEMPERATURE=0.4
-LLM_TOP_P=0.9
-LLM_MAX_TOKENS=1024
-LLM_N_THREADS=8
-
-# LLM_BASE_URL, LLM_MODEL_NAME은 사용하지 않음 (llama_cpp provider는 직접 모델 로드)
-```
-
-### 시나리오 4: LM Studio 사용
+### 시나리오 3: LM Studio 사용
 
 LM Studio 앱을 사용하는 경우:
 
@@ -148,8 +125,8 @@ LLM_MAX_TOKENS=1024
 
 | Provider | 설명 | 사용 시기 |
 |----------|------|-----------|
-| `llama_cpp` | llama-cpp-python 직접 사용 | 텍스트 전용 모델, 간단한 설정 |
-| `llamacpp_server` | llama.cpp 서버 사용 | Qwen3-VL 등 Vision 모델, PM2로 관리 |
+| `llamacpp_server` | llama.cpp 서버 사용 | Qwen3-VL 등 Vision 모델, PM2로 관리 (권장) |
+| `lmstudio` | LM Studio 앱 사용 | LM Studio 앱으로 서버 실행 (deprecated) |
 
 ### LLM API 서버 설정
 

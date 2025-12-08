@@ -108,10 +108,6 @@ def configure_external_loggers() -> None:
     """외부 라이브러리의 로그 레벨 조정."""
     import logging
     
-    # llama_cpp 로거 억제
-    llama_logger = logging.getLogger("llama_cpp")
-    llama_logger.setLevel(logging.ERROR)
-    
     # pyannote 로거 억제 (선택적)
     pyannote_logger = logging.getLogger("pyannote")
     pyannote_logger.setLevel(logging.WARNING)

@@ -48,8 +48,10 @@
 - **MinIO**: 오브젝트 스토리지 (포트 9000, 9001)
 
 ### 2. Windows PM2 (Celery 워커)
-- **Celery Worker**: ASR + LLM 작업 처리 (GPU 가속)
-- Concurrency: 2 (NUM_ASR_WORKERS=1, NUM_LLM_WORKERS=1)
+- **worker-asr**: ASR 작업 처리 (화자 분리 포함, GPU 가속)
+- **worker-llm**: LLM 요약 작업 처리
+- **worker-ocr**: OCR 문서 처리 (기본 모드: Qwen3-VL API, Docling 모드: Docling)
+- 각 워커는 독립적으로 실행 및 스케일링 가능
 
 ### 3. Windows Native (LM Studio)
 - **LM Studio**: LLM 추론 서버 (포트 1234)
@@ -235,10 +237,14 @@ pm2 start ecosystem.config.js
 
 # 상태 확인
 pm2 status
-pm2 logs celery-worker
 
-# 실시간 로그 확인
-pm2 logs celery-worker --lines 100
+# 워커별 로그 확인
+pm2 logs worker-asr
+pm2 logs worker-llm
+pm2 logs worker-ocr
+
+# 모든 워커 로그 확인
+pm2 logs --lines 100
 ```
 
 ### 3. Windows 부팅 시 자동 시작 설정
@@ -258,14 +264,23 @@ pm2 startup
 ### 4. 워커 관리 명령어
 
 ```bash
-# 워커 재시작
-pm2 restart celery-worker
+# 모든 워커 재시작
+pm2 restart all
+
+# 특정 워커 재시작
+pm2 restart worker-asr
+pm2 restart worker-llm
+pm2 restart worker-ocr
 
 # 워커 중지
-pm2 stop celery-worker
+pm2 stop worker-asr
+pm2 stop worker-llm
+pm2 stop worker-ocr
 
 # 워커 삭제
-pm2 delete celery-worker
+pm2 delete worker-asr
+pm2 delete worker-llm
+pm2 delete worker-ocr
 
 # 모든 PM2 프로세스 중지
 pm2 stop all
@@ -333,12 +348,18 @@ docker logs --tail 100 asr-backend
 ### PM2 워커 로그
 
 ```bash
-# 실시간 로그
-pm2 logs celery-worker
+# 모든 워커 실시간 로그
+pm2 logs
+
+# 특정 워커 로그
+pm2 logs worker-asr
+pm2 logs worker-llm
+pm2 logs worker-ocr
 
 # 로그 파일 직접 확인
-tail -f C:\timblo\torch-test\logs\celery-out.log
-tail -f C:\timblo\torch-test\logs\celery-error.log
+tail -f C:\timblo\torch-test\logs\worker-asr-out.log
+tail -f C:\timblo\torch-test\logs\worker-llm-out.log
+tail -f C:\timblo\torch-test\logs\worker-ocr-out.log
 
 # 로그 초기화
 pm2 flush
@@ -377,7 +398,9 @@ pm2 status
 pm2 monit
 
 # 메트릭 확인
-pm2 describe celery-worker
+pm2 describe worker-asr
+pm2 describe worker-llm
+pm2 describe worker-ocr
 
 # PM2 Plus (옵션 - 고급 모니터링)
 pm2 link <secret_key> <public_key>
@@ -409,7 +432,12 @@ netstat -an | grep :3000
 
 ```bash
 # PM2 로그 확인
-pm2 logs celery-worker --lines 200
+pm2 logs --lines 200
+
+# 특정 워커 로그 확인
+pm2 logs worker-asr --lines 200
+pm2 logs worker-llm --lines 200
+pm2 logs worker-ocr --lines 200
 
 # Redis 연결 확인 (Git Bash)
 redis-cli ping
@@ -420,7 +448,7 @@ redis-cli
 > LLEN celery
 
 # 워커 재시작
-pm2 restart celery-worker
+pm2 restart all
 ```
 
 ### 3. GPU 관련 문제
@@ -536,8 +564,8 @@ docker-compose build backend frontend
 # 3. 서비스 재시작 (무중단)
 docker-compose up -d backend frontend
 
-# 4. PM2 워커는 코드 변경 시 자동 재시작
-pm2 restart celery-worker
+# 4. PM2 워커 재시작
+pm2 restart all
 ```
 
 ### 의존성 업데이트
@@ -575,7 +603,7 @@ docker-compose up -d frontend
 1. ✅ WSL2가 자동 시작되었는지 확인
 2. ✅ Docker Desktop이 실행 중인지 확인
 3. ✅ `docker-compose ps`로 모든 컨테이너 확인
-4. ✅ `pm2 status`로 Celery 워커 확인
+4. ✅ `pm2 status`로 모든 워커(worker-asr, worker-llm, worker-ocr) 확인
 5. ✅ 각 서비스 URL 접속 테스트
 6. ✅ LM Studio가 실행 중인지 확인 (LLM 사용 시)
 
