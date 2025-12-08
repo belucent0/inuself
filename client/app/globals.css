@@ -195,8 +195,223 @@
 .markdown-content pre code {
   background-color: transparent;
   padding: 0;
+}
+
+/* HTML 콘텐츠 스타일 (OCR 결과용) */
+.html-content {
+  line-height: 1.6;
+  color: #333;
+}
+
+.html-content h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  color: #111;
+  border-bottom: 2px solid #e5e7eb;
+  padding-bottom: 0.5rem;
+}
+
+.html-content h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  color: #111;
+}
+
+.html-content h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+  color: #333;
+}
+
+.html-content h4 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  color: #444;
+}
+
+.html-content p {
+  margin-bottom: 1rem;
+  line-height: 1.7;
+}
+
+.html-content ul,
+.html-content ol {
+  margin-bottom: 1rem;
+  padding-left: 2rem;
+}
+
+.html-content li {
+  margin-bottom: 0.5rem;
+  line-height: 1.6;
+}
+
+.html-content ul {
+  list-style-type: disc;
+}
+
+.html-content ol {
+  list-style-type: decimal;
+}
+
+.html-content li > ul,
+.html-content li > ol {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.html-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+  border: 1px solid #e5e7eb;
+}
+
+.html-content table th,
+.html-content table td {
+  padding: 0.75rem;
+  border: 1px solid #e5e7eb;
+  text-align: left;
+}
+
+.html-content table th {
+  background-color: #f9fafb;
+  font-weight: 600;
+  color: #111;
+}
+
+.html-content table tr:nth-child(even) {
+  background-color: #f9fafb;
+}
+
+.html-content hr {
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  margin: 2rem 0;
+}
+
+.html-content code {
+  background-color: #f4f4f4;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  font-family: 'Courier New', 'Monaco', 'Menlo', monospace;
+  font-size: 0.9em;
+  color: #e83e8c;
+}
+
+.html-content pre {
+  background-color: #f4f4f4;
+  padding: 1rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin-bottom: 1rem;
+  border: 1px solid #e5e7eb;
+}
+
+.html-content pre code {
+  background-color: transparent;
+  padding: 0;
   color: #333;
   font-size: 0.875rem;
+}
+
+/* 문서 뷰어 스타일 (Docling HTML 출력용) */
+.doc-viewer {
+  line-height: 1.7;
+  color: #333;
+}
+
+.doc-viewer table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+  border: 1px solid #d1d5db;
+  background-color: white;
+}
+
+.doc-viewer th,
+.doc-viewer td {
+  border: 1px solid #d1d5db;
+  padding: 0.75rem 1rem;
+  vertical-align: top;
+  text-align: left;
+}
+
+.doc-viewer th {
+  background-color: #f3f4f6;
+  font-weight: 600;
+  color: #111827;
+}
+
+.doc-viewer thead th {
+  background-color: #e5e7eb;
+  font-weight: 700;
+}
+
+.doc-viewer tbody tr:nth-child(even) {
+  background-color: #f9fafb;
+}
+
+.doc-viewer tbody tr:hover {
+  background-color: #f3f4f6;
+}
+
+.doc-viewer h1,
+.doc-viewer h2,
+.doc-viewer h3,
+.doc-viewer h4,
+.doc-viewer h5,
+.doc-viewer h6 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.doc-viewer h1 {
+  font-size: 2rem;
+  border-bottom: 2px solid #e5e7eb;
+  padding-bottom: 0.5rem;
+}
+
+.doc-viewer h2 {
+  font-size: 1.5rem;
+}
+
+.doc-viewer h3 {
+  font-size: 1.25rem;
+}
+
+.doc-viewer p {
+  margin-bottom: 1rem;
+  line-height: 1.7;
+}
+
+.doc-viewer ul,
+.doc-viewer ol {
+  margin-bottom: 1rem;
+  padding-left: 2rem;
+}
+
+.doc-viewer li {
+  margin-bottom: 0.5rem;
+  line-height: 1.6;
+}
+
+.doc-viewer strong {
+  font-weight: 600;
+  color: #111827;
+}
+
+.doc-viewer em {
+  font-style: italic;
 }
 
 .markdown-content blockquote {

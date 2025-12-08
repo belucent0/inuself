@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Card, CardContent } from '@/components/ui/card'
 import PageHeader from '@/components/PageHeader'
+import MarkdownContent from '@/components/MarkdownContent'
 
 type TabType = 'developing' | 'considering' | 'longterm'
 
@@ -91,9 +91,7 @@ export default function RoadmapPage() {
                 ) : error && !markdownCache[tab] ? (
                   <p className="text-destructive">{error}</p>
                 ) : markdownCache[tab] ? (
-                  <div className="markdown-content">
-                    <ReactMarkdown>{markdownCache[tab]}</ReactMarkdown>
-                  </div>
+                  <MarkdownContent content={markdownCache[tab]} />
                 ) : null}
               </TabsContent>
             ))}

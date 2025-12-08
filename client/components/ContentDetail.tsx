@@ -1,6 +1,5 @@
 'use client'
 
-import ReactMarkdown from 'react-markdown'
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowUp, Download, FileText, Music } from 'lucide-react'
@@ -17,6 +16,8 @@ import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import DocumentViewer from '@/components/DocumentViewer'
+import MarkdownContent from '@/components/MarkdownContent'
+import HtmlContent from '@/components/HtmlContent'
 
 type Props = {
   content: ContentDetailType
@@ -24,9 +25,16 @@ type Props = {
 
 // 오디오 파일인지 확인하는 헬퍼 함수
 function isAudioFile(filename: string): boolean {
-  const audioExtensions = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.wma', '.mp4', '.avi', '.mkv', '.mov', '.webm']
+  const audioExtensions = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.wma']
   const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
   return audioExtensions.includes(ext)
+}
+
+// 비디오 파일인지 확인하는 헬퍼 함수
+function isVideoFile(filename: string): boolean {
+  const videoExtensions = ['.mp4', '.avi', '.mkv', '.mov', '.webm']
+  const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
+  return videoExtensions.includes(ext)
 }
 
 // 문서 파일인지 확인하는 헬퍼 함수
@@ -162,7 +170,14 @@ export default function ContentDetail({ content }: Props) {
     if (!content.media_url) {
       return
     }
-    const mediaElement = isAudioFile(content.filename) ? audioRef.current : videoRef.current
+    let mediaElement: HTMLMediaElement | null = null
+
+    if (isVideoFile(content.filename)) {
+      mediaElement = videoRef.current
+    } else if (isAudioFile(content.filename)) {
+      mediaElement = audioRef.current
+    }
+
     if (mediaElement) {
       mediaElement.currentTime = startTime
       mediaElement.play().catch((error) => {
@@ -306,17 +321,9 @@ export default function ContentDetail({ content }: Props) {
                   {isTxtFile(content.filename) ? (
                     // txt 파일: 문서 뷰어는 생략하고 아래 "문서 내용" 섹션에서 표시
                     <div className="p-8 text-center">
-                      <p className="text-muted-foreground mb-4">
+                      <p className="text-muted-foreground">
                         텍스트 파일은 아래 "문서 내용" 섹션에서 확인할 수 있습니다.
                       </p>
-                      <Button
-                        type="button"
-                        onClick={handleDownload}
-                        variant="default"
-                      >
-                        <Download className="mr-2 h-4 w-4" />
-                        파일 다운로드
-                      </Button>
                     </div>
                   ) : isPdfFile(content.filename) || isDocxFile(content.filename) ? (
                     <DocumentViewer
@@ -349,6 +356,16 @@ export default function ContentDetail({ content }: Props) {
                     </div>
                   )}
                 </div>
+              ) : isVideoFile(content.filename) ? (
+                <video 
+                  ref={videoRef}
+                  controls 
+                  src={content.media_url} 
+                  className="w-full max-h-[500px]"
+                  preload="metadata"
+                >
+                  브라우저가 비디오 재생을 지원하지 않습니다.
+                </video>
               ) : isAudioFile(content.filename) ? (
                 <audio 
                   ref={audioRef}
@@ -360,15 +377,19 @@ export default function ContentDetail({ content }: Props) {
                   브라우저가 오디오 재생을 지원하지 않습니다.
                 </audio>
               ) : (
-                <video 
-                  ref={videoRef}
-                  controls 
-                  src={content.media_url} 
-                  className="w-full max-h-[500px]"
-                  preload="metadata"
-                >
-                  브라우저가 비디오 재생을 지원하지 않습니다.
-                </video>
+                <div className="p-8 text-center">
+                  <p className="text-muted-foreground mb-4">
+                    이 파일 형식은 브라우저에서 직접 미리보기를 지원하지 않습니다.
+                  </p>
+                  <Button
+                    type="button"
+                    onClick={handleDownload}
+                    variant="default"
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    파일 다운로드
+                  </Button>
+                </div>
               )}
             </div>
             <div className="flex items-center gap-3 flex-wrap">
@@ -387,7 +408,7 @@ export default function ContentDetail({ content }: Props) {
                 type="button"
                 onClick={handleDownload}
                 variant="default"
-                className={isDocumentFile(content.filename) ? "w-full" : "ml-auto"}
+                className="ml-auto"
               >
                 <Download className="mr-2 h-4 w-4" />
                 파일 다운로드
@@ -419,9 +440,7 @@ export default function ContentDetail({ content }: Props) {
             </div>
           )}
           {content.summary_md ? (
-            <div className="markdown-content">
-              <ReactMarkdown>{content.summary_md}</ReactMarkdown>
-            </div>
+            <MarkdownContent content={content.summary_md} />
           ) : (
             content.status !== 'SUMMARIZING' &&
             content.status !== 'SUMMARY_FAILED' && (
@@ -559,12 +578,34 @@ export default function ContentDetail({ content }: Props) {
           </CardHeader>
           <CardContent>
             <ScrollArea className="h-[700px] md:h-[850px] rounded-lg border px-4 py-4">
-              <div className={cn(
-                "whitespace-pre-wrap break-words text-base leading-relaxed",
-                isTxtFile(content.filename) && "font-mono"
-              )}>
-                {content.document.ocr_text || (isTxtFile(content.filename) ? '내용이 없습니다.' : 'OCR 결과가 없습니다.')}
-              </div>
+              {content.document.ocr_text || content.document.html_content ? (
+                isTxtFile(content.filename) ? (
+                  // 텍스트 파일은 기존 방식 유지 (monospace)
+                  <div className="whitespace-pre-wrap break-words text-base leading-relaxed font-mono">
+                    {content.document.ocr_text}
+                  </div>
+                ) : content.document.html_content ? (
+                  // Docling HTML 콘텐츠가 있으면 우선적으로 렌더링 (뷰어용)
+                  <div className="doc-viewer">
+                    <HtmlContent content={content.document.html_content} />
+                  </div>
+                ) : content.document.ocr_text ? (
+                  // OCR 텍스트만 있으면 마크다운으로 렌더링 (기본 모드)
+                  // JSON 문자열인지 확인 (Docling fallback인 경우)
+                  content.document.ocr_text.trim().startsWith('{') && content.document.ocr_text.trim().startsWith('{"schema_name') ? (
+                    <div className="text-muted-foreground p-4 border rounded">
+                      <p className="font-semibold mb-2">OCR 처리 중 오류가 발생했습니다.</p>
+                      <p className="text-sm">원본 JSON 데이터가 표시되고 있습니다. OCR 처리를 다시 시도해주세요.</p>
+                    </div>
+                  ) : (
+                    <MarkdownContent content={content.document.ocr_text} />
+                  )
+                ) : null
+              ) : (
+                <p className="text-muted-foreground">
+                  {isTxtFile(content.filename) ? '내용이 없습니다.' : 'OCR 결과가 없습니다.'}
+                </p>
+              )}
             </ScrollArea>
           </CardContent>
         </Card>

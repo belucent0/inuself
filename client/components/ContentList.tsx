@@ -85,6 +85,12 @@ const getStatusIcon = (status: ContentStatus) => {
   }
 }
 
+// 파일 확장자 추출
+const getFileExtension = (filename: string): string => {
+  const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
+  return ext || ''
+}
+
 export default function ContentList({ contents, pagination, onRefresh }: Props) {
   const router = useRouter()
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
@@ -251,6 +257,11 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
                         {getStatusIcon(item.status)}
                         {statusLabels[item.status]}
                       </Badge>
+                      {getFileExtension(item.filename) && (
+                        <Badge variant="outline" className="text-xs">
+                          {getFileExtension(item.filename)}
+                        </Badge>
+                      )}
                       {item.content_type !== 'DOCUMENT' && (
                         <span className="text-[13px] md:text-sm text-muted-foreground">
                           화자 수: {item.speakers.length || 0} · 재생 길이: {item.duration_seconds.toFixed(1)}초

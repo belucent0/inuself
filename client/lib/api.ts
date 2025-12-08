@@ -72,6 +72,7 @@ export type ContentSummary = {
     ocr_text: string
     page_count: number
     ocr_metadata: Record<string, unknown>
+    html_content?: string | null  // Docling HTML 출력 (뷰어용)
   } | null
 }
 
@@ -111,6 +112,7 @@ export type ContentDetail = ContentSummary & {
     ocr_text: string
     page_count: number
     ocr_metadata: Record<string, unknown>
+    html_content?: string | null  // Docling HTML 출력 (뷰어용)
   } | null
   logs: SttLog[]
   llm_logs: LlmLog[]
@@ -178,7 +180,8 @@ export async function deleteContentsBulk(contentIds: number[]): Promise<BulkDele
 export async function uploadContent(
   file: File,
   minSpeakers?: number,
-  maxSpeakers?: number
+  maxSpeakers?: number,
+  ocrMode?: string
 ): Promise<{ content_id: number }> {
   const formData = new FormData()
   formData.append('file', file)
@@ -189,6 +192,9 @@ export async function uploadContent(
   }
   if (maxSpeakers !== undefined) {
     params.append('max_speakers', maxSpeakers.toString())
+  }
+  if (ocrMode !== undefined) {
+    params.append('ocr_mode', ocrMode)
   }
 
   const queryString = params.toString()
