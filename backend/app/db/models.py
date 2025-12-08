@@ -110,6 +110,7 @@ class Document(Base):
     ocr_text: Mapped[str] = mapped_column(Text, nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     ocr_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    html_content: Mapped[str | None] = mapped_column(Text, nullable=True)  # Docling HTML 출력 (뷰어용)
 
     file: Mapped["File"] = relationship("File", back_populates="document")
 

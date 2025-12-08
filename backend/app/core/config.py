@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     asr_chunk_overlap_seconds: int = 0  # 오버랩 크기 (초) - 테스트용 0으로 설정
     asr_chunk_threshold_minutes: int = 25  # 이 길이 이상인 파일만 청킹 적용 (30분 = 1800초)
 
-    # LLM 요약 설정 (llama_cpp/llama.cpp 서버)
-    llm_provider: str = "llama_cpp"  # "llama_cpp", "llamacpp_server" (또는 "lmstudio" - deprecated)
+    # LLM 요약 설정 (llama.cpp 서버)
+    llm_provider: str = "llamacpp_server"  # "llamacpp_server" (또는 "lmstudio" - deprecated)
     
     # 공통 LLM 설정 (모든 provider에서 사용)
     llm_system_prompt: str = "당신은 회의록을 요약하는 전문가입니다. 모든 응답은 반드시 한글로 작성하세요. 마크다운 형식으로 명확하고 간결한 요약을 제공하되, 지시사항이나 프롬프트는 절대 포함하지 마세요."
@@ -77,10 +77,6 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://localhost:8080"
     llm_model_name: str = "Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf"
     
-    # llama_cpp provider 전용 설정 (llama-cpp-python 직접 사용 시)
-    llm_model_path: Path = Path("models/gpt-oss-20b-Q4_K_S.gguf")
-    llm_n_gpu_layers: int = -1  # GPU 레이어 설정 (-1: 모든 레이어 GPU, 0: CPU만, 양수: 지정된 레이어 수만큼 GPU)
-    
     # LLM 서버 설정 (요청마다 시작/종료, provider와 무관)
     llm_server_path: str = Field("", validation_alias="LLM_SERVER_PATH")  # 서버 실행 파일 경로
     llm_server_model: str = Field("", validation_alias="LLM_SERVER_MODEL")  # 모델 파일 경로
@@ -92,6 +88,9 @@ class Settings(BaseSettings):
     
     # OCR 설정 (poppler 경로)
     poppler_path: str = Field("", validation_alias="POPPLER_PATH")  # poppler bin 디렉토리 경로 (예: C:\poppler\bin)
+    
+    # LibreOffice 설정 (Office 문서 변환용)
+    libreoffice_path: str = Field("", validation_alias="LIBREOFFICE_PATH")  # LibreOffice 실행 파일 경로 (예: C:\Program Files\LibreOffice\program\soffice.exe 또는 /usr/bin/libreoffice)
     
     @property
     def llm_api_base_url(self) -> str:
@@ -109,15 +108,6 @@ class Settings(BaseSettings):
 
     # CORS 설정
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://asr.timblo.io"
-
-    @model_validator(mode="after")
-    def resolve_llm_model_path(self) -> "Settings":
-        """모델 초기화 후 경로를 프로젝트 루트 기준으로 변환."""
-        # llm_model_path가 상대 경로인 경우 프로젝트 루트 기준으로 변환
-        if not self.llm_model_path.is_absolute():
-            project_root = _get_project_root()
-            self.llm_model_path = project_root / self.llm_model_path
-        return self
 
 
 @lru_cache

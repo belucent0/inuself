@@ -57,14 +57,12 @@ def summarize_transcription(text: str) -> tuple[str, str]:
     settings = get_settings()
     
     # LLM 호출
-    if settings.llm_provider == "llama_cpp":
-        raw_response = _summarize_with_llama_cpp(normalized, settings)
-    elif settings.llm_provider in ("lmstudio", "llamacpp_server"):
+    if settings.llm_provider in ("lmstudio", "llamacpp_server"):
         # "lmstudio"는 deprecated이지만 하위 호환성 유지
         # "llamacpp_server"는 llama.cpp 서버를 명시적으로 사용
-        raw_response = _summarize_with_lmstudio(normalized, settings)
+        raw_response = _summarize_with_llm(normalized, settings)
     else:
-        raise ValueError(f"지원하지 않는 LLM provider: {settings.llm_provider}")
+        raise ValueError(f"지원하지 않는 LLM provider: {settings.llm_provider}. 'llamacpp_server' 또는 'lmstudio'만 지원됩니다.")
     
     # JSON 파싱 시도
     title, summary_md = _parse_json_response(raw_response, normalized)
@@ -143,340 +141,6 @@ def _parse_json_response(raw_response: str, transcript_text: str) -> tuple[str, 
         return _extract_title_fallback(raw_response, transcript_text), sanitize_summary_output(raw_response, transcript_text)
 
 
-def _summarize_chunk_with_llama_cpp(chunk: str, chunk_index: int, total_chunks: int, settings) -> str:
-    """단일 청크를 llama.cpp로 요약합니다."""
-    import logging
-    import threading
-    from dataclasses import dataclass
-    from functools import lru_cache
-    from pathlib import Path
-    from llama_cpp import Llama
-    
-    @dataclass(frozen=True)
-    class SummarizerConfig:
-        model_path: str
-        context_length: int
-        max_tokens: int
-        temperature: float
-        top_p: float
-        n_threads: int
-        n_gpu_layers: int  # GPU 레이어 설정 추가
-    
-    _model_lock = threading.Lock()
-    
-    @lru_cache(maxsize=1)
-    def _get_llama_model(config):
-        """llama.cpp Llama 인스턴스를 캐시해 재사용한다 (llama_cpp provider용)."""
-        from pathlib import Path
-        from llama_cpp import Llama
-        
-        # 모델 파일 검증
-        model_path = Path(config.model_path)
-        if not model_path.exists():
-            raise FileNotFoundError(f"Model file not found: {config.model_path}")
-        if not model_path.is_file():
-            raise ValueError(f"Model path is not a file: {config.model_path}")
-        
-        logger.info("LLM model loading started: %s", config.model_path)
-        # n_gpu_layers 설정: config에서 읽어옴 (환경 변수 LLM_N_GPU_LAYERS로 설정 가능)
-        # -1: 모든 레이어를 GPU에 로드 (Vulkan 가속, 최대 성능)
-        # 0: CPU만 사용
-        # 양수: 지정된 레이어 수만큼 GPU에 로드, 나머지는 CPU (하이브리드)
-        # llama-cpp-python 0.3.16에서 Vulkan 지원 확인됨
-        n_gpu_layers = config.n_gpu_layers
-        if n_gpu_layers == -1:
-            logger.info("GPU layer configuration: n_gpu_layers=%d (Vulkan GPU acceleration mode - all layers)", n_gpu_layers)
-        elif n_gpu_layers == 0:
-            logger.info("GPU layer configuration: n_gpu_layers=%d (CPU mode)", n_gpu_layers)
-        else:
-            logger.info("GPU layer configuration: n_gpu_layers=%d (hybrid mode - %d layers GPU, rest CPU)", n_gpu_layers, n_gpu_layers)
-        
-        try:
-            with _model_lock:
-                logger.info("LLM model creation started: n_ctx=%d, n_gpu_layers=%d", config.context_length, n_gpu_layers)
-                # llama-cpp-python의 chat template 경고 로그 억제
-                llama_logger = logging.getLogger("llama_cpp")
-                original_level = llama_logger.level
-                llama_logger.setLevel(logging.ERROR)  # WARNING 이상만 억제
-                
-                try:
-                    import time
-                    load_start = time.time()
-                    logger.info("LLM model instance creation started...")
-                    llama = Llama(
-                        model_path=config.model_path,
-                        n_ctx=config.context_length,
-                        n_threads=config.n_threads,
-                        logits_all=False,
-                        embedding=False,
-                        use_mlock=True,
-                        n_gpu_layers=n_gpu_layers,  # Vulkan GPU 가속 사용
-                        verbose=False,  # chat template 경고 억제
-                    )
-                    load_elapsed = time.time() - load_start
-                    logger.info("LLM model loaded: n_ctx=%d, loading time=%.2f seconds", config.context_length, load_elapsed)
-                    return llama
-                finally:
-                    # 로거 레벨 복원
-                    llama_logger.setLevel(original_level)
-        except Exception as e:
-            # 원본 예외의 상세 정보를 포함
-            import traceback
-            error_details = traceback.format_exc()
-            error_type = type(e).__name__
-            
-            # Qwen3-VL 모델 호환성 체크
-            model_name = str(config.model_path).lower()
-            is_vision_model = "vl" in model_name or "vision" in model_name
-            
-            error_msg = (
-                f"LLM model loading failed: {error_type}: {e}\n"
-                f"Model path: {config.model_path}\n"
-                f"Error type: {error_type}\n"
-            )
-            
-            if is_vision_model:
-                error_msg += (
-                    f"\n⚠️ WARNING: This appears to be a Vision-Language model (Qwen3-VL).\n"
-                    f"llama-cpp-python may not fully support Vision-Language models.\n"
-                    f"Consider using a text-only Qwen model instead (e.g., Qwen2.5-32B-Instruct).\n"
-                )
-            
-            error_msg += (
-                f"\nPossible causes:\n"
-                f"1. Model file is corrupted or incompatible format\n"
-                f"2. llama-cpp-python build does not properly support Vulkan\n"
-                f"3. Model format is incompatible with llama-cpp-python version\n"
-                f"4. Vision-Language models may not be supported by llama-cpp-python\n"
-                f"\nSolutions:\n"
-                f"- Try using a text-only model (not Vision-Language)\n"
-                f"- Re-download the model file or\n"
-                f"- Rebuild llama-cpp-python with Vulkan support:\n"
-                f"  CMAKE_ARGS='-DGGML_VULKAN=ON' pip install --force-reinstall llama-cpp-python\n"
-                f"\nFull traceback:\n{error_details}"
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from e
-    
-    cfg = SummarizerConfig(
-        model_path=str(settings.llm_model_path),
-        context_length=settings.llm_context_length,
-        max_tokens=settings.llm_max_tokens,
-        temperature=settings.llm_temperature,
-        top_p=settings.llm_top_p,
-        n_threads=settings.llm_n_threads,
-        n_gpu_layers=settings.llm_n_gpu_layers,  # GPU 레이어 설정
-    )
-    
-    prompt = DEFAULT_SUMMARY_PROMPT.format(transcript=chunk)
-    
-    # 프롬프트 길이 체크 (대략적인 토큰 수 추정: 한국어는 1 토큰 ≈ 2.5-3 문자)
-    # 더 보수적으로 2.5 문자/토큰 사용
-    estimated_tokens = len(prompt) / 2.5
-    max_allowed_tokens = cfg.context_length - cfg.max_tokens - 1000  # 안전 마진 1000 토큰 (프롬프트 템플릿 포함)
-    
-    if estimated_tokens > max_allowed_tokens:
-        # 청크가 너무 길면 더 작게 분할
-        logger.warning(
-            "Chunk %d/%d is too large (estimated tokens: %d, max allowed: %d). Splitting into smaller chunks.",
-            chunk_index, total_chunks, int(estimated_tokens), max_allowed_tokens
-        )
-        # 더 작은 청크로 재분할
-        smaller_chunks = _split_text_into_chunks(chunk, max_tokens_per_chunk=int(max_allowed_tokens * 0.8), overlap_tokens=200)
-        logger.info("Re-split chunk %d/%d into %d smaller chunks.", chunk_index, total_chunks, len(smaller_chunks))
-        
-        # 각 작은 청크를 요약하고 합치기
-        sub_summaries = []
-        for sub_idx, sub_chunk in enumerate(smaller_chunks, 1):
-            try:
-                sub_prompt = DEFAULT_SUMMARY_PROMPT.format(transcript=sub_chunk)
-                llama = _get_llama_model(cfg)
-                # 로거 레벨 조정
-                llama_logger = logging.getLogger("llama_cpp")
-                original_level = llama_logger.level
-                llama_logger.setLevel(logging.ERROR)
-                try:
-                    response = llama.create_completion(
-                        prompt=sub_prompt,
-                        max_tokens=cfg.max_tokens,
-                        temperature=cfg.temperature,
-                        top_p=cfg.top_p,
-                        stream=False,
-                        echo=False,
-                    )
-                finally:
-                    llama_logger.setLevel(original_level)
-                
-                sub_response = _extract_text(response).strip()
-                if sub_response:
-                    sub_summaries.append(sub_response)
-            except Exception as exc:
-                logger.error("Small chunk %d-%d summarization failed: %s", chunk_index, sub_idx, exc)
-        
-        if not sub_summaries:
-            raise RuntimeError(f"All small chunk summarizations failed for chunk {chunk_index}/{total_chunks}.")
-        
-        # 작은 청크 요약들을 합쳐서 반환
-        raw_response = "\n\n".join(sub_summaries)
-    else:
-        llama = _get_llama_model(cfg)
-        # 로거 레벨 조정 (chat template 경고 억제)
-        llama_logger = logging.getLogger("llama_cpp")
-        original_level = llama_logger.level
-        llama_logger.setLevel(logging.ERROR)
-        try:
-            logger.info("Chunk %d/%d summarization started: prompt length=%d chars, max_tokens=%d", 
-                       chunk_index, total_chunks, len(prompt), cfg.max_tokens)
-            response = llama.create_completion(
-                prompt=prompt,
-                max_tokens=cfg.max_tokens,
-                temperature=cfg.temperature,
-                top_p=cfg.top_p,
-                stream=False,
-                echo=False,
-            )
-            logger.info("Chunk %d/%d create_completion completed", chunk_index, total_chunks)
-        finally:
-            llama_logger.setLevel(original_level)
-        
-        raw_response = _extract_text(response).strip()
-    
-    if not raw_response:
-        raise RuntimeError(f"llama.cpp summarization result is empty (chunk {chunk_index}/{total_chunks}).")
-    logger.info("Chunk %d/%d response completed (length: %d chars)", chunk_index, total_chunks, len(raw_response))
-    return raw_response
-
-
-def _summarize_with_llama_cpp(text: str, settings) -> str:
-    """
-    llama.cpp 직접 사용한 요약.
-    긴 텍스트는 청킹하여 처리합니다.
-    """
-    # 실제 사용 가능한 컨텍스트 길이 계산
-    # 프롬프트 템플릿 오버헤드: 약 200-300 토큰
-    # 안전 마진: max_tokens + 추가 오버헤드 (약 2000 토큰)
-    prompt_overhead = 2000  # 프롬프트 템플릿 + 안전 마진
-    available_tokens = settings.llm_context_length - settings.llm_max_tokens - prompt_overhead
-    
-    # 한국어는 토큰 수가 더 많으므로 더 보수적인 변환 사용
-    # 1 토큰 ≈ 2.5-3.0 문자 (한국어는 영어보다 토큰 수가 많음)
-    chars_per_token = 2.5  # 더 보수적으로 2.5 문자/토큰 사용
-    max_chunk_chars = int(available_tokens * chars_per_token)
-    
-    logger.info(
-        "[LLM Summarizer] Text length check: total=%d chars, max chunk=%d chars (approx %d tokens), "
-        "configured context=%d, available=%d tokens, prompt overhead=%d tokens",
-        len(text), max_chunk_chars, available_tokens, settings.llm_context_length, available_tokens, prompt_overhead
-    )
-    
-    # 텍스트가 한 번에 처리 가능한지 확인
-    # 안전하게 80%만 사용하여 토큰 추정 오차를 고려
-    safe_max_chars = int(max_chunk_chars * 0.8)
-    if len(text) <= safe_max_chars:
-        # 한 번에 처리 가능하면 기존 방식 사용
-        logger.info("[LLM Summarizer] Text is short, processing in one go.")
-        return _summarize_chunk_with_llama_cpp(text, 1, 1, settings)
-    
-    logger.info(
-        "[LLM Summarizer] Text is long, using chunked summarization. "
-        "Total length: %d chars, max per chunk: %d chars (approx %d tokens)",
-        len(text), max_chunk_chars, available_tokens
-    )
-    
-    # 텍스트를 더 작은 청크로 분할하여 컨텍스트 초과 방지
-    # available_tokens의 60%만 사용하여 안전 마진 확보 (프롬프트 오버헤드 고려)
-    safe_chunk_tokens = int(available_tokens * 0.6)
-    logger.info(
-        "[LLM Summarizer] Using safe chunk size: %d tokens (60%% of available %d tokens)",
-        safe_chunk_tokens, available_tokens
-    )
-    chunks = _split_text_into_chunks(text, max_tokens_per_chunk=safe_chunk_tokens, overlap_tokens=500)
-    logger.info("Split text into %d chunks.", len(chunks))
-    
-    # 각 청크 요약
-    successful_chunks = []
-    failed_chunks = []
-    for i, chunk in enumerate(chunks, 1):
-        logger.info("Summarizing chunk %d/%d... (length: %d chars)", i, len(chunks), len(chunk))
-        try:
-            chunk_summary = _summarize_chunk_with_llama_cpp(chunk, i, len(chunks), settings)
-            successful_chunks.append({
-                "chunk_index": i,
-                "summary": chunk_summary
-            })
-            logger.info("Chunk %d/%d summarization succeeded", i, len(chunks))
-        except Exception as exc:
-            logger.error("Chunk %d summarization failed: %s", i, exc)
-            failed_chunks.append(i)
-            # 실패한 청크는 건너뛰고 계속 진행
-    
-    if not successful_chunks:
-        raise RuntimeError("All chunk summarizations failed.")
-    
-    # 실패한 청크가 있으면 경고 로그
-    if failed_chunks:
-        logger.warning(
-            "Some chunk summarizations failed: failed chunks=%s, succeeded chunks=%d/%d",
-            failed_chunks, len(successful_chunks), len(chunks)
-        )
-    
-    # 통합 요약 생성 (성공한 청크만 사용)
-    logger.info("Merging chunk summaries to create final summary... (succeeded chunks: %d/%d)", len(successful_chunks), len(chunks))
-    combined_summaries = "\n\n".join([
-        f"## 부분 {cs['chunk_index']}\n\n{cs['summary']}"
-        for cs in successful_chunks
-    ])
-    
-    # 통합 요약 프롬프트
-    failed_parts_note = ""
-    if failed_chunks:
-        failed_parts_note = f"\n\nNote: Some parts ({', '.join(map(str, failed_chunks))}) failed to summarize and are excluded from this summary."
-    
-    merge_prompt = """당신은 회의록을 요약하는 전문가입니다. 다음은 긴 회의 전사의 여러 부분에 대한 요약입니다. 모든 부분을 통합하여 하나의 포괄적인 요약을 작성하고 적절한 제목을 생성하세요.
-
-1. (필수) title: 통합된 요약에 대한 적절한 제목을 생성하세요. 제목만 보고도 회의의 대략적인 내용을 추측할 수 있어야 합니다. 제목은 반드시 한글로 작성하세요.
-
-2. summary: 모든 부분을 통합하여 요약하세요.
-   - 모든 내용은 반드시 한글로 작성하세요
-   - `## 요약` 제목으로 시작하세요
-   - 모든 부분의 핵심 내용을 불릿 포인트로 제공하세요
-   - `## 세부 사항` 섹션에 결정 사항이나 액션 아이템을 번호로 나열하세요
-   - 요약이 모든 부분의 중요한 내용을 다루도록 하세요
-   - 중복 정보를 제거하고 유사한 내용을 통합하세요
-   - 실제 회의 내용에만 집중하세요. 에러 메시지, 기술 정보, 플레이스홀더 텍스트는 무시하세요
-   - 출력은 유효한 마크다운 형식이어야 합니다
-   - 원본 요약이나 에러 메시지를 포함하지 마세요
-   - 일부 부분이 누락된 경우, 사용 가능한 내용만 요약하세요{failed_parts_note}
-
----
-
-다음 JSON 형식으로 반드시 응답하세요:
-
-{{
-    "title": "제목",  # 필수. 한글로 작성
-    "summary": "## 요약\\n\\n- 내용...\\n\\n## 세부 사항\\n\\n1. 항목..."
-}}
-
-부분별 요약:
-{transcript}
-"""
-    
-    try:
-        # 통합 요약
-        prompt = merge_prompt.format(transcript=combined_summaries, failed_parts_note=failed_parts_note)
-        raw_response = _summarize_chunk_with_llama_cpp(prompt, 1, 1, settings)
-        raw_response = raw_response.strip()
-        if not raw_response:
-            raise RuntimeError("llama.cpp merge summarization result is empty.")
-        
-        logger.info("Chunked summarization completed (final response length: %d chars)", len(raw_response))
-        return raw_response
-    except Exception as exc:
-        # 통합 요약 실패 시 개별 요약을 합쳐서 반환
-        logger.warning("Merge summarization failed, returning combined individual summaries: %s", exc)
-        return f"## 요약\n\n{combined_summaries}"
-
-
 def _split_text_into_chunks(text: str, max_tokens_per_chunk: int = 10000, overlap_tokens: int = 500) -> list[str]:
     """
     텍스트를 지정된 토큰 수 단위로 청크로 분할합니다.
@@ -531,7 +195,7 @@ def _split_text_into_chunks(text: str, max_tokens_per_chunk: int = 10000, overla
     return chunks
 
 
-def _summarize_chunk_with_lmstudio(chunk: str, chunk_index: int, total_chunks: int, settings) -> str:
+def _summarize_chunk_with_llm(chunk: str, chunk_index: int, total_chunks: int, settings) -> str:
     """단일 청크를 OpenAI 호환 API 서버(llama.cpp 서버, LM Studio 등)로 요약합니다."""
     prompt = DEFAULT_SUMMARY_PROMPT.format(transcript=chunk)
     system_prompt = settings.llm_system_prompt.strip()
@@ -561,7 +225,7 @@ def _summarize_chunk_with_lmstudio(chunk: str, chunk_index: int, total_chunks: i
         raise RuntimeError(error_msg) from exc
 
 
-def _summarize_with_lmstudio(text: str, settings) -> str:
+def _summarize_with_llm(text: str, settings) -> str:
     """
     OpenAI 호환 API 서버(llama.cpp 서버, LM Studio 등) Chat Completions API를 통한 요약.
     긴 텍스트는 청킹하여 처리합니다.
@@ -595,7 +259,7 @@ def _summarize_with_lmstudio(text: str, settings) -> str:
     if len(text) <= safe_max_chars:
         # 한 번에 처리 가능하면 기존 방식 사용
         logger.info("[LLM Summarizer] Text is short, processing in one go.")
-        return _summarize_chunk_with_lmstudio(text, 1, 1, settings)
+        return _summarize_chunk_with_llm(text, 1, 1, settings)
     
     logger.info(
         "[LLM Summarizer] Text is long, using chunked summarization. "
@@ -620,7 +284,7 @@ def _summarize_with_lmstudio(text: str, settings) -> str:
     for i, chunk in enumerate(chunks, 1):
         logger.info("Summarizing chunk %d/%d... (length: %d chars)", i, len(chunks), len(chunk))
         try:
-            chunk_summary = _summarize_chunk_with_lmstudio(chunk, i, len(chunks), settings)
+            chunk_summary = _summarize_chunk_with_llm(chunk, i, len(chunks), settings)
             successful_chunks.append({
                 "chunk_index": i,
                 "summary": chunk_summary
@@ -710,14 +374,6 @@ def _summarize_with_lmstudio(text: str, settings) -> str:
         return f"## 요약\n\n{combined_summaries}"
 
 
-def _extract_text(completion: dict[str, Any]) -> str:
-    """llama_cpp 응답에서 텍스트 추출."""
-    choices = completion.get("choices") or []
-    if not choices:
-        return ""
-    return str(choices[0].get("text") or "")
-
-
 def extract_title(summary_md: str, transcript_text: str) -> str:
     """
     요약 텍스트와 전사 텍스트를 기반으로 제목을 추출합니다.
@@ -749,9 +405,7 @@ def extract_title(summary_md: str, transcript_text: str) -> str:
     prompt = title_prompt.format(summary=summary_md[:2000])  # 요약의 앞부분만 사용
     
     try:
-        if settings.llm_provider == "llama_cpp":
-            title = _extract_title_with_llama_cpp(prompt, settings)
-        elif settings.llm_provider in ("lmstudio", "llamacpp_server"):
+        if settings.llm_provider in ("lmstudio", "llamacpp_server"):
             # "lmstudio"는 deprecated이지만 하위 호환성 유지
             # "llamacpp_server"는 llama.cpp 서버를 명시적으로 사용
             title = _extract_title_with_lmstudio(prompt, settings)
@@ -835,105 +489,6 @@ def extract_title(summary_md: str, transcript_text: str) -> str:
     except Exception as exc:
         logger.warning("Title extraction failed, using fallback method: %s", exc)
         return _extract_title_fallback(summary_md, transcript_text)
-
-
-def _extract_title_with_llama_cpp(prompt: str, settings) -> str:
-    """llama_cpp를 사용한 제목 추출."""
-    import threading
-    from dataclasses import dataclass
-    from functools import lru_cache
-    from llama_cpp import Llama
-    
-    @dataclass(frozen=True)
-    class TitleExtractorConfig:
-        model_path: str
-        n_threads: int
-        n_gpu_layers: int  # GPU 레이어 설정 추가
-    
-    _title_model_lock = threading.Lock()
-    
-    @lru_cache(maxsize=1)
-    def _get_title_llama_model(config):
-        """제목 추출용 llama.cpp Llama 인스턴스를 캐시해 재사용한다."""
-        from pathlib import Path
-        from llama_cpp import Llama
-        
-        model_path = Path(config.model_path)
-        if not model_path.exists():
-            raise FileNotFoundError(f"Model file not found: {config.model_path}")
-        
-        try:
-            with _title_model_lock:
-                # llama-cpp-python의 chat template 경고 로그 억제
-                llama_logger = logging.getLogger("llama_cpp")
-                original_level = llama_logger.level
-                llama_logger.setLevel(logging.ERROR)  # WARNING 이상만 억제
-                
-                try:
-                    llama = Llama(
-                        model_path=config.model_path,
-                        n_ctx=512,  # 제목 추출은 짧은 컨텍스트로 충분
-                        n_threads=config.n_threads,
-                        logits_all=False,
-                        embedding=False,
-                        use_mlock=True,
-                        n_gpu_layers=config.n_gpu_layers,  # config에서 읽어옴
-                        verbose=False,  # chat template 경고 억제
-                    )
-                    return llama
-                finally:
-                    # 로거 레벨 복원
-                    llama_logger.setLevel(original_level)
-        except Exception as e:
-            # 원본 예외의 상세 정보를 포함
-            import traceback
-            error_details = traceback.format_exc()
-            error_type = type(e).__name__
-            
-            # Qwen3-VL 모델 호환성 체크
-            model_name = str(config.model_path).lower()
-            is_vision_model = "vl" in model_name or "vision" in model_name
-            
-            error_msg = (
-                f"Failed to load LLM model for title extraction: {error_type}: {e}\n"
-                f"Model path: {config.model_path}\n"
-            )
-            
-            if is_vision_model:
-                error_msg += (
-                    f"\n⚠️ WARNING: This appears to be a Vision-Language model (Qwen3-VL).\n"
-                    f"llama-cpp-python may not fully support Vision-Language models.\n"
-                    f"Consider using a text-only Qwen model instead (e.g., Qwen2.5-32B-Instruct).\n"
-                )
-            
-            error_msg += f"\nFull traceback:\n{error_details}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from e
-    
-    cfg = TitleExtractorConfig(
-        model_path=str(settings.llm_model_path),
-        n_threads=settings.llm_n_threads,
-        n_gpu_layers=settings.llm_n_gpu_layers,  # GPU 레이어 설정
-    )
-    
-    llm = _get_title_llama_model(cfg)
-    
-    # llama-cpp-python의 chat template 경고 로그 억제
-    llama_logger = logging.getLogger("llama_cpp")
-    original_level = llama_logger.level
-    llama_logger.setLevel(logging.ERROR)
-    
-    try:
-        completion = llm(
-            prompt,
-            max_tokens=100,
-            temperature=0.3,
-            stop=["\n\n", "제목:", "Title:"],
-        )
-        return _extract_text(completion)
-    finally:
-        # 로거 레벨 복원
-        llama_logger.setLevel(original_level)
 
 
 def _extract_title_with_lmstudio(prompt: str, settings) -> str:

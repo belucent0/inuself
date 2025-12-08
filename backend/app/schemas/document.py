@@ -12,6 +12,7 @@ class DocumentBaseSchema(BaseModel):
     ocr_text: str
     page_count: int = 0
     ocr_metadata: dict[str, Any] = Field(default_factory=dict)
+    html_content: str | None = None  # Docling HTML 출력 (뷰어용)
 
     class Config:
         from_attributes = True
@@ -21,4 +22,5 @@ class DocumentDetail(DocumentBaseSchema):
     """Document 상세 정보."""
 
     pass
+
 

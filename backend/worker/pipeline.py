@@ -58,7 +58,7 @@ def run_asr_diarization_pipeline(
     project_root: Path | None = None,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
-    content_id: int | None = None,  # 락 회복을 위한 content_id
+    file_id: int | None = None,  # 락 회복을 위한 file_id
 ) -> PipelineResult:
     """
     ASR + 화자분리 파이프라인 실행.
@@ -131,7 +131,7 @@ def run_asr_diarization_pipeline(
             logs=logs,
             min_speakers=min_speakers,
             max_speakers=max_speakers,
-            content_id=content_id,
+            file_id=file_id,
         )
     else:
         raise ValueError(f"Unsupported processing mode: {processing_mode}")
@@ -148,7 +148,7 @@ def _run_case4_parallel_full_asr(
     logs: list[dict[str, Any]],
     min_speakers: int | None = None,
     max_speakers: int | None = None,
-    content_id: int | None = None,  # 락 회복을 위한 content_id
+    file_id: int | None = None,  # 락 회복을 위한 file_id
 ) -> PipelineResult:
     """Case 4: 화자분리와 ASR(전체 파일 또는 청킹) 병렬 처리."""
     print(f"\n{'='*60}")
@@ -190,9 +190,9 @@ def _run_case4_parallel_full_asr(
     lock_ttl = max(300.0, min(audio_duration * 0.5, 7200.0))
     print(f"[Lock] Audio duration: {audio_duration:.2f}s, Lock TTL: {lock_ttl:.2f}s")
     
-    # 락 회복 로직: content_id가 제공되고, 워커가 실제로 실행 중이 아니면 락을 무시하고 진행
+    # 락 회복 로직: file_id가 제공되고, 워커가 실제로 실행 중이 아니면 락을 무시하고 진행
     should_skip_lock = False
-    if content_id is not None:
+    if file_id is not None:
         try:
             # distributed_lock을 import하기 위해 경로 추가
             _backend_dir = Path(__file__).parent.parent
@@ -200,22 +200,22 @@ def _run_case4_parallel_full_asr(
                 sys.path.insert(0, str(_backend_dir))
             from app.worker.celery_queue import is_celery_task_in_queue
             
-            # 해당 content_id의 ASR 작업이 실제로 실행 중인지 확인
-            is_running = is_celery_task_in_queue(content_id=content_id, task_name="process_asr_task")
+            # 해당 file_id의 ASR 작업이 실제로 실행 중인지 확인
+            is_running = is_celery_task_in_queue(file_id=file_id, task_name="process_asr_task")
             
             if not is_running:
                 # 워커가 실행 중이 아니면 락을 무시하고 진행 (락 회복)
-                print(f"[Lock Recovery] Content ID {content_id} is not running in worker, skipping lock check")
+                print(f"[Lock Recovery] File ID {file_id} is not running in worker, skipping lock check")
                 should_skip_lock = True
             else:
-                print(f"[Lock] Content ID {content_id} is running in worker, acquiring lock...")
+                print(f"[Lock] File ID {file_id} is running in worker, acquiring lock...")
         except Exception as e:
             # 확인 실패 시 락을 사용 (안전한 기본값)
             print(f"[Lock] Failed to check worker status: {e}, using lock")
     
-    # 락 키 결정: content_id가 있으면 content_id 기반, 없으면 전역 락
-    asr_lock_key = f"lock:asr:{content_id}" if content_id is not None else "lock:asr:global"
-    diarization_lock_key = f"lock:diarization:{content_id}" if content_id is not None else "lock:diarization:global"
+    # 락 키 결정: file_id가 있으면 file_id 기반, 없으면 전역 락
+    asr_lock_key = f"lock:asr:{file_id}" if file_id is not None else "lock:asr:global"
+    diarization_lock_key = f"lock:diarization:{file_id}" if file_id is not None else "lock:diarization:global"
     
     # ASR 락과 화자분리 락을 각각 획득 (중첩 컨텍스트 매니저 사용)
     # 락 획득 실패 시 예외를 발생시키지 않고, 컨텍스트 매니저가 정상적으로 종료되도록 함

@@ -10,7 +10,7 @@ class TaskQueueAdapter(ABC):
     @abstractmethod
     def enqueue_asr_job(
         self,
-        content_id: int,
+        file_id: int,
         storage_key: str,
         original_filename: str,
         model_size: str,
@@ -23,7 +23,7 @@ class TaskQueueAdapter(ABC):
         pass
     
     @abstractmethod
-    def enqueue_llm_job(self, content_id: int) -> str:
+    def enqueue_llm_job(self, file_id: int) -> str:
         """LLM 작업을 큐에 등록하고 작업 ID를 반환."""
         pass
     
@@ -33,6 +33,7 @@ class TaskQueueAdapter(ABC):
         file_id: int,
         storage_key: str,
         original_filename: str,
+        ocr_mode: str = "basic",
     ) -> str:
         """OCR 작업을 큐에 등록하고 작업 ID를 반환."""
         pass
@@ -48,7 +49,7 @@ class CeleryAdapter(TaskQueueAdapter):
     
     def enqueue_asr_job(
         self,
-        content_id: int,
+        file_id: int,
         storage_key: str,
         original_filename: str,
         model_size: str,
@@ -64,7 +65,7 @@ class CeleryAdapter(TaskQueueAdapter):
         result = process_asr_task.apply_async(
             args=(),
             kwargs={
-                "content_id": content_id,
+                "file_id": file_id,
                 "storage_key": storage_key,
                 "original_filename": original_filename,
                 "model_size": model_size,
@@ -77,14 +78,14 @@ class CeleryAdapter(TaskQueueAdapter):
         )
         return result.id
     
-    def enqueue_llm_job(self, content_id: int) -> str:
+    def enqueue_llm_job(self, file_id: int) -> str:
         # Lazy import: celery_tasks가 llm_processor를 import하므로 실행 시점에만 로드
         from .celery_tasks import process_llm_task
         
         # 큐를 명시적으로 지정하여 작업 전송
         result = process_llm_task.apply_async(
             args=(),
-            kwargs={"content_id": content_id},
+            kwargs={"file_id": file_id},
             queue="llm",  # 큐를 명시적으로 지정
         )
         return result.id
@@ -94,6 +95,7 @@ class CeleryAdapter(TaskQueueAdapter):
         file_id: int,
         storage_key: str,
         original_filename: str,
+        ocr_mode: str = "basic",
     ) -> str:
         # Lazy import: celery_tasks가 ocr_processor를 import하므로 실행 시점에만 로드
         from .celery_tasks import process_ocr_task
@@ -105,6 +107,7 @@ class CeleryAdapter(TaskQueueAdapter):
                 "file_id": file_id,
                 "storage_key": storage_key,
                 "original_filename": original_filename,
+                "ocr_mode": ocr_mode,
             },
             queue="ocr",  # 큐를 명시적으로 지정
         )

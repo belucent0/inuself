@@ -49,17 +49,18 @@ async def upload_content(
     file: UploadFile,
     min_speakers: int | None = Query(None, ge=1, description="최소 화자 수 (선택사항)"),
     max_speakers: int | None = Query(None, ge=1, description="최대 화자 수 (선택사항)"),
+    ocr_mode: str = Query("basic", description="OCR 처리 모드 ('basic' 또는 'docling')"),
     file_service: FileService = Depends(get_file_service)
 ):
     """파일 업로드 (오디오 및 문서 지원)."""
     from ..core.logging import logger
     
-    logger.info("[Upload] File upload request received: filename={}, content_type={}, min_speakers={}, max_speakers={}", 
-               file.filename, file.content_type, min_speakers, max_speakers)
-    print(f"[Upload] 파일 업로드 요청: {file.filename} ({file.content_type}), min_speakers={min_speakers}, max_speakers={max_speakers}")
+    logger.info("[Upload] File upload request received: filename={}, content_type={}, min_speakers={}, max_speakers={}, ocr_mode={}", 
+               file.filename, file.content_type, min_speakers, max_speakers, ocr_mode)
+    print(f"[Upload] 파일 업로드 요청: {file.filename} ({file.content_type}), min_speakers={min_speakers}, max_speakers={max_speakers}, ocr_mode={ocr_mode}")
     
     try:
-        result = await file_service.upload_and_enqueue(file, min_speakers=min_speakers, max_speakers=max_speakers)
+        result = await file_service.upload_and_enqueue(file, min_speakers=min_speakers, max_speakers=max_speakers, ocr_mode=ocr_mode)
         # 하위 호환성을 위해 content_id로 변환
         upload_response = UploadResponse(content_id=result["file_id"], queued=True)
         logger.info("[Upload] File upload successful: file_id={}, filename={}", result["file_id"], file.filename)
@@ -91,11 +92,11 @@ async def bulk_delete_contents(
     """체크박스로 선택된 콘텐츠를 상태에 관계없이 삭제."""
     try:
         deleted_ids, skipped_ids = await file_service.delete_files_by_ids(payload.content_ids)
-        message = "Selected contents deleted."
+        message = "선택된 콘텐츠를 삭제했습니다."
         if not deleted_ids:
-            message = "No deletable contents found."
+            message = "삭제 가능한 콘텐츠를 찾을 수 없습니다."
         elif skipped_ids:
-            message = "Some contents deleted. (Non-existent or already deleted items excluded)"
+            message = "일부 콘텐츠를 삭제했습니다. (존재하지 않거나 이미 삭제된 항목은 제외됨)"
 
         return BulkDeleteResponse(
             deleted_count=len(deleted_ids),

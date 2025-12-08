@@ -72,7 +72,7 @@ async def requeue_processing_contents() -> int:
             # Task Queue Adapter 사용 (Celery)
             task_queue = get_task_queue()
             task_queue.enqueue_asr_job(
-                content_id=file_obj.id,  # 하위 호환성을 위해 content_id로 전달
+                file_id=file_obj.id,
                 storage_key=file_obj.object_key,
                 original_filename=file_obj.filename,
                 model_size=settings.whisper_model_default,
@@ -112,7 +112,7 @@ async def requeue_summarizing_contents() -> int:
 
     for file_obj in files:
         # 이미 큐에 있는 작업은 재큐잉하지 않음 (중복 방지)
-        if is_celery_task_in_queue(content_id=file_obj.id, task_name="process_llm_task"):
+        if is_celery_task_in_queue(file_id=file_obj.id, task_name="process_llm_task"):
             logger.debug("LLM job already in queue for file_id=%s, skipping requeue", file_obj.id)
             continue
         
@@ -137,7 +137,7 @@ async def requeue_summarizing_contents() -> int:
 
             # Task Queue Adapter 사용 (Celery)
             task_queue = get_task_queue()
-            job_id = task_queue.enqueue_llm_job(content_id=file_obj.id)  # 하위 호환성을 위해 content_id로 전달
+            job_id = task_queue.enqueue_llm_job(file_id=file_obj.id)
             requeued += 1
             logger.info("Requeued LLM job for file_id=%s (previous_status=%s, job_id=%s)", 
                       file_obj.id, file_obj.status.value, job_id)

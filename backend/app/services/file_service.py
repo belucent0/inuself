@@ -1,9 +1,8 @@
-"""파일 서비스 - 파일 타입 감지 및 업로드/큐잉 처리."""
-
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Sequence
 from uuid import uuid4
 
 from fastapi import UploadFile
@@ -16,6 +15,8 @@ from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
+from ..schemas.content import ContentDetail, ContentListItem, ContentListResponse, SttLogSchema, LlmLogSchema
+from ..schemas.file import DocumentSchema, TranscriptionSchema
 from ..worker.celery_queue import cancel_celery_tasks_by_content_ids
 
 
@@ -29,10 +30,8 @@ class FileService:
         self.document_repo = DocumentRepository(session)
         self.settings = get_settings()
 
-    async def list_files(self, page: int = 1, page_size: int = 10):
+    async def list_files(self, page: int = 1, page_size: int = 10) -> ContentListResponse:
         """페이지네이션을 포함한 파일 목록 조회."""
-        from ..schemas.content import ContentListResponse, ContentListItem
-        
         if page < 1:
             page = 1
         if page_size < 1:
@@ -44,47 +43,24 @@ class FileService:
         
         items = []
         for row in rows:
-            # File 모델을 ContentListItem으로 변환
-            item_dict = {
+            # SQLAlchemy 객체를 딕셔너리로 변환
+            item_data = {
                 "id": row.id,
                 "filename": row.filename,
                 "object_key": row.object_key,
-                "file_type": row.content_type.value,  # "AUDIO" 또는 "DOCUMENT"
-                "content_type": row.content_type,  # ContentType enum
+                "media_url": get_public_media_url(row.object_key),
+                "content_type": row.content_type,
                 "status": row.status,
                 "summary_md": row.summary_md,
                 "title": row.title,
                 "created_at": row.created_at,
-                "updated_at": getattr(row, 'updated_at', None),  # updated_at이 없을 수 있음
-                "speakers": [],  # 기본값
-                "duration_seconds": 0.0,  # 기본값
+                "speakers": row.transcription.speakers if row.transcription else [],
+                "duration_seconds": row.transcription.duration_seconds if row.transcription else 0.0,
+                "file_type": row.content_type.value if row.content_type else None,
+                "transcription_content": row.transcription.transcription if row.transcription else None,
+                "document": DocumentSchema.model_validate(row.document).model_dump() if row.document else None,
             }
-            
-            # 오디오 파일인 경우 transcription 정보 추가
-            if row.content_type == ContentType.AUDIO and row.transcription:
-                item_dict["duration_seconds"] = row.transcription.duration_seconds
-                item_dict["speakers"] = row.transcription.speakers
-                # transcription_content 추가 (dict로 변환)
-                item_dict["transcription_content"] = {
-                    "id": row.transcription.id,
-                    "file_id": row.transcription.file_id,
-                    "speakers": row.transcription.speakers,
-                    "duration_seconds": row.transcription.duration_seconds,
-                    "transcription": row.transcription.transcription,
-                }
-            # 문서 파일인 경우 document 정보 추가
-            elif row.content_type == ContentType.DOCUMENT and row.document:
-                item_dict["document"] = {
-                    "id": row.document.id,
-                    "file_id": row.document.file_id,
-                    "ocr_text": row.document.ocr_text,
-                    "page_count": row.document.page_count,
-                    "ocr_metadata": row.document.ocr_metadata,
-                }
-            
-            item = ContentListItem.model_validate(item_dict)
-            # media_url 추가
-            item.media_url = get_public_media_url(row.object_key)
+            item = ContentListItem.model_validate(item_data)
             items.append(item)
         
         total_pages = (total + page_size - 1) // page_size if total > 0 else 0
@@ -97,153 +73,49 @@ class FileService:
             total_pages=total_pages,
         )
 
-    async def get_file(self, file_id: int):
+    async def get_file(self, file_id: int) -> ContentDetail:
         """파일 상세 조회."""
-        from ..schemas.content import ContentDetail
-        
         file_obj = await self.file_repo.get_file(file_id)
         if not file_obj:
             raise ValueError("File not found")
         
-        # ContentDetail로 변환
-        detail_dict = {
+        # SQLAlchemy 객체를 딕셔너리로 변환
+        detail_data = {
             "id": file_obj.id,
             "filename": file_obj.filename,
             "object_key": file_obj.object_key,
-            "file_type": file_obj.content_type.value,
+            "media_url": get_public_media_url(file_obj.object_key),
             "content_type": file_obj.content_type,
             "status": file_obj.status,
             "summary_md": file_obj.summary_md,
             "title": file_obj.title,
             "created_at": file_obj.created_at,
-            "updated_at": getattr(file_obj, 'updated_at', None),
-            "speakers": [],
-            "duration_seconds": 0.0,
-            "transcription": {},
+            "updated_at": None,  # File 모델에는 없음
+            "speakers": file_obj.transcription.speakers if file_obj.transcription else [],
+            "duration_seconds": file_obj.transcription.duration_seconds if file_obj.transcription else 0.0,
+            "file_type": file_obj.content_type.value if file_obj.content_type else None,
+            # transcription 필드는 필수이므로, transcription이 없으면 빈 딕셔너리 사용
+            "transcription": file_obj.transcription.transcription if file_obj.transcription else {},
+            "transcription_content": file_obj.transcription.transcription if file_obj.transcription else None,
+            "document": DocumentSchema.model_validate(file_obj.document).model_dump() if file_obj.document else None,
+            "logs": [SttLogSchema.model_validate(log) for log in file_obj.logs],
+            "llm_logs": [LlmLogSchema.model_validate(log) for log in file_obj.llm_logs],
         }
-        
-        # 오디오 파일인 경우 transcription 정보 추가
-        if file_obj.content_type == ContentType.AUDIO and file_obj.transcription:
-            detail_dict["duration_seconds"] = file_obj.transcription.duration_seconds
-            detail_dict["speakers"] = file_obj.transcription.speakers
-            detail_dict["transcription"] = file_obj.transcription.transcription
-            detail_dict["transcription_content"] = {
-                "id": file_obj.transcription.id,
-                "file_id": file_obj.transcription.file_id,
-                "speakers": file_obj.transcription.speakers,
-                "duration_seconds": file_obj.transcription.duration_seconds,
-                "transcription": file_obj.transcription.transcription,
-            }
-        # 문서 파일인 경우 document 정보 추가
-        if file_obj.content_type == ContentType.DOCUMENT:
-            # file_obj.document가 로드되지 않았거나 None인 경우 명시적으로 조회
-            if file_obj.document is None:
-                document_obj = await self.document_repo.get_by_file_id(file_id)
-                if document_obj:
-                    detail_dict["document"] = {
-                        "id": document_obj.id,
-                        "file_id": document_obj.file_id,
-                        "ocr_text": document_obj.ocr_text,
-                        "page_count": document_obj.page_count,
-                        "ocr_metadata": document_obj.ocr_metadata,
-                    }
-                else:
-                    # document가 아직 생성되지 않은 경우 (처리 중)
-                    detail_dict["document"] = None
-            else:
-                # file_obj.document가 이미 로드된 경우
-                detail_dict["document"] = {
-                    "id": file_obj.document.id,
-                    "file_id": file_obj.document.file_id,
-                    "ocr_text": file_obj.document.ocr_text,
-                    "page_count": file_obj.document.page_count,
-                    "ocr_metadata": file_obj.document.ocr_metadata,
-                }
-        
-        # 로그 추가
-        detail_dict["logs"] = [
-            {
-                "id": log.id,
-                "file_id": log.file_id,
-                "message": log.message,
-                "log": log.log,
-                "created_at": log.created_at,
-            }
-            for log in file_obj.logs
-        ]
-        detail_dict["llm_logs"] = [
-            {
-                "id": log.id,
-                "file_id": log.file_id,
-                "message": log.message,
-                "log": log.log,
-                "created_at": log.created_at,
-            }
-            for log in file_obj.llm_logs
-        ]
-        
-        detail = ContentDetail.model_validate(detail_dict)
-        # media_url 추가
-        detail.media_url = get_public_media_url(file_obj.object_key)
+        detail = ContentDetail.model_validate(detail_data)
         return detail
-
-    def _detect_content_type(self, filename: str) -> ContentType:
-        """파일명으로 콘텐츠 타입 감지."""
-        file_path = Path(filename)
-        extension = file_path.suffix.lower()
-        
-        # 오디오 파일 확장자
-        audio_extensions = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma", ".mp4", ".avi", ".mkv", ".mov", ".webm"}
-        # 허용된 문서 파일 확장자 (이미지 파일과 txt)
-        allowed_document_extensions = {".txt", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"}
-        # 차단된 문서 파일 확장자 (페이지가 많은 문서 파일들 - OCR이 불안정)
-        blocked_document_extensions = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"}
-        
-        if extension in audio_extensions:
-            return ContentType.AUDIO
-        elif extension in allowed_document_extensions:
-            return ContentType.DOCUMENT
-        elif extension in blocked_document_extensions:
-            raise ValueError(f"PDF, Word, Excel, PowerPoint 등의 문서 파일은 지원하지 않습니다. 이미지 파일(.png, .jpg 등)과 txt 파일만 업로드 가능합니다. (확장자: {extension})")
-        else:
-            raise ValueError(f"지원하지 않는 파일 형식입니다. (확장자: {extension})")
-
-    def _build_object_key(self, filename: str) -> str:
-        """안전한 파일명으로 object_key 생성 (비ASCII 문자 제거)."""
-        original_path = Path(filename)
-        extension = original_path.suffix  # .mp4, .wav, .pdf 등
-        # UUID + 확장자로 안전한 파일명 생성 (비ASCII 문자 문제 해결)
-        safe_filename = f"{uuid4().hex}{extension}"
-        return f"{self.settings.s3_prefix}/{safe_filename}"
-
-    async def _upload_file_content_to_storage(self, file_content: bytes, object_key: str) -> None:
-        """파일 내용을 스토리지에 업로드."""
-        from io import BytesIO
-        file_obj = BytesIO(file_content)
-        
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: upload_fileobj(file_obj, key=object_key))
 
     async def upload_and_enqueue(
         self,
         file: UploadFile,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
+        ocr_mode: str = "basic",
     ) -> dict[str, int]:
-        """
-        파일 업로드 및 큐잉.
-        
-        Returns:
-            {"file_id": int}
-        """
+        """파일 업로드 및 처리 큐에 등록."""
         logger.info("[Upload] 파일 업로드 시작: filename=%s", file.filename)
         print(f"[Upload] [1/4] 파일 업로드 시작: {file.filename}")
         
-        # 파일 타입 감지
-        content_type = self._detect_content_type(file.filename or "")
-        logger.info("[Upload] 파일 타입 감지: content_type=%s", content_type.value)
-        
-        object_key = self._build_object_key(file.filename or "")
+        object_key = self._build_object_key(file.filename)
         logger.info("[Upload] 스토리지 키 생성: object_key=%s", object_key)
         
         # 파일 내용 읽기 및 크기 확인
@@ -253,7 +125,7 @@ class FileService:
         logger.info("[Upload] 파일 크기: %d bytes (%.2f MB)", file_size, file_size_mb)
         print(f"[Upload] [2/4] 파일 크기: {file_size:,} bytes ({file_size_mb:.2f} MB)")
         
-        # 스토리지 업로드
+        # 스토리지 업로드 (파일 내용을 직접 전달)
         logger.info("[Upload] 스토리지 업로드 시작: object_key=%s", object_key)
         print(f"[Upload] [3/4] 스토리지 업로드 중: {object_key}")
         await self._upload_file_content_to_storage(file_content, object_key)
@@ -263,10 +135,13 @@ class FileService:
         # 파일 닫기
         await file.close()
         
+        # 파일 타입 결정
+        content_type = self._determine_content_type(file.filename, file.content_type)
+        
         # DB에 파일 생성
         logger.info("[Upload] DB에 파일 생성 시작: filename=%s", file.filename)
         file_obj = await self.file_repo.create_file(
-            filename=file.filename or "",
+            filename=file.filename or "unknown",
             object_key=object_key,
             content_type=content_type,
             status=FileStatus.QUEUED,
@@ -280,9 +155,8 @@ class FileService:
             # 오디오: Transcription 생성 + ASR 작업 큐잉
             await self.transcription_repo.create_transcription(
                 file_id=file_obj.id,
-                speakers=[],
-                duration_seconds=0.0,
                 transcription={},
+                duration_seconds=0.0,
             )
             await self.session.commit()
             
@@ -297,7 +171,7 @@ class FileService:
                 task_queue = get_task_queue()
                 enqueue_func = partial(
                     task_queue.enqueue_asr_job,
-                    content_id=file_obj.id,  # 하위 호환성을 위해 content_id로 전달
+                    file_id=file_obj.id,
                     storage_key=object_key,
                     original_filename=file.filename or "",
                     model_size=self.settings.whisper_model_default,
@@ -325,8 +199,8 @@ class FileService:
             await self.session.commit()
             
             # OCR 작업 큐잉
-            logger.info("[Upload] OCR 작업 큐잉: file_id=%s", file_obj.id)
-            print(f"[Upload] [4/4] OCR 작업 큐잉 중: file_id={file_obj.id}")
+            logger.info("[Upload] OCR 작업 큐잉: file_id=%s, ocr_mode=%s", file_obj.id, ocr_mode)
+            print(f"[Upload] [4/4] OCR 작업 큐잉 중: file_id={file_obj.id}, ocr_mode={ocr_mode}")
             try:
                 loop = asyncio.get_running_loop()
                 from functools import partial
@@ -338,10 +212,11 @@ class FileService:
                     file_id=file_obj.id,
                     storage_key=object_key,
                     original_filename=file.filename or "",
+                    ocr_mode=ocr_mode,
                 )
                 job_id = await loop.run_in_executor(None, enqueue_func)
-                logger.info("[Upload] OCR 작업 큐잉 성공: file_id=%s, job_id=%s", file_obj.id, job_id)
-                print(f"[Upload] OK OCR 큐 등록 완료: file_id={file_obj.id}, job_id={job_id}")
+                logger.info("[Upload] OCR 작업 큐잉 성공: file_id=%s, job_id=%s, ocr_mode=%s", file_obj.id, job_id, ocr_mode)
+                print(f"[Upload] OK OCR 큐 등록 완료: file_id={file_obj.id}, job_id={job_id}, ocr_mode={ocr_mode}")
             except Exception as exc:
                 error_msg = f"OCR 작업 큐잉 실패: file_id={file_obj.id}, error={exc}"
                 logger.exception("[Upload] %s", error_msg)
@@ -351,33 +226,7 @@ class FileService:
         print(f"[Upload] ========================================")
         print(f"[Upload] 파일 업로드 완료: file_id={file_obj.id}, filename={file.filename}")
         print(f"[Upload] ========================================")
-        
         return {"file_id": file_obj.id}
-
-    async def _cleanup_queue_and_storage(self, file_ids: list[int], object_keys: list[str]) -> None:
-        """큐 작업 취소와 스토리지 파일 삭제를 일괄 처리."""
-        loop = asyncio.get_running_loop()
-
-        if file_ids:
-            # Celery 큐 작업 취소 (하위 호환성을 위해 content_id로 전달)
-            celery_cancelled = await loop.run_in_executor(
-                None, cancel_celery_tasks_by_content_ids, file_ids
-            )
-            if celery_cancelled:
-                logger.info("Cancelled %s Celery tasks for deleted files", celery_cancelled)
-
-        for object_key in object_keys:
-            try:
-                await loop.run_in_executor(None, delete_file, object_key)
-            except Exception as exc:
-                logger.warning("Failed to delete file from storage: %s, error: %s", object_key, exc)
-
-    async def delete_queued_files(self) -> int:
-        """QUEUED 상태인 모든 파일 삭제 (DB + 스토리지 + 큐)."""
-        count, file_ids, object_keys = await self.file_repo.delete_queued_files()
-        await self._cleanup_queue_and_storage(file_ids, object_keys)
-        await self.session.commit()
-        return count
 
     async def delete_files_by_ids(self, file_ids: list[int]) -> tuple[list[int], list[int]]:
         """
@@ -396,3 +245,52 @@ class FileService:
         skipped_ids = [file_id for file_id in unique_ids if file_id not in deleted_set]
         return deleted_ids, skipped_ids
 
+    def _build_object_key(self, filename: str) -> str:
+        """안전한 파일명으로 object_key 생성 (비ASCII 문자 제거)."""
+        original_path = Path(filename)
+        extension = original_path.suffix  # .mp4, .wav 등
+        # UUID + 확장자로 안전한 파일명 생성 (비ASCII 문자 문제 해결)
+        safe_filename = f"{uuid4().hex}{extension}"
+        return f"{self.settings.s3_prefix}/{safe_filename}"
+
+    async def _upload_file_content_to_storage(self, file_content: bytes, object_key: str) -> None:
+        """파일 내용을 스토리지에 업로드."""
+        # BytesIO로 변환하여 upload_fileobj에 전달
+        from io import BytesIO
+        file_obj = BytesIO(file_content)
+        
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: upload_fileobj(file_obj, key=object_key))
+
+    async def _cleanup_queue_and_storage(self, file_ids: list[int], object_keys: list[str]) -> None:
+        """큐 작업 취소와 스토리지 파일 삭제를 일괄 처리."""
+        loop = asyncio.get_running_loop()
+
+        if file_ids:
+            # Celery 큐 작업 취소
+            celery_cancelled = await loop.run_in_executor(None, cancel_celery_tasks_by_content_ids, file_ids)
+            if celery_cancelled:
+                logger.info("Cancelled %s Celery tasks for deleted files", celery_cancelled)
+
+        for object_key in object_keys:
+            try:
+                await loop.run_in_executor(None, delete_file, object_key)
+            except Exception as exc:
+                logger.warning("Failed to delete file from storage: %s, error: %s", object_key, exc)
+
+    def _determine_content_type(self, filename: str | None, content_type: str | None) -> ContentType:
+        """파일명과 content_type으로 파일 타입 결정."""
+        if not filename:
+            return ContentType.DOCUMENT  # 기본값
+        
+        filename_lower = filename.lower()
+        
+        # 오디오/비디오 확장자
+        audio_extensions = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma"}
+        video_extensions = {".mp4", ".avi", ".mkv", ".mov", ".webm", ".flv", ".wmv"}
+        
+        if any(filename_lower.endswith(ext) for ext in audio_extensions | video_extensions):
+            return ContentType.AUDIO
+        
+        # 문서 확장자
+        return ContentType.DOCUMENT

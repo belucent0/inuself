@@ -4,13 +4,13 @@ from ..core.logging import logger
 from .celery_app import celery_app
 
 
-def is_celery_task_in_queue(*, content_id: int, task_name: str = "process_llm_task") -> bool:
+def is_celery_task_in_queue(*, file_id: int, task_name: str = "process_llm_task") -> bool:
     """
-    해당 content_id의 Celery 작업이 큐에 이미 있는지 확인.
+    해당 file_id의 Celery 작업이 큐에 이미 있는지 확인.
     
     Args:
-        content_id: 확인할 콘텐츠 ID
-        task_name: 확인할 작업 이름 ("process_llm_task" 또는 "process_asr_task")
+        file_id: 확인할 파일 ID
+        task_name: 확인할 작업 이름 ("process_llm_task", "process_asr_task", 또는 "process_ocr_task")
         
     Returns:
         작업이 큐에 있으면 True, 없으면 False
@@ -30,8 +30,9 @@ def is_celery_task_in_queue(*, content_id: int, task_name: str = "process_llm_ta
                     if task.get("name") == task_name:
                         task_kwargs = task.get("kwargs", {})
                         task_args = task.get("args", [])
-                        task_content_id = task_kwargs.get("content_id") or (task_args[0] if task_args else None)
-                        if task_content_id == content_id:
+                        # file_id 확인
+                        task_file_id = task_kwargs.get("file_id") or (task_args[0] if task_args else None)
+                        if task_file_id == file_id:
                             return True
         
         # 예약된 작업 확인 (큐에 대기 중인 작업)
@@ -42,8 +43,9 @@ def is_celery_task_in_queue(*, content_id: int, task_name: str = "process_llm_ta
                     if task.get("name") == task_name:
                         task_kwargs = task.get("kwargs", {})
                         task_args = task.get("args", [])
-                        task_content_id = task_kwargs.get("content_id") or (task_args[0] if task_args else None)
-                        if task_content_id == content_id:
+                        # file_id 확인
+                        task_file_id = task_kwargs.get("file_id") or (task_args[0] if task_args else None)
+                        if task_file_id == file_id:
                             return True
         
         # 스케줄된 작업 확인 (ETA로 예약된 작업)
@@ -55,8 +57,9 @@ def is_celery_task_in_queue(*, content_id: int, task_name: str = "process_llm_ta
                     if request.get("task") == task_name:
                         task_kwargs = request.get("kwargs", {})
                         task_args = request.get("args", [])
-                        task_content_id = task_kwargs.get("content_id") or (task_args[0] if task_args else None)
-                        if task_content_id == content_id:
+                        # file_id 확인
+                        task_file_id = task_kwargs.get("file_id") or (task_args[0] if task_args else None)
+                        if task_file_id == file_id:
                             return True
         
         return False
@@ -65,17 +68,17 @@ def is_celery_task_in_queue(*, content_id: int, task_name: str = "process_llm_ta
         return False
 
 
-def cancel_celery_tasks_by_content_ids(content_ids: list[int]) -> int:
+def cancel_celery_tasks_by_content_ids(file_ids: list[int]) -> int:
     """
-    주어진 content_id와 매칭되는 Celery 작업을 취소합니다.
+    주어진 file_id와 매칭되는 Celery 작업을 취소합니다.
     
     Args:
-        content_ids: 취소할 콘텐츠 ID 리스트
+        file_ids: 취소할 파일 ID 리스트 (함수명은 하위 호환성을 위해 유지)
         
     Returns:
         취소된 작업 수
     """
-    if not content_ids:
+    if not file_ids:
         return 0
     
     settings = get_settings()
@@ -84,7 +87,7 @@ def cancel_celery_tasks_by_content_ids(content_ids: list[int]) -> int:
         return 0
     
     cancelled_count = 0
-    content_ids_set = set(content_ids)
+    file_ids_set = set(file_ids)
     
     try:
         # Celery Inspector를 사용하여 활성/예약/스케줄된 작업 확인
@@ -99,22 +102,18 @@ def cancel_celery_tasks_by_content_ids(content_ids: list[int]) -> int:
                     task_kwargs = task.get("kwargs", {})
                     task_args = task.get("args", [])
                     
-                    # ASR 또는 LLM 작업인지 확인
-                    if task_name in ["process_asr_task", "process_llm_task"]:
-                        # content_id 추출
-                        task_content_id = None
-                        if task_name == "process_llm_task":
-                            task_content_id = task_kwargs.get("content_id") or (task_args[0] if task_args else None)
-                        elif task_name == "process_asr_task":
-                            task_content_id = task_kwargs.get("content_id") or (task_args[0] if task_args else None)
+                    # ASR, LLM, 또는 OCR 작업인지 확인
+                    if task_name in ["process_asr_task", "process_llm_task", "process_ocr_task"]:
+                        # file_id 추출
+                        task_file_id = task_kwargs.get("file_id") or (task_args[0] if task_args else None)
                         
-                        if task_content_id and task_content_id in content_ids_set:
+                        if task_file_id and task_file_id in file_ids_set:
                             task_id = task.get("id")
                             try:
                                 celery_app.control.revoke(task_id, terminate=True)
                                 cancelled_count += 1
-                                logger.info(f"[Celery] 활성 작업 취소: content_id={task_content_id}, task_id={task_id}")
-                                logger.info("Cancelled active Celery task: content_id=%s, task_id=%s", task_content_id, task_id)
+                                logger.info(f"[Celery] 활성 작업 취소: file_id={task_file_id}, task_id={task_id}")
+                                logger.info("Cancelled active Celery task: file_id=%s, task_id=%s", task_file_id, task_id)
                             except Exception as e:
                                 logger.warning("Failed to cancel active Celery task %s: %s", task_id, e)
         
@@ -127,20 +126,17 @@ def cancel_celery_tasks_by_content_ids(content_ids: list[int]) -> int:
                     task_kwargs = task.get("kwargs", {})
                     task_args = task.get("args", [])
                     
-                    if task_name in ["process_asr_task", "process_llm_task"]:
-                        task_content_id = None
-                        if task_name == "process_llm_task":
-                            task_content_id = task_kwargs.get("content_id") or (task_args[0] if task_args else None)
-                        elif task_name == "process_asr_task":
-                            task_content_id = task_kwargs.get("content_id") or (task_args[0] if task_args else None)
+                    if task_name in ["process_asr_task", "process_llm_task", "process_ocr_task"]:
+                        # file_id 추출
+                        task_file_id = task_kwargs.get("file_id") or (task_args[0] if task_args else None)
                         
-                        if task_content_id and task_content_id in content_ids_set:
+                        if task_file_id and task_file_id in file_ids_set:
                             task_id = task.get("id")
                             try:
                                 celery_app.control.revoke(task_id, terminate=True)
                                 cancelled_count += 1
-                                logger.info(f"[Celery] 예약된 작업 취소: content_id={task_content_id}, task_id={task_id}")
-                                logger.info("Cancelled reserved Celery task: content_id=%s, task_id=%s", task_content_id, task_id)
+                                logger.info(f"[Celery] 예약된 작업 취소: file_id={task_file_id}, task_id={task_id}")
+                                logger.info("Cancelled reserved Celery task: file_id=%s, task_id=%s", task_file_id, task_id)
                             except Exception as e:
                                 logger.warning("Failed to cancel reserved Celery task %s: %s", task_id, e)
         
@@ -154,20 +150,17 @@ def cancel_celery_tasks_by_content_ids(content_ids: list[int]) -> int:
                     task_kwargs = request.get("kwargs", {})
                     task_args = request.get("args", [])
                     
-                    if task_name in ["process_asr_task", "process_llm_task"]:
-                        task_content_id = None
-                        if task_name == "process_llm_task":
-                            task_content_id = task_kwargs.get("content_id") or (task_args[0] if task_args else None)
-                        elif task_name == "process_asr_task":
-                            task_content_id = task_kwargs.get("content_id") or (task_args[0] if task_args else None)
+                    if task_name in ["process_asr_task", "process_llm_task", "process_ocr_task"]:
+                        # file_id 추출
+                        task_file_id = task_kwargs.get("file_id") or (task_args[0] if task_args else None)
                         
-                        if task_content_id and task_content_id in content_ids_set:
+                        if task_file_id and task_file_id in file_ids_set:
                             task_id = request.get("id")
                             try:
                                 celery_app.control.revoke(task_id, terminate=True)
                                 cancelled_count += 1
-                                logger.info(f"[Celery] 스케줄된 작업 취소: content_id={task_content_id}, task_id={task_id}")
-                                logger.info("Cancelled scheduled Celery task: content_id=%s, task_id=%s", task_content_id, task_id)
+                                logger.info(f"[Celery] 스케줄된 작업 취소: file_id={task_file_id}, task_id={task_id}")
+                                logger.info("Cancelled scheduled Celery task: file_id=%s, task_id=%s", task_file_id, task_id)
                             except Exception as e:
                                 logger.warning("Failed to cancel scheduled Celery task %s: %s", task_id, e)
         

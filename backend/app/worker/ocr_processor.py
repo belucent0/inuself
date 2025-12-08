@@ -24,10 +24,11 @@ def process_ocr_job(
     file_id: int,
     storage_key: str,
     original_filename: str,
+    ocr_mode: str = "basic",
 ) -> None:
     """Celery 워커가 호출하는 OCR 작업 진입점."""
     logger.info("[OCR] ========================================")
-    logger.info(f"[OCR] OCR job started: file_id={file_id}")
+    logger.info(f"[OCR] OCR job started: file_id={file_id}, ocr_mode={ocr_mode}")
     logger.info(f"[OCR] File: {original_filename}")
     logger.info(f"[OCR] Storage key: {storage_key}")
     logger.info("[OCR] ========================================")
@@ -85,6 +86,7 @@ def process_ocr_job(
                 file_id=file_id,
                 storage_key=storage_key,
                 original_filename=original_filename,
+                ocr_mode=ocr_mode,
             )
         )
         logger.info(f"[OCR] OK OCR job completed: file_id={file_id}")
@@ -145,10 +147,11 @@ async def _process_ocr_job(
     file_id: int,
     storage_key: str,
     original_filename: str,
+    ocr_mode: str = "basic",
 ) -> None:
     """OCR 작업 처리 함수."""
-    logger.info("[OCR] Processing OCR job file_id={} key={}", file_id, storage_key)
-    logger.info(f"[OCR] [1/4] Starting OCR job: file_id={file_id}, file={original_filename}")
+    logger.info("[OCR] Processing OCR job file_id={} key={} mode={}", file_id, storage_key, ocr_mode)
+    logger.info(f"[OCR] [1/4] Starting OCR job: file_id={file_id}, file={original_filename}, ocr_mode={ocr_mode}")
     
     # 파일 다운로드
     logger.info(f"[OCR] [2/4] Downloading file: {storage_key}")
@@ -244,11 +247,12 @@ async def _process_ocr_job(
         else:
             # 이미지나 PDF 파일인 경우 OCR 서비스 사용
             ocr_service = OcrService()
-            ocr_result = ocr_service.process_document(temp_path)
+            ocr_result = ocr_service.process_document(temp_path, ocr_mode=ocr_mode)
             
             logger.info("[OCR] OCR processing completed!")
             logger.info(f"[OCR] - Extracted text length: {len(ocr_result['ocr_text'])} chars")
             logger.info(f"[OCR] - Page count: {ocr_result['page_count']}")
+            logger.info(f"[OCR] - HTML content: {'Yes' if ocr_result.get('html_content') else 'No'}")
         
     except Exception as exc:
         logger.error(f"[OCR] ERROR Error occurred: {exc}")
@@ -323,6 +327,7 @@ async def _process_ocr_job(
                 ocr_text=ocr_result["ocr_text"],
                 page_count=ocr_result["page_count"],
                 ocr_metadata=ocr_result["ocr_metadata"],
+                html_content=ocr_result.get("html_content"),
             )
         else:
             # document가 없는 경우 생성 (txt 파일 등에서 발생할 수 있음)
@@ -332,6 +337,7 @@ async def _process_ocr_job(
                 ocr_text=ocr_result["ocr_text"],
                 page_count=ocr_result["page_count"],
                 ocr_metadata=ocr_result["ocr_metadata"],
+                html_content=ocr_result.get("html_content"),
             )
         await file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
         
@@ -359,15 +365,31 @@ async def _process_ocr_job(
     logger.info("OCR processing completed for file_id={}", file_id)
     
     # LLM 요약 처리 (async 함수 직접 호출)
+    # 요약 실패는 OCR 작업 실패로 처리하지 않음 (OCR 자체는 성공)
     try:
         from .llm_processor import _process_job
         
         logger.info(f"[OCR] >> Starting LLM summarization for file_id={file_id}")
-        await _process_job(content_id=file_id)  # 하위 호환성을 위해 content_id로 전달
+        await _process_job(file_id=file_id)
         logger.info(f"[OCR] >> LLM summarization completed for file_id={file_id}")
         logger.info("LLM summarization completed for file_id={}", file_id)
+    except ValueError as exc:
+        # 빈 텍스트로 인한 요약 실패는 경고로 처리 (이미 llm_summary_service에서 처리됨)
+        if "empty" in str(exc).lower() or "no transcription" in str(exc).lower() or "no ocr text" in str(exc).lower():
+            logger.warning(
+                f"[OCR] LLM summarization skipped (empty text) for file_id={file_id}: {exc}. "
+                "OCR processing completed successfully."
+            )
+        else:
+            logger.warning(
+                f"[OCR] LLM summarization failed (ValueError) for file_id={file_id}: {exc}. "
+                "OCR processing completed successfully."
+            )
     except Exception as exc:
-        logger.error(f"[OCR] ERROR Failed to process LLM summarization: {exc}")
-        logger.exception("Failed to process LLM summarization for file_id={}", file_id)
-        raise
+        # 기타 요약 실패는 경고로 처리하되 OCR 작업은 성공으로 표시
+        logger.warning(
+            f"[OCR] LLM summarization failed for file_id={file_id}: {exc}. "
+            "OCR processing completed successfully, but summarization was skipped."
+        )
+        logger.exception("LLM summarization error details for file_id={}", file_id)
 

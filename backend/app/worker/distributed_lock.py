@@ -9,6 +9,104 @@ from ..core.logging import logger
 from ..core.redis import get_redis_connection
 
 
+class LockContextManager:
+    """Redis 락을 관리하는 컨텍스트 매니저 클래스."""
+    
+    def __init__(
+        self,
+        lock_key: str,
+        timeout: float = 3600.0,
+        blocking_timeout: float = 0.0,
+    ):
+        self.lock_key = lock_key
+        self.timeout = timeout
+        self.blocking_timeout = blocking_timeout
+        self.redis_client = None
+        self.lock = None
+        self.acquired = False
+    
+    def __enter__(self):
+        """락 획득 시도."""
+        self.redis_client = _get_redis_client()
+        
+        if self.redis_client is None:
+            # Redis가 없으면 락 없이 진행 (하위 호환성)
+            logger.warning("Redis가 없어 락 없이 진행합니다: {}", self.lock_key)
+            self.acquired = True
+            return self.acquired
+        
+        try:
+            # Redis Lock 생성
+            self.lock = self.redis_client.lock(
+                self.lock_key,
+                timeout=self.timeout,
+                blocking_timeout=self.blocking_timeout,
+                thread_local=False,  # 멀티스레드 환경에서도 동작하도록
+            )
+            
+            # 락 획득 시도
+            self.acquired = self.lock.acquire(blocking=False)
+            
+            if self.acquired:
+                logger.info("락 획득 성공: {}", self.lock_key)
+            else:
+                # 락 획득 실패 시 TTL 정보 조회
+                ttl_seconds = None
+                try:
+                    ttl_seconds = self.redis_client.ttl(self.lock_key)
+                    if ttl_seconds > 0:
+                        # TTL을 읽기 쉬운 형식으로 변환
+                        minutes = ttl_seconds // 60
+                        seconds = ttl_seconds % 60
+                        if minutes > 0:
+                            ttl_str = f"{minutes}분 {seconds}초"
+                        else:
+                            ttl_str = f"{seconds}초"
+                        logger.warning(
+                            "락 획득 실패 (다른 워커가 처리 중): {}, 락 해제 예상 시간: {} (TTL: {}초)",
+                            self.lock_key,
+                            ttl_str,
+                            ttl_seconds
+                        )
+                    elif ttl_seconds == -1:
+                        # TTL이 없는 경우 (이론적으로는 발생하지 않아야 함)
+                        logger.warning(
+                            "락 획득 실패 (다른 워커가 처리 중): {}, 락 TTL 정보 없음",
+                            self.lock_key
+                        )
+                    else:
+                        # ttl_seconds == -2: 키가 존재하지 않음
+                        logger.warning(
+                            "락 획득 실패: {}, 락이 존재하지 않음 (이미 해제됨)",
+                            self.lock_key
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "락 획득 실패 (다른 워커가 처리 중): {}, TTL 조회 실패: {}",
+                        self.lock_key,
+                        e
+                    )
+            
+            return self.acquired
+            
+        except (LockError, ConnectionError, Exception) as e:
+            logger.error("락 획득 중 오류 발생: {}, error={}", self.lock_key, e)
+            self.acquired = False
+            return self.acquired
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """락 해제."""
+        if self.lock and self.acquired:
+            try:
+                self.lock.release()
+                logger.info("락 해제 완료: {}", self.lock_key)
+            except Exception as e:
+                logger.warning("락 해제 중 오류 발생: {}, error={}", self.lock_key, e)
+        
+        # 예외를 그대로 전파 (False 반환)
+        return False
+
+
 def _get_redis_client() -> Optional:
     """Redis 클라이언트를 반환합니다."""
     try:
@@ -31,7 +129,7 @@ def acquire_lock(
     Redis 기반 분산 락을 획득하는 컨텍스트 매니저.
     
     Args:
-        lock_key: 락 키 (예: "lock:asr:123" 또는 "lock:llm:123")
+        lock_key: 락 키 (예: "lock:asr:global", "lock:asr:{file_id}", "lock:llm:global", "lock:llm:{file_id}", "lock:ocr:global", "lock:ocr:{file_id}")
         timeout: 락 자동 해제 시간 (초, TTL). 
                  이 시간이 지나면 자동으로 락이 해제됩니다.
                  워커가 강제 종료되어도 TTL이 지나면 락이 자동 해제됩니다.
@@ -79,16 +177,65 @@ def acquire_lock(
         if acquired:
             logger.info("락 획득 성공: {}", lock_key)
         else:
-            logger.warning("락 획득 실패 (다른 워커가 처리 중): {}", lock_key)
+            # 락 획득 실패 시 TTL 정보 조회
+            ttl_seconds = None
+            try:
+                ttl_seconds = redis_client.ttl(lock_key)
+                if ttl_seconds > 0:
+                    # TTL을 읽기 쉬운 형식으로 변환
+                    minutes = ttl_seconds // 60
+                    seconds = ttl_seconds % 60
+                    if minutes > 0:
+                        ttl_str = f"{minutes}분 {seconds}초"
+                    else:
+                        ttl_str = f"{seconds}초"
+                    logger.warning(
+                        "락 획득 실패 (다른 워커가 처리 중): {}, 락 해제 예상 시간: {} (TTL: {}초)",
+                        lock_key,
+                        ttl_str,
+                        ttl_seconds
+                    )
+                elif ttl_seconds == -1:
+                    # TTL이 없는 경우 (이론적으로는 발생하지 않아야 함)
+                    logger.warning(
+                        "락 획득 실패 (다른 워커가 처리 중): {}, 락 TTL 정보 없음",
+                        lock_key
+                    )
+                else:
+                    # ttl_seconds == -2: 키가 존재하지 않음
+                    logger.warning(
+                        "락 획득 실패: {}, 락이 존재하지 않음 (이미 해제됨)",
+                        lock_key
+                    )
+            except Exception as e:
+                logger.warning(
+                    "락 획득 실패 (다른 워커가 처리 중): {}, TTL 조회 실패: {}",
+                    lock_key,
+                    e
+                )
         
         try:
             yield acquired
         except GeneratorExit:
             # 컨텍스트 매니저가 정상적으로 종료될 때 발생
+            # 제너레이터가 정상적으로 종료되도록 보장
+            if lock and acquired:
+                try:
+                    lock.release()
+                    logger.info("락 해제 완료 (GeneratorExit): {}", lock_key)
+                except Exception:
+                    pass
             raise
         except Retry:
             # Celery의 Retry 예외는 재시도를 위해 그대로 전파해야 함
             # 락은 finally에서 해제됨
+            # 제너레이터가 정상적으로 종료되도록 보장
+            if lock and acquired:
+                try:
+                    lock.release()
+                    logger.info("락 해제 완료 (Retry): {}", lock_key)
+                except Exception:
+                    pass
             raise
         except Exception:
             # 다른 예외는 그대로 전파 (락은 finally에서 해제됨)
@@ -99,7 +246,14 @@ def acquire_lock(
         raise
     except (LockError, ConnectionError, Exception) as e:
         logger.error("락 획득 중 오류 발생: {}, error={}", lock_key, e)
-        yield False
+        try:
+            yield False
+        except GeneratorExit:
+            # 제너레이터가 정상적으로 종료되도록 보장
+            raise
+        except Exception:
+            # 예외가 발생해도 제너레이터는 정상 종료
+            raise
     finally:
         if lock and acquired:
             try:
@@ -131,15 +285,30 @@ def is_locked(lock_key: str) -> bool:
         return False
 
 
-def _check_celery_task_active() -> bool:
+def _check_worker_active_by_queue(queue_name: str) -> bool:
     """
-    Celery에서 LLM 작업이 실제로 진행 중인지 확인합니다.
+    특정 큐의 워커가 활성 작업을 처리 중인지 확인합니다.
+    
+    Args:
+        queue_name: 확인할 큐 이름 ("asr", "ocr", "llm")
     
     Returns:
-        작업이 진행 중이면 True, 아니면 False
+        해당 큐의 작업이 실행 중이면 True, 아니면 False
     """
     try:
         from .celery_app import celery_app
+        
+        # 큐 이름에 따른 작업 이름 매핑
+        task_name_map = {
+            "asr": "process_asr_task",
+            "ocr": "process_ocr_task",
+            "llm": "process_llm_task",
+        }
+        
+        task_name = task_name_map.get(queue_name)
+        if not task_name:
+            logger.warning("Unknown queue name: {}, returning False", queue_name)
+            return False
         
         # Celery inspect를 사용하여 활성 작업 확인
         inspect = celery_app.control.inspect()
@@ -151,16 +320,109 @@ def _check_celery_task_active() -> bool:
         # 모든 워커의 활성 작업 확인
         for worker_name, tasks in active_tasks.items():
             for task in tasks:
-                # LLM 작업이 진행 중인지 확인
-                if task.get("name") == "process_llm_task":
-                    logger.info("LLM task is active: worker={}, task_id={}", worker_name, task.get("id"))
+                # 해당 큐의 작업이 진행 중인지 확인
+                if task.get("name") == task_name:
+                    logger.info("{} task is active: worker={}, task_id={}", queue_name.upper(), worker_name, task.get("id"))
                     return True
         
         return False
     except Exception as e:
-        logger.warning("Failed to check Celery active tasks: {}", e)
-        # 확인 실패 시 안전하게 True 반환 (작업이 진행 중일 수 있으므로)
-        return True
+        logger.warning("Failed to check Celery active tasks for queue {}: {}", queue_name, e)
+        # 확인 실패 시 False 반환 (락으로 제어하므로 안전)
+        return False
+
+
+def _check_celery_task_active() -> bool:
+    """
+    Celery에서 LLM 작업이 실제로 진행 중인지 확인합니다 (하위 호환성).
+    
+    Returns:
+        작업이 진행 중이면 True, 아니면 False
+    """
+    return _check_worker_active_by_queue("llm")
+
+
+@contextmanager
+def acquire_task_locks(
+    queue_name: str,
+    file_id: int,
+    task_id: str,
+    lock_ttl: float,
+):
+    """
+    태스크 실행을 위한 전역 락과 개별 락을 획득하는 컨텍스트 매니저.
+    OCR 방식을 기준으로 워커 상태 확인 및 락 강제 해제 로직을 포함합니다.
+    
+    Args:
+        queue_name: 큐 이름 ("asr", "ocr", "llm")
+        file_id: 파일 ID
+        task_id: 태스크 ID (로깅용)
+        lock_ttl: 락 TTL (초)
+    
+    Yields:
+        tuple[bool, bool]: (전역 락 획득 여부, 개별 락 획득 여부)
+    
+    Example:
+        with acquire_task_locks("asr", file_id=123, task_id="task-123", lock_ttl=3600.0) as (global_acquired, individual_acquired):
+            if not global_acquired:
+                return {"status": "skipped", "reason": "global_lock_failed"}
+            if not individual_acquired:
+                return {"status": "skipped", "reason": "individual_lock_failed"}
+            # 작업 수행
+    """
+    global_lock_key = f"lock:{queue_name}:global"
+    individual_lock_key = f"lock:{queue_name}:{file_id}"
+    
+    # 워커 상태 확인: 락이 존재하지만 워커가 비활성화되어 있으면 락을 강제 해제
+    if is_locked(global_lock_key):
+        worker_active = _check_worker_active_by_queue(queue_name)
+        if not worker_active:
+            logger.warning(
+                "[Celery {}] Lock exists but worker is inactive, forcing release: file_id={}, task_id={}",
+                queue_name.upper(),
+                file_id,
+                task_id,
+            )
+            # 락 강제 해제 시도
+            try:
+                redis_client = _get_redis_client()
+                if redis_client:
+                    redis_client.delete(global_lock_key)
+                    logger.info("[Celery {}] Forced lock release: {}", queue_name.upper(), global_lock_key)
+            except Exception as e:
+                logger.warning(
+                    "[Celery {}] Failed to force release lock: {}, error={}",
+                    queue_name.upper(),
+                    global_lock_key,
+                    e
+                )
+    
+    # 전역 락 획득 (워커 상태 확인 후)
+    with acquire_lock(global_lock_key, timeout=lock_ttl, blocking_timeout=0.0) as global_acquired:
+        if not global_acquired:
+            logger.warning(
+                "[Celery {}] Task skipped (global lock failed): file_id={}, task_id={}",
+                queue_name.upper(),
+                file_id,
+                task_id,
+            )
+            yield (False, False)
+            return
+        
+        # 개별 ID 락 획득
+        with acquire_lock(individual_lock_key, timeout=lock_ttl, blocking_timeout=0.0) as individual_acquired:
+            if not individual_acquired:
+                logger.warning(
+                    "[Celery {}] Task skipped (individual lock failed): file_id={}, task_id={}",
+                    queue_name.upper(),
+                    file_id,
+                    task_id,
+                )
+                yield (True, False)
+                return
+            
+            # 두 락 모두 획득 성공
+            yield (True, True)
 
 
 def force_release_lock(lock_key: str, check_active: bool = True) -> bool:

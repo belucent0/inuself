@@ -12,11 +12,11 @@ settings = get_settings()
 _worker_loop: asyncio.AbstractEventLoop | None = None
 
 
-def process_llm_job(*, content_id: int) -> None:
+def process_llm_job(*, file_id: int) -> None:
     """RQ 워커가 호출하는 요약 작업 진입점."""
     logger.info("[LLM] ========================================")
-    logger.info(f"[LLM] Summary job started: content_id={content_id}")
-    logger.info("LLM job started for content_id={}", content_id)
+    logger.info(f"[LLM] Summary job started: file_id={file_id}")
+    logger.info("LLM job started for file_id={}", file_id)
     
     # Windows에서는 매 작업마다 새로운 이벤트 루프를 생성 (ASR 워커와 동일)
     if sys.platform == "win32":
@@ -70,12 +70,12 @@ def process_llm_job(*, content_id: int) -> None:
     
     try:
         logger.info("[LLM] Running event loop...")
-        loop.run_until_complete(_process_job(content_id=content_id))
-        logger.info(f"[LLM] OK Summary job completed: content_id={content_id}")
-        logger.info("LLM job completed for content_id={}", content_id)
+        loop.run_until_complete(_process_job(file_id=file_id))
+        logger.info(f"[LLM] OK Summary job completed: file_id={file_id}")
+        logger.info("LLM job completed for file_id={}", file_id)
     except Exception as exc:
-        logger.error(f"[LLM] ERROR Summary job failed: content_id={content_id}, error={exc}")
-        logger.exception("LLM job failed for content_id={}", content_id)
+        logger.error(f"[LLM] ERROR Summary job failed: file_id={file_id}, error={exc}")
+        logger.exception("LLM job failed for file_id={}", file_id)
         raise
     finally:
         if sys.platform == "win32":
@@ -128,7 +128,7 @@ def _ensure_worker_loop() -> asyncio.AbstractEventLoop:
     return _worker_loop
 
 
-async def _process_job(*, content_id: int) -> None:
+async def _process_job(*, file_id: int) -> None:
     logger.info("[LLM] Creating DB session...")
     
     # Windows에서 각 작업마다 새로운 이벤트 루프를 사용하므로
@@ -157,7 +157,7 @@ async def _process_job(*, content_id: int) -> None:
         logger.info("[LLM] Initializing LlmSummaryService...")
         service = LlmSummaryService(session)
         logger.info("[LLM] Calling summarize function...")
-        await service.summarize(content_id)
+        await service.summarize(file_id)
         logger.info("[LLM] Summarize function completed")
     finally:
         logger.info("[LLM] Closing DB session...")

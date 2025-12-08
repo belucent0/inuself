@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 from uuid import uuid4
 
 from fastapi import UploadFile
@@ -276,9 +276,83 @@ class ContentService:
                 
                 logger.info("Manual OCR retry enqueued: file_id=%s, job_id=%s", content_id, job_id)
                 return {"success": True, "message": "OCR reprocessing started", "job_id": job_id}
+            elif retry_type == "asr":
+                # ASR 재처리
+                if file_obj.content_type != ContentType.AUDIO:
+                    raise ValueError(f"Cannot retry ASR for non-audio file (content_type: {file_obj.content_type.value})")
+                
+                if file_obj.status not in [FileStatus.ASR_FAILED, FileStatus.PROCESSING, FileStatus.QUEUED]:
+                    raise ValueError(f"Cannot retry ASR for file with status: {file_obj.status.value}")
+                
+                # 화자수 범위 검증
+                if min_speakers is not None and max_speakers is not None and min_speakers > max_speakers:
+                    raise ValueError("min_speakers must be less than or equal to max_speakers")
+                
+                # 상태를 QUEUED로 변경
+                await file_repo.update_file_status(content_id, FileStatus.QUEUED)
+                log_data = {"event": "manual_retry", "type": "asr"}
+                if min_speakers is not None:
+                    log_data["min_speakers"] = min_speakers
+                if max_speakers is not None:
+                    log_data["max_speakers"] = max_speakers
+                await file_repo.add_log(
+                    file_id=content_id,
+                    log=log_data,
+                    message="Manual ASR retry requested by user",
+                )
+                await self.session.commit()
+                
+                # ASR 작업 큐잉
+                loop = asyncio.get_running_loop()
+                from functools import partial
+                from ..worker.task_queue_adapter import get_task_queue
+                
+                task_queue = get_task_queue()
+                enqueue_func = partial(
+                    task_queue.enqueue_asr_job,
+                    file_id=content_id,
+                    storage_key=file_obj.object_key,
+                    original_filename=file_obj.filename,
+                    model_size=self.settings.whisper_model_default,
+                    processing_mode="case4",
+                    num_asr_chunks=self.settings.max_workers,
+                    min_speakers=min_speakers,
+                    max_speakers=max_speakers,
+                )
+                job_id = await loop.run_in_executor(None, enqueue_func)
+                
+                logger.info("Manual ASR retry enqueued: file_id=%s, job_id=%s, min_speakers=%s, max_speakers=%s", 
+                           content_id, job_id, min_speakers, max_speakers)
+                return {"success": True, "message": "ASR reprocessing started", "job_id": job_id}
+            
+            elif retry_type == "summary":
+                # LLM Summary 재처리
+                if file_obj.status != FileStatus.SUMMARY_FAILED:
+                    raise ValueError(f"Cannot retry LLM summary for file with status: {file_obj.status.value}")
+                
+                # 상태를 SUMMARIZING으로 변경
+                await file_repo.update_file_status(content_id, FileStatus.SUMMARIZING)
+                await file_repo.add_llm_log(
+                    file_id=content_id,
+                    log={"event": "manual_retry", "type": "llm_summary"},
+                    message="Manual LLM summary retry requested by user",
+                )
+                await self.session.commit()
+                
+                # LLM 작업 큐잉
+                loop = asyncio.get_running_loop()
+                from functools import partial
+                from ..worker.task_queue_adapter import get_task_queue
+                
+                task_queue = get_task_queue()
+                enqueue_func = partial(task_queue.enqueue_llm_job, file_id=content_id)
+                job_id = await loop.run_in_executor(None, enqueue_func)
+                
+                logger.info("Manual LLM retry enqueued: file_id=%s, job_id=%s", content_id, job_id)
+                return {"success": True, "message": "LLM summary reprocessing started", "job_id": job_id}
+            
             else:
-                # ASR/Summary는 File 기반으로 처리 (기존 로직과 유사)
-                raise ValueError(f"File-based retry for {retry_type} not yet implemented. Use Content-based retry.")
+                raise ValueError(f"Invalid retry_type: {retry_type}. Must be 'asr', 'summary', or 'ocr'")
         
         # 하위 호환성: Content 기반 처리
         content = await self.repo.get_content(content_id)

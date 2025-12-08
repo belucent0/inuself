@@ -10,7 +10,6 @@ from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
-from ..repositories.content_repository import ContentRepository  # 하위 호환성
 from ..worker.llm_summarizer import summarize_transcription, sanitize_summary_output
 
 
@@ -22,28 +21,19 @@ class LlmSummaryService:
         self.file_repo = FileRepository(session)
         self.transcription_repo = TranscriptionRepository(session)
         self.document_repo = DocumentRepository(session)
-        self.content_repo = ContentRepository(session)  # 하위 호환성
         self.settings = get_settings()
 
-    async def summarize(self, content_id: int) -> None:
+    async def summarize(self, file_id: int) -> None:
         """
         LLM 요약 수행.
         
-        content_id는 file_id로도 사용됨 (하위 호환성).
-        File이 있으면 File 사용, 없으면 Content 사용.
+        file_id는 file 테이블의 id입니다.
         """
-        # 먼저 File로 시도
-        file_obj = await self.file_repo.get_file(content_id)
+        file_obj = await self.file_repo.get_file(file_id)
+        if not file_obj:
+            raise ValueError(f"File {file_id} not found")
         
-        if file_obj:
-            # File 사용
-            await self._summarize_file(file_obj)
-        else:
-            # 하위 호환성: Content 사용
-            content = await self.content_repo.get_content(content_id)
-            if not content:
-                raise ValueError(f"Content or File {content_id} not found")
-            await self._summarize_content(content, content_id)
+        await self._summarize_file(file_obj)
 
     async def _summarize_file(self, file_obj) -> None:
         """File을 사용한 요약."""
@@ -72,7 +62,20 @@ class LlmSummaryService:
                 text_to_summarize = document.ocr_text.strip()
         
         if not text_to_summarize:
-            raise ValueError("Text to summarize is empty (no transcription or OCR text).")
+            # 빈 텍스트인 경우 요약을 건너뛰고 완료 상태로 설정
+            logger.warning(
+                "Text to summarize is empty (no transcription or OCR text) for file_id=%s. "
+                "Skipping summarization and marking as completed.",
+                file_id
+            )
+            await self.file_repo.add_llm_log(
+                file_id,
+                log={"event": "summarization_skipped", "reason": "empty_text"},
+                message="LLM summarization skipped: no text to summarize",
+            )
+            await self.file_repo.update_file_status(file_id, FileStatus.COMPLETED)
+            await self.session.commit()
+            return
         
         # 상태 변경
         if file_obj.status != FileStatus.SUMMARIZING:
@@ -117,63 +120,4 @@ class LlmSummaryService:
         await self.session.commit()
         logger.info("LLM summary stored for file_id={} ({:.2f}s)", file_id, elapsed)
 
-    async def _summarize_content(self, content, content_id: int) -> None:
-        """Content를 사용한 요약 (하위 호환성)."""
-        from ..db.models import ContentStatus
-        
-        # 이미 완료된 콘텐츠는 스킵
-        if content.status == ContentStatus.COMPLETED:
-            if content.summary_md:
-                logger.info(
-                    "Content %s already completed with summary (length=%d chars), skipping",
-                    content_id,
-                    len(content.summary_md)
-                )
-                return
-        
-        transcription = content.transcription or {}
-        transcript_text = str(transcription.get("text") or "").strip()
-        if not transcript_text:
-            raise ValueError("Transcription text is empty, cannot summarize.")
-        
-        if content.status != ContentStatus.SUMMARIZING:
-            await self.content_repo.update_content_status(content_id, ContentStatus.SUMMARIZING)
-        
-        await self.content_repo.add_llm_log(
-            content_id,
-            log={"event": "summarizing_started", "previous_status": content.status.value},
-            message="LLM summarization started",
-        )
-        await self.session.commit()
-        logger.info("LLM summarization started for content_id={} (provider={})", content_id, self.settings.llm_provider)
-        
-        start = time.perf_counter()
-        try:
-            title, summary_md = summarize_transcription(transcript_text)
-            summary_md = sanitize_summary_output(summary_md, transcript_text)
-        except Exception as exc:
-            await self.content_repo.update_content_status(content_id, ContentStatus.SUMMARY_FAILED)
-            await self.content_repo.add_llm_log(
-                content_id,
-                log={"event": "summarizing_failed", "error": str(exc)},
-                message="LLM summarization failed",
-            )
-            await self.session.commit()
-            logger.exception("LLM summarization failed for content_id={}", content_id)
-            raise
-        
-        elapsed = time.perf_counter() - start
-        
-        await self.content_repo.update_title(content_id, title)
-        await self.content_repo.update_summary_markdown(content_id, summary_md)
-        logger.info("Title and summary stored for content_id={}: title={}, summary_length={}", 
-                    content_id, title, len(summary_md))
-        await self.content_repo.update_content_status(content_id, ContentStatus.COMPLETED)
-        await self.content_repo.add_llm_log(
-            content_id,
-            log={"event": "summarizing_completed", "duration_sec": elapsed},
-            message="LLM summarization completed",
-        )
-        await self.session.commit()
-        logger.info("LLM summary stored for content_id={} ({:.2f}s)", content_id, elapsed)
 
