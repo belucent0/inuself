@@ -33,6 +33,7 @@
     --chart-4: 43 74% 66%;
     --chart-5: 27 87% 67%;
   }
+
   .dark {
     --background: 0 0% 3.9%;
     --foreground: 0 0% 98%;
@@ -65,10 +66,11 @@
   * {
     @apply border-border;
   }
+
   body {
     @apply bg-background text-foreground;
   }
-  
+
   a {
     @apply text-foreground;
   }
@@ -138,8 +140,8 @@
   list-style-type: decimal;
 }
 
-.markdown-content li > ul,
-.markdown-content li > ol {
+.markdown-content li>ul,
+.markdown-content li>ol {
   margin-top: 0.5rem;
   margin-bottom: 0.5rem;
 }
@@ -155,17 +157,20 @@
 .markdown-content table td {
   padding: 0.75rem;
   border: 1px solid #e5e7eb;
-  text-align: left;
+  text-align: center;
+  /* 변경: 중앙 정렬 */
+  vertical-align: middle;
+  /* 변경: 세로 중앙 정렬 */
+  word-break: break-word;
+  /* 추가 */
 }
 
 .markdown-content table th {
   background-color: #f9fafb;
   font-weight: 600;
   color: #111;
-}
-
-.markdown-content table tr:nth-child(even) {
-  background-color: #f9fafb;
+  white-space: nowrap;
+  /* 헤더는 한 줄로 */
 }
 
 .markdown-content hr {
@@ -261,8 +266,8 @@
   list-style-type: decimal;
 }
 
-.html-content li > ul,
-.html-content li > ol {
+.html-content li>ul,
+.html-content li>ol {
   margin-top: 0.5rem;
   margin-bottom: 0.5rem;
 }
@@ -278,17 +283,20 @@
 .html-content table td {
   padding: 0.75rem;
   border: 1px solid #e5e7eb;
-  text-align: left;
+  text-align: center;
+  /* 변경: 기본 중앙 정렬 */
+  vertical-align: middle;
+  /* 변경: 세로 중앙 정렬 */
+  word-break: break-word;
+  /* 추가: 긴 단어 줄바꿈 */
 }
 
 .html-content table th {
   background-color: #f9fafb;
   font-weight: 600;
   color: #111;
-}
-
-.html-content table tr:nth-child(even) {
-  background-color: #f9fafb;
+  white-space: nowrap;
+  /* 헤더는 가급적 한 줄로 */
 }
 
 .html-content hr {
@@ -339,31 +347,24 @@
 .doc-viewer th,
 .doc-viewer td {
   border: 1px solid #d1d5db;
-  padding: 0.75rem 1rem;
-  vertical-align: top;
-  text-align: left;
+  padding: 0.5rem 0.75rem;
+  /* 조정: 패딩을 약간 줄임 */
+  vertical-align: middle;
+  /* 변경: 세로 중앙 정렬 */
+  text-align: center;
+  /* 변경: 기본 중앙 정렬 */
+  word-break: break-word;
+  /* 추가 */
 }
 
 .doc-viewer th {
   background-color: #f3f4f6;
   font-weight: 600;
   color: #111827;
+  white-space: nowrap;
+  /* 헤더는 가급적 한 줄로 */
 }
 
-.doc-viewer thead th {
-  background-color: #e5e7eb;
-  font-weight: 700;
-}
-
-.doc-viewer tbody tr:nth-child(even) {
-  background-color: #f9fafb;
-}
-
-.doc-viewer tbody tr:hover {
-  background-color: #f3f4f6;
-}
-
-.doc-viewer h1,
 .doc-viewer h2,
 .doc-viewer h3,
 .doc-viewer h4,
@@ -387,6 +388,16 @@
 
 .doc-viewer h3 {
   font-size: 1.25rem;
+}
+
+/* DOCX 섹션 비율 조정 (세로 축소) */
+.docx-container .docx-wrapper>section {
+  transform: scaleY(1.0) !important;
+  transform-origin: top center !important;
+  margin-bottom: -10% !important;
+  /* 축소된 공간만큼 마진 제거 */
+  display: block;
+  /* DocumentViewer에서 제어되지만 기본값 설정 */
 }
 
 .doc-viewer p {
@@ -458,10 +469,11 @@
   * {
     @apply border-border;
   }
+
   body {
     @apply bg-background text-foreground;
   }
-  
+
   a {
     @apply text-foreground;
   }
@@ -486,5 +498,3 @@
     top: 0.5rem !important;
   }
 }
-
-

@@ -2,9 +2,9 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowUp, Download, FileText, Music } from 'lucide-react'
+import { ArrowUp, Download, FileText, Music, Trash2 } from 'lucide-react'
 
-import { ContentDetail as ContentDetailType, retryProcessing, reclusterSpeakers } from '@/lib/api'
+import { ContentDetail as ContentDetailType, retryProcessing, reclusterSpeakers, deleteContentsBulk } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { formatToKST } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -60,15 +60,21 @@ function isPdfFile(filename: string): boolean {
   return getFileExtension(filename) === '.pdf'
 }
 
-// DOCX 파일인지 확인
+// DOCX 파일인지 확인 (미리보기 지원: .docx만)
 function isDocxFile(filename: string): boolean {
   const ext = getFileExtension(filename)
-  return ext === '.docx' || ext === '.doc'
+  return ext === '.docx'  // .doc는 미리보기 미지원
 }
 
 // TXT 파일인지 확인
 function isTxtFile(filename: string): boolean {
   return getFileExtension(filename) === '.txt'
+}
+
+// Office 파일인지 확인 (미리보기 미지원: .doc, .xls, .xlsx, .ppt, .pptx)
+function isOfficeFile(filename: string): boolean {
+  const ext = getFileExtension(filename)
+  return ['.doc', '.xls', '.xlsx', '.ppt', '.pptx'].includes(ext)
 }
 
 export default function ContentDetail({ content }: Props) {
@@ -88,18 +94,18 @@ export default function ContentDetail({ content }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const segmentContainerRef = useRef<HTMLDivElement>(null)
   const segmentViewportRef = useRef<HTMLDivElement | null>(null)
-  
+
   const handleRetry = async (type: 'asr' | 'summary' | 'ocr') => {
     const isDocument = isDocumentFile(content.filename)
     const typeLabel = type === 'ocr' ? 'OCR 처리' : type === 'asr' ? (isDocument ? 'OCR 처리' : 'ASR 처리') : 'LLM 요약'
     if (!confirm(`${typeLabel}를 다시 시도하시겠습니까?`)) {
       return
     }
-    
+
     try {
       let minSpeakersValue: number | undefined = undefined
       let maxSpeakersValue: number | undefined = undefined
-      
+
       // 문서 타입이 아닐 때만 화자 수 처리
       if (type === 'asr' && !isDocument) {
         if (minSpeakers.trim()) {
@@ -120,7 +126,7 @@ export default function ContentDetail({ content }: Props) {
           throw new Error('최소 화자 수는 최대 화자 수보다 작거나 같아야 합니다.')
         }
       }
-      
+
       const result = await retryProcessing(content.id, type, minSpeakersValue, maxSpeakersValue)
       setMessage(result.message)
       router.refresh()
@@ -129,33 +135,49 @@ export default function ContentDetail({ content }: Props) {
       setMessage(error instanceof Error ? error.message : '재처리 실패')
     }
   }
-  
+
+  const handleDelete = async () => {
+    if (!confirm(`"${content.filename}"을(를) 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`)) {
+      return
+    }
+
+    try {
+      await deleteContentsBulk([content.id])
+      setMessage('삭제되었습니다. 목록 페이지로 이동합니다...')
+      setTimeout(() => {
+        router.push('/contents')
+      }, 1000)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '삭제 실패')
+    }
+  }
+
   const handleRecluster = async () => {
-    if (!content.transcription?.diarization_metadata?.segment_embeddings || 
-        content.transcription.diarization_metadata.segment_embeddings.length === 0) {
+    if (!content.transcription?.diarization_metadata?.segment_embeddings ||
+      content.transcription.diarization_metadata.segment_embeddings.length === 0) {
       setReclusterMessage('세그먼트 임베딩이 없습니다. 먼저 화자 분리를 완료해주세요.')
       return
     }
-    
+
     if (!confirm('화자 재분류를 실행하시겠습니까? 기존 화자 라벨이 변경될 수 있습니다.')) {
       return
     }
-    
+
     setIsReclustering(true)
     setReclusterMessage('')
-    
+
     try {
       const numSpeakersValue = numSpeakers.trim() ? parseInt(numSpeakers.trim()) : undefined
       if (numSpeakersValue !== undefined && (numSpeakersValue < 1 || isNaN(numSpeakersValue))) {
         throw new Error('화자 수는 1 이상의 정수여야 합니다.')
       }
-      
+
       const result = await reclusterSpeakers(
         content.id,
         numSpeakersValue,
         similarityThreshold
       )
-      
+
       setReclusterMessage(`✅ ${result.message} (${result.num_speakers}명: ${result.speaker_labels.join(', ')})`)
       router.refresh()
       setTimeout(() => setReclusterMessage(''), 5000)
@@ -194,13 +216,13 @@ export default function ContentDetail({ content }: Props) {
     if (!content.media_url) {
       return
     }
-    
+
     try {
       const response = await fetch(content.media_url)
       if (!response.ok) {
         throw new Error('파일 다운로드 실패')
       }
-      
+
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -243,12 +265,12 @@ export default function ContentDetail({ content }: Props) {
         (seg) => currentTime >= seg.start && currentTime <= seg.end
       )
       const newSegmentId = activeSegment?.id ?? null
-      
+
       // 세그먼트가 실제로 변경되었을 때만 업데이트 및 스크롤
       if (newSegmentId !== previousSegmentIdRef.current) {
         setCurrentSegmentId(newSegmentId)
         previousSegmentIdRef.current = newSegmentId
-        
+
         // 자동 스크롤이 활성화되어 있고 세그먼트가 변경되었을 때 스크롤
         if (autoScroll && newSegmentId !== null) {
           const segmentElement = document.getElementById(`segment-${newSegmentId}`)
@@ -260,7 +282,7 @@ export default function ContentDetail({ content }: Props) {
             const elementOffsetTop = elementRect.top - containerRect.top + scrollTop
             const containerCenter = viewport.clientHeight / 2
             const targetScrollTop = elementOffsetTop - containerCenter + (elementRect.height / 2)
-            
+
             viewport.scrollTo({
               top: targetScrollTop,
               behavior: 'smooth'
@@ -271,13 +293,13 @@ export default function ContentDetail({ content }: Props) {
     }
 
     mediaElement.addEventListener('timeupdate', handleTimeUpdate)
-    
+
     // 재생이 멈췄을 때 하이라이트 제거
     const handlePause = () => {
       setCurrentSegmentId(null)
       previousSegmentIdRef.current = null
     }
-    
+
     mediaElement.addEventListener('pause', handlePause)
     mediaElement.addEventListener('ended', handlePause)
 
@@ -287,28 +309,40 @@ export default function ContentDetail({ content }: Props) {
       mediaElement.removeEventListener('ended', handlePause)
     }
   }, [content.media_url, content.filename, content.transcription?.segments, autoScroll])
-  
+
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
-            {content.content_type === 'DOCUMENT' ? (
-              <FileText className="h-5 w-5 text-muted-foreground flex-shrink-0" />
-            ) : content.content_type === 'AUDIO' ? (
-              <Music className="h-5 w-5 text-muted-foreground flex-shrink-0" />
-            ) : null}
-            <CardTitle className="text-xl break-words">{content.title || content.filename}</CardTitle>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              {content.content_type === 'DOCUMENT' ? (
+                <FileText className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+              ) : content.content_type === 'AUDIO' ? (
+                <Music className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+              ) : null}
+              <CardTitle className="text-xl break-words">{content.title || content.filename}</CardTitle>
+            </div>
+            <Button
+              type="button"
+              onClick={handleDelete}
+              variant="destructive"
+              size="sm"
+              className="flex-shrink-0"
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              삭제
+            </Button>
           </div>
-          <CardDescription>
-            {isDocumentFile(content.filename) 
+          <CardDescription className="mt-2">
+            {isDocumentFile(content.filename)
               ? `문서 파일 · ${content.document ? `페이지 수: ${content.document.page_count}페이지` : '처리 중'}`
               : `총 재생 길이 ${content.duration_seconds.toFixed(1)}초 · 화자 ${content.speakers.join(', ') || '분석 중'}`
             }
           </CardDescription>
           <p className="text-xs text-muted-foreground break-all mt-2">저장 키: {content.object_key}</p>
         </CardHeader>
-        
+
         {content.media_url && (
           <CardContent className="space-y-4">
             <div>
@@ -340,37 +374,38 @@ export default function ContentDetail({ content }: Props) {
                         className="max-w-full max-h-[800px] object-contain"
                       />
                     </div>
+                  ) : isOfficeFile(content.filename) ? (
+                    <div className="p-8 text-center">
+                      <p className="text-muted-foreground mb-2">
+                        이 파일 형식({getFileExtension(content.filename)})은 현재 미리보기를 지원하지 않습니다.
+                      </p>
+                      <p className="text-sm text-muted-foreground mb-4">
+                        .doc, .xls, .xlsx, .ppt, .pptx 파일은 향후 지원 예정입니다.
+                      </p>
+                    </div>
                   ) : (
                     <div className="p-8 text-center">
                       <p className="text-muted-foreground mb-4">
                         이 파일 형식은 브라우저에서 직접 미리보기를 지원하지 않습니다.
                       </p>
-                      <Button
-                        type="button"
-                        onClick={handleDownload}
-                        variant="default"
-                      >
-                        <Download className="mr-2 h-4 w-4" />
-                        파일 다운로드
-                      </Button>
                     </div>
                   )}
                 </div>
               ) : isVideoFile(content.filename) ? (
-                <video 
+                <video
                   ref={videoRef}
-                  controls 
-                  src={content.media_url} 
+                  controls
+                  src={content.media_url}
                   className="w-full max-h-[500px]"
                   preload="metadata"
                 >
                   브라우저가 비디오 재생을 지원하지 않습니다.
                 </video>
               ) : isAudioFile(content.filename) ? (
-                <audio 
+                <audio
                   ref={audioRef}
-                  controls 
-                  src={content.media_url} 
+                  controls
+                  src={content.media_url}
                   className="w-full max-w-2xl"
                   preload="metadata"
                 >
@@ -450,68 +485,68 @@ export default function ContentDetail({ content }: Props) {
         </CardContent>
       </Card>
 
-      {(content.status === 'ASR_FAILED' || content.status === 'PROCESSING' || content.status === 'QUEUED' || 
+      {(content.status === 'ASR_FAILED' || content.status === 'PROCESSING' || content.status === 'QUEUED' ||
         content.status === 'OCR_FAILED' || content.status === 'OCR_PROCESSING') && (
-        <Card className={cn(
-          (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "border-destructive",
-          (content.status === 'QUEUED' || content.status === 'OCR_PROCESSING') && "border-primary"
-        )}>
-          <CardHeader>
-            <CardTitle className={cn(
-              "text-base",
-              (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "text-destructive",
-              (content.status === 'QUEUED' || content.status === 'OCR_PROCESSING') && "text-primary"
-            )}>
-              {content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED'
-                ? `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.`
-                : content.status === 'QUEUED' || content.status === 'OCR_PROCESSING'
-                ? `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`
-                : `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {!isDocumentFile(content.filename) && (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="minSpeakers">최소 화자 수 (선택사항)</Label>
-                    <Input
-                      id="minSpeakers"
-                      type="number"
-                      min="1"
-                      value={minSpeakers}
-                      onChange={(e) => setMinSpeakers(e.target.value)}
-                      placeholder="자동 결정"
-                    />
+          <Card className={cn(
+            (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "border-destructive",
+            (content.status === 'QUEUED' || content.status === 'OCR_PROCESSING') && "border-primary"
+          )}>
+            <CardHeader>
+              <CardTitle className={cn(
+                "text-base",
+                (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "text-destructive",
+                (content.status === 'QUEUED' || content.status === 'OCR_PROCESSING') && "text-primary"
+              )}>
+                {content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED'
+                  ? `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.`
+                  : content.status === 'QUEUED' || content.status === 'OCR_PROCESSING'
+                    ? `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`
+                    : `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!isDocumentFile(content.filename) && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="minSpeakers">최소 화자 수 (선택사항)</Label>
+                      <Input
+                        id="minSpeakers"
+                        type="number"
+                        min="1"
+                        value={minSpeakers}
+                        onChange={(e) => setMinSpeakers(e.target.value)}
+                        placeholder="자동 결정"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="maxSpeakers">최대 화자 수 (선택사항)</Label>
+                      <Input
+                        id="maxSpeakers"
+                        type="number"
+                        min="1"
+                        value={maxSpeakers}
+                        onChange={(e) => setMaxSpeakers(e.target.value)}
+                        placeholder="자동 결정"
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="maxSpeakers">최대 화자 수 (선택사항)</Label>
-                    <Input
-                      id="maxSpeakers"
-                      type="number"
-                      min="1"
-                      value={maxSpeakers}
-                      onChange={(e) => setMaxSpeakers(e.target.value)}
-                      placeholder="자동 결정"
-                    />
-                  </div>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  화자 수 범위를 지정하지 않으면 자동으로 결정됩니다.
-                </p>
-              </>
-            )}
-            <Button
-              type="button"
-              onClick={() => handleRetry(isDocumentFile(content.filename) ? 'ocr' : 'asr')}
-              variant="default"
-              className="w-full"
-            >
-              {isDocumentFile(content.filename) ? 'OCR 재처리' : 'ASR 재처리'}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+                  <p className="text-xs text-muted-foreground">
+                    화자 수 범위를 지정하지 않으면 자동으로 결정됩니다.
+                  </p>
+                </>
+              )}
+              <Button
+                type="button"
+                onClick={() => handleRetry(isDocumentFile(content.filename) ? 'ocr' : 'asr')}
+                variant="default"
+                className="w-full"
+              >
+                {isDocumentFile(content.filename) ? 'OCR 재처리' : 'ASR 재처리'}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
       {message && (
         <div className={cn(
@@ -536,28 +571,28 @@ export default function ContentDetail({ content }: Props) {
             >
               <div className="space-y-4">
                 {content.transcription.segments.map((seg) => {
-                const isActive = currentSegmentId === seg.id
-                return (
-                  <div 
-                    key={seg.id}
-                    id={`segment-${seg.id}`}
-                    className={cn(
-                      "pb-4 border-b last:border-b-0 transition-colors rounded-md px-2 py-3",
-                      isActive && "bg-primary/10"
-                    )}
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <Badge variant="outline">{seg.speaker || 'UNKNOWN'}</Badge>
-                      <button
-                        onClick={() => handleSeekToTime(seg.start)}
-                        className="text-xs text-muted-foreground hover:text-primary underline underline-offset-2 transition-colors"
-                      >
-                        [{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]
-                      </button>
+                  const isActive = currentSegmentId === seg.id
+                  return (
+                    <div
+                      key={seg.id}
+                      id={`segment-${seg.id}`}
+                      className={cn(
+                        "pb-4 border-b last:border-b-0 transition-colors rounded-md px-2 py-3",
+                        isActive && "bg-primary/10"
+                      )}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <Badge variant="outline">{seg.speaker || 'UNKNOWN'}</Badge>
+                        <button
+                          onClick={() => handleSeekToTime(seg.start)}
+                          className="text-xs text-muted-foreground hover:text-primary underline underline-offset-2 transition-colors"
+                        >
+                          [{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]
+                        </button>
+                      </div>
+                      <p className="text-base leading-relaxed break-words">{seg.text}</p>
                     </div>
-                    <p className="text-base leading-relaxed break-words">{seg.text}</p>
-                  </div>
-                )
+                  )
                 })}
               </div>
             </ScrollArea>
@@ -571,7 +606,7 @@ export default function ContentDetail({ content }: Props) {
           <CardHeader>
             <CardTitle>{isTxtFile(content.filename) ? '문서 내용' : 'OCR 결과'}</CardTitle>
             <CardDescription>
-              {isTxtFile(content.filename) 
+              {isTxtFile(content.filename)
                 ? '텍스트 파일 내용'
                 : `페이지 수: ${content.document.page_count}페이지`}
             </CardDescription>
@@ -598,7 +633,10 @@ export default function ContentDetail({ content }: Props) {
                       <p className="text-sm">원본 JSON 데이터가 표시되고 있습니다. OCR 처리를 다시 시도해주세요.</p>
                     </div>
                   ) : (
-                    <MarkdownContent content={content.document.ocr_text} />
+                    // 무조건 HTML 뷰어로 렌더링
+                    <div className="doc-viewer">
+                      <HtmlContent content={content.document.ocr_text} />
+                    </div>
                   )
                 ) : null
               ) : (
@@ -627,72 +665,72 @@ export default function ContentDetail({ content }: Props) {
         </Card>
       )}
 
-      {content.transcription?.diarization_metadata?.segment_embeddings && 
-       content.transcription.diarization_metadata.segment_embeddings.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>화자 재분류</CardTitle>
-            <CardDescription>
-              저장된 세그먼트 임베딩을 기반으로 화자를 재클러스터링합니다. GPU 연산 없이 빠르게 처리됩니다.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="numSpeakers">화자 수 (선택사항)</Label>
-              <Input
-                id="numSpeakers"
-                type="number"
-                min="1"
-                value={numSpeakers}
-                onChange={(e) => setNumSpeakers(e.target.value)}
-                placeholder="자동 결정"
-                className="max-w-xs"
-                disabled={isReclustering}
-              />
-              <p className="text-xs text-muted-foreground">
-                비워두면 자동으로 결정됩니다.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="similarityThreshold">
-                유사도 임계값: {similarityThreshold.toFixed(2)}
-              </Label>
-              <input
-                id="similarityThreshold"
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={similarityThreshold}
-                onChange={(e) => setSimilarityThreshold(parseFloat(e.target.value))}
-                className="w-full max-w-md"
-                disabled={isReclustering}
-              />
-              <p className="text-xs text-muted-foreground">
-                0.0 (낮음) ~ 1.0 (높음) - 유사도가 이 값 이상인 세그먼트를 같은 화자로 묶습니다.
-              </p>
-            </div>
-            <Button
-              onClick={handleRecluster}
-              disabled={isReclustering}
-              variant="secondary"
-              className="w-full"
-            >
-              {isReclustering ? '재클러스터링 중...' : '재클러스터링 실행'}
-            </Button>
-            {reclusterMessage && (
-              <div className={cn(
-                "p-3 rounded-md text-sm",
-                reclusterMessage.includes('✅') 
-                  ? "bg-primary/10 text-primary" 
-                  : "bg-destructive/10 text-destructive"
-              )}>
-                {reclusterMessage}
+      {content.transcription?.diarization_metadata?.segment_embeddings &&
+        content.transcription.diarization_metadata.segment_embeddings.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle>화자 재분류</CardTitle>
+              <CardDescription>
+                저장된 세그먼트 임베딩을 기반으로 화자를 재클러스터링합니다. GPU 연산 없이 빠르게 처리됩니다.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="numSpeakers">화자 수 (선택사항)</Label>
+                <Input
+                  id="numSpeakers"
+                  type="number"
+                  min="1"
+                  value={numSpeakers}
+                  onChange={(e) => setNumSpeakers(e.target.value)}
+                  placeholder="자동 결정"
+                  className="max-w-xs"
+                  disabled={isReclustering}
+                />
+                <p className="text-xs text-muted-foreground">
+                  비워두면 자동으로 결정됩니다.
+                </p>
               </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+              <div className="space-y-2">
+                <Label htmlFor="similarityThreshold">
+                  유사도 임계값: {similarityThreshold.toFixed(2)}
+                </Label>
+                <input
+                  id="similarityThreshold"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={similarityThreshold}
+                  onChange={(e) => setSimilarityThreshold(parseFloat(e.target.value))}
+                  className="w-full max-w-md"
+                  disabled={isReclustering}
+                />
+                <p className="text-xs text-muted-foreground">
+                  0.0 (낮음) ~ 1.0 (높음) - 유사도가 이 값 이상인 세그먼트를 같은 화자로 묶습니다.
+                </p>
+              </div>
+              <Button
+                onClick={handleRecluster}
+                disabled={isReclustering}
+                variant="secondary"
+                className="w-full"
+              >
+                {isReclustering ? '재클러스터링 중...' : '재클러스터링 실행'}
+              </Button>
+              {reclusterMessage && (
+                <div className={cn(
+                  "p-3 rounded-md text-sm",
+                  reclusterMessage.includes('✅')
+                    ? "bg-primary/10 text-primary"
+                    : "bg-destructive/10 text-destructive"
+                )}>
+                  {reclusterMessage}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
       <Card>
         <CardHeader>

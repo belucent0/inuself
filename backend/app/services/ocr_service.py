@@ -576,11 +576,14 @@ class OcrService:
             logger.info(f"HTML content extracted: {len(html_content)} characters")
             
             # JSON/텍스트 추출 (LLM 요약용)
-            # Docling의 텍스트 추출 방식 사용
-            doc_dict = result.document.export_to_dict()
-            
-            # JSON에서 텍스트만 추출하여 LLM에 전달
-            ocr_text = self._extract_text_from_docling_dict(doc_dict)
+            # Docling의 export_to_markdown 사용 (가능한 경우)
+            try:
+                ocr_text = result.document.export_to_markdown()
+                logger.info(f"Markdown content extracted: {len(ocr_text)} characters")
+            except Exception as e:
+                logger.warning(f"Failed to export to markdown: {e}, falling back to manual dict extraction")
+                doc_dict = result.document.export_to_dict()
+                ocr_text = self._extract_text_from_docling_dict(doc_dict)
             
             # 페이지 수 계산
             page_count = len(doc_dict.get("pages", [])) if "pages" in doc_dict else 1
@@ -699,8 +702,8 @@ class OcrService:
         
         # 텍스트가 없으면 원본 딕셔너리를 JSON 문자열로 변환 (fallback)
         if not texts:
-            logger.warning("No text extracted from Docling dict, returning JSON fallback")
-            return json.dumps(doc_dict, ensure_ascii=False, indent=2)
+            logger.warning("No text extracted from Docling dict, returning empty string")
+            return ""
         
         return "".join(texts)
     

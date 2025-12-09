@@ -53,12 +53,12 @@ export default function DocumentViewer({ fileUrl, filename, isPdf, isDocx }: Doc
     setLoading(false)
   }
 
-  // DOCX 렌더링
+  // DOCX 렌더링 및 페이지 감지
   useEffect(() => {
     if (isDocx && docxContainerRef.current && fileUrl) {
       setLoading(true)
       setError(null)
-      
+
       fetch(fileUrl)
         .then((response) => response.blob())
         .then((blob) => {
@@ -70,7 +70,7 @@ export default function DocumentViewer({ fileUrl, filename, isPdf, isDocx }: Doc
               ignoreHeight: false,
               ignoreFonts: false,
               breakPages: true,
-              ignoreLastRenderedPageBreak: true,
+              ignoreLastRenderedPageBreak: false,  // 페이지 브레이크 감지를 위해 false로 변경
               experimental: false,
               trimXmlDeclaration: true,
               useBase64URL: false,
@@ -78,6 +78,36 @@ export default function DocumentViewer({ fileUrl, filename, isPdf, isDocx }: Doc
             })
               .then(() => {
                 setLoading(false)
+
+                // 렌더링 완료 후 페이지 감지
+                setTimeout(() => {
+                  if (docxContainerRef.current) {
+                    // docx-preview가 생성하는 section 요소들을 페이지로 간주
+                    let sections = docxContainerRef.current.querySelectorAll('.docx-wrapper > section')
+
+                    // 직접 자식이 아닐 경우 대체 셀렉터 사용
+                    if (sections.length === 0) {
+                      sections = docxContainerRef.current.querySelectorAll('section')
+                      console.log('페이지 감지: 대체 셀렉터 사용')
+                    }
+
+                    if (sections.length > 0) {
+                      console.log(`DOCX 페이지 감지: ${sections.length}개 페이지`)
+                      setNumPages(sections.length)
+                      setPageNumber(1)
+
+                      // 각 섹션에 페이지 번호 데이터 속성 추가
+                      sections.forEach((section, index) => {
+                        (section as HTMLElement).setAttribute('data-page-number', String(index + 1))
+                      })
+                    } else {
+                      // section이 없으면 전체를 1페이지로 간주
+                      console.log('DOCX 페이지 구분 없음, 전체를 1페이지로 표시')
+                      setNumPages(1)
+                      setPageNumber(1)
+                    }
+                  }
+                }, 100)  // 렌더링 완료 후 약간의 지연
               })
               .catch((err) => {
                 console.error('DOCX 렌더링 오류:', err)
@@ -93,6 +123,44 @@ export default function DocumentViewer({ fileUrl, filename, isPdf, isDocx }: Doc
         })
     }
   }, [isDocx, fileUrl])
+
+  // DOCX 페이지 표시/숨김 처리
+  useEffect(() => {
+    if (isDocx && docxContainerRef.current && numPages > 0) {
+      console.log('페이지 표시/숨김 처리 시작:', { pageNumber, numPages })
+
+      // 여러 가능한 셀렉터 시도
+      let sections = docxContainerRef.current.querySelectorAll('.docx-wrapper > section')
+
+      if (sections.length === 0) {
+        // section이 직접 자식이 아닐 수 있음
+        sections = docxContainerRef.current.querySelectorAll('section')
+        console.log('대체 셀렉터 사용, 찾은 섹션 수:', sections.length)
+      }
+
+      if (sections.length > 0) {
+        console.log(`총 ${sections.length}개 섹션 발견, 현재 페이지: ${pageNumber}`)
+
+        // 모든 섹션을 순회하며 현재 페이지만 표시
+        sections.forEach((section, index) => {
+          const htmlSection = section as HTMLElement
+          const shouldShow = index + 1 === pageNumber
+
+          console.log(`섹션 ${index + 1}: ${shouldShow ? '표시' : '숨김'}`)
+
+          if (shouldShow) {
+            htmlSection.style.display = 'block'
+            htmlSection.style.visibility = 'visible'
+          } else {
+            htmlSection.style.display = 'none'
+            htmlSection.style.visibility = 'hidden'
+          }
+        })
+      } else {
+        console.warn('섹션을 찾을 수 없습니다. DOM 구조:', docxContainerRef.current.innerHTML.substring(0, 500))
+      }
+    }
+  }, [isDocx, pageNumber, numPages])
 
   // 줌 인
   const handleZoomIn = () => {
@@ -167,7 +235,7 @@ export default function DocumentViewer({ fileUrl, filename, isPdf, isDocx }: Doc
               <RotateCcw className="h-4 w-4" />
             </Button>
           </div>
-          
+
           {numPages > 0 && (
             <div className="flex items-center gap-2">
               <Button
@@ -274,8 +342,83 @@ export default function DocumentViewer({ fileUrl, filename, isPdf, isDocx }: Doc
   if (isDocx) {
     return (
       <div className="w-full flex flex-col">
+        {/* 컨트롤 바 */}
+        <div className="flex items-center justify-between gap-2 p-2 bg-muted/50 border-b rounded-t-lg">
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleZoomOut}
+              disabled={scale <= 0.5}
+              aria-label="줌 아웃"
+            >
+              <ZoomOut className="h-4 w-4" />
+            </Button>
+            <span className="text-sm font-medium min-w-[60px] text-center">
+              {Math.round(scale * 100)}%
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleZoomIn}
+              disabled={scale >= 3.0}
+              aria-label="줌 인"
+            >
+              <ZoomIn className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleZoomReset}
+              aria-label="줌 리셋 (100%)"
+              title="줌 리셋 (100%)"
+            >
+              <RotateCcw className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {numPages > 0 && (
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handlePrevPage}
+                disabled={pageNumber <= 1}
+                aria-label="이전 페이지"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={1}
+                  max={numPages}
+                  value={pageNumber}
+                  onChange={handlePageInput}
+                  className="w-16 h-8 text-center text-sm"
+                />
+                <span className="text-sm text-muted-foreground">/ {numPages}</span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleNextPage}
+                disabled={pageNumber >= numPages}
+                aria-label="다음 페이지"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+        </div>
+
         {/* DOCX 뷰어 */}
-        <div className="flex-1 overflow-auto border rounded-lg bg-white p-8">
+        <div className="flex-1 overflow-auto border-x bg-muted/30 flex justify-center items-start px-4 py-0">
           {loading && (
             <div className="flex items-center justify-center h-[600px]">
               <p className="text-muted-foreground">DOCX 로딩 중...</p>
@@ -293,8 +436,12 @@ export default function DocumentViewer({ fileUrl, filename, isPdf, isDocx }: Doc
               loading && 'hidden'
             )}
             style={{
-              maxWidth: '100%',
+              maxWidth: '800px',
+              width: '100%',
               margin: '0 auto',
+              transform: `scale(${scale})`,  // 세로 비율 조정은 CSS로 이동
+              transformOrigin: 'top center',
+              transition: 'transform 0.2s ease-in-out',
             }}
           />
         </div>
