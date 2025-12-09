@@ -17,6 +17,7 @@ class FileStatus(str, enum.Enum):
     # 진행 중 상태
     PROCESSING = "PROCESSING"  # ASR/화자분리 진행 중
     OCR_PROCESSING = "OCR_PROCESSING"  # OCR 처리 중
+    SUMMARY_QUEUED = "SUMMARY_QUEUED"  # LLM 요약 대기중 (큐에 등록됨)
     SUMMARIZING = "SUMMARIZING"  # LLM 요약 중
     
     # 완료 상태

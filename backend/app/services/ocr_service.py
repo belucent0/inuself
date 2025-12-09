@@ -319,6 +319,12 @@ class OcrService:
         """기본 OCR 프롬프트 (표가 없는 경우)."""
         return """이 이미지에서 모든 텍스트를 정확하게 추출하여 **반드시 HTML 형식으로만** 반환해주세요.
 
+**중요: 언어 준수 사항 (Strict Language Constraint)**
+1. 이 문서는 **한국어(Korean)** 또는 **영어(English)** 문서입니다.
+2. **절대로 중국어(Chinese Characters)를 출력하지 마세요.**
+3. OCR 과정에서 글자가 불분명할 경우, 중국어 한자가 아닌 **한국어(한글)** 또는 **영어(알파벳)**로 인식해야 합니다.
+4. 한자(Hanja)가 명확히 포함된 경우에만 제한적으로 표시하고, 그 외에는 모두 한글/영어로 변환하세요.
+
 **중요: 마크다운 문법(#, ##, |, -, 등)을 절대 사용하지 마세요. 오직 HTML 태그만 사용하세요.**
 
 요구사항:
@@ -337,6 +343,12 @@ class OcrService:
         """표 전용 OCR 프롬프트 (표가 감지된 경우)."""
         return """이 이미지에서 모든 텍스트를 정확하게 추출하여 **반드시 HTML 형식으로만** 반환해주세요.
 이 이미지에는 표(table)가 포함되어 있습니다. 표 구조를 정확히 인식하는 것이 매우 중요합니다.
+
+**중요: 언어 준수 사항 (Strict Language Constraint)**
+1. 이 문서는 **한국어(Korean)** 또는 **영어(English)** 문서입니다.
+2. **절대로 중국어(Chinese Characters)를 출력하지 마세요.**
+3. OCR 과정에서 글자가 불분명할 경우, 중국어 한자가 아닌 **한국어(한글)** 또는 **영어(알파벳)**로 인식해야 합니다.
+4. 한자(Hanja)가 명확히 포함된 경우에만 제한적으로 표시하고, 그 외에는 모두 한글/영어로 변환하세요.
 
 **중요: 마크다운 문법(#, ##, |, -, 등)을 절대 사용하지 마세요. 오직 HTML 태그만 사용하세요.**
 
@@ -564,6 +576,13 @@ class OcrService:
         """
         logger.info(f"Processing document with Docling: {file_path}")
         
+        # RapidOCR 등 필수 의존성 체크
+        try:
+            import rapidocr_onnxruntime
+        except ImportError:
+            logger.warning("RapidOCR not installed. Docling quality might be poor. Fallback to Qwen3-VL (Basic Mode).")
+            return self._process_with_qwen3vl(file_path)
+
         try:
             # Docling DocumentConverter 초기화
             converter = DocumentConverter()
@@ -576,15 +595,22 @@ class OcrService:
             logger.info(f"HTML content extracted: {len(html_content)} characters")
             
             # JSON/텍스트 추출 (LLM 요약용)
+            # doc_dict를 먼저 추출 (페이지 수 계산 및 메타데이터에 필요)
+            doc_dict = result.document.export_to_dict()
+            
             # Docling의 export_to_markdown 사용 (가능한 경우)
             try:
                 ocr_text = result.document.export_to_markdown()
                 logger.info(f"Markdown content extracted: {len(ocr_text)} characters")
             except Exception as e:
                 logger.warning(f"Failed to export to markdown: {e}, falling back to manual dict extraction")
-                doc_dict = result.document.export_to_dict()
                 ocr_text = self._extract_text_from_docling_dict(doc_dict)
             
+            # 텍스트가 너무 적으면(예: 100자 이하) OCR 실패로 간주하고 Fallback
+            if len(ocr_text.strip()) < 100:
+                 logger.warning(f"Docling extracted insufficient text ({len(ocr_text)} chars). Fallback to Qwen3-VL.")
+                 return self._process_with_qwen3vl(file_path)
+
             # 페이지 수 계산
             page_count = len(doc_dict.get("pages", [])) if "pages" in doc_dict else 1
             

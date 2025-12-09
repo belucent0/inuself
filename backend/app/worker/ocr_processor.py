@@ -339,7 +339,7 @@ async def _process_ocr_job(
                 ocr_metadata=ocr_result["ocr_metadata"],
                 html_content=ocr_result.get("html_content"),
             )
-        await file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
+        await file_repo.update_file_status(file_id, FileStatus.SUMMARY_QUEUED)
         
         await file_repo.add_log(
             file_id,
@@ -361,35 +361,18 @@ async def _process_ocr_job(
             except Exception as e:
                 logger.error("Error disposing result engine: {}", e)
     
-    logger.info("[OCR] OK Database save completed, starting LLM summarization")
+    logger.info("[OCR] OK Database save completed, ready to enqueue summary job")
     logger.info("OCR processing completed for file_id={}", file_id)
     
-    # LLM 요약 처리 (async 함수 직접 호출)
-    # 요약 실패는 OCR 작업 실패로 처리하지 않음 (OCR 자체는 성공)
+    # LLM 요약 작업 큐잉 (Task Queue Adapter 사용)
     try:
-        from .llm_processor import _process_job
+        from .task_queue_adapter import get_task_queue
         
-        logger.info(f"[OCR] >> Starting LLM summarization for file_id={file_id}")
-        await _process_job(file_id=file_id)
-        logger.info(f"[OCR] >> LLM summarization completed for file_id={file_id}")
-        logger.info("LLM summarization completed for file_id={}", file_id)
-    except ValueError as exc:
-        # 빈 텍스트로 인한 요약 실패는 경고로 처리 (이미 llm_summary_service에서 처리됨)
-        if "empty" in str(exc).lower() or "no transcription" in str(exc).lower() or "no ocr text" in str(exc).lower():
-            logger.warning(
-                f"[OCR] LLM summarization skipped (empty text) for file_id={file_id}: {exc}. "
-                "OCR processing completed successfully."
-            )
-        else:
-            logger.warning(
-                f"[OCR] LLM summarization failed (ValueError) for file_id={file_id}: {exc}. "
-                "OCR processing completed successfully."
-            )
+        task_queue = get_task_queue()
+        job_id = task_queue.enqueue_llm_job(file_id=file_id)
+        logger.info(f"[OCR] >> Summary job enqueued to LLM queue (file_id={file_id}, job_id={job_id})")
+        logger.info("LLM job enqueued for file_id={}, job_id={}", file_id, job_id)
     except Exception as exc:
-        # 기타 요약 실패는 경고로 처리하되 OCR 작업은 성공으로 표시
-        logger.warning(
-            f"[OCR] LLM summarization failed for file_id={file_id}: {exc}. "
-            "OCR processing completed successfully, but summarization was skipped."
-        )
-        logger.exception("LLM summarization error details for file_id={}", file_id)
+        logger.error(f"[OCR] ERROR Failed to enqueue LLM job: {exc}")
+        logger.exception("Failed to enqueue LLM job for file_id={}", file_id)
 

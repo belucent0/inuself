@@ -92,30 +92,70 @@ async def requeue_processing_contents() -> int:
 
 async def requeue_summarizing_contents() -> int:
     """
-    SUMMARIZING 상태에서 멈춘 파일을 다시 LLM 큐에 등록한다.
+    SUMMARY_QUEUED 또는 SUMMARIZING 상태에서 멈춘 파일을 다시 LLM 큐에 등록한다.
     
+    스마트 재큐잉:
+    - 요약이 이미 완료된 파일(summary_md와 title 존재)은 상태만 COMPLETED로 복구
+    - 요약이 없는 파일만 실제로 재큐잉
+    
+    SUMMARY_QUEUED 상태는 큐에 등록되었지만 아직 워커가 시작하지 않은 상태입니다.
     SUMMARIZING 상태는 워커 재시작 시 큐에 작업이 없어졌을 수 있으므로 재등록이 필요합니다.
     SUMMARY_FAILED 상태는 재시도하지 않음 (실패한 작업은 수동으로 재시도해야 함).
 
     Returns:
         재큐잉된 파일 개수
     """
-    # SUMMARIZING 상태만 재큐잉 (SUMMARY_FAILED는 제외)
+    # SUMMARY_QUEUED와 SUMMARIZING 상태만 재큐잉 (SUMMARY_FAILED는 제외)
     files = await _fetch_files_by_status([
+        FileStatus.SUMMARY_QUEUED,
         FileStatus.SUMMARIZING,
     ])
     if not files:
-        logger.info("No stuck SUMMARIZING files found.")
+        logger.info("No stuck SUMMARY_QUEUED or SUMMARIZING files found.")
         return 0
 
     requeued = 0
+    recovered = 0
 
     for file_obj in files:
+        # 스마트 재큐잉: 요약이 이미 완료된 경우 상태만 복구
+        if file_obj.summary_md and file_obj.title:
+            session = AsyncSessionLocal()
+            try:
+                repo = FileRepository(session)
+                logger.info(
+                    "File %s already has summary (title=%s, summary_length=%d), recovering status to COMPLETED",
+                    file_obj.id,
+                    file_obj.title,
+                    len(file_obj.summary_md)
+                )
+                await repo.update_file_status(file_obj.id, FileStatus.COMPLETED)
+                await repo.add_llm_log(
+                    file_id=file_obj.id,
+                    log={
+                        "event": "status_recovered",
+                        "previous_status": "SUMMARIZING",
+                        "summary_length": len(file_obj.summary_md),
+                        "title": file_obj.title,
+                    },
+                    message="Status recovered from SUMMARIZING to COMPLETED (summary already exists)",
+                )
+                await session.commit()
+                recovered += 1
+                logger.info("Successfully recovered file_id=%s to COMPLETED", file_obj.id)
+            except Exception as exc:
+                logger.exception("Failed to recover file_id=%s", file_obj.id)
+                await session.rollback()
+            finally:
+                await session.close()
+            continue
+        
         # 이미 큐에 있는 작업은 재큐잉하지 않음 (중복 방지)
         if is_celery_task_in_queue(file_id=file_obj.id, task_name="process_llm_task"):
             logger.debug("LLM job already in queue for file_id=%s, skipping requeue", file_obj.id)
             continue
         
+        # 요약이 없는 파일은 재큐잉
         session = AsyncSessionLocal()
         try:
             repo = FileRepository(session)
@@ -147,6 +187,9 @@ async def requeue_summarizing_contents() -> int:
         finally:
             await session.close()
 
+    if recovered > 0:
+        logger.info("Recovered %d files from SUMMARIZING to COMPLETED (summary already exists)", recovered)
+    
     return requeued
 
 

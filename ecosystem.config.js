@@ -98,7 +98,7 @@ const apps = [
       WORKER_TYPE: 'llm',
       // 순차 처리 설정 (기본값: true)
       SEQUENTIAL_PROCESSING: envVars.SEQUENTIAL_PROCESSING || 'true',
-      
+
       // LLM 설정 (.env에서 읽어옴)
       LLM_PROVIDER: envVars.LLM_PROVIDER || 'llamacpp_server',
       LLM_SYSTEM_PROMPT: envVars.LLM_SYSTEM_PROMPT || '',
@@ -107,13 +107,14 @@ const apps = [
       LLM_TOP_P: envVars.LLM_TOP_P || '0.9',
       LLM_MAX_TOKENS: envVars.LLM_MAX_TOKENS || '1024',
       LLM_N_THREADS: envVars.LLM_N_THREADS || '8',
-      
+
       // LLM API 서버 설정 (모든 OpenAI 호환 API, provider와 무관)
       LLM_BASE_URL: envVars.LLM_BASE_URL || 'http://localhost:8080',
       LLM_MODEL_NAME: envVars.LLM_MODEL_NAME || 'Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf',
-      
+
       // llama_cpp 전용 설정 (.env에서 읽어옴, llama-cpp-python 직접 사용 시)
-      LLM_MODEL_PATH: envVars.LLM_MODEL_PATH || '',
+      LLM_SERVER_PATH: envVars.LLM_SERVER_PATH || '',
+      LLM_SERVER_MODEL: envVars.LLM_SERVER_MODEL || '',
       LLM_N_GPU_LAYERS: envVars.LLM_N_GPU_LAYERS || '-1',  // -1: 모든 레이어 GPU, 0: CPU만, 양수: 하이브리드
     },
     autorestart: true,
@@ -152,10 +153,13 @@ const apps = [
       WORKER_TYPE: 'ocr',
       // 순차 처리 설정 (기본값: true)
       SEQUENTIAL_PROCESSING: envVars.SEQUENTIAL_PROCESSING || 'true',
-      
+
       // LLM API 서버 설정 (기본 모드에서 Qwen3-VL API 사용)
       LLM_BASE_URL: envVars.LLM_BASE_URL || 'http://localhost:8080',
       LLM_MODEL_NAME: envVars.LLM_MODEL_NAME || 'Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf',
+
+      // llama_cpp 전용 설정 (OCR 비전 모델 분리)
+      OCR_SERVER_MODEL: envVars.OCR_SERVER_MODEL || '',
     },
     autorestart: true,
     max_restarts: 10,

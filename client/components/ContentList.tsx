@@ -39,6 +39,7 @@ const statusLabels: Record<ContentStatus, string> = {
   QUEUED: '대기중',
   PROCESSING: '인식중',
   OCR_PROCESSING: 'OCR 처리중',
+  SUMMARY_QUEUED: '요약 대기',
   SUMMARIZING: '요약중',
   COMPLETED: '완료',
   ASR_FAILED: 'ASR 실패',
@@ -53,12 +54,16 @@ const getStatusVariant = (status: ContentStatus): 'default' | 'secondary' | 'des
       return 'success'
     case 'ASR_FAILED':
       return 'destructive'
+    case 'OCR_FAILED':
+      return 'destructive'
     case 'SUMMARY_FAILED':
       return 'warning'
     case 'PROCESSING':
+    case 'OCR_PROCESSING':
     case 'SUMMARIZING':
       return 'info'
     case 'QUEUED':
+    case 'SUMMARY_QUEUED':
     case 'CANCELLED':
       return 'outline'
     default:
@@ -71,6 +76,7 @@ const getStatusIcon = (status: ContentStatus) => {
     case 'QUEUED':
     case 'PROCESSING':
     case 'OCR_PROCESSING':
+    case 'SUMMARY_QUEUED':
     case 'SUMMARIZING':
       return <Spinner className="size-3" />
     case 'COMPLETED':
@@ -171,7 +177,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
     if (!confirm(`${typeLabel}를 다시 시도하시겠습니까?`)) {
       return
     }
-    
+
     try {
       const result = await retryProcessing(contentId, type)
       setMessage(result.message)
@@ -219,7 +225,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
           {isDeleting ? '삭제 중...' : `선택 삭제 (${selectedIds.size}개)`}
         </Button>
       </div>
-      
+
       {message && (
         <div className={cn(
           "p-3 rounded-md text-sm",
@@ -228,7 +234,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
           {message}
         </div>
       )}
-      
+
       <div className="space-y-2.5 md:space-y-4">
         {contents.map((item) => (
           <Card key={item.id} className="hover:shadow-md transition-shadow">
@@ -290,13 +296,13 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
           </Card>
         ))}
       </div>
-      
+
       {pagination && (
         <div className="relative flex items-center justify-between px-2 py-4">
           {/* 왼쪽: 행 수 */}
           <div className="flex items-center gap-2">
-            <Select 
-              value={pagination.pageSize.toString()} 
+            <Select
+              value={pagination.pageSize.toString()}
               onValueChange={(value) => {
                 if (pagination.onPageSizeChange) {
                   pagination.onPageSizeChange(parseInt(value, 10))
@@ -314,7 +320,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
                 <SelectItem value="100">100</SelectItem>
               </SelectContent>
             </Select>
-              <span className="hidden md:inline text-sm text-muted-foreground">개 행</span>
+            <span className="hidden md:inline text-sm text-muted-foreground">개 행</span>
           </div>
 
           {/* 중앙: 네비게이션 버튼들 (정중앙) */}

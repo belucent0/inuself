@@ -97,3 +97,56 @@ def configure_worker_logging(**kwargs):
 
 
 
+# Celery 워커 시작 시 정리 작업 (Stale Lock Cleanup)
+from celery.signals import worker_ready
+
+@worker_ready.connect
+def cleanup_stale_locks_on_startup(sender=None, **kwargs):
+    """
+    워커 시작 시 Stale Lock을 정리합니다.
+    주의: 이 로직은 각 타입(asr, ocr, llm)별로 단일 워커가 실행되는 환경을 가정합니다.
+    """
+    import sys
+    from redis import Redis
+    
+    # 이 프로세스가 어떤 큐를 처리하는지 확인
+    target_queues = []
+    cmd_args = " ".join(sys.argv)
+    
+    # 큐 이름 확인 (asr, ocr, llm)
+    if "worker-llm" in cmd_args or ("llm" in cmd_args and ("-Q" in sys.argv or "--queues" in sys.argv)):
+        target_queues.append("llm")
+    if "worker-asr" in cmd_args or ("asr" in cmd_args and ("-Q" in sys.argv or "--queues" in sys.argv)):
+        target_queues.append("asr")
+    if "worker-ocr" in cmd_args or ("ocr" in cmd_args and ("-Q" in sys.argv or "--queues" in sys.argv)):
+        target_queues.append("ocr")
+        
+    if not target_queues:
+        logging.info("[Startup] Could not determine worker type from args. Skipping lock cleanup.")
+        return
+
+    try:
+        redis_url = settings.redis_url
+        redis_client = Redis.from_url(redis_url)
+        
+        for queue in target_queues:
+            # 각 큐의 Global Lock 키
+            # distributed_lock.py의 acquire_task_locks 함수 참고: f"lock:{queue_name}:global"
+            global_lock_key = f"lock:{queue}:global"
+            
+            locks_to_remove = [global_lock_key]
+            
+            # LLM 워커인 경우 서버 락도 추가
+            if queue == "llm":
+                locks_to_remove.append("lock:llm_server:global")
+            
+            for lock_key in locks_to_remove:
+                if redis_client.exists(lock_key):
+                    logging.warning(f"[Startup] Found stale lock '{lock_key}' on {queue.upper()} worker start. Removing it.")
+                    redis_client.delete(lock_key)
+                    logging.warning(f"[Startup] Stale lock '{lock_key}' removed.")
+                else:
+                    logging.info(f"[Startup] No stale lock '{lock_key}' found for {queue.upper()} worker.")
+            
+    except Exception as e:
+        logging.error(f"[Startup] Failed to check/remove stale locks: {e}")

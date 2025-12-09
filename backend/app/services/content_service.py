@@ -327,11 +327,11 @@ class ContentService:
             
             elif retry_type == "summary":
                 # LLM Summary 재처리
-                if file_obj.status != FileStatus.SUMMARY_FAILED:
+                if file_obj.status not in [FileStatus.SUMMARY_FAILED, FileStatus.SUMMARY_QUEUED, FileStatus.SUMMARIZING]:
                     raise ValueError(f"Cannot retry LLM summary for file with status: {file_obj.status.value}")
                 
-                # 상태를 SUMMARIZING으로 변경
-                await file_repo.update_file_status(content_id, FileStatus.SUMMARIZING)
+                # 상태를 SUMMARY_QUEUED로 변경 (큐에 등록)
+                await file_repo.update_file_status(content_id, FileStatus.SUMMARY_QUEUED)
                 await file_repo.add_llm_log(
                     file_id=content_id,
                     log={"event": "manual_retry", "type": "llm_summary"},
@@ -406,11 +406,11 @@ class ContentService:
             return {"success": True, "message": "ASR reprocessing started", "job_id": job_id}
         
         elif retry_type == "summary":
-            if content.status != ContentStatus.SUMMARY_FAILED:
+            if content.status not in [ContentStatus.SUMMARY_FAILED, ContentStatus.SUMMARY_QUEUED, ContentStatus.SUMMARIZING]:
                 raise ValueError(f"Cannot retry LLM summary for content with status: {content.status.value}")
             
-            # 상태를 SUMMARIZING으로 변경
-            await self.repo.update_content_status(content_id, ContentStatus.SUMMARIZING)
+            # 상태를 SUMMARY_QUEUED로 변경 (큐에 등록)
+            await self.repo.update_content_status(content_id, ContentStatus.SUMMARY_QUEUED)
             await self.repo.add_llm_log(
                 content_id=content_id,
                 log={"event": "manual_retry", "type": "llm_summary"},
@@ -424,7 +424,8 @@ class ContentService:
             from ..worker.task_queue_adapter import get_task_queue
             
             task_queue = get_task_queue()
-            enqueue_func = partial(task_queue.enqueue_llm_job, content_id=content_id)
+            enqueue_func = partial(task_queue.enqueue_llm_job, file_id=content_id)
+            enqueue_func = partial(task_queue.enqueue_llm_job, file_id=content_id)
             job_id = await loop.run_in_executor(None, enqueue_func)
             
             logger.info("Manual LLM retry enqueued: content_id=%s, job_id=%s", content_id, job_id)

@@ -31,7 +31,16 @@ class LlmSummaryService:
         """
         file_obj = await self.file_repo.get_file(file_id)
         if not file_obj:
-            raise ValueError(f"File {file_id} not found")
+            logger.warning("[LLM] File not found, skipping summarization: file_id=%s", file_id)
+            # 존재하지 않는 파일은 실패로 마킹하고 로그를 남긴 뒤 종료
+            await self.file_repo.add_llm_log(
+                file_id,
+                log={"event": "summarization_skipped", "reason": "file_not_found"},
+                message="LLM summarization skipped: file not found",
+            )
+            await self.file_repo.update_file_status(file_id, FileStatus.SUMMARY_FAILED)
+            await self.session.commit()
+            return
         
         await self._summarize_file(file_obj)
 
@@ -77,20 +86,23 @@ class LlmSummaryService:
             await self.session.commit()
             return
         
-        # 상태 변경
-        if file_obj.status != FileStatus.SUMMARIZING:
-            await self.file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
-        
-        await self.file_repo.add_llm_log(
-            file_id,
-            log={"event": "summarizing_started", "previous_status": file_obj.status.value},
-            message="LLM summarization started",
-        )
-        await self.session.commit()
-        logger.info("LLM summarization started for file_id={} (provider={})", file_id, self.settings.llm_provider)
+        # 실제 LLM 처리 직전까지 SUMMARY_QUEUED 상태 유지
+        # 락 획득 및 서버 시작은 summarize_transcription 내부에서 처리됨
+        logger.info("Starting LLM summarization for file_id={} (provider={})", file_id, self.settings.llm_provider)
         
         start = time.perf_counter()
         try:
+            # 상태 변경: SUMMARY_QUEUED → SUMMARIZING (실제 LLM 호출 직전)
+            await self.file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
+            await self.file_repo.add_llm_log(
+                file_id,
+                log={"event": "summarizing_started", "previous_status": file_obj.status.value},
+                message="LLM summarization started (about to call LLM)",
+            )
+            await self.session.commit()
+            logger.info("Status changed to SUMMARIZING for file_id={}", file_id)
+            
+            # 이제 실제 LLM 호출 (락 획득 및 서버 시작 포함)
             title, summary_md = summarize_transcription(text_to_summarize)
             summary_md = sanitize_summary_output(summary_md, text_to_summarize)
         except Exception as exc:

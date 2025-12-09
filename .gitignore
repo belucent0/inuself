@@ -71,9 +71,7 @@ src/asr/models/*.bin
 !src/asr/models/.gitkeep
 
 # LLM models (large files, don't commit)
-models/*.gguf
-models/*.mmproj
-!models/.gitkeep
+models/*
 
 # ASR logs
 src/asr/logs/

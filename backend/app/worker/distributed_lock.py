@@ -15,7 +15,7 @@ class LockContextManager:
     def __init__(
         self,
         lock_key: str,
-        timeout: float = 3600.0,
+        timeout: float = 1800.0,
         blocking_timeout: float = 0.0,
     ):
         self.lock_key = lock_key
@@ -172,7 +172,9 @@ def acquire_lock(
         )
         
         # 락 획득 시도
-        acquired = lock.acquire(blocking=False)
+        # blocking_timeout이 0보다 크면 블로킹 모드 사용
+        is_blocking = blocking_timeout > 0
+        acquired = lock.acquire(blocking=is_blocking)
         
         if acquired:
             logger.info("락 획득 성공: {}", lock_key)

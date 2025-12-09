@@ -1,7 +1,10 @@
 """Task Queue 추상화 레이어 - Celery를 사용."""
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 from ..core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class TaskQueueAdapter(ABC):
@@ -81,14 +84,17 @@ class CeleryAdapter(TaskQueueAdapter):
     def enqueue_llm_job(self, file_id: int) -> str:
         # Lazy import: celery_tasks가 llm_processor를 import하므로 실행 시점에만 로드
         from .celery_tasks import process_llm_task
-        
-        # 큐를 명시적으로 지정하여 작업 전송
-        result = process_llm_task.apply_async(
-            args=(),
-            kwargs={"file_id": file_id},
-            queue="llm",  # 큐를 명시적으로 지정
-        )
-        return result.id
+        try:
+            result = process_llm_task.apply_async(
+                args=(),
+                kwargs={"file_id": file_id},
+                queue="llm",
+            )
+            logger.info("[TaskQueue] LLM job enqueued: file_id=%s, job_id=%s", file_id, result.id)
+            return result.id
+        except Exception as exc:
+            logger.error("[TaskQueue] Failed to enqueue LLM job: file_id=%s, error=%s", file_id, exc)
+            raise
     
     def enqueue_ocr_job(
         self,

@@ -48,35 +48,7 @@ async def lifespan(app: FastAPI):
         logger.info("[FastAPI] 개발 환경: run_dev.sh가 워커를 관리합니다.")
         logger.info("[FastAPI] 프로덕션 환경: start.bat을 사용하면 PM2 워커도 함께 시작됩니다.")
     
-    # 백그라운드 태스크: 주기적으로 SUMMARIZING 상태 콘텐츠 자동 재큐잉
-    async def auto_requeue_llm_jobs():
-        """주기적으로 SUMMARIZING 상태의 콘텐츠를 자동으로 재큐잉."""
-        from .worker.requeue import requeue_summarizing_contents
-        
-        while True:
-            try:
-                await asyncio.sleep(60)  # 60초마다 체크
-                requeued = await requeue_summarizing_contents()
-                if requeued > 0:
-                    logger.info("Auto-requeued %d LLM jobs", requeued)
-                    logger.info(f"[Auto-Requeue] {requeued}개의 LLM 작업을 자동으로 재큐잉했습니다.")
-            except Exception as exc:
-                logger.exception("Failed to auto-requeue LLM jobs")
-                logger.error(f"[Auto-Requeue] 자동 재큐잉 실패: {exc}")
-    
-    # 백그라운드 태스크 시작
-    auto_requeue_task = asyncio.create_task(auto_requeue_llm_jobs())
-    logger.info("[FastAPI] LLM 작업 자동 재큐잉 백그라운드 태스크 시작 (60초 간격)")
-    
     yield
-    
-    # 종료 시: 백그라운드 태스크 취소
-    auto_requeue_task.cancel()
-    try:
-        await auto_requeue_task
-    except asyncio.CancelledError:
-        pass
-    logger.info("[FastAPI] LLM 작업 자동 재큐잉 백그라운드 태스크 종료")
 
 
 def create_app() -> FastAPI:
@@ -122,21 +94,6 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["system"])
     async def healthcheck():
         return {"status": "ok"}
-
-    @app.post(f"{settings.api_prefix}/queue/requeue-llm", tags=["system"])
-    async def requeue_llm_jobs():
-        """SUMMARIZING 또는 SUMMARY_FAILED 상태의 콘텐츠를 LLM 큐에 재등록합니다."""
-        try:
-            from .worker.requeue import requeue_summarizing_contents
-            
-            requeued = await requeue_summarizing_contents()
-            return {
-                "message": f"{requeued} LLM jobs requeued.",
-                "requeued_count": requeued,
-            }
-        except Exception as e:
-            logger.exception("Failed to requeue LLM jobs")
-            return {"error": str(e)}
 
     return app
 

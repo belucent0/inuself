@@ -33,10 +33,11 @@ export type SttLog = {
   log: Record<string, unknown>
 }
 
-export type ContentStatus = 
+export type ContentStatus =
   | 'QUEUED' // 처리 대기중 (큐에 등록됨)
   | 'PROCESSING' // 처리중 (ASR/화자분리 진행 중)
   | 'OCR_PROCESSING' // OCR 처리 중
+  | 'SUMMARY_QUEUED' // LLM 요약 대기중 (큐에 등록됨)
   | 'SUMMARIZING' // LLM 요약 진행 중
   | 'COMPLETED' // 전체 파이프라인 완료
   | 'ASR_FAILED' // ASR/화자분리 단계 실패
@@ -198,7 +199,7 @@ export async function uploadContent(
   }
 
   const queryString = params.toString()
-  const url = queryString 
+  const url = queryString
     ? `${API_BASE}/contents/upload?${queryString}`
     : `${API_BASE}/contents/upload`
 
@@ -207,18 +208,18 @@ export async function uploadContent(
       method: 'POST',
       body: formData,
     })
-    
+
     console.log('Upload response status:', res.status)
-    
+
     if (!res.ok) {
       const errorText = await res.text()
       console.error('Upload failed:', res.status, errorText)
       throw new Error(`업로드 실패: ${res.status} ${errorText}`)
     }
-    
+
     const contentType = res.headers.get('content-type')
     console.log('Response content-type:', contentType)
-    
+
     let data
     try {
       data = await res.json()
@@ -228,7 +229,7 @@ export async function uploadContent(
       console.error('JSON parse error:', jsonError, 'Response text:', text)
       throw new Error(`응답 파싱 실패: ${text}`)
     }
-    
+
     return data
   } catch (error) {
     console.error('Upload error:', error)
@@ -240,7 +241,7 @@ export async function uploadContent(
 }
 
 export async function retryProcessing(
-  contentId: number, 
+  contentId: number,
   type: 'asr' | 'summary' | 'ocr',
   minSpeakers?: number,
   maxSpeakers?: number
@@ -252,7 +253,7 @@ export async function retryProcessing(
   if (maxSpeakers !== undefined) {
     params.append('max_speakers', maxSpeakers.toString())
   }
-  
+
   const res = await fetch(`${API_BASE}/contents/${contentId}/retry?${params.toString()}`, {
     method: 'POST',
   })
@@ -275,7 +276,7 @@ export async function reclusterSpeakers(
   if (similarityThreshold !== undefined) {
     body.similarity_threshold = similarityThreshold
   }
-  
+
   const res = await fetch(`${API_BASE}/contents/${contentId}/recluster-speakers`, {
     method: 'POST',
     headers: {
@@ -283,12 +284,12 @@ export async function reclusterSpeakers(
     },
     body: JSON.stringify(body),
   })
-  
+
   if (!res.ok) {
     const errorText = await res.text()
     throw new Error(`재클러스터링 실패: ${res.status} ${errorText}`)
   }
-  
+
   return res.json()
 }
 

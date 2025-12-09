@@ -52,6 +52,7 @@ def check_locks():
             "lock:asr:global",
             "lock:llm:global",
             "lock:ocr:global",
+            "lock:llm_server:global",  # LLM API 서버 실행 락
         ]
         
         # 개별 락도 확인 (최대 20개)
@@ -147,6 +148,7 @@ def release_all_global_locks():
         "lock:asr:global",
         "lock:llm:global",
         "lock:ocr:global",
+        "lock:llm_server:global",
     ]
     
     print("=" * 60)

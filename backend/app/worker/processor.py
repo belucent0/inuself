@@ -421,7 +421,7 @@ async def _process_job(
             duration_seconds=result.duration_seconds,
             transcription=result.transcription,
         )
-        await file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
+        await file_repo.update_file_status(file_id, FileStatus.SUMMARY_QUEUED)
         await file_repo.add_log(
             file_id=file_id,
             log={

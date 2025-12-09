@@ -458,6 +458,20 @@ export default function ContentDetail({ content }: Props) {
           <CardTitle>LLM 요약</CardTitle>
         </CardHeader>
         <CardContent>
+          {content.status === 'SUMMARY_QUEUED' && (
+            <div className="space-y-4">
+              <p className="text-muted-foreground">요약 작업이 큐에 등록되었습니다. 잠시만 기다려 주세요.</p>
+              <p className="text-xs text-muted-foreground">작업이 오래 걸린다면 아래 버튼을 눌러 재시도할 수 있습니다.</p>
+              <Button
+                type="button"
+                onClick={() => handleRetry('summary')}
+                variant="outline"
+                className="w-full"
+              >
+                요약 재처리 (수동)
+              </Button>
+            </div>
+          )}
           {content.status === 'SUMMARIZING' && (
             <p className="text-muted-foreground">LLM이 요약을 생성하는 중입니다. 잠시만 기다려 주세요.</p>
           )}
@@ -477,6 +491,7 @@ export default function ContentDetail({ content }: Props) {
           {content.summary_md ? (
             <MarkdownContent content={content.summary_md} />
           ) : (
+            content.status !== 'SUMMARY_QUEUED' &&
             content.status !== 'SUMMARIZING' &&
             content.status !== 'SUMMARY_FAILED' && (
               <p className="text-muted-foreground">요약이 아직 준비되지 않았습니다.</p>
