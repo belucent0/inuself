@@ -218,7 +218,8 @@ class ContentService:
         content_id: int, 
         retry_type: str,
         min_speakers: int | None = None,
-        max_speakers: int | None = None
+        max_speakers: int | None = None,
+        ocr_mode: str = "document",
     ) -> dict:
         """
         실패한 콘텐츠를 재처리합니다.
@@ -227,7 +228,10 @@ class ContentService:
             content_id: 콘텐츠 ID (또는 File ID)
             retry_type: "asr", "summary", 또는 "ocr"
             min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
+            retry_type: "asr", "summary", 또는 "ocr"
+            min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
             max_speakers: 최대 화자 수 (선택사항, ASR 재처리 시에만 사용)
+            ocr_mode: OCR 처리 모드 ("document", "portray")
         
         Returns:
             {"success": True, "message": "...", "job_id": "..."}
@@ -245,18 +249,30 @@ class ContentService:
             # File 기반 처리
             if retry_type == "ocr":
                 # OCR 재처리
-                if file_obj.content_type != ContentType.DOCUMENT:
-                    raise ValueError(f"Cannot retry OCR for non-document file (content_type: {file_obj.content_type.value})")
+                # 허용되는 content_type: DOCUMENT, PORTRAY
+                if file_obj.content_type not in [ContentType.DOCUMENT, ContentType.PORTRAY]:
+                    raise ValueError(f"Cannot retry OCR for non-document/non-portray file (content_type: {file_obj.content_type.value})")
                 
-                if file_obj.status not in [FileStatus.OCR_FAILED, FileStatus.OCR_PROCESSING, FileStatus.QUEUED]:
-                    raise ValueError(f"Cannot retry OCR for file with status: {file_obj.status.value}")
+                if file_obj.status not in [FileStatus.OCR_FAILED, FileStatus.OCR_PROCESSING, FileStatus.QUEUED, FileStatus.COMPLETED]:
+                     # COMPLETED 상태에서도 재처리 가능하게 허용 (모드 변경 등)
+                    pass
                 
+                # OCR 모드에 따라 ContentType 업데이트
+                new_content_type = ContentType.DOCUMENT
+                if ocr_mode == "portray":
+                    new_content_type = ContentType.PORTRAY
+                
+                # ContentType이 변경되면 업데이트
+                if file_obj.content_type != new_content_type:
+                    file_obj.content_type = new_content_type
+                    logger.info("Content type updated to %s for file_id=%s", new_content_type, content_id)
+
                 # 상태를 QUEUED로 변경
                 await file_repo.update_file_status(content_id, FileStatus.QUEUED)
                 await file_repo.add_log(
                     file_id=content_id,
-                    log={"event": "manual_retry", "type": "ocr"},
-                    message="Manual OCR retry requested by user",
+                    log={"event": "manual_retry", "type": "ocr", "ocr_mode": ocr_mode},
+                    message=f"Manual OCR retry requested by user (mode: {ocr_mode})",
                 )
                 await self.session.commit()
                 
@@ -271,6 +287,7 @@ class ContentService:
                     file_id=content_id,
                     storage_key=file_obj.object_key,
                     original_filename=file_obj.filename,
+                    ocr_mode=ocr_mode,
                 )
                 job_id = await loop.run_in_executor(None, enqueue_func)
                 

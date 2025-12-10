@@ -23,16 +23,7 @@ except ImportError:
     PYMUPDF_AVAILABLE = False
     logger.warning("PyMuPDF not available. PDF processing will be limited.")
 
-# Docling - 문서 구조 파싱 및 HTML 추출
-try:
-    from docling.document_converter import DocumentConverter
-    DOCLING_AVAILABLE = True
-except ImportError:
-    DOCLING_AVAILABLE = False
-    logger.warning("Docling not available. Complex document layout processing will be limited.")
-
-
-OcrMode = Literal["basic", "docling", "portray"]
+OcrMode = Literal["document", "portray"]
 
 
 class OcrService:
@@ -552,207 +543,28 @@ class OcrService:
                     logger.error(f"Error calling LLM API: {e}")
                     raise
 
-    def process_document(self, file_path: Path, ocr_mode: OcrMode = "basic") -> dict[str, Any]:
+    def process_document(self, file_path: Path, ocr_mode: OcrMode = "document") -> dict[str, Any]:
         """
         문서 파일을 OCR 처리.
         
         Args:
             file_path: 처리할 파일 경로
-            ocr_mode: OCR 처리 모드 ("basic" 또는 "docling")
+            ocr_mode: OCR 처리 모드 ("document" 또는 "portray")
         
         Returns:
             {
                 "ocr_text": str,  # 추출된 텍스트 (LLM 요약용)
                 "page_count": int,  # 페이지 수
                 "ocr_metadata": dict,  # 메타데이터
-                "html_content": str | None,  # HTML 콘텐츠 (뷰어용, docling 모드만)
+                "html_content": str | None,  # HTML 콘텐츠 (뷰어용) - document 모드는 None (Qwen3-VL raw output)
             }
         """
         logger.info(f"Processing document: {file_path} with mode: {ocr_mode}")
         
-        # Docling 모드인 경우
-        if ocr_mode == "docling":
-            if not DOCLING_AVAILABLE:
-                logger.warning("Docling not available, falling back to basic mode")
-                return self._process_with_qwen3vl(file_path, ocr_mode="basic")
-            
-            return self._process_with_docling(file_path)
-        
-        # 기본 모드 (Qwen3-VL) 또는 Portray 모드
+        # 기본 모드 (Qwen3-VL Document Analysis) 또는 Portray 모드
         return self._process_with_qwen3vl(file_path, ocr_mode=ocr_mode)
     
-    def _process_with_docling(self, file_path: Path) -> dict[str, Any]:
-        """
-        Docling을 사용한 문서 처리 (Two-Track Strategy).
-        
-        Returns:
-            {
-                "ocr_text": str,  # JSON 기반 텍스트 (LLM 요약용)
-                "page_count": int,
-                "ocr_metadata": dict,
-                "html_content": str,  # HTML (뷰어용)
-            }
-        """
-        logger.info(f"Processing document with Docling: {file_path}")
-        
-        # RapidOCR 등 필수 의존성 체크
-        try:
-            import rapidocr_onnxruntime
-        except ImportError:
-            logger.warning("RapidOCR not installed. Docling quality might be poor. Fallback to Qwen3-VL (Basic Mode).")
-            return self._process_with_qwen3vl(file_path, ocr_mode="basic")
-
-        try:
-            # Docling DocumentConverter 초기화
-            converter = DocumentConverter()
-            
-            # 문서 변환
-            result = converter.convert(str(file_path))
-            
-            # HTML 추출 (뷰어용)
-            html_content = result.document.export_to_html()
-            logger.info(f"HTML content extracted: {len(html_content)} characters")
-            
-            # JSON/텍스트 추출 (LLM 요약용)
-            # doc_dict를 먼저 추출 (페이지 수 계산 및 메타데이터에 필요)
-            doc_dict = result.document.export_to_dict()
-            
-            # Docling의 export_to_markdown 사용 (가능한 경우)
-            try:
-                ocr_text = result.document.export_to_markdown()
-                logger.info(f"Markdown content extracted: {len(ocr_text)} characters")
-            except Exception as e:
-                logger.warning(f"Failed to export to markdown: {e}, falling back to manual dict extraction")
-                ocr_text = self._extract_text_from_docling_dict(doc_dict)
-            
-            # 텍스트가 너무 적으면(예: 100자 이하) OCR 실패로 간주하고 Fallback
-            if len(ocr_text.strip()) < 100:
-                 logger.warning(f"Docling extracted insufficient text ({len(ocr_text)} chars). Fallback to Qwen3-VL.")
-                 return self._process_with_qwen3vl(file_path, ocr_mode="basic")
-
-            # 페이지 수 계산
-            page_count = len(doc_dict.get("pages", [])) if "pages" in doc_dict else 1
-            
-            # 메타데이터 구성
-            ocr_metadata = {
-                "file_path": str(file_path),
-                "file_type": file_path.suffix.lower(),
-                "page_count": page_count,
-                "processing_mode": "docling",
-                "html_generated": True,
-                "docling_metadata": {
-                    "num_tables": len(doc_dict.get("tables", [])) if "tables" in doc_dict else 0,
-                    "num_figures": len(doc_dict.get("figures", [])) if "figures" in doc_dict else 0,
-                }
-            }
-            
-            logger.info(f"Docling processing completed: {len(ocr_text)} chars text, {len(html_content)} chars HTML")
-            
-            return {
-                "ocr_text": ocr_text,
-                "page_count": page_count,
-                "ocr_metadata": ocr_metadata,
-                "html_content": html_content,
-            }
-        
-        except Exception as e:
-            logger.error(f"Docling processing failed: {e}, falling back to Qwen3-VL")
-            # Docling 실패 시 Qwen3-VL로 fallback
-            return self._process_with_qwen3vl(file_path, ocr_mode="basic")
-    
-    def _extract_text_from_docling_dict(self, doc_dict: dict) -> str:
-        """
-        Docling JSON에서 텍스트 추출 (LLM 요약용).
-        
-        표, 목록, 단락 등의 구조를 유지하면서 텍스트만 추출합니다.
-        """
-        texts = []
-        
-        # body.children에서 참조를 따라가며 텍스트 추출
-        body = doc_dict.get("body", {})
-        children = body.get("children", [])
-        
-        # texts 배열에서 텍스트 추출
-        texts_dict = {item.get("self_ref", ""): item for item in doc_dict.get("texts", [])}
-        tables_dict = {item.get("self_ref", ""): item for item in doc_dict.get("tables", [])}
-        
-        # body.children의 순서대로 처리
-        for child_ref in children:
-            ref_path = child_ref.get("$ref", "")
-            
-            # 텍스트 참조인 경우
-            if ref_path in texts_dict:
-                text_item = texts_dict[ref_path]
-                text_content = text_item.get("text", "")
-                label = text_item.get("label", "")
-                
-                if text_content:
-                    # label에 따라 포맷팅
-                    if label == "section_header":
-                        level = text_item.get("level", 1)
-                        header_tag = "#" * (level + 1)  # level 1 -> ##, level 2 -> ###
-                        texts.append(f"\n{header_tag} {text_content}\n")
-                    elif label == "page_footer" or label == "page_header":
-                        # 페이지 헤더/푸터는 제외
-                        continue
-                    else:
-                        texts.append(f"{text_content}\n")
-            
-            # 테이블 참조인 경우
-            elif ref_path in tables_dict:
-                table = tables_dict[ref_path]
-                texts.append(f"\n\n## 표\n")
-                
-                # 테이블 데이터 추출
-                table_data = table.get("data", {})
-                table_cells = table_data.get("table_cells", [])
-                
-                if table_cells:
-                    # 행과 열로 그룹화
-                    rows_dict = {}
-                    max_col = 0
-                    for cell in table_cells:
-                        row_idx = cell.get("start_row_offset_idx", 0)
-                        col_idx = cell.get("start_col_offset_idx", 0)
-                        col_span = cell.get("col_span", 1)
-                        cell_text = cell.get("text", "").strip()
-                        
-                        if row_idx not in rows_dict:
-                            rows_dict[row_idx] = {}
-                        
-                        # colspan 처리
-                        for c in range(col_idx, col_idx + col_span):
-                            rows_dict[row_idx][c] = cell_text
-                            max_col = max(max_col, c)
-                    
-                    # 행 순서대로 정렬하여 텍스트로 변환
-                    for row_idx in sorted(rows_dict.keys()):
-                        row_cells = rows_dict[row_idx]
-                        row_text = " | ".join([row_cells.get(col_idx, "") for col_idx in range(max_col + 1)])
-                        texts.append(f"{row_text}\n")
-        
-        # body.children이 없으면 texts 배열 전체를 순서대로 처리
-        if not children and "texts" in doc_dict:
-            for text_item in doc_dict["texts"]:
-                text_content = text_item.get("text", "")
-                label = text_item.get("label", "")
-                
-                if text_content:
-                    if label == "section_header":
-                        level = text_item.get("level", 1)
-                        header_tag = "#" * (level + 1)
-                        texts.append(f"\n{header_tag} {text_content}\n")
-                    elif label not in ("page_footer", "page_header"):
-                        texts.append(f"{text_content}\n")
-        
-        # 텍스트가 없으면 원본 딕셔너리를 JSON 문자열로 변환 (fallback)
-        if not texts:
-            logger.warning("No text extracted from Docling dict, returning empty string")
-            return ""
-        
-        return "".join(texts)
-    
-    def _process_with_qwen3vl(self, file_path: Path, ocr_mode: OcrMode = "basic") -> dict[str, Any]:
+    def _process_with_qwen3vl(self, file_path: Path, ocr_mode: OcrMode = "document") -> dict[str, Any]:
         """
         Qwen3-VL을 사용한 기존 OCR 처리 방식.
         

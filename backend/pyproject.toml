@@ -8,7 +8,7 @@ readme = "README.md"
 # Docker에서는 --no-root 플래그 사용, 로컬에서는 poetry install --no-root 사용
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = ">=3.12,<3.14"
 
 # ========================================
 # API 서버 공통 의존성 (가벼운 것들)
@@ -37,7 +37,7 @@ PyMuPDF = "^1.23.0"  # PDF를 이미지로 변환 (OCR용, 크로스 플랫폼, 
 # 오디오 처리 공통 의존성 (API/워커 공통)
 # ========================================
 librosa = "^0.10.0"
-soundfile = ">=0.12.0"  # pyannote.audio 4.x requires >=0.13.1
+soundfile = ">=0.13.1"  # pyannote.audio 4.x requires >=0.13.1
 
 # ========================================
 # 워커별 선택적 의존성 (무거운 것들)

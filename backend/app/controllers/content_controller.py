@@ -49,7 +49,7 @@ async def upload_content(
     file: UploadFile,
     min_speakers: int | None = Query(None, ge=1, description="최소 화자 수 (선택사항)"),
     max_speakers: int | None = Query(None, ge=1, description="최대 화자 수 (선택사항)"),
-    ocr_mode: str = Query("basic", description="OCR 처리 모드 ('basic' 또는 'docling')"),
+    ocr_mode: str = Query("document", description="OCR 처리 모드 ('document' 또는 'portray')"),
     file_service: FileService = Depends(get_file_service)
 ):
     """파일 업로드 (오디오 및 문서 지원)."""
@@ -122,6 +122,7 @@ async def retry_processing(
     type: str = Query(..., description="재처리 타입: 'asr' (ASR 재처리) 또는 'summary' (LLM 요약 재처리)"),
     min_speakers: int | None = Query(None, ge=1, description="최소 화자 수 (ASR 재처리 시에만 사용)"),
     max_speakers: int | None = Query(None, ge=1, description="최대 화자 수 (ASR 재처리 시에만 사용)"),
+    ocr_mode: str = Query("document", description="OCR 처리 모드 ('document' 또는 'portray')"),
     service: ContentService = Depends(get_service)
 ):
     """
@@ -131,9 +132,16 @@ async def retry_processing(
         type: "asr" (ASR 재처리), "summary" (LLM 요약 재처리), 또는 "ocr" (OCR 재처리)
         min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
         max_speakers: 최대 화자 수 (선택사항, ASR 재처리 시에만 사용)
+        ocr_mode: OCR 처리 모드 (선택사항, OCR 재처리 시에만 사용: "document", "portray")
     """
     try:
-        result = await service.retry_processing(content_id, type, min_speakers=min_speakers, max_speakers=max_speakers)
+        result = await service.retry_processing(
+            content_id, 
+            type, 
+            min_speakers=min_speakers, 
+            max_speakers=max_speakers,
+            ocr_mode=ocr_mode
+        )
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

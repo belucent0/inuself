@@ -109,7 +109,7 @@ class FileService:
         file: UploadFile,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
-        ocr_mode: str = "basic",
+        ocr_mode: str = "document",
     ) -> dict[str, int]:
         """파일 업로드 및 처리 큐에 등록."""
         logger.info("[Upload] 파일 업로드 시작: filename=%s", file.filename)
@@ -279,7 +279,7 @@ class FileService:
             except Exception as exc:
                 logger.warning("Failed to delete file from storage: %s, error: %s", object_key, exc)
 
-    def _determine_content_type(self, filename: str | None, content_type: str | None, ocr_mode: str = "basic") -> ContentType:
+    def _determine_content_type(self, filename: str | None, content_type: str | None, ocr_mode: str = "document") -> ContentType:
         """파일명과 content_type으로 파일 타입 결정."""
         if not filename:
             return ContentType.DOCUMENT  # 기본값

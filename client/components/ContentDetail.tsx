@@ -10,6 +10,8 @@ import { formatToKST } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -89,6 +91,9 @@ export default function ContentDetail({ content }: Props) {
   const [currentSegmentId, setCurrentSegmentId] = useState<number | null>(null)
   const [autoScroll, setAutoScroll] = useState<boolean>(false)
   const [showScrollTop, setShowScrollTop] = useState<boolean>(false)
+  const [showOcrRetryModal, setShowOcrRetryModal] = useState(false)
+  const [ocrRetryMode, setOcrRetryMode] = useState<'portray' | 'document' | null>(null)
+
   const previousSegmentIdRef = useRef<number | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -97,7 +102,15 @@ export default function ContentDetail({ content }: Props) {
 
   const handleRetry = async (type: 'asr' | 'summary' | 'ocr') => {
     const isDocument = isDocumentFile(content.filename)
-    const typeLabel = type === 'ocr' ? 'OCR 처리' : type === 'asr' ? (isDocument ? 'OCR 처리' : 'ASR 처리') : 'LLM 요약'
+
+    // OCR 재처리인 경우 모달 표시
+    if (type === 'ocr') {
+      setOcrRetryMode(null) // 초기화
+      setShowOcrRetryModal(true)
+      return
+    }
+
+    const typeLabel = type === 'asr' ? (isDocument ? 'OCR 처리' : 'ASR 처리') : 'LLM 요약'
     if (!confirm(`${typeLabel}를 다시 시도하시겠습니까?`)) {
       return
     }
@@ -235,6 +248,21 @@ export default function ContentDetail({ content }: Props) {
     } catch (error) {
       console.error('다운로드 오류:', error)
       alert('파일 다운로드에 실패했습니다.')
+    }
+  }
+
+  const handleOcrRetryConfirm = async () => {
+    if (!ocrRetryMode) return
+
+    try {
+      // 기존 handleRetry 로직과 유사하지만 ocrMode를 추가로 전달
+      const result = await retryProcessing(content.id, 'ocr', undefined, undefined, ocrRetryMode)
+      setMessage(result.message)
+      router.refresh()
+      setTimeout(() => setMessage(''), 3000)
+      setShowOcrRetryModal(false)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '재처리 실패')
     }
   }
 
@@ -798,6 +826,75 @@ export default function ContentDetail({ content }: Props) {
           <ArrowUp className="h-5 w-5" />
         </Button>
       )}
+
+      {/* OCR 재처리 모달 */}
+      <Dialog open={showOcrRetryModal} onOpenChange={setShowOcrRetryModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>OCR 재처리 옵션</DialogTitle>
+            <DialogDescription>
+              *문서의 특성에 맞는 처리 방식을 선택하세요.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-4">
+            <RadioGroup
+              value={ocrRetryMode || ''}
+              onValueChange={(value) => setOcrRetryMode(value as 'portray' | 'document')}
+            >
+              <div className="space-y-3">
+                <Label
+                  htmlFor="retry-portray"
+                  className={`flex flex-col space-y-1 rounded-md border border-input bg-background p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary ${isOfficeFile(content.filename) || isPdfFile(content.filename) ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                >
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem
+                      value="portray"
+                      id="retry-portray"
+                      disabled={isOfficeFile(content.filename) || isPdfFile(content.filename)}
+                    />
+                    <span className="text-sm font-semibold">이미지 묘사</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground ml-6">
+                    전문적인 시각으로 이미지의 대상, 인물, 상황을 분석하고 상세하게 묘사합니다. (이미지 파일 전용)
+                  </p>
+                </Label>
+                <Label
+                  htmlFor="retry-document"
+                  className="flex flex-col space-y-1 rounded-md border border-input bg-background p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
+                >
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="document" id="retry-document" />
+                    <span className="text-sm font-semibold">문서 분석</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground ml-6">
+                    Qwen3-VL 모델을 사용하여 문서의 텍스트와 구조를 심층적으로 분석합니다.
+                    (일반 문서, 표가 포함된 문서에 권장)
+                  </p>
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowOcrRetryModal(false)}
+            >
+              취소
+            </Button>
+            <Button
+              type="button"
+              onClick={handleOcrRetryConfirm}
+              disabled={!ocrRetryMode}
+            >
+              재처리 시작
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

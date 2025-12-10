@@ -244,7 +244,8 @@ export async function retryProcessing(
   contentId: number,
   type: 'asr' | 'summary' | 'ocr',
   minSpeakers?: number,
-  maxSpeakers?: number
+  maxSpeakers?: number,
+  ocrMode?: string
 ): Promise<{ success: boolean; message: string; job_id?: string }> {
   const params = new URLSearchParams({ type })
   if (minSpeakers !== undefined) {
@@ -252,6 +253,9 @@ export async function retryProcessing(
   }
   if (maxSpeakers !== undefined) {
     params.append('max_speakers', maxSpeakers.toString())
+  }
+  if (ocrMode !== undefined) {
+    params.append('ocr_mode', ocrMode)
   }
 
   const res = await fetch(`${API_BASE}/contents/${contentId}/retry?${params.toString()}`, {

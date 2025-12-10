@@ -11,7 +11,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 type SpeakerRange = '1-2' | '3-6' | '7-10' | '11+' | null
-type OcrMode = 'portray' | 'docling' | null
+type OcrMode = 'portray' | 'document' | null
 
 export default function UploadForm() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -310,16 +310,16 @@ export default function UploadForm() {
                   </p>
                 </Label>
                 <Label
-                  htmlFor="docling"
+                  htmlFor="document"
                   className="flex flex-col space-y-1 rounded-md border border-input bg-background p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
                 >
                   <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="docling" id="docling" />
-                    <span className="text-sm font-semibold">문서 레이아웃 인식</span>
+                    <RadioGroupItem value="document" id="document" />
+                    <span className="text-sm font-semibold">문서 분석</span>
                   </div>
                   <p className="text-xs text-muted-foreground ml-6">
-                    Docling을 통한 HTML 내보내기 처리 → Qwen3-VL로 추세 분석
-                    (복잡한 문서, 표가 포함된 문서에 권장)
+                    Qwen3-VL 모델을 사용하여 문서의 텍스트와 구조를 심층적으로 분석합니다.
+                    (일반 문서, 표가 포함된 문서에 권장)
                   </p>
                 </Label>
               </div>
