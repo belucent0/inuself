@@ -37,15 +37,14 @@ PyMuPDF = "^1.23.0"  # PDF를 이미지로 변환 (OCR용, 크로스 플랫폼, 
 # 오디오 처리 공통 의존성 (API/워커 공통)
 # ========================================
 librosa = "^0.10.0"
-soundfile = "^0.12.0"
+soundfile = ">=0.12.0"  # pyannote.audio 4.x requires >=0.13.1
 
 # ========================================
 # 워커별 선택적 의존성 (무거운 것들)
 # optional = true로 설정하여 선택적 설치
 # ========================================
-torch = {version = "*", optional = true}  # ASR 워커용 (화자 분리)
-"pyannote.audio" = {version = "^3.1.0", optional = true}  # ASR 워커용 (화자 분리)
-docling = {version = "^2.0.0", optional = true}  # OCR 워커용 (복잡한 문서 레이아웃)
+torch = {version = "*", optional = true}  # ASR 워커용 (기존 설치된 ROCm 버전 사용)
+"pyannote.audio" = {version = "4.0.3", optional = true}  # ASR 워커용 (community-1 모델 필수)
 
 [tool.poetry.extras]
 # 워커별 extras 그룹
@@ -54,10 +53,8 @@ asr_worker = ["torch", "pyannote.audio"]
 # LLM 워커: poetry install --extras llm_worker
 # llama-server를 서브프로세스로 관리하므로 추가 패키지 불필요
 llm_worker = []
-# OCR 워커: poetry install --extras ocr_worker
-ocr_worker = ["docling"]
-# 전체 워커 (하위 호환성): poetry install --extras gpu_worker
-gpu_worker = ["torch", "pyannote.audio", "docling"]
+# 전체 워커 (하위 호환성): poetry install --extras gpu_worker  
+gpu_worker = ["torch", "pyannote.audio"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

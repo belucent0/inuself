@@ -183,75 +183,13 @@ def _run_case4_parallel_full_asr(
     case_start = time.time()
     
     # ASR 락과 화자분리 락을 각각 획득한 후 병렬 실행
-    print(f"\n[Step 1] Acquiring locks for ASR and Diarization...")
+    # ASR 락과 화자분리 락을 각각 획득했으므로 여기서는 락 획득 로직을 제거함
+    print(f"\n[Step 1] Running internal pipeline without extra locks (assumed acquired by caller)...")
     
-    # 오디오 길이 기반 TTL 계산 (오디오 길이의 0.5배, 최소 300초, 최대 7200초)
-    # 워커 강제 종료 시에도 TTL이 지나면 자동으로 락이 해제됨
-    lock_ttl = max(300.0, min(audio_duration * 0.5, 7200.0))
-    print(f"[Lock] Audio duration: {audio_duration:.2f}s, Lock TTL: {lock_ttl:.2f}s")
-    
-    # 락 회복 로직: file_id가 제공되고, 워커가 실제로 실행 중이 아니면 락을 무시하고 진행
-    should_skip_lock = False
-    if file_id is not None:
-        try:
-            # distributed_lock을 import하기 위해 경로 추가
-            _backend_dir = Path(__file__).parent.parent
-            if str(_backend_dir) not in sys.path:
-                sys.path.insert(0, str(_backend_dir))
-            from app.worker.celery_queue import is_celery_task_in_queue
-            
-            # 해당 file_id의 ASR 작업이 실제로 실행 중인지 확인
-            is_running = is_celery_task_in_queue(file_id=file_id, task_name="process_asr_task")
-            
-            if not is_running:
-                # 워커가 실행 중이 아니면 락을 무시하고 진행 (락 회복)
-                print(f"[Lock Recovery] File ID {file_id} is not running in worker, skipping lock check")
-                should_skip_lock = True
-            else:
-                print(f"[Lock] File ID {file_id} is running in worker, acquiring lock...")
-        except Exception as e:
-            # 확인 실패 시 락을 사용 (안전한 기본값)
-            print(f"[Lock] Failed to check worker status: {e}, using lock")
-    
-    # 락 키 결정: file_id가 있으면 file_id 기반, 없으면 전역 락
-    asr_lock_key = f"lock:asr:{file_id}" if file_id is not None else "lock:asr:global"
-    diarization_lock_key = f"lock:diarization:{file_id}" if file_id is not None else "lock:diarization:global"
-    
-    # ASR 락과 화자분리 락을 각각 획득 (중첩 컨텍스트 매니저 사용)
-    # 락 획득 실패 시 예외를 발생시키지 않고, 컨텍스트 매니저가 정상적으로 종료되도록 함
-    if should_skip_lock:
-        # 락 회복: 더미 컨텍스트 매니저 사용
-        from contextlib import nullcontext
-        asr_lock_ctx = nullcontext(True)
-        diarization_lock_ctx = nullcontext(True)
-        asr_acquired = True
-        diarization_acquired = True
-    else:
-        asr_lock_ctx = acquire_lock(asr_lock_key, timeout=lock_ttl, blocking_timeout=0.0)
-        asr_acquired = asr_lock_ctx.__enter__()
-        
-        if not asr_acquired:
-            # 락 획득 실패 시 컨텍스트 매니저를 정상적으로 종료하고 예외 발생
-            try:
-                asr_lock_ctx.__exit__(None, None, None)
-            except Exception:
-                pass
-            raise RuntimeError("Failed to acquire ASR lock. Another ASR task is running.")
-        
-        diarization_lock_ctx = acquire_lock(diarization_lock_key, timeout=lock_ttl, blocking_timeout=0.0)
-        diarization_acquired = diarization_lock_ctx.__enter__()
-        
-        if not diarization_acquired:
-            # 락 획득 실패 시 컨텍스트 매니저를 정상적으로 종료하고 예외 발생
-            try:
-                diarization_lock_ctx.__exit__(None, None, None)
-            except Exception:
-                pass
-            try:
-                asr_lock_ctx.__exit__(None, None, None)
-            except Exception:
-                pass
-            raise RuntimeError("Failed to acquire diarization lock. Another diarization task is running.")
+    # 락 변수 더미 초기화 (finally 블록 호환성 유지)
+    from contextlib import nullcontext
+    asr_lock_ctx = nullcontext()
+    diarization_lock_ctx = nullcontext()
     
     try:
         print(f"[Step 2] Starting Diarization and ASR simultaneously (with locks)...")

@@ -23,6 +23,27 @@ except ImportError:
         sys.path.insert(0, str(_app_dir))
     from core.logging import logger
 
+
+# HuggingFace Hub validation 패치 (로컬 경로 허용) - community-1 모델 로딩에 필수
+try:
+    import huggingface_hub.utils._validators
+    import os
+    
+    if not hasattr(huggingface_hub.utils._validators, '_original_validate_repo_id'):
+        huggingface_hub.utils._validators._original_validate_repo_id = huggingface_hub.utils._validators.validate_repo_id
+    
+    def _patched_validate_repo_id(repo_id: str) -> None:
+        """로컬 경로인 경우 검증을 건너뛰는 패치된 validate_repo_id"""
+        # 로컬 파일 시스템 경로로 보이면 검증 스킵 (Windows/Unix 경로 모두 처리)
+        if os.path.exists(str(repo_id)) or '\\' in str(repo_id) or ':' in str(repo_id) or str(repo_id).startswith('/'):
+            return
+        # Hub ID인 경우에만 원래 검증 실행
+        return huggingface_hub.utils._validators._original_validate_repo_id(repo_id)
+    
+    huggingface_hub.utils._validators.validate_repo_id = _patched_validate_repo_id
+except (ImportError, AttributeError) as e:
+    print(f"[Warning] Failed to patch validate_repo_id: {e}")
+
 # HuggingFace Hub 호환성 패치: use_auth_token -> token
 # pyannote.audio가 사용하는 오래된 API를 최신 API로 변환
 try:
@@ -51,6 +72,28 @@ except (ImportError, AttributeError):
     # huggingface_hub가 없거나 이미 다른 방식으로 import된 경우 무시
     pass
 
+# pyannote.audio 3.1 호환성 패치 제거 (4.0.3 community-1은 최신 파이프라인 사용)
+# SpeakerDiarization 클래스 직접 패치 불필요 -> 필요함! Community-1 config에 plda가 남아있어서 제거해야 함.
+try:
+    from pyannote.audio.pipelines import SpeakerDiarization
+    import functools
+    
+    if not hasattr(SpeakerDiarization, '_original_init'):
+        SpeakerDiarization._original_init = SpeakerDiarization.__init__
+    
+    @functools.wraps(SpeakerDiarization._original_init)
+    def _patched_sd_init(self, *args, **kwargs):
+        # plda 파라미터는 최신 버전에서 제거되었으므로 무시
+        if "plda" in kwargs:
+            print(f"[Patch] Ignoring 'plda' argument for SpeakerDiarization: {kwargs.get('plda')}")
+            kwargs.pop("plda")
+            
+        SpeakerDiarization._original_init(self, *args, **kwargs)
+    
+    SpeakerDiarization.__init__ = _patched_sd_init
+    print("[Patch] Applied SpeakerDiarization.__init__ patch for plda compatibility")
+except (ImportError, AttributeError) as e:
+    print(f"[Warning] Failed to patch SpeakerDiarization: {e}")
 
 def run_diarization(
     waveform: Any,
@@ -105,10 +148,78 @@ def run_diarization(
     else:
         logger.info("[Diarization] Starting speaker diarization...")
     
-    logger.info("[Diarization] Loading speaker diarization model...")
+    # 3.1 모델 지원 제거, 오직 community-1만 사용
+    hf_model_id = "pyannote/speaker-diarization-community-1"
     
-    diarization_load_start = time.time()
-    diarization_pipeline = DiarizationPipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+    logger.info(f"[Diarization] Loading speaker diarization model: {hf_model_id}")
+    
+    # community-1 모델 로딩 로직 (수동 패치 필수: Pipeline.from_pretrained가 $model 치환을 못함)
+    # community-1 모델 로딩 로직 (수동 패치 필수: Pipeline.from_pretrained가 $model 치환을 못함)
+    try:
+        import yaml
+        from huggingface_hub import snapshot_download
+        from pyannote.audio import Model
+        
+        logger.info("[Diarization] Manually loading and patching community-1 model...")
+        
+        # 모델 다운로드
+        model_path = snapshot_download(repo_id=hf_model_id)
+        config_path = Path(model_path) / "config.yaml"
+        
+        # Config 로드
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        
+        pipeline_params = config["pipeline"]["params"]
+        logger.info(f"[Diarization] Initial params keys: {list(pipeline_params.keys())}")
+
+        # plda 제거 및 segmentation/embedding 명시적 로딩
+        for key in list(pipeline_params.keys()):
+            value = pipeline_params[key]
+            
+            if key == "segmentation":
+                logger.info("[Diarization] Explicitly loading segmentation model: pyannote/segmentation-3.0")
+                # 커뮤니티 추천 버전에 맞춰 명시적 로드
+                pipeline_params[key] = Model.from_pretrained("pyannote/segmentation-3.0")
+                
+            elif key == "embedding":
+                logger.info("[Diarization] Explicitly loading embedding model: pyannote/wespeaker-voxceleb-resnet34-LM")
+                # 커뮤니티 추천 버전에 맞춰 명시적 로드
+                pipeline_params[key] = Model.from_pretrained("pyannote/wespeaker-voxceleb-resnet34-LM")
+                
+            elif key == "plda":
+                logger.info(f"[Diarization] Removing deprecated 'plda' key")
+                del pipeline_params[key]
+                
+            elif isinstance(value, str) and "$model" in value:
+                # 절대 경로로 변환 (Windows 역슬래시 문제 주의)
+                replaced_path = value.replace("$model", str(model_path))
+                pipeline_params[key] = replaced_path
+        
+        # Pipeline 인스턴스화
+        diarization_load_start = time.time()
+        
+        from pyannote.audio.pipelines import SpeakerDiarization
+        logger.info(f"[Diarization] Instantiating SpeakerDiarization with keys: {list(pipeline_params.keys())}")
+        
+        # 로컬 경로 검증 패치가 적용된 상태에서 실행됨
+        diarization_pipeline = SpeakerDiarization(**pipeline_params)
+        
+        # 가중치 로드 (pytorch_model.bin)
+        weights_path = Path(model_path) / "pytorch_model.bin"
+        if weights_path.exists():
+            logger.info(f"[Diarization] Loading weights from {weights_path}")
+            diarization_pipeline.load_state_dict(torch.load(weights_path, map_location=device))
+        else:
+            logger.warning(f"[Diarization] Weights file not found at {weights_path}")
+            
+    except Exception as e:
+        import traceback
+        logger.error(f"[Diarization] Failed to manual load community-1: {e}")
+        logger.error(traceback.format_exc())
+        # Fallback은 하지 않음 (community-1 전용이므로)
+        raise RuntimeError(f"Failed to load community-1 model: {e}")
+        
     diarization_pipeline.to(torch.device(device))
     diarization_load_time = time.time() - diarization_load_start
     
@@ -157,11 +268,23 @@ def run_diarization(
                 # return_embeddings 파라미터를 지원하지 않는 경우
                 logger.info("[Diarization] return_embeddings not supported, extracting manually...")
                 result = diarization_pipeline(audio_data, **pipeline_kwargs)
+                
+                # Pyannote 4.x 대응: DiarizeOutput 객체에서 Annotation 추출
+                if hasattr(result, "speaker_diarization"):
+                    logger.info("[Diarization] Extracting annotation from 4.x DiarizeOutput (fallback path)")
+                    result = result.speaker_diarization
+
                 embeddings_dict = extract_speaker_embeddings(
                     diarization_pipeline, audio_data, result
                 )
         else:
             result = diarization_pipeline(audio_data, **pipeline_kwargs)
+            
+            # Pyannote 4.x 대응: DiarizeOutput 객체에서 Annotation 추출
+            if hasattr(result, "speaker_diarization"):
+                logger.info("[Diarization] Extracting annotation from 4.x DiarizeOutput")
+                result = result.speaker_diarization
+
             embeddings_dict = None
     diarization_time = time.time() - diarization_start
     

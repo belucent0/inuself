@@ -45,9 +45,6 @@ def process_transcription_job(
     logger.info(f"[Worker] File: {original_filename}")
     logger.info(f"[Worker] Storage key: {storage_key}")
     logger.info(f"[Worker] Model: {model_size}, Mode: {processing_mode}")
-    if min_speakers is not None or max_speakers is not None:
-        logger.info(f"[Worker] Speaker range: min={min_speakers}, max={max_speakers}")
-    logger.info("[Worker] ========================================")
     logger.info("Job started: file_id={}, file={}, key={}, min_speakers={}, max_speakers={}", 
                file_id, original_filename, storage_key, min_speakers, max_speakers)
     
@@ -287,21 +284,23 @@ async def _process_job(
         
         # Lazy import: torchaudio DLL 로드 오류 방지
         from worker.pipeline import PipelineResult, run_asr_diarization_pipeline
+        from functools import partial
+        
+        # functools.partial을 사용하여 명시적으로 인자를 캡처 (lambda 클로저 문제 방지)
+        pipeline_func = partial(
+            run_asr_diarization_pipeline,
+            temp_path,
+            model_size=model_size,
+            processing_mode=processing_mode,
+            num_asr_chunks=num_asr_chunks,
+            project_root=project_root,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            file_id=file_id,
+        )
         
         loop = asyncio.get_running_loop()
-        result: PipelineResult = await loop.run_in_executor(
-            None,
-            lambda: run_asr_diarization_pipeline(
-                temp_path,
-                model_size=model_size,
-                processing_mode=processing_mode,
-                num_asr_chunks=num_asr_chunks,
-                project_root=project_root,
-                min_speakers=min_speakers,
-                max_speakers=max_speakers,
-                file_id=file_id,  # 락 회복을 위해 file_id 전달
-            ),
-        )
+        result: PipelineResult = await loop.run_in_executor(None, pipeline_func)
         logger.info("[Worker] [5/5] ASR pipeline completed!")
         num_speakers = len(result.speaker_stats)
         logger.info(f"[Worker] - Number of speakers (from stats): {num_speakers}")
