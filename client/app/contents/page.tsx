@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useLocalStorage } from '@/hooks/use-local-storage'
 import { useSearchParams } from 'next/navigation'
 import ContentList from '@/components/ContentList'
 import { listContents, ContentListResponse } from '@/lib/api'
@@ -11,32 +12,15 @@ export default function ContentsPage() {
   const [data, setData] = useState<ContentListResponse | null>(null)
   const [page, setPage] = useState(1)
   // 모바일에서는 5, 데스크톱에서는 10을 기본값으로 설정
-  const [pageSize, setPageSize] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return window.innerWidth < 768 ? 5 : 10
-    }
-    return 10
-  })
+  // 모바일에서는 5, 데스크톱에서는 10을 기본값으로 설정 (localStorage에 저장된 값이 있으면 사용)
+  const [pageSize, setPageSize] = useLocalStorage<number>('content_list_page_size',
+    typeof window !== 'undefined' && window.innerWidth < 768 ? 5 : 10
+  )
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const searchParams = useSearchParams()
 
-  // 모바일/데스크톱 전환 시 페이지 크기 조정
-  useEffect(() => {
-    const handleResize = () => {
-      const isMobile = window.innerWidth < 768
-      if (isMobile && pageSize !== 5) {
-        setPageSize(5)
-        setPage(1)
-      } else if (!isMobile && pageSize === 5) {
-        setPageSize(10)
-        setPage(1)
-      }
-    }
 
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [pageSize])
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -124,8 +108,8 @@ export default function ContentsPage() {
   return (
     <div>
       <PageHeader items={breadcrumbItems} />
-      <ContentList 
-        contents={data.items} 
+      <ContentList
+        contents={data.items}
         pagination={{
           currentPage: data.page,
           totalPages: data.total_pages,

@@ -324,7 +324,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
           </div>
 
           {/* 중앙: 네비게이션 버튼들 (정중앙) */}
-          <div className="absolute left-1/2 transform -translate-x-1/2 flex items-center gap-2">
+          <div className="absolute left-1/2 transform -translate-x-1/2 flex items-center gap-1 md:gap-2">
             <Button
               variant="outline"
               size="icon"
@@ -345,6 +345,13 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
+
+            <div className="flex items-center justify-center min-w-[45px]">
+              <span className="text-sm font-medium">
+                {pagination.currentPage} / {pagination.totalPages}
+              </span>
+            </div>
+
             <Button
               variant="outline"
               size="icon"
@@ -367,12 +374,6 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
             </Button>
           </div>
 
-          {/* 오른쪽: 선택된 항목 수 - 데스크톱만 표시 */}
-          <div className="hidden md:block text-sm text-muted-foreground">
-            {selectedIds.size} / {pagination.total} 행 선택됨
-          </div>
-          {/* 모바일: 빈 공간 (중앙 정렬을 위해) */}
-          <div className="md:hidden w-[70px]"></div>
         </div>
       )}
     </div>
