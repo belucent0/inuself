@@ -60,7 +60,12 @@ async def upload_content(
     print(f"[Upload] 파일 업로드 요청: {file.filename} ({file.content_type}), min_speakers={min_speakers}, max_speakers={max_speakers}, ocr_mode={ocr_mode}")
     
     try:
-        result = await file_service.upload_and_enqueue(file, min_speakers=min_speakers, max_speakers=max_speakers, ocr_mode=ocr_mode)
+        result = await file_service.upload_and_enqueue(
+            file, 
+            min_speakers=min_speakers, 
+            max_speakers=max_speakers, 
+            ocr_mode=ocr_mode,
+        )
         # 하위 호환성을 위해 content_id로 변환
         upload_response = UploadResponse(content_id=result["file_id"], queued=True)
         logger.info("[Upload] File upload successful: file_id={}, filename={}", result["file_id"], file.filename)

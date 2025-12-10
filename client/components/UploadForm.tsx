@@ -11,7 +11,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 type SpeakerRange = '1-2' | '3-6' | '7-10' | '11+' | null
-type OcrMode = 'basic' | 'docling' | null
+type OcrMode = 'portray' | 'docling' | null
 
 export default function UploadForm() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -33,30 +33,21 @@ export default function UploadForm() {
   const isDocumentFile = (filename: string): boolean => {
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
     // 허용된 문서 파일: 이미지 파일과 txt
-    let allowedDocumentExtensions = ['.txt', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp', ]
+    let allowedDocumentExtensions = ['.txt', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp',]
     allowedDocumentExtensions.push(...['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'])
     return allowedDocumentExtensions.includes(ext)
   }
 
-  const isBlockedDocumentFile = (filename: string): boolean => {
+  const isOfficeDocument = (filename: string): boolean => {
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
-    // 차단된 문서 파일: PDF, Word, Excel, PowerPoint 등
-    const blockedDocumentExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
-    return blockedDocumentExtensions.includes(ext)
+    const officeExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
+    return officeExtensions.includes(ext)
   }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null
     if (file) {
-      // 차단된 문서 파일 체크
-      // if (isBlockedDocumentFile(file.name)) {
-      //   setStatus('PDF, Word, Excel, PowerPoint 등의 문서 파일은 지원하지 않습니다. 이미지 파일(.png, .jpg 등)과 txt 파일만 업로드 가능합니다.')
-      //   if (fileInputRef.current) {
-      //     fileInputRef.current.value = ''
-      //   }
-      //   return
-      // }
-      
+
       // 허용되지 않은 파일 체크
       if (!isAudioFile(file.name) && !isDocumentFile(file.name)) {
         setStatus('지원하지 않는 파일 형식입니다. 오디오/비디오 파일, 이미지 파일, 텍스트 파일, PDF, 또는 Office 문서 파일만 업로드 가능합니다.')
@@ -65,7 +56,7 @@ export default function UploadForm() {
         }
         return
       }
-      
+
       setSelectedFile(file)
       // 오디오 파일인 경우 화자 수 선택 모달 표시
       if (isAudioFile(file.name)) {
@@ -79,19 +70,19 @@ export default function UploadForm() {
     }
   }
 
-  const handleUploadDirect = async (file: File, selectedOcrMode: string = 'basic') => {
+  const handleUploadDirect = async (file: File, selectedOcrMode: string = 'portray') => {
     setUploading(true)
     setStatus('업로드 중...')
     try {
       await uploadContent(file, undefined, undefined, selectedOcrMode)
       setStatus('업로드 완료! 큐에 등록되었습니다.')
       setSelectedFile(null)
-      
+
       // 파일 입력 필드 초기화
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
-      
+
       // 목록 페이지로 이동하고 자동 새로고침
       router.push(`/contents?refresh=${Date.now()}`)
     } catch (error) {
@@ -119,7 +110,7 @@ export default function UploadForm() {
 
   const handleOcrUpload = async () => {
     if (!selectedFile || !ocrMode) return
-    
+
     setUploading(true)
     setStatus('업로드 중...')
     try {
@@ -128,12 +119,12 @@ export default function UploadForm() {
       setShowOcrModal(false)
       setSelectedFile(null)
       setOcrMode(null)
-      
+
       // 파일 입력 필드 초기화
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
-      
+
       // 목록 페이지로 이동하고 자동 새로고침
       router.push(`/contents?refresh=${Date.now()}`)
     } catch (error) {
@@ -145,10 +136,10 @@ export default function UploadForm() {
 
   const handleUpload = async () => {
     if (!selectedFile) return
-    
+
     let minSpeakers: number | undefined = undefined
     let maxSpeakers: number | undefined = undefined
-    
+
     if (speakerRange) {
       switch (speakerRange) {
         case '1-2':
@@ -169,21 +160,21 @@ export default function UploadForm() {
           break
       }
     }
-    
+
     setUploading(true)
     setStatus('업로드 중...')
     try {
-      await uploadContent(selectedFile, minSpeakers, maxSpeakers)
+      await uploadContent(selectedFile, minSpeakers, maxSpeakers, undefined)
       setStatus('업로드 완료! 큐에 등록되었습니다.')
       setShowModal(false)
       setSelectedFile(null)
       setSpeakerRange(null)
-      
+
       // 파일 입력 필드 초기화
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
-      
+
       // 목록 페이지로 이동하고 자동 새로고침 (쿼리 파라미터로 강제 새로고침)
       router.push(`/contents?refresh=${Date.now()}`)
     } catch (error) {
@@ -236,7 +227,7 @@ export default function UploadForm() {
               *실제 발화자를 기준으로 입력하면 인식률이 향상됩니다.
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="py-4">
             <RadioGroup
               value={speakerRange || ''}
@@ -260,6 +251,9 @@ export default function UploadForm() {
                 ))}
               </div>
             </RadioGroup>
+
+            <div className="mt-6 flex items-center space-x-2">
+            </div>
           </div>
 
           <DialogFooter>
@@ -291,7 +285,7 @@ export default function UploadForm() {
               *문서의 복잡도에 따라 처리 방식을 선택하세요.
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="py-4">
             <RadioGroup
               value={ocrMode || ''}
@@ -299,15 +293,20 @@ export default function UploadForm() {
             >
               <div className="space-y-3">
                 <Label
-                  htmlFor="basic"
-                  className="flex flex-col space-y-1 rounded-md border border-input bg-background p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
+                  htmlFor="portray"
+                  className={`flex flex-col space-y-1 rounded-md border border-input bg-background p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary ${selectedFile && isOfficeDocument(selectedFile.name) ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
                 >
                   <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="basic" id="basic" />
-                    <span className="text-sm font-semibold">기본</span>
+                    <RadioGroupItem
+                      value="portray"
+                      id="portray"
+                      disabled={selectedFile ? isOfficeDocument(selectedFile.name) : false}
+                    />
+                    <span className="text-sm font-semibold">이미지 묘사</span>
                   </div>
                   <p className="text-xs text-muted-foreground ml-6">
-                    Qwen3-VL만으로 이미지/문서 인식 및 설명/요약
+                    전문적인 시각으로 이미지의 대상, 인물, 상황을 분석하고 상세하게 묘사합니다.
                   </p>
                 </Label>
                 <Label
@@ -316,10 +315,11 @@ export default function UploadForm() {
                 >
                   <div className="flex items-center space-x-2">
                     <RadioGroupItem value="docling" id="docling" />
-                    <span className="text-sm font-semibold">복잡한 문서 레이아웃 인식</span>
+                    <span className="text-sm font-semibold">문서 레이아웃 인식</span>
                   </div>
                   <p className="text-xs text-muted-foreground ml-6">
                     Docling을 통한 HTML 내보내기 처리 → Qwen3-VL로 추세 분석
+                    (복잡한 문서, 표가 포함된 문서에 권장)
                   </p>
                 </Label>
               </div>

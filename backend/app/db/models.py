@@ -37,6 +37,7 @@ class ContentType(str, enum.Enum):
 
     AUDIO = "AUDIO"  # 오디오 파일
     DOCUMENT = "DOCUMENT"  # 문서 파일
+    PORTRAY = "PORTRAY"  # 이미지 묘사
 
 
 # 하위 호환성을 위한 별칭

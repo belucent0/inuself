@@ -32,7 +32,7 @@ except ImportError:
     logger.warning("Docling not available. Complex document layout processing will be limited.")
 
 
-OcrMode = Literal["basic", "docling"]
+OcrMode = Literal["basic", "docling", "portray"]
 
 
 class OcrService:
@@ -375,6 +375,25 @@ class OcrService:
 10. HTML 태그는 올바르게 닫아주세요.
 11. 반환 형식 예시: <h2>제목</h2><p>내용</p><table><thead><tr><th>헤더1</th><th>헤더2</th></tr></thead><tbody><tr><td>데이터1</td><td>데이터2</td></tr></tbody></table>"""
 
+    def _get_portray_prompt(self) -> str:
+        """이미지 묘사(Portray) 전용 프롬프트."""
+        return """이 이미지를 전문가의 시각으로 상세하게 분석하고 묘사해주세요.
+이미지의 주요 대상(Subject), 등장인물(People), 그리고 전반적인 상황(Situation)을 중심으로 분석해야 합니다.
+
+**응답 형식**:
+반드시 HTML 형식으로 작성해주세요. 마크다운은 사용하지 마세요.
+
+**구조 가이드**:
+1. **<h2>전반적인 상황 (Situation)</h2>**: 이미지의 전체적인 분위기, 배경, 시간대, 날씨 등을 묘사하세요. <p> 태그 사용.
+2. **<h2>주요 대상 및 인물 (Subject & People)</h2>**:
+   - 등장인물이 있다면 외양, 표정, 행동, 의상 등을 상세히 묘사하세요.
+   - 주요 사물이 있다면 위치, 색상, 형태, 질감 등을 묘사하세요.
+   - <ul>, <li> 태그를 사용하여 항목별로 정리해도 좋습니다.
+3. **<h2>세부 특징 및 맥락 (Details & Context)</h2>**: 이미지에서 발견되는 흥미로운 세부사항이나, 이미지의 목적/맥락에 대한 추론을 포함하세요. <p> 태그 사용.
+
+**언어**: 한국어(Korean)로 작성해주세요.
+**스타일**: 객관적이고 전문적인 어조를 유지하되, 시각장애인에게 이미지를 설명하듯 구체적이고 생생하게 묘사하세요."""
+
     def _detect_table(self, image_base64: str, server_process=None) -> bool:
         """
         이미지에서 표가 있는지 감지.
@@ -555,12 +574,12 @@ class OcrService:
         if ocr_mode == "docling":
             if not DOCLING_AVAILABLE:
                 logger.warning("Docling not available, falling back to basic mode")
-                return self._process_with_qwen3vl(file_path)
+                return self._process_with_qwen3vl(file_path, ocr_mode="basic")
             
             return self._process_with_docling(file_path)
         
-        # 기본 모드 (Qwen3-VL)
-        return self._process_with_qwen3vl(file_path)
+        # 기본 모드 (Qwen3-VL) 또는 Portray 모드
+        return self._process_with_qwen3vl(file_path, ocr_mode=ocr_mode)
     
     def _process_with_docling(self, file_path: Path) -> dict[str, Any]:
         """
@@ -581,7 +600,7 @@ class OcrService:
             import rapidocr_onnxruntime
         except ImportError:
             logger.warning("RapidOCR not installed. Docling quality might be poor. Fallback to Qwen3-VL (Basic Mode).")
-            return self._process_with_qwen3vl(file_path)
+            return self._process_with_qwen3vl(file_path, ocr_mode="basic")
 
         try:
             # Docling DocumentConverter 초기화
@@ -609,7 +628,7 @@ class OcrService:
             # 텍스트가 너무 적으면(예: 100자 이하) OCR 실패로 간주하고 Fallback
             if len(ocr_text.strip()) < 100:
                  logger.warning(f"Docling extracted insufficient text ({len(ocr_text)} chars). Fallback to Qwen3-VL.")
-                 return self._process_with_qwen3vl(file_path)
+                 return self._process_with_qwen3vl(file_path, ocr_mode="basic")
 
             # 페이지 수 계산
             page_count = len(doc_dict.get("pages", [])) if "pages" in doc_dict else 1
@@ -639,7 +658,7 @@ class OcrService:
         except Exception as e:
             logger.error(f"Docling processing failed: {e}, falling back to Qwen3-VL")
             # Docling 실패 시 Qwen3-VL로 fallback
-            return self._process_with_qwen3vl(file_path)
+            return self._process_with_qwen3vl(file_path, ocr_mode="basic")
     
     def _extract_text_from_docling_dict(self, doc_dict: dict) -> str:
         """
@@ -733,7 +752,7 @@ class OcrService:
         
         return "".join(texts)
     
-    def _process_with_qwen3vl(self, file_path: Path) -> dict[str, Any]:
+    def _process_with_qwen3vl(self, file_path: Path, ocr_mode: OcrMode = "basic") -> dict[str, Any]:
         """
         Qwen3-VL을 사용한 기존 OCR 처리 방식.
         
@@ -839,12 +858,18 @@ class OcrService:
                 
                 image_base64 = None
                 try:
-                    # 1단계: 표 감지를 위한 기본 해상도 이미지 생성
-                    detection_image_base64 = self._image_to_base64(image, max_size=(1536, 1536), quality=75)
+                    has_table = False
                     
-                    # 표 감지
-                    has_table = self._detect_table(detection_image_base64, server_process=server_process)
-                    logger.info(f"Page {page_idx + 1} table detection: {'Table found' if has_table else 'No table'}")
+                    # Portray 모드가 아닌 경우에만 표 감지 수행
+                    if ocr_mode != "portray":
+                        # 1단계: 표 감지를 위한 기본 해상도 이미지 생성
+                        detection_image_base64 = self._image_to_base64(image, max_size=(1536, 1536), quality=75)
+                        
+                        # 표 감지
+                        has_table = self._detect_table(detection_image_base64, server_process=server_process)
+                        logger.info(f"Page {page_idx + 1} table detection: {'Table found' if has_table else 'No table'}")
+                    else:
+                        logger.info(f"Page {page_idx + 1}: Portray mode, skipping table detection")
                     
                     # 2단계: 표 감지 결과에 따라 해상도 결정
                     if has_table:
@@ -853,7 +878,7 @@ class OcrService:
                         quality = 85  # 표 인식을 위해 품질도 약간 증가
                         logger.info(f"Page {page_idx + 1}: Using high resolution ({max_size}) for table detection")
                     else:
-                        # 표가 없으면 기본 해상도 사용 (메모리 및 처리 시간 최적화)
+                        # 표가 없으면(또는 Portray 모드) 기본 해상도 사용 (메모리 및 처리 시간 최적화)
                         max_size = (1536, 1536)
                         quality = 75
                         logger.info(f"Page {page_idx + 1}: Using default resolution ({max_size})")
@@ -862,7 +887,11 @@ class OcrService:
                     image_base64 = self._image_to_base64(image, max_size=max_size, quality=quality)
                     
                     # 표 감지 결과에 따라 프롬프트 선택
-                    if has_table:
+                    if ocr_mode == "portray":
+                        prompt = self._get_portray_prompt()
+                        # Portray 모드에서는 표 감지에 상관없이 기본 해상도 사용 (이미 설정됨) 
+                        # 또는 필요하다면 고정 해상도 사용. 여기서는 위에서 설정된대로 진행.
+                    elif has_table:
                         prompt = self._get_table_ocr_prompt()
                     else:
                         prompt = self._get_default_ocr_prompt()
@@ -934,7 +963,7 @@ class OcrService:
         logger.info(f"OCR completed: {len(ocr_text)} total characters")
         
         # processing_mode 추가
-        ocr_metadata["processing_mode"] = "basic"
+        ocr_metadata["processing_mode"] = ocr_mode
         
         return {
             "ocr_text": ocr_text,

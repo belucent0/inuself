@@ -135,8 +135,9 @@ class FileService:
         # 파일 닫기
         await file.close()
         
+        
         # 파일 타입 결정
-        content_type = self._determine_content_type(file.filename, file.content_type)
+        content_type = self._determine_content_type(file.filename, file.content_type, ocr_mode=ocr_mode)
         
         # DB에 파일 생성
         logger.info("[Upload] DB에 파일 생성 시작: filename=%s", file.filename)
@@ -188,8 +189,8 @@ class FileService:
                 logger.exception("[Upload] %s", error_msg)
                 print(f"[Upload] ERROR {error_msg}")
         
-        elif content_type == ContentType.DOCUMENT:
-            # 문서: Document 생성 + OCR 작업 큐잉
+        elif content_type in (ContentType.DOCUMENT, ContentType.PORTRAY):
+            # 문서 또는 이미지 묘사: Document 생성 + OCR 작업 큐잉
             await self.document_repo.create_document(
                 file_id=file_obj.id,
                 ocr_text="",
@@ -278,7 +279,7 @@ class FileService:
             except Exception as exc:
                 logger.warning("Failed to delete file from storage: %s, error: %s", object_key, exc)
 
-    def _determine_content_type(self, filename: str | None, content_type: str | None) -> ContentType:
+    def _determine_content_type(self, filename: str | None, content_type: str | None, ocr_mode: str = "basic") -> ContentType:
         """파일명과 content_type으로 파일 타입 결정."""
         if not filename:
             return ContentType.DOCUMENT  # 기본값
@@ -291,6 +292,10 @@ class FileService:
         
         if any(filename_lower.endswith(ext) for ext in audio_extensions | video_extensions):
             return ContentType.AUDIO
+
+        # Portray 모드인 경우 PORTRAY 타입 반환
+        if ocr_mode == "portray":
+            return ContentType.PORTRAY
         
         # 문서 확장자
         return ContentType.DOCUMENT
