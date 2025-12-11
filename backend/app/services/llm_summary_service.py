@@ -65,7 +65,7 @@ class LlmSummaryService:
             if transcription:
                 transcript_data = transcription.transcription or {}
                 text_to_summarize = str(transcript_data.get("text") or "").strip()
-        elif file_obj.content_type == ContentType.DOCUMENT:
+        elif file_obj.content_type in [ContentType.DOCUMENT, ContentType.PORTRAY]:
             document = await self.document_repo.get_by_file_id(file_id)
             if document:
                 text_to_summarize = document.ocr_text.strip()
