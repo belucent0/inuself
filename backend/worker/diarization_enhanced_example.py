@@ -24,7 +24,7 @@ def example_basic_extraction(waveform: np.ndarray, sample_rate: int):
     print("=" * 60)
     
     # 화자 분리 실행
-    result, load_time, process_time, _ = run_diarization(
+    result, load_time, process_time, _, _, _ = run_diarization(
         waveform=waveform,
         sample_rate=sample_rate,
         device="cuda",
@@ -52,7 +52,7 @@ def example_with_embeddings(waveform: np.ndarray, sample_rate: int):
     print("=" * 60)
     
     # Embedding 포함하여 화자 분리 실행
-    result, load_time, process_time, embeddings_dict = run_diarization(
+    result, load_time, process_time, embeddings_dict, _, _ = run_diarization(
         waveform=waveform,
         sample_rate=sample_rate,
         device="cuda",
@@ -75,7 +75,7 @@ def example_confidence_refinement(waveform: np.ndarray, sample_rate: int):
     print("=" * 60)
     
     # 화자 분리 실행 (embedding 포함)
-    result, load_time, process_time, embeddings_dict = run_diarization(
+    result, load_time, process_time, embeddings_dict, _, _ = run_diarization(
         waveform=waveform,
         sample_rate=sample_rate,
         device="cuda",

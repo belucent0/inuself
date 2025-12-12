@@ -237,7 +237,7 @@ def _run_case4_parallel_full_asr(
             
             # 두 작업 모두 완료 대기
             print(f"[Parallel] Waiting for both Diarization and ASR to complete...")
-            diarization, diarization_load_time, diarization_time, embeddings_dict, pipeline = diarization_future.result()
+            diarization, diarization_load_time, diarization_time, embeddings_dict, pipeline, diarization_params = diarization_future.result()
             asr_result, model_load_time, transcribe_time = asr_future.result()
         
         # 락은 컨텍스트 매니저가 자동으로 해제
@@ -271,13 +271,24 @@ def _run_case4_parallel_full_asr(
     )
     
     # 화자별 통계
+    # 화자별 통계 (겹치는 화자 "A & B"는 분리하여 각각 집계)
     speaker_stats = {}
     for seg in merged_segments:
-        speaker = seg.get("speaker", "UNKNOWN")
-        if speaker not in speaker_stats:
-            speaker_stats[speaker] = {"count": 0, "duration": 0.0}
-        speaker_stats[speaker]["count"] += 1
-        speaker_stats[speaker]["duration"] += seg["end"] - seg["start"]
+        speaker_label = seg.get("speaker", "UNKNOWN")
+        
+        # " & "로 화자 분리 (예: "SPEAKER_00 & SPEAKER_01")
+        if " & " in speaker_label:
+            speakers = speaker_label.split(" & ")
+        else:
+            speakers = [speaker_label]
+            
+        duration = seg["end"] - seg["start"]
+        
+        for speaker in speakers:
+            if speaker not in speaker_stats:
+                speaker_stats[speaker] = {"count": 0, "duration": 0.0}
+            speaker_stats[speaker]["count"] += 1
+            speaker_stats[speaker]["duration"] += duration
     
     # 화자 세그먼트 추출
     diarization_segments = []
@@ -302,6 +313,7 @@ def _run_case4_parallel_full_asr(
         "asr_time": model_load_time + transcribe_time,
         "asr_chunked": use_chunking,
         "speaker_stats": speaker_stats,
+        "diarization_params": diarization_params,
     })
     
     return PipelineResult(

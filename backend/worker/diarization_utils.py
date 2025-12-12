@@ -105,7 +105,7 @@ def run_diarization(
     num_speakers: int | None = None,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
-) -> tuple[Any, float, float, dict[str, Any] | None, Any | None]:
+) -> tuple[Any, float, float, dict[str, Any] | None, Any | None, dict[str, Any]]:
     """
     화자 분리 실행 (전체 오디오 파일 처리).
     
@@ -204,6 +204,20 @@ def run_diarization(
         
         # 로컬 경로 검증 패치가 적용된 상태에서 실행됨
         diarization_pipeline = SpeakerDiarization(**pipeline_params)
+
+        # clustering.threshold를 화자구분 민감도, 낮을수록 클러스터가 쉽게 합쳐짐
+        HYPER_PARAMETERS = {
+            "segmentation": {
+                "min_duration_off": 0.0,
+            },
+            "clustering": {
+                "threshold": 0.45, 
+                "Fa": 0.07, 
+                "Fb": 0.8
+            }
+        }
+        diarization_pipeline.instantiate(HYPER_PARAMETERS)
+        logger.info(f"[Diarization] Applied custom hyperparameters: {HYPER_PARAMETERS}")
         
         # 가중치 로드 (pytorch_model.bin)
         weights_path = Path(model_path) / "pytorch_model.bin"
@@ -290,10 +304,13 @@ def run_diarization(
     
     logger.info(f"[Diarization] Completed in {diarization_time:.2f} seconds")
     
+    # 하이퍼파라미터 로깅을 위해 사용된 파라미터 반환
+    used_params = HYPER_PARAMETERS if 'HYPER_PARAMETERS' in locals() else pipeline_params
+
     if return_pipeline:
-        return result, diarization_load_time, diarization_time, embeddings_dict, diarization_pipeline
+        return result, diarization_load_time, diarization_time, embeddings_dict, diarization_pipeline, used_params
     else:
-        return result, diarization_load_time, diarization_time, embeddings_dict, None
+        return result, diarization_load_time, diarization_time, embeddings_dict, None, used_params
 
 
 def extract_segment_embeddings(
@@ -576,6 +593,7 @@ def extract_speaker_segments(
     diarization_result: Any,
     include_metadata: bool = False,
     split_overlaps: bool = False,
+    merge_overlaps: bool = False,
 ) -> list[tuple[float, float, str] | dict[str, Any]]:
     """
     화자 분리 결과에서 세그먼트 추출.
@@ -584,6 +602,7 @@ def extract_speaker_segments(
         diarization_result: pyannote.audio의 Annotation 객체
         include_metadata: True일 경우 딕셔너리 형태로 메타데이터 포함
         split_overlaps: True일 경우 겹치는 구간을 분리하여 별도 세그먼트로 생성
+        merge_overlaps: True일 경우 겹치는 구간의 화자 이름을 "A & B" 형태로 병합 (split_overlaps가 True여야 함)
     
     Returns:
         include_metadata=False: [(start, end, speaker), ...]
@@ -604,6 +623,10 @@ def extract_speaker_segments(
     # 겹치는 구간을 분리하는 경우
     if split_overlaps:
         segments = _split_overlapping_segments(segments, include_metadata)
+        
+        # 분리된 구간 중 같은 시간대의 화자들을 병합하는 경우
+        if merge_overlaps:
+            segments = _create_merged_overlap_segments(segments, include_metadata)
     
     if include_metadata:
         segments.sort(key=lambda x: x["start"])
@@ -686,6 +709,63 @@ def _split_overlapping_segments(
                 split_segments.append((start_time, end_time, speaker))
     
     return split_segments
+
+
+def _create_merged_overlap_segments(
+    segments: list[tuple[float, float, str] | dict[str, Any]],
+    include_metadata: bool,
+) -> list[tuple[float, float, str] | dict[str, Any]]:
+    """
+    겹치는 시간대의 세그먼트들을 하나로 합치고 화자 이름을 병합합니다.
+    (예: "Speaker A"와 "Speaker B"가 같은 시간대에 있으면 "Speaker A & Speaker B"로 병합)
+    
+    Args:
+        segments: _split_overlapping_segments()의 결과 리스트 (시간순 정렬됨을 가정)
+        include_metadata: 메타데이터 포함 여부
+        
+    Returns:
+        병합된 화자 레이블을 가진 세그먼트 리스트
+    """
+    if not segments:
+        return []
+        
+    merged_output = []
+    
+    # 시간대별로 화자들을 그룹화
+    # key: (start, end), value: set(speakers)
+    time_groups = {}
+    
+    for seg in segments:
+        if include_metadata:
+            start, end = seg["start"], seg["end"]
+            speaker = seg["speaker"]
+        else:
+            start, end, speaker = seg[0], seg[1], seg[2]
+            
+        # 부동소수점 비교를 위해 키를 튜플로 (소수점 3자리 반올림)
+        key = (round(start, 3), round(end, 3))
+        
+        if key not in time_groups:
+            time_groups[key] = set()
+        time_groups[key].add(speaker)
+        
+    # 그룹화된 결과를 리스트로 변환
+    sorted_times = sorted(time_groups.keys())
+    
+    for start, end in sorted_times:
+        speakers = sorted(list(time_groups[(start, end)]))
+        combined_label = " & ".join(speakers)
+        
+        if include_metadata:
+            merged_output.append({
+                "start": start,
+                "end": end,
+                "speaker": combined_label,
+            })
+        else:
+            merged_output.append((start, end, combined_label))
+            
+    return merged_output
 
 
 def compute_speaker_transitions(segments: list[tuple[float, float, str]]) -> list[dict[str, Any]]:
@@ -894,11 +974,12 @@ def merge_segments_with_speakers(
     # 겹침 분리 옵션이 활성화된 경우, 분리된 세그먼트 사용
     speaker_segments = {}
     if split_overlaps:
-        # 겹치는 구간을 분리한 세그먼트 사용
+        # 겹치는 구간을 분리하고 병합된(A & B) 세그먼트 사용
         split_diarization_segments = extract_speaker_segments(
             diarization_result, 
             include_metadata=True, 
-            split_overlaps=True
+            split_overlaps=True,
+            merge_overlaps=True  # 겹치는 구간의 이름을 병합 (A & B)
         )
         for seg in split_diarization_segments:
             speaker_segments[(seg["start"], seg["end"])] = seg["speaker"]

@@ -51,13 +51,23 @@ def rebuild_speaker_stats(segments: list[dict[str, Any]]) -> dict[str, dict[str,
     """병합된 세그먼트 기준으로 화자 통계를 다시 계산한다."""
     stats: dict[str, dict[str, float | int]] = {}
     for segment in segments:
-        speaker = segment.get("speaker") or "UNKNOWN"
-        stats.setdefault(speaker, {"count": 0, "duration": 0.0})
-        stats[speaker]["count"] = int(stats[speaker]["count"]) + 1
-        stats[speaker]["duration"] = float(stats[speaker]["duration"]) + max(
+        speaker_label = segment.get("speaker") or "UNKNOWN"
+        
+        # " & "로 화자 분리 (예: "SPEAKER_00 & SPEAKER_01")
+        if " & " in speaker_label:
+            speakers = speaker_label.split(" & ")
+        else:
+            speakers = [speaker_label]
+            
+        duration = max(
             0.0,
             segment.get("end", 0.0) - segment.get("start", 0.0),
         )
+
+        for speaker in speakers:
+            stats.setdefault(speaker, {"count": 0, "duration": 0.0})
+            stats[speaker]["count"] = int(stats[speaker]["count"]) + 1
+            stats[speaker]["duration"] = float(stats[speaker]["duration"]) + duration
     return stats
 
 
