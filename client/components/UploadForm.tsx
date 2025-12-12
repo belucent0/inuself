@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
-type SpeakerRange = '1-2' | '3-6' | '7-10' | '11+' | null
+type SpeakerRange = 'auto' | '1-2' | '3-6' | '7-10' | '11+' | null
 type OcrMode = 'portray' | 'document' | null
 
 export default function UploadForm() {
@@ -19,7 +19,7 @@ export default function UploadForm() {
   const [isUploading, setUploading] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [showOcrModal, setShowOcrModal] = useState(false)
-  const [speakerRange, setSpeakerRange] = useState<SpeakerRange>(null)
+  const [speakerRange, setSpeakerRange] = useState<SpeakerRange>('auto')
   const [ocrMode, setOcrMode] = useState<OcrMode>(null)
   const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -61,7 +61,7 @@ export default function UploadForm() {
       // 오디오 파일인 경우 화자 수 선택 모달 표시
       if (isAudioFile(file.name)) {
         setShowModal(true)
-        setSpeakerRange(null)
+        setSpeakerRange('auto')
       } else if (isDocumentFile(file.name)) {
         // 문서 파일인 경우 OCR 모드 선택 모달 표시
         setShowOcrModal(true)
@@ -142,6 +142,11 @@ export default function UploadForm() {
 
     if (speakerRange) {
       switch (speakerRange) {
+        case 'auto':
+          // 자동 파악: 둘 다 undefined
+          minSpeakers = undefined
+          maxSpeakers = undefined
+          break
         case '1-2':
           minSpeakers = 1
           maxSpeakers = 2
@@ -235,6 +240,7 @@ export default function UploadForm() {
             >
               <div className="grid grid-cols-2 gap-3">
                 {[
+                  { value: 'auto', label: '자동 파악' },
                   { value: '1-2', label: '1~2명' },
                   { value: '3-6', label: '3~6명' },
                   { value: '7-10', label: '7~10명' },

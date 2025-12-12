@@ -135,8 +135,11 @@ export async function listContents(page: number = 1, pageSize: number = 20): Pro
   return res.json()
 }
 
-export async function getContentDetail(id: string): Promise<ContentDetail> {
+export async function getContentDetail(id: string): Promise<ContentDetail | null> {
   const res = await fetch(`${API_BASE}/contents/${id}`, { cache: 'no-store' })
+  if (res.status === 404) {
+    return null
+  }
   if (!res.ok) {
     throw new Error('콘텐츠 상세 조회 실패')
   }

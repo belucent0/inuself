@@ -1,3 +1,4 @@
+import { notFound } from 'next/navigation'
 import { Metadata } from 'next'
 import ContentDetail from '@/components/ContentDetail'
 import { getContentDetail } from '@/lib/api'
@@ -14,7 +15,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params
   try {
     const content = await getContentDetail(id)
-    const title = content.title || content.filename || '콘텐츠 상세'
+    const title = content?.title || content?.filename || '콘텐츠 상세'
     return {
       title: `${title} - ASR 파이프라인`,
     }
@@ -28,6 +29,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function ContentDetailPage({ params }: Props) {
   const { id } = await params
   const content = await getContentDetail(id)
+
+  if (!content) {
+    notFound()
+  }
+
   const breadcrumbItems = [
     { label: '홈', href: '/' },
     { label: '콘텐츠', href: '/contents' },
