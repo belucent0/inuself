@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Enum, ForeignKey, Integer, String, TIMESTAMP, Text, Float
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
@@ -66,7 +66,7 @@ class File(Base):
     summary_md: Mapped[str | None] = mapped_column(Text, nullable=True)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False
+        TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     # 관계
@@ -138,7 +138,7 @@ class Content(Base):
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False
+        TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     logs: Mapped[list["SttLog"]] = relationship(
@@ -164,7 +164,7 @@ class SttLog(Base):
     log: Mapped[dict] = mapped_column(JSONB, nullable=False)
     message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False
+        TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     file: Mapped["File | None"] = relationship("File", back_populates="logs")
@@ -186,7 +186,7 @@ class LlmLog(Base):
     log: Mapped[dict] = mapped_column(JSONB, nullable=False)
     message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False
+        TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     file: Mapped["File | None"] = relationship("File", back_populates="llm_logs")

@@ -300,3 +300,26 @@ export async function reclusterSpeakers(
   return res.json()
 }
 
+
+// ... (기존 코드 유지)
+
+/**
+ * WebSocket Base URL 반환
+ * 
+ * 로컬 개발 환경(localhost)에서는 백엔드 포트(8000)로 직접 연결하여
+ * Next.js 개발 서버의 프록시 이슈를 우회합니다.
+ * 프로덕션 환경에서는 Nginx 프록시를 타도록 상대 경로('/ws')를 반환합니다.
+ */
+export const getWebSocketBase = (): string => {
+  if (typeof window === 'undefined') return ''
+
+  // 로컬 개발 환경 감지
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'ws://localhost:8000/ws'
+  }
+
+  // 기본: 상대 경로 (Nginx 프록시 사용)
+  return '/ws'
+}
+
+
