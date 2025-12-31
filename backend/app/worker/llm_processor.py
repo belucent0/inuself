@@ -5,7 +5,9 @@ from ..core.config import get_settings
 from ..core.logging import logger
 from ..db.session import AsyncSessionLocal
 from ..services.llm_summary_service import LlmSummaryService
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+
+from ..core.system_utils import setup_worker_event_loop, cleanup_worker_event_loop, WorkerSessionContext
 
 settings = get_settings()
 
@@ -18,55 +20,8 @@ def process_llm_job(*, file_id: int) -> None:
     logger.info(f"[LLM] Summary job started: file_id={file_id}")
     logger.info("LLM job started for file_id={}", file_id)
     
-    # Windows에서는 매 작업마다 새로운 이벤트 루프를 생성 (ASR 워커와 동일)
-    if sys.platform == "win32":
-        # 기존 이벤트 루프 정리
-        try:
-            existing_loop = asyncio.get_event_loop()
-            if existing_loop and not existing_loop.is_closed():
-                try:
-                    pending = asyncio.all_tasks(existing_loop)
-                    if pending:
-                        existing_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                except Exception:
-                    pass
-                try:
-                    existing_loop.close()
-                except Exception:
-                    pass
-        except RuntimeError:
-            pass
-        
-        # Windows에서 ProactorEventLoop 사용 (asyncpg 호환)
-        policy = asyncio.get_event_loop_policy()
-        if not isinstance(policy, asyncio.WindowsProactorEventLoopPolicy):
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Proactor 초기화
-        if isinstance(loop, asyncio.ProactorEventLoop):
-            try:
-                async def _init_proactor():
-                    pass
-                loop.run_until_complete(_init_proactor())
-            except Exception as exc:
-                logger.warning("Failed to initialize Proactor, recreating loop: %s", exc)
-                try:
-                    loop.close()
-                except Exception:
-                    pass
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    async def _init_proactor_retry():
-                        pass
-                    loop.run_until_complete(_init_proactor_retry())
-                except Exception:
-                    pass
-    else:
-        loop = _ensure_worker_loop()
+    # 이벤트 루프 설정 (Windows/Linux 분기 처리는 system_utils 내부에서 수행)
+    loop = setup_worker_event_loop()
     
     try:
         logger.info("[LLM] Running event loop...")
@@ -78,37 +33,9 @@ def process_llm_job(*, file_id: int) -> None:
         logger.exception("LLM job failed for file_id={}", file_id)
         raise
     finally:
-        if sys.platform == "win32":
-            try:
-                # 남은 작업이 있으면 타임아웃과 함께 완료 대기
-                pending = asyncio.all_tasks(loop)
-                if pending:
-                    try:
-                        loop.run_until_complete(
-                            asyncio.wait_for(
-                                asyncio.gather(*pending, return_exceptions=True),
-                                timeout=5.0
-                            )
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning("Timeout waiting for pending LLM tasks")
-                    except Exception as e:
-                        logger.error("Error waiting for pending LLM tasks: {}", e)
-            except Exception as e:
-                logger.error("Error during LLM event loop cleanup: {}", e)
-            finally:
-                # 이벤트 루프 닫기
-                try:
-                    if not loop.is_closed():
-                        loop.close()
-                except Exception as e:
-                    logger.error("Error closing LLM event loop: {}", e)
-                
-                # 현재 이벤트 루프 제거 (중요!)
-                try:
-                    asyncio.set_event_loop(None)
-                except Exception as e:
-                    logger.error("Error unsetting LLM event loop: {}", e)
+        # 이벤트 루프 정리
+        cleanup_worker_event_loop(loop)
+
 
 
 def _ensure_worker_loop() -> asyncio.AbstractEventLoop:
@@ -128,46 +55,37 @@ def _ensure_worker_loop() -> asyncio.AbstractEventLoop:
     return _worker_loop
 
 
+from .event_publisher import ProgressReporter
+
 async def _process_job(*, file_id: int) -> None:
+    reporter = ProgressReporter(file_id)
+
+    # 이벤트 발행: LLM 요약 시작
+    reporter.summarizing(
+        step="llm_start",
+        progress=10.0,
+        message="LLM 요약 작업 시작"
+    )
+
     logger.info("[LLM] Creating DB session...")
     
-    # Windows에서 각 작업마다 새로운 이벤트 루프를 사용하므로
-    # 현재 이벤트 루프에서 새로운 DB 엔진과 세션을 생성해야 함
-    # 전역 엔진은 다른 이벤트 루프의 연결을 사용할 수 있어 충돌 발생 가능
-    current_engine = None
-    if sys.platform == "win32":
-        # 현재 이벤트 루프에서 새로운 엔진 생성
-        current_engine = create_async_engine(
-            settings.postgres_dsn,
-            echo=settings.debug,
-            future=True,
-            pool_pre_ping=True,  # 연결 상태 체크
-            pool_recycle=3600,   # 1시간마다 연결 재생성
-        )
-        CurrentAsyncSessionLocal = async_sessionmaker(
-            current_engine,
-            expire_on_commit=False,
-        )
-        session = CurrentAsyncSessionLocal()
-    else:
-        # Linux/Mac에서는 전역 엔진 사용
-        session = AsyncSessionLocal()
+    logger.info("[LLM] Creating DB session...")
     
-    try:
-        logger.info("[LLM] Initializing LlmSummaryService...")
-        service = LlmSummaryService(session)
-        logger.info("[LLM] Calling summarize function...")
-        await service.summarize(file_id)
-        logger.info("[LLM] Summarize function completed")
-    finally:
-        logger.info("[LLM] Closing DB session...")
-        await session.close()
-        # Windows에서 생성한 엔진도 타임아웃과 함께 정리
-        if current_engine:
-            try:
-                await asyncio.wait_for(current_engine.dispose(), timeout=10.0)
-            except asyncio.TimeoutError:
-                logger.warning("Timeout disposing LLM database engine")
-            except Exception as e:
-                logger.error("Error disposing LLM database engine: %s", e)
+    # WorkerSessionContext를 사용하여 세션 생성 (OS별 처리 포함)
+    async with WorkerSessionContext() as session:
+        try:
+            logger.info("[LLM] Initializing LlmSummaryService...")
+            service = LlmSummaryService(session)
+            logger.info("[LLM] Calling summarize function...")
+            await service.summarize(file_id)
+            logger.info("[LLM] Summarize function completed")
+    
+            # 이벤트 발행: LLM 요약 완료 (최종 완료)
+            reporter.complete()
+    
+        except Exception as exc:
+            # 이벤트 발행: 에러
+            reporter.fail(f"LLM 요약 실패: {str(exc)}")
+            raise exc
+
 

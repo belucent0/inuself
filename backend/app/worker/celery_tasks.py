@@ -6,7 +6,6 @@ from ..core.logging import logger
 from ..db.session import AsyncSessionLocal
 from ..repositories.content_repository import ContentRepository
 from ..repositories.file_repository import FileRepository
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from .celery_app import celery_app
 from .distributed_lock import acquire_task_locks
 from ..core.config import get_settings
@@ -120,69 +119,30 @@ def process_asr_task(
                 raise self.retry(exc=exc)
 
 
+from ..core.system_utils import setup_worker_event_loop, cleanup_worker_event_loop, WorkerSessionContext
+
 def _get_file_duration_sync(file_id: int) -> float:
     """
     File의 duration_seconds를 동기적으로 가져옵니다.
     락 TTL 계산을 위해 사용됩니다.
     """
     try:
-        # Windows에서는 새로운 이벤트 루프 생성
-        if sys.platform == "win32":
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        else:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+        # 이벤트 루프 설정 (Windows/Linux 분기 처리는 system_utils 내부에서 수행)
+        loop = setup_worker_event_loop()
         
         async def _get_duration():
-            # Windows에서는 각 작업마다 새로운 엔진 생성
-            current_engine = None
-            if sys.platform == "win32":
-                current_engine = create_async_engine(
-                    settings.postgres_dsn,
-                    echo=settings.debug,
-                    future=True,
-                )
-                CurrentAsyncSessionLocal = async_sessionmaker(
-                    current_engine,
-                    expire_on_commit=False,
-                )
-                session = CurrentAsyncSessionLocal()
-            else:
-                session = AsyncSessionLocal()
-            
-            try:
+            # WorkerSessionContext를 사용하여 세션 생성 (OS별 처리 포함)
+            async with WorkerSessionContext() as session:
                 repo = FileRepository(session)
                 file_obj = await repo.get_file(file_id)
                 if file_obj and file_obj.transcription:
                     return file_obj.transcription.duration_seconds or 0.0
                 return 0.0
-            finally:
-                await session.close()
-                if current_engine:
-                    try:
-                        await asyncio.wait_for(current_engine.dispose(), timeout=5.0)
-                    except Exception:
-                        pass
         
         duration = loop.run_until_complete(_get_duration())
         
-        # Windows에서는 루프 정리
-        if sys.platform == "win32":
-            try:
-                pending = asyncio.all_tasks(loop)
-                if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception:
-                pass
-            try:
-                loop.close()
-            except Exception:
-                pass
-            asyncio.set_event_loop(None)
+        # 이벤트 루프 정리
+        cleanup_worker_event_loop(loop)
         
         return duration
     except Exception as e:
