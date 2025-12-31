@@ -532,19 +532,19 @@ export default function ContentDetail({ content }: Props) {
         content.status === 'OCR_FAILED' || content.status === 'OCR_PROCESSING') && (
           <Card className={cn(
             (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "border-destructive",
-            (content.status === 'QUEUED' || content.status === 'OCR_PROCESSING') && "border-primary"
+            content.status === 'QUEUED' && "border-primary"
           )}>
             <CardHeader>
               <CardTitle className={cn(
                 "text-base",
                 (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "text-destructive",
-                (content.status === 'QUEUED' || content.status === 'OCR_PROCESSING') && "text-primary"
+                content.status === 'QUEUED' && "text-primary"
               )}>
                 {content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED'
-                  ? `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.`
-                  : content.status === 'QUEUED' || content.status === 'OCR_PROCESSING'
-                    ? `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`
-                    : `${isDocumentFile(content.filename) ? 'OCR' : 'ASR'} 처리가 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`}
+                  ? `${isDocumentFile(content.filename) ? '문서' : '음성'} 인식이 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.`
+                  : content.status === 'QUEUED'
+                    ? `${isDocumentFile(content.filename) ? '문서' : '음성'} 인식이 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`
+                    : `${isDocumentFile(content.filename) ? '문서' : '음성'} 인식이 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">

@@ -17,7 +17,7 @@ import { formatToKST } from '@/lib/utils'
 const statusLabels: Record<ContentStatus, string> = {
     QUEUED: '대기중',
     PROCESSING: '인식중',
-    OCR_PROCESSING: 'OCR 처리중',
+    OCR_PROCESSING: '인식중',
     SUMMARY_QUEUED: '요약 대기',
     SUMMARIZING: '요약중',
     COMPLETED: '완료',
@@ -106,12 +106,22 @@ export function ContentItem({ item, selected, onToggle, onRetry, liveProgress }:
     if (progress.isConnected && progress.status) {
         // useFileProgress는 'processing', 'queued' (소문자) 반환
         // ContentStatus는 'PROCESSING', 'QUEUED' (대문자)
-        const wsStatusUpper = progress.status.toUpperCase() as ContentStatus
+        let wsStatusUpper = progress.status.toUpperCase() as string
+
+        // 소켓에서 'FAILED'가 오면 콘텐츠 타입에 따라 구체적인 실패 상태로 매핑
+        if (wsStatusUpper === 'FAILED') {
+            if (item.content_type === 'DOCUMENT') {
+                wsStatusUpper = 'OCR_FAILED'
+            } else {
+                // 오디오/비디오는 ASR_FAILED (요약 실패는 별도 처리가 필요할 수 있으나, 보통 워커 레벨 실패는 ASR/OCR 단계)
+                wsStatusUpper = 'ASR_FAILED'
+            }
+        }
 
         // 유효한 상태인지 확인 (statusLabels 키에 존재하는지)
         // @ts-ignore
         if (wsStatusUpper in statusLabels) {
-            displayStatus = wsStatusUpper
+            displayStatus = wsStatusUpper as ContentStatus
         }
     }
 
