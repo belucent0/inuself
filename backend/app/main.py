@@ -24,16 +24,22 @@ class HealthCheckLogFilter(logging.Filter):
         return True  # 다른 로그는 정상 출력
 
 
-# RQ 워커는 제거되었습니다. Celery 워커는 PM2로 관리합니다.
-        import traceback
-        traceback.print_exc()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 실행되는 lifespan 이벤트."""
     import asyncio
     import os
+    
+    # RedisListener 시작
+    from .websocket.dependencies import get_redis_listener
+    redis_listener = get_redis_listener()
+    
+    try:
+        await redis_listener.start(pattern="events:*")
+        logger.info("[Lifespan] RedisListener started")
+    except Exception as exc:
+        logger.exception("[Lifespan] Failed to start RedisListener: {}", exc)
     
     # 시작 시: 워커 시작 제어
     # 개발 환경에서는 run_dev.sh가 워커를 관리하므로 기본적으로 비활성화
@@ -49,6 +55,13 @@ async def lifespan(app: FastAPI):
         logger.info("[FastAPI] 프로덕션 환경: start.bat을 사용하면 PM2 워커도 함께 시작됩니다.")
     
     yield
+    
+    # 종료 시: RedisListener 중지
+    try:
+        await redis_listener.stop()
+        logger.info("[Lifespan] RedisListener stopped")
+    except Exception as exc:
+        logger.exception("[Lifespan] Error stopping RedisListener: {}", exc)
 
 
 def create_app() -> FastAPI:
@@ -90,6 +103,11 @@ def create_app() -> FastAPI:
         logger.warning(f"[Storage] ✗ {storage_message}")
 
     app.include_router(content_controller.router, prefix=settings.api_prefix)
+    
+    # WebSocket 라우터 추가 (별도 경로, prefix 없음)
+    from .controllers import websocket_controller
+    app.include_router(websocket_controller.router)
+    logger.info("[FastAPI] WebSocket routes registered at /ws")
 
     @app.get("/health", tags=["system"])
     async def healthcheck():
