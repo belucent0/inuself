@@ -9,7 +9,7 @@ services:
       MINIO_ROOT_USER: torchdev
       MINIO_ROOT_PASSWORD: torchdev-secret
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -23,34 +23,34 @@ services:
     #   docker run --rm --network host minio/mc \
     #     alias set local http://127.0.0.1:9000 torchdev torchdev-secret
 
-  # minio-bootstrap:
-  #   image: minio/mc:latest
-  #   container_name: asr-minio-bootstrap
-  #   depends_on:
-  #     minio:
-  #       condition: service_healthy
-  #   environment:
-  #     MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
-  #   command: ["mb", "--ignore-existing", "local/asr-media"]
-  #   restart: "no"
+    # minio-bootstrap:
+    #   image: minio/mc:latest
+    #   container_name: asr-minio-bootstrap
+    #   depends_on:
+    #     minio:
+    #       condition: service_healthy
+    #   environment:
+    #     MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
+    #   command: ["mb", "--ignore-existing", "local/asr-media"]
+    #   restart: "no"
 
-  # minio-policy-setup:
-  #   image: minio/mc:latest
-  #   container_name: asr-minio-policy-setup
-  #   depends_on:
-  #     minio-bootstrap:
-  #       condition: service_completed_successfully
-  #   environment:
-  #     MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
-  #   entrypoint: /bin/sh
-  #   command: -c "mc anonymous set download local/asr-media"
-  #   restart: "no"
+    # minio-policy-setup:
+    #   image: minio/mc:latest
+    #   container_name: asr-minio-policy-setup
+    #   depends_on:
+    #     minio-bootstrap:
+    #       condition: service_completed_successfully
+    #   environment:
+    #     MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
+    #   entrypoint: /bin/sh
+    #   command: -c "mc anonymous set download local/asr-media"
+    #   restart: "no"
 
 
   redis:
     image: redis:7.2-alpine
     container_name: asr-redis
-    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
     volumes:
       - redis-data:/data
       - ./infra/redis.conf:/usr/local/etc/redis/redis.conf:ro
@@ -58,7 +58,7 @@ services:
       - "6379:6379"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -88,7 +88,7 @@ services:
       - postgres-data:/var/lib/postgresql
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d asr"]
+      test: [ "CMD-SHELL", "pg_isready -U user -d asr" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -134,9 +134,8 @@ services:
       - S3_ACCESS_KEY=torchdev
       - S3_SECRET_KEY=torchdev-secret
       - S3_BUCKET_NAME=asr-media
-      - MEDIA_BASE_URL=/media
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 5s
       retries: 5

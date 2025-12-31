@@ -33,6 +33,10 @@ const nextConfig = {
         source: '/ws/:path*',
         destination: `${backendUrl}/ws/:path*`,
       },
+      {
+        source: '/media/:path*',
+        destination: 'http://localhost:9000/asr-media/:path*',
+      },
     ]
   },
 }

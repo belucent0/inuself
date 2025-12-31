@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     s3_prefix: str = "uploads"
     
     # 외부 접근용 미디어 URL (nginx 프록시 경로)
-    # 환경변수로 설정 가능: MEDIA_BASE_URL=https://asr.timblo.io/media
+    # 환경변수로 설정 가능: MEDIA_BASE_URL=/media
     media_base_url: str = ""  # 비어있으면 s3_endpoint 사용
 
     whisper_model_default: str = "large-v3"
@@ -142,7 +142,7 @@ class Settings(BaseSettings):
     admin_password: str = "admin123"
 
     # CORS 설정
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://asr.timblo.io"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://asr.timblo.io,http://asr.timblo.io:3000"
 
 
 @lru_cache

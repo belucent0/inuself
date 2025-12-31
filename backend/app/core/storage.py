@@ -121,34 +121,17 @@ def delete_file(key: str) -> None:
         local_path.unlink()
 
 
-def get_public_media_url(key: str) -> str | None:
-    """MinIO에 저장된 파일의 public URL을 반환."""
+def get_public_media_url(key: str) -> str:
+    """
+    파일의 public URL을 반환.
+    복잡한 확인 로직 없이 설정된 Base URL 또는 기본값(/media)을 사용하여 URL을 생성합니다.
+    """
     settings = get_settings()
-    client = get_s3_client()
-    if client:
-        try:
-            client.head_bucket(Bucket=settings.s3_bucket)
-            # media_base_url이 설정되어 있으면 nginx 프록시 경로 사용
-            if settings.media_base_url:
-                # key는 "uploads/xxx.mp4" 형식이므로 그대로 사용
-                return f"{settings.media_base_url}/{key}"
-            else:
-                # s3_endpoint가 내부 서비스 이름을 포함하는 경우 (예: asr-minio:9000)
-                # nginx 프록시 경로(/media)를 사용
-                s3_endpoint = settings.s3_endpoint
-                if '://' in s3_endpoint:
-                    # URL에서 호스트 부분 추출
-                    host_part = s3_endpoint.split('://', 1)[1].split('/', 1)[0]
-                    # 내부 서비스 이름 패턴 감지 (포트 번호가 있거나 도메인이 아닌 경우)
-                    if ':' in host_part and not host_part.startswith('localhost') and not host_part.startswith('127.0.0.1'):
-                        # 내부 서비스 이름으로 판단하고 nginx 프록시 경로 사용
-                        return f"/media/{key}"
-                
-                # 개발 환경: MinIO 직접 URL 생성 (localhost인 경우)
-                return f"{settings.s3_endpoint}/{settings.s3_bucket}/{key}"
-        except ClientError:
-            pass
-    return None
+    # 설정된 값이 없으면 기본값 "/media" 사용 (로컬/Docker 공통)
+    base_url = settings.media_base_url or "/media"
+    # 경로 끝에 /가 있으면 제거하여 중복 방지
+    base_url = base_url.rstrip("/")
+    return f"{base_url}/{key}"
 
 
 def check_storage_health() -> tuple[bool, str]:
