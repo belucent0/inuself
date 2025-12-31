@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowUp, Download, FileText, Music, Trash2 } from 'lucide-react'
+import { ArrowUp, Download, FileText, Music, Trash2, Image as ImageIcon } from 'lucide-react'
 
 import { ContentDetail as ContentDetailType, retryProcessing, reclusterSpeakers, deleteContentsBulk } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -346,6 +346,8 @@ export default function ContentDetail({ content }: Props) {
             <div className="flex items-center gap-2 min-w-0 flex-1">
               {content.content_type === 'DOCUMENT' ? (
                 <FileText className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+              ) : content.content_type === 'PORTRAY' ? (
+                <ImageIcon className="h-5 w-5 text-muted-foreground flex-shrink-0" />
               ) : content.content_type === 'AUDIO' ? (
                 <Music className="h-5 w-5 text-muted-foreground flex-shrink-0" />
               ) : null}

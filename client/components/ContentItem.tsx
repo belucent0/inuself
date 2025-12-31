@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { FileText, Music, CheckCircle2, XCircle } from 'lucide-react'
+import { FileText, Music, CheckCircle2, XCircle, Image as ImageIcon } from 'lucide-react'
 import { Spinner } from '@/components/ui/spinner'
 // FileProgressIndicator import 삭제
 // useFileProgress 관련 import 삭제
@@ -13,7 +13,8 @@ import { FileProgress, FileStatus } from '@/types/file-progress'
 import { ContentSummary, ContentStatus } from '@/lib/api'
 import { formatToKST } from '@/lib/utils'
 
-// ... (statusLabels, getStatusVariant, getStatusIcon, getFileExtension 생략 - 변경 없음)
+
+
 const statusLabels: Record<ContentStatus, string> = {
     QUEUED: '대기중',
     PROCESSING: '인식중',
@@ -140,6 +141,8 @@ export function ContentItem({ item, selected, onToggle, onRetry, liveProgress }:
                             <div className="flex items-center gap-2 mb-1.5 md:mb-2">
                                 {item.content_type === 'DOCUMENT' ? (
                                     <FileText className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground flex-shrink-0" />
+                                ) : item.content_type === 'PORTRAY' ? (
+                                    <ImageIcon className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground flex-shrink-0" />
                                 ) : item.content_type === 'AUDIO' ? (
                                     <Music className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground flex-shrink-0" />
                                 ) : null}
@@ -157,7 +160,7 @@ export function ContentItem({ item, selected, onToggle, onRetry, liveProgress }:
                                         {getFileExtension(item.filename)}
                                     </Badge>
                                 )}
-                                {item.content_type !== 'DOCUMENT' && (
+                                {item.content_type !== 'DOCUMENT' && item.content_type !== 'PORTRAY' && (
                                     <span className="text-[13px] md:text-sm text-muted-foreground">
                                         화자 수: {item.speakers.length || 0} · 재생 길이: {item.duration_seconds.toFixed(1)}초
                                     </span>

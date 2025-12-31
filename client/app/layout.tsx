@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 
 // 클라이언트 환경변수에서 관리자 계정 정보 읽기
 const ADMIN_USERNAME = process.env.NEXT_PUBLIC_ADMIN_USERNAME || 'admin'
@@ -23,17 +23,17 @@ const pageTitles: Record<string, string> = {
 
 function getPageTitle(pathname: string | null): string {
   if (!pathname) return 'ASR 파이프라인'
-  
+
   // 정확한 경로 매칭
   if (pageTitles[pathname]) {
     return pageTitles[pathname]
   }
-  
+
   // /contents/[id] 같은 동적 라우트 처리
   if (pathname.startsWith('/contents/')) {
     return '콘텐츠 상세'
   }
-  
+
   return 'ASR 파이프라인'
 }
 
@@ -135,11 +135,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="flex min-h-screen">
           {/* 데스크톱 사이드바 */}
           <Sidebar />
-          
+
           {/* 모바일 헤더 */}
           <header className="md:hidden fixed top-0 left-0 right-0 z-40 h-14 border-b bg-background flex items-center gap-3 px-4">
             <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
-              <SheetContent side="left" className="w-3/4 max-w-sm p-0 h-full">
+              <SheetContent
+                side="left"
+                className="w-3/4 max-w-sm p-0 h-full"
+                onOpenAutoFocus={(e) => e.preventDefault()}
+              >
+                <SheetTitle className="sr-only">메뉴</SheetTitle>
                 <Sidebar isMobileSheet />
               </SheetContent>
             </Sheet>
@@ -155,7 +160,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               {getPageTitle(pathname)}
             </h1>
           </header>
-          
+
           {/* 메인 콘텐츠 */}
           <main className="flex-1 md:ml-64 pt-14 md:pt-0 p-4 md:p-8">
             {children}

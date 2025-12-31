@@ -246,8 +246,11 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
             <Button
               variant="outline"
               size="icon"
-              className="h-8 w-8"
-              onClick={() => pagination.onPageChange(1)}
+              className="h-8 w-8 hover:bg-background hover:text-foreground md:hover:bg-accent md:hover:text-accent-foreground active:bg-accent active:text-accent-foreground"
+              onClick={(e) => {
+                e.currentTarget.blur()
+                pagination.onPageChange(1)
+              }}
               disabled={pagination.currentPage === 1}
               title="Go to first page"
             >
@@ -256,8 +259,11 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
             <Button
               variant="outline"
               size="icon"
-              className="h-8 w-8"
-              onClick={() => pagination.onPageChange(pagination.currentPage - 1)}
+              className="h-8 w-8 hover:bg-background hover:text-foreground md:hover:bg-accent md:hover:text-accent-foreground active:bg-accent active:text-accent-foreground"
+              onClick={(e) => {
+                e.currentTarget.blur()
+                pagination.onPageChange(pagination.currentPage - 1)
+              }}
               disabled={pagination.currentPage === 1}
               title="Go to previous page"
             >
@@ -273,8 +279,11 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
             <Button
               variant="outline"
               size="icon"
-              className="h-8 w-8"
-              onClick={() => pagination.onPageChange(pagination.currentPage + 1)}
+              className="h-8 w-8 hover:bg-background hover:text-foreground md:hover:bg-accent md:hover:text-accent-foreground active:bg-accent active:text-accent-foreground"
+              onClick={(e) => {
+                e.currentTarget.blur()
+                pagination.onPageChange(pagination.currentPage + 1)
+              }}
               disabled={pagination.currentPage === pagination.totalPages}
               title="Go to next page"
             >
@@ -283,8 +292,11 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
             <Button
               variant="outline"
               size="icon"
-              className="h-8 w-8"
-              onClick={() => pagination.onPageChange(pagination.totalPages)}
+              className="h-8 w-8 hover:bg-background hover:text-foreground md:hover:bg-accent md:hover:text-accent-foreground active:bg-accent active:text-accent-foreground"
+              onClick={(e) => {
+                e.currentTarget.blur()
+                pagination.onPageChange(pagination.totalPages)
+              }}
               disabled={pagination.currentPage === pagination.totalPages}
               title="Go to last page"
             >

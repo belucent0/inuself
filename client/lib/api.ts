@@ -45,7 +45,7 @@ export type ContentStatus =
   | 'SUMMARY_FAILED' // LLM 요약 실패
   | 'CANCELLED' // 취소됨 (사용자 취소 또는 타임아웃)
 
-export type ContentType = 'AUDIO' | 'DOCUMENT'
+export type ContentType = 'AUDIO' | 'DOCUMENT' | 'PORTRAY'
 
 export type ContentSummary = {
   id: number
