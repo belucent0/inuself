@@ -2,14 +2,24 @@
 
 import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
-import { Menu } from 'lucide-react'
+import Link from 'next/link'
+import { cn } from '@/lib/utils'
 import './globals.css'
-import Sidebar from '@/components/Sidebar'
+import { AppSidebar } from '@/components/app-sidebar'
+import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/components/ui/sidebar'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
+import { Separator } from '@/components/ui/separator'
+import {
+  Breadcrumb,
+  BreadcrumbList,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb'
 
 // 클라이언트 환경변수에서 관리자 계정 정보 읽기
 const ADMIN_USERNAME = process.env.NEXT_PUBLIC_ADMIN_USERNAME || 'admin'
@@ -37,6 +47,34 @@ function getPageTitle(pathname: string | null): string {
   return 'ASR 파이프라인'
 }
 
+function getBreadcrumbItems(pathname: string | null) {
+  if (!pathname) return []
+
+  if (pathname === '/contents') {
+    return [
+      { label: '홈', href: '/' },
+      { label: '콘텐츠' },
+    ]
+  }
+
+  if (pathname.startsWith('/contents/')) {
+    return [
+      { label: '홈', href: '/' },
+      { label: '콘텐츠', href: '/contents' },
+      { label: '콘텐츠 상세' },
+    ]
+  }
+
+  if (pathname === '/roadmap') {
+    return [
+      { label: '홈', href: '/' },
+      { label: '로드맵' },
+    ]
+  }
+
+  return []
+}
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -44,7 +82,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+
+  // 컨텐츠 상세 페이지인지 확인
+  const isDetailPage = pathname?.startsWith('/contents/') && pathname !== '/contents'
+  const breadcrumbItems = getBreadcrumbItems(pathname)
 
   useEffect(() => {
     // localStorage에 인증 플래그가 있으면 통과
@@ -132,40 +173,48 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="ko">
       <body>
-        <div className="flex min-h-screen">
-          {/* 데스크톱 사이드바 */}
-          <Sidebar />
+        <SidebarProvider defaultOpen={!isDetailPage}>
+          <AppSidebar />
+          <SidebarInset>
+            <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
+              <SidebarTrigger className="-ml-1" />
+              <Separator orientation="vertical" className="mr-2 h-4" />
+              {breadcrumbItems.length > 0 ? (
+                <Breadcrumb className="text-base">
+                  <BreadcrumbList>
+                    {breadcrumbItems.map((item, index) => {
+                      const isLast = index === breadcrumbItems.length - 1
 
-          {/* 모바일 헤더 */}
-          <header className="md:hidden fixed top-0 left-0 right-0 z-40 h-14 border-b bg-background flex items-center gap-3 px-4">
-            <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
-              <SheetContent
-                side="left"
-                className="w-3/4 max-w-sm p-0 h-full"
-                onOpenAutoFocus={(e) => e.preventDefault()}
-              >
-                <SheetTitle className="sr-only">메뉴</SheetTitle>
-                <Sidebar isMobileSheet />
-              </SheetContent>
-            </Sheet>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              aria-label="메뉴 토글"
-            >
-              <Menu className="h-5 w-5" />
-            </Button>
-            <h1 className="text-lg font-semibold flex-1 truncate">
-              {getPageTitle(pathname)}
-            </h1>
-          </header>
-
-          {/* 메인 콘텐츠 */}
-          <main className="flex-1 md:ml-64 pt-14 md:pt-0 p-4 md:p-8">
-            {children}
-          </main>
-        </div>
+                      return (
+                        <div key={index} className="flex items-center">
+                          <BreadcrumbItem>
+                            {isLast ? (
+                              <BreadcrumbPage className="font-bold">{item.label}</BreadcrumbPage>
+                            ) : item.href ? (
+                              <BreadcrumbLink asChild className="font-normal">
+                                <Link href={item.href}>{item.label}</Link>
+                              </BreadcrumbLink>
+                            ) : (
+                              <BreadcrumbPage className="font-bold">{item.label}</BreadcrumbPage>
+                            )}
+                          </BreadcrumbItem>
+                          {!isLast && <BreadcrumbSeparator />}
+                        </div>
+                      )
+                    })}
+                  </BreadcrumbList>
+                </Breadcrumb>
+              ) : (
+                <h1 className="text-lg font-semibold">
+                  {getPageTitle(pathname)}
+                </h1>
+              )}
+            </header>
+            <main className="flex-1 p-4 md:p-8">
+              {children}
+            </main>
+          </SidebarInset>
+        </SidebarProvider>
       </body>
     </html>
   )

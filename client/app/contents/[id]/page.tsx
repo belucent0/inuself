@@ -2,7 +2,6 @@ import { notFound } from 'next/navigation'
 import { Metadata } from 'next'
 import ContentDetail from '@/components/ContentDetail'
 import { getContentDetail } from '@/lib/api'
-import PageHeader from '@/components/PageHeader'
 
 type Props = {
   params: Promise<{ id: string }>
@@ -34,18 +33,6 @@ export default async function ContentDetailPage({ params }: Props) {
     notFound()
   }
 
-  const breadcrumbItems = [
-    { label: '홈', href: '/' },
-    { label: '콘텐츠', href: '/contents' },
-    { label: '콘텐츠 상세' },
-  ]
-
-  return (
-    <div>
-      <PageHeader items={breadcrumbItems} />
-      <ContentDetail content={content} />
-    </div>
-  )
+  return <ContentDetail content={content} />
 }
-
 

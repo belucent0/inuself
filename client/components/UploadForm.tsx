@@ -222,6 +222,7 @@ export default function UploadForm() {
               onClick={() => setShowStreamingModal(true)}
               disabled={isUploading}
               className="w-full mt-2"
+              data-streaming-asr-trigger
             >
               실시간 전사 (Beta)
             </Button>

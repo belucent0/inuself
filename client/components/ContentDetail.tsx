@@ -344,8 +344,9 @@ export default function ContentDetail({ content }: Props) {
   }, [content.media_url, content.filename, content.transcription?.segments, autoScroll])
 
   return (
-    <div className="space-y-6">
-      <Card>
+    <>
+      {/* 헤더 카드 - 전체 너비 */}
+      <Card className="mb-6">
         <CardHeader>
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -377,470 +378,494 @@ export default function ContentDetail({ content }: Props) {
           </CardDescription>
           <p className="text-xs text-muted-foreground break-all mt-2">저장 키: {content.object_key}</p>
         </CardHeader>
+      </Card>
 
-        {content.media_url && (
-          <CardContent className="space-y-4">
-            <div>
-              <h3 className="text-sm font-semibold mb-2">
-                {isDocumentFile(content.filename) ? '문서 뷰어' : '미디어 재생'}
-              </h3>
-              {isDocumentFile(content.filename) ? (
-                // 문서 뷰어
-                <div className="w-full border rounded-lg overflow-hidden bg-muted/50">
-                  {isTxtFile(content.filename) ? (
-                    // txt 파일: 문서 뷰어는 생략하고 아래 "문서 내용" 섹션에서 표시
-                    <div className="p-8 text-center">
-                      <p className="text-muted-foreground">
-                        텍스트 파일은 아래 "문서 내용" 섹션에서 확인할 수 있습니다.
-                      </p>
+      {/* 3열 그리드 레이아웃 */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* 좌측 영역: 미디어 재생 + 세그먼트 + 메타데이터 */}
+        <div className="lg:col-span-4 space-y-6">
+          {/* 미디어 재생 */}
+          {content.media_url && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  {isDocumentFile(content.filename) ? '문서 뷰어' : '미디어 재생'}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  {isDocumentFile(content.filename) ? (
+                    // 문서 뷰어
+                    <div className="w-full border rounded-lg overflow-hidden bg-muted/50">
+                      {isTxtFile(content.filename) ? (
+                        // txt 파일: 문서 뷰어는 생략하고 아래 "문서 내용" 섹션에서 표시
+                        <div className="p-8 text-center">
+                          <p className="text-muted-foreground">
+                            텍스트 파일은 아래 "문서 내용" 섹션에서 확인할 수 있습니다.
+                          </p>
+                        </div>
+                      ) : isPdfFile(content.filename) || isDocxFile(content.filename) ? (
+                        <DocumentViewer
+                          fileUrl={content.media_url}
+                          filename={content.filename}
+                          isPdf={isPdfFile(content.filename)}
+                          isDocx={isDocxFile(content.filename)}
+                        />
+                      ) : isImageFile(content.filename) ? (
+                        <div className="flex justify-center items-center p-4">
+                          <img
+                            src={content.media_url}
+                            alt={content.filename}
+                            className="max-w-full max-h-[400px] object-contain"
+                          />
+                        </div>
+                      ) : isOfficeFile(content.filename) ? (
+                        <div className="p-8 text-center">
+                          <p className="text-muted-foreground mb-2">
+                            이 파일 형식({getFileExtension(content.filename)})은 현재 미리보기를 지원하지 않습니다.
+                          </p>
+                          <p className="text-sm text-muted-foreground mb-4">
+                            .doc, .xls, .xlsx, .ppt, .pptx 파일은 향후 지원 예정입니다.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="p-8 text-center">
+                          <p className="text-muted-foreground mb-4">
+                            이 파일 형식은 브라우저에서 직접 미리보기를 지원하지 않습니다.
+                          </p>
+                        </div>
+                      )}
                     </div>
-                  ) : isPdfFile(content.filename) || isDocxFile(content.filename) ? (
-                    <DocumentViewer
-                      fileUrl={content.media_url}
-                      filename={content.filename}
-                      isPdf={isPdfFile(content.filename)}
-                      isDocx={isDocxFile(content.filename)}
-                    />
-                  ) : isImageFile(content.filename) ? (
-                    <div className="flex justify-center items-center p-4">
-                      <img
-                        src={content.media_url}
-                        alt={content.filename}
-                        className="max-w-full max-h-[800px] object-contain"
-                      />
-                    </div>
-                  ) : isOfficeFile(content.filename) ? (
-                    <div className="p-8 text-center">
-                      <p className="text-muted-foreground mb-2">
-                        이 파일 형식({getFileExtension(content.filename)})은 현재 미리보기를 지원하지 않습니다.
-                      </p>
-                      <p className="text-sm text-muted-foreground mb-4">
-                        .doc, .xls, .xlsx, .ppt, .pptx 파일은 향후 지원 예정입니다.
-                      </p>
-                    </div>
+                  ) : isVideoFile(content.filename) ? (
+                    <video
+                      ref={videoRef}
+                      controls
+                      src={content.media_url}
+                      className="w-full max-h-[400px]"
+                      preload="metadata"
+                    >
+                      브라우저가 비디오 재생을 지원하지 않습니다.
+                    </video>
+                  ) : isAudioFile(content.filename) ? (
+                    <audio
+                      ref={audioRef}
+                      controls
+                      src={content.media_url}
+                      className="w-full"
+                      preload="metadata"
+                    >
+                      브라우저가 오디오 재생을 지원하지 않습니다.
+                    </audio>
                   ) : (
                     <div className="p-8 text-center">
                       <p className="text-muted-foreground mb-4">
                         이 파일 형식은 브라우저에서 직접 미리보기를 지원하지 않습니다.
                       </p>
+                      <Button
+                        type="button"
+                        onClick={handleDownload}
+                        variant="default"
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        파일 다운로드
+                      </Button>
                     </div>
                   )}
                 </div>
-              ) : isVideoFile(content.filename) ? (
-                <video
-                  ref={videoRef}
-                  controls
-                  src={content.media_url}
-                  className="w-full max-h-[500px]"
-                  preload="metadata"
-                >
-                  브라우저가 비디오 재생을 지원하지 않습니다.
-                </video>
-              ) : isAudioFile(content.filename) ? (
-                <audio
-                  ref={audioRef}
-                  controls
-                  src={content.media_url}
-                  className="w-full max-w-2xl"
-                  preload="metadata"
-                >
-                  브라우저가 오디오 재생을 지원하지 않습니다.
-                </audio>
-              ) : (
-                <div className="p-8 text-center">
-                  <p className="text-muted-foreground mb-4">
-                    이 파일 형식은 브라우저에서 직접 미리보기를 지원하지 않습니다.
-                  </p>
+                <div className="flex items-center gap-3 flex-wrap">
                   <Button
                     type="button"
                     onClick={handleDownload}
                     variant="default"
+                    className="ml-auto"
                   >
                     <Download className="mr-2 h-4 w-4" />
                     파일 다운로드
                   </Button>
                 </div>
-              )}
-            </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <Button
-                type="button"
-                onClick={handleDownload}
-                variant="default"
-                className="ml-auto"
-              >
-                <Download className="mr-2 h-4 w-4" />
-                파일 다운로드
-              </Button>
-            </div>
-          </CardContent>
-        )}
-      </Card>
+              </CardContent>
+            </Card>
+          )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>LLM 요약</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {content.status === 'SUMMARY_QUEUED' && (
-            <div className="space-y-4">
-              <p className="text-muted-foreground">요약 작업이 큐에 등록되었습니다. 잠시만 기다려 주세요.</p>
-              <p className="text-xs text-muted-foreground">작업이 오래 걸린다면 아래 버튼을 눌러 재시도할 수 있습니다.</p>
-              <Button
-                type="button"
-                onClick={() => handleRetry('summary')}
-                variant="outline"
-                className="w-full"
-              >
-                요약 재처리 (수동)
-              </Button>
-            </div>
-          )}
-          {content.status === 'SUMMARIZING' && (
-            <p className="text-muted-foreground">LLM이 요약을 생성하는 중입니다. 잠시만 기다려 주세요.</p>
-          )}
-          {content.status === 'SUMMARY_FAILED' && (
-            <div className="space-y-4">
-              <p className="text-destructive">요약 생성에 실패했습니다. 다시 시도하려면 아래 버튼을 클릭하세요.</p>
-              <Button
-                type="button"
-                onClick={() => handleRetry('summary')}
-                variant="secondary"
-                className="w-full"
-              >
-                LLM 요약 재처리
-              </Button>
-            </div>
-          )}
-          {content.summary_md ? (
-            <MarkdownContent content={content.summary_md} />
-          ) : (
-            content.status !== 'SUMMARY_QUEUED' &&
-            content.status !== 'SUMMARIZING' &&
-            content.status !== 'SUMMARY_FAILED' && (
-              <p className="text-muted-foreground">요약이 아직 준비되지 않았습니다.</p>
-            )
-          )}
-        </CardContent>
-      </Card>
-
-      {(content.status === 'ASR_FAILED' || content.status === 'PROCESSING' || content.status === 'QUEUED' ||
-        content.status === 'OCR_FAILED' || content.status === 'OCR_PROCESSING') && (
-          <Card className={cn(
-            (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "border-destructive",
-            content.status === 'QUEUED' && "border-primary"
-          )}>
-            <CardHeader>
-              <CardTitle className={cn(
-                "text-base",
-                (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "text-destructive",
-                content.status === 'QUEUED' && "text-primary"
-              )}>
-                {content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED'
-                  ? `${isDocumentFile(content.filename) ? '문서' : '음성'} 인식이 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.`
-                  : content.status === 'QUEUED'
-                    ? `${isDocumentFile(content.filename) ? '문서' : '음성'} 인식이 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`
-                    : `${isDocumentFile(content.filename) ? '문서' : '음성'} 인식이 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {!isDocumentFile(content.filename) && (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="minSpeakers">최소 화자 수 (선택사항)</Label>
-                      <Input
-                        id="minSpeakers"
-                        type="number"
-                        min="1"
-                        value={minSpeakers}
-                        onChange={(e) => setMinSpeakers(e.target.value)}
-                        placeholder="자동 결정"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="maxSpeakers">최대 화자 수 (선택사항)</Label>
-                      <Input
-                        id="maxSpeakers"
-                        type="number"
-                        min="1"
-                        value={maxSpeakers}
-                        onChange={(e) => setMaxSpeakers(e.target.value)}
-                        placeholder="자동 결정"
-                      />
-                    </div>
+          {/* 오디오 타입: 세그먼트 표시 */}
+          {content.transcription && content.transcription.segments && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">세그먼트</CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={autoScroll}
+                      onCheckedChange={setAutoScroll}
+                      className="touch-manipulation"
+                      aria-label={autoScroll ? '자동 스크롤 활성화' : '자동 스크롤 비활성화'}
+                    />
+                    <Label className="text-sm">자동 스크롤</Label>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    화자 수 범위를 지정하지 않으면 자동으로 결정됩니다.
-                  </p>
-                </>
-              )}
-              <Button
-                type="button"
-                onClick={() => handleRetry(isDocumentFile(content.filename) ? 'ocr' : 'asr')}
-                variant="default"
-                className="w-full"
-              >
-                {isDocumentFile(content.filename) ? 'OCR 재처리' : 'ASR 재처리'}
-              </Button>
-            </CardContent>
-          </Card>
-        )}
-
-      {message && (
-        <div className={cn(
-          "p-3 rounded-md text-sm",
-          message.includes('실패') ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary"
-        )}>
-          {message}
-        </div>
-      )}
-
-      {/* 오디오 타입: 세그먼트 표시 */}
-      {content.transcription && content.transcription.segments && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>세그먼트</CardTitle>
-              <div className="flex items-center gap-2">
-                <Switch
-                  checked={autoScroll}
-                  onCheckedChange={setAutoScroll}
-                  className="touch-manipulation"
-                  aria-label={autoScroll ? '자동 스크롤 활성화' : '자동 스크롤 비활성화'}
-                />
-                <Label className="text-sm">스크립트 자동 스크롤</Label>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <ScrollArea
-              ref={segmentContainerRef}
-              viewportRef={segmentViewportRef}
-              className="h-[700px] md:h-[850px] rounded-lg border px-1 py-4"
-            >
-              <div className="space-y-4">
-                {content.transcription.segments.map((seg) => {
-                  const isActive = currentSegmentId === seg.id
-                  return (
-                    <div
-                      key={seg.id}
-                      id={`segment-${seg.id}`}
-                      className={cn(
-                        "pb-4 border-b last:border-b-0 transition-colors rounded-md px-2 py-3",
-                        isActive && "bg-primary/10"
-                      )}
-                    >
-                      <div className="flex items-center gap-2 mb-2">
-                        <Badge variant="outline">{seg.speaker || 'UNKNOWN'}</Badge>
-                        <button
-                          onClick={() => handleSeekToTime(seg.start)}
-                          className="text-xs text-muted-foreground hover:text-primary underline underline-offset-2 transition-colors"
+                </div>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea
+                  ref={segmentContainerRef}
+                  viewportRef={segmentViewportRef}
+                  className="h-[500px] rounded-lg border px-1 py-4"
+                >
+                  <div className="space-y-4">
+                    {content.transcription.segments.map((seg) => {
+                      const isActive = currentSegmentId === seg.id
+                      return (
+                        <div
+                          key={seg.id}
+                          id={`segment-${seg.id}`}
+                          className={cn(
+                            "pb-4 border-b last:border-b-0 transition-colors rounded-md px-2 py-3",
+                            isActive && "bg-primary/10"
+                          )}
                         >
-                          [{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]
-                        </button>
+                          <div className="flex items-center gap-2 mb-2">
+                            <Badge variant="outline">{seg.speaker || 'UNKNOWN'}</Badge>
+                            <button
+                              onClick={() => handleSeekToTime(seg.start)}
+                              className="text-xs text-muted-foreground hover:text-primary underline underline-offset-2 transition-colors"
+                            >
+                              [{seg.start.toFixed(2)}s - {seg.end.toFixed(2)}s]
+                            </button>
+                          </div>
+                          <p className="text-base leading-relaxed break-words">{seg.text}</p>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 문서 타입: OCR 결과 표시 */}
+          {content.document && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{isTxtFile(content.filename) ? '문서 내용' : 'OCR 결과'}</CardTitle>
+                <CardDescription>
+                  {isTxtFile(content.filename)
+                    ? '텍스트 파일 내용'
+                    : `페이지 수: ${content.document.page_count}페이지`}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-[500px] rounded-lg border px-4 py-4">
+                  {content.document.ocr_text || content.document.html_content ? (
+                    isTxtFile(content.filename) ? (
+                      // 텍스트 파일은 기존 방식 유지 (monospace)
+                      <div className="whitespace-pre-wrap break-words text-base leading-relaxed font-mono">
+                        {content.document.ocr_text}
                       </div>
-                      <p className="text-base leading-relaxed break-words">{seg.text}</p>
-                    </div>
-                  )
-                })}
-              </div>
-            </ScrollArea>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* 문서 타입: OCR 결과 표시 */}
-      {content.document && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{isTxtFile(content.filename) ? '문서 내용' : 'OCR 결과'}</CardTitle>
-            <CardDescription>
-              {isTxtFile(content.filename)
-                ? '텍스트 파일 내용'
-                : `페이지 수: ${content.document.page_count}페이지`}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ScrollArea className="h-[700px] md:h-[850px] rounded-lg border px-4 py-4">
-              {content.document.ocr_text || content.document.html_content ? (
-                isTxtFile(content.filename) ? (
-                  // 텍스트 파일은 기존 방식 유지 (monospace)
-                  <div className="whitespace-pre-wrap break-words text-base leading-relaxed font-mono">
-                    {content.document.ocr_text}
-                  </div>
-                ) : content.document.html_content ? (
-                  // Docling HTML 콘텐츠가 있으면 우선적으로 렌더링 (뷰어용)
-                  <div className="doc-viewer">
-                    <HtmlContent content={content.document.html_content} />
-                  </div>
-                ) : content.document.ocr_text ? (
-                  // OCR 텍스트만 있으면 마크다운으로 렌더링 (기본 모드)
-                  // JSON 문자열인지 확인 (Docling fallback인 경우)
-                  content.document.ocr_text.trim().startsWith('{') && content.document.ocr_text.trim().startsWith('{"schema_name') ? (
-                    <div className="text-muted-foreground p-4 border rounded">
-                      <p className="font-semibold mb-2">OCR 처리 중 오류가 발생했습니다.</p>
-                      <p className="text-sm">원본 JSON 데이터가 표시되고 있습니다. OCR 처리를 다시 시도해주세요.</p>
-                    </div>
+                    ) : content.document.html_content ? (
+                      // Docling HTML 콘텐츠가 있으면 우선적으로 렌더링 (뷰어용)
+                      <div className="doc-viewer">
+                        <HtmlContent content={content.document.html_content} />
+                      </div>
+                    ) : content.document.ocr_text ? (
+                      // OCR 텍스트만 있으면 마크다운으로 렌더링 (기본 모드)
+                      // JSON 문자열인지 확인 (Docling fallback인 경우)
+                      content.document.ocr_text.trim().startsWith('{') && content.document.ocr_text.trim().startsWith('{"schema_name') ? (
+                        <div className="text-muted-foreground p-4 border rounded">
+                          <p className="font-semibold mb-2">OCR 처리 중 오류가 발생했습니다.</p>
+                          <p className="text-sm">원본 JSON 데이터가 표시되고 있습니다. OCR 처리를 다시 시도해주세요.</p>
+                        </div>
+                      ) : (
+                        // 무조건 HTML 뷰어로 렌더링
+                        <div className="doc-viewer">
+                          <HtmlContent content={content.document.ocr_text} />
+                        </div>
+                      )
+                    ) : null
                   ) : (
-                    // 무조건 HTML 뷰어로 렌더링
-                    <div className="doc-viewer">
-                      <HtmlContent content={content.document.ocr_text} />
+                    <p className="text-muted-foreground">
+                      {isTxtFile(content.filename) ? '내용이 없습니다.' : 'OCR 결과가 없습니다.'}
+                    </p>
+                  )}
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 화자 재분류 */}
+          {content.transcription?.diarization_metadata?.segment_embeddings &&
+            content.transcription.diarization_metadata.segment_embeddings.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">화자 재분류</CardTitle>
+                  <CardDescription>
+                    저장된 세그먼트 임베딩을 기반으로 화자를 재클러스터링합니다.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="numSpeakers">화자 수 (선택사항)</Label>
+                    <Input
+                      id="numSpeakers"
+                      type="number"
+                      min="1"
+                      value={numSpeakers}
+                      onChange={(e) => setNumSpeakers(e.target.value)}
+                      placeholder="자동 결정"
+                      disabled={isReclustering}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      비워두면 자동으로 결정됩니다.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="similarityThreshold">
+                      유사도 임계값: {similarityThreshold.toFixed(2)}
+                    </Label>
+                    <input
+                      id="similarityThreshold"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={similarityThreshold}
+                      onChange={(e) => setSimilarityThreshold(parseFloat(e.target.value))}
+                      className="w-full"
+                      disabled={isReclustering}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      0.0 (낮음) ~ 1.0 (높음)
+                    </p>
+                  </div>
+                  <Button
+                    onClick={handleRecluster}
+                    disabled={isReclustering}
+                    variant="secondary"
+                    className="w-full"
+                  >
+                    {isReclustering ? '재클러스터링 중...' : '재클러스터링 실행'}
+                  </Button>
+                  {reclusterMessage && (
+                    <div className={cn(
+                      "p-3 rounded-md text-sm",
+                      reclusterMessage.includes('✅')
+                        ? "bg-primary/10 text-primary"
+                        : "bg-destructive/10 text-destructive"
+                    )}>
+                      {reclusterMessage}
                     </div>
-                  )
-                ) : null
-              ) : (
-                <p className="text-muted-foreground">
-                  {isTxtFile(content.filename) ? '내용이 없습니다.' : 'OCR 결과가 없습니다.'}
+                  )}
+                </CardContent>
+              </Card>
+            )}
+        </div>
+
+        {/* 중앙 영역: 화자 분리 메타데이터 + LLM 요약 + 재처리 카드 */}
+        <div className="lg:col-span-5 space-y-6">
+          {/* 화자 분리 메타데이터 */}
+          {content.transcription?.diarization_metadata && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">화자 분리 메타데이터</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <p className="text-sm">
+                  <strong>구분된 화자 수:</strong> {content.transcription.diarization_metadata.num_speakers}명
                 </p>
-              )}
-            </ScrollArea>
-          </CardContent>
-        </Card>
-      )}
+                <p className="text-sm">
+                  <strong>화자 라벨:</strong> {content.transcription.diarization_metadata.speaker_labels.join(', ')}
+                </p>
+              </CardContent>
+            </Card>
+          )}
 
-      {content.transcription?.diarization_metadata && (
-        <Card>
-          <CardHeader>
-            <CardTitle>화자 분리 메타데이터</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <p className="text-sm">
-              <strong>구분된 화자 수:</strong> {content.transcription.diarization_metadata.num_speakers}명
-            </p>
-            <p className="text-sm">
-              <strong>화자 라벨:</strong> {content.transcription.diarization_metadata.speaker_labels.join(', ')}
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {content.transcription?.diarization_metadata?.segment_embeddings &&
-        content.transcription.diarization_metadata.segment_embeddings.length > 0 && (
           <Card>
             <CardHeader>
-              <CardTitle>화자 재분류</CardTitle>
-              <CardDescription>
-                저장된 세그먼트 임베딩을 기반으로 화자를 재클러스터링합니다. GPU 연산 없이 빠르게 처리됩니다.
-              </CardDescription>
+              <CardTitle>LLM 요약</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="numSpeakers">화자 수 (선택사항)</Label>
-                <Input
-                  id="numSpeakers"
-                  type="number"
-                  min="1"
-                  value={numSpeakers}
-                  onChange={(e) => setNumSpeakers(e.target.value)}
-                  placeholder="자동 결정"
-                  className="max-w-xs"
-                  disabled={isReclustering}
-                />
-                <p className="text-xs text-muted-foreground">
-                  비워두면 자동으로 결정됩니다.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="similarityThreshold">
-                  유사도 임계값: {similarityThreshold.toFixed(2)}
-                </Label>
-                <input
-                  id="similarityThreshold"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={similarityThreshold}
-                  onChange={(e) => setSimilarityThreshold(parseFloat(e.target.value))}
-                  className="w-full max-w-md"
-                  disabled={isReclustering}
-                />
-                <p className="text-xs text-muted-foreground">
-                  0.0 (낮음) ~ 1.0 (높음) - 유사도가 이 값 이상인 세그먼트를 같은 화자로 묶습니다.
-                </p>
-              </div>
-              <Button
-                onClick={handleRecluster}
-                disabled={isReclustering}
-                variant="secondary"
-                className="w-full"
-              >
-                {isReclustering ? '재클러스터링 중...' : '재클러스터링 실행'}
-              </Button>
-              {reclusterMessage && (
-                <div className={cn(
-                  "p-3 rounded-md text-sm",
-                  reclusterMessage.includes('✅')
-                    ? "bg-primary/10 text-primary"
-                    : "bg-destructive/10 text-destructive"
-                )}>
-                  {reclusterMessage}
+            <CardContent>
+              {content.status === 'SUMMARY_QUEUED' && (
+                <div className="space-y-4">
+                  <p className="text-muted-foreground">요약 작업이 큐에 등록되었습니다. 잠시만 기다려 주세요.</p>
+                  <p className="text-xs text-muted-foreground">작업이 오래 걸린다면 아래 버튼을 눌러 재시도할 수 있습니다.</p>
+                  <Button
+                    type="button"
+                    onClick={() => handleRetry('summary')}
+                    variant="outline"
+                    className="w-full"
+                  >
+                    요약 재처리 (수동)
+                  </Button>
                 </div>
+              )}
+              {content.status === 'SUMMARIZING' && (
+                <p className="text-muted-foreground">LLM이 요약을 생성하는 중입니다. 잠시만 기다려 주세요.</p>
+              )}
+              {content.status === 'SUMMARY_FAILED' && (
+                <div className="space-y-4">
+                  <p className="text-destructive">요약 생성에 실패했습니다. 다시 시도하려면 아래 버튼을 클릭하세요.</p>
+                  <Button
+                    type="button"
+                    onClick={() => handleRetry('summary')}
+                    variant="secondary"
+                    className="w-full"
+                  >
+                    LLM 요약 재처리
+                  </Button>
+                </div>
+              )}
+              {content.summary_md ? (
+                <MarkdownContent content={content.summary_md} />
+              ) : (
+                content.status !== 'SUMMARY_QUEUED' &&
+                content.status !== 'SUMMARIZING' &&
+                content.status !== 'SUMMARY_FAILED' && (
+                  <p className="text-muted-foreground">요약이 아직 준비되지 않았습니다.</p>
+                )
               )}
             </CardContent>
           </Card>
-        )}
 
-      <Card>
-        <Collapsible open={isLogsOpen} onOpenChange={setIsLogsOpen}>
-          <CardHeader>
-            <CollapsibleTrigger className="flex items-center justify-between w-full hover:opacity-70 transition-opacity">
-              <CardTitle>로그</CardTitle>
-              <ChevronDown className={cn(
-                "h-5 w-5 transition-transform duration-200",
-                isLogsOpen && "transform rotate-180"
-              )} />
-            </CollapsibleTrigger>
-          </CardHeader>
-          <CollapsibleContent>
-            <CardContent className="space-y-4">
-              {content.logs?.map((log) => (
-                <div key={log.id} className="pb-4 border-b last:border-b-0">
-                  <p className="text-sm font-semibold mb-2">{log.message || '로그'}</p>
-                  <pre className="text-xs overflow-x-auto break-words whitespace-pre-wrap bg-muted p-3 rounded-md">
-                    {JSON.stringify(log.log, null, 2)}
-                  </pre>
-                  <p className="text-xs text-muted-foreground mt-2">{formatToKST(log.created_at)}</p>
-                </div>
-              ))}
-            </CardContent>
-          </CollapsibleContent>
-        </Collapsible>
-      </Card>
+          {(content.status === 'ASR_FAILED' || content.status === 'PROCESSING' || content.status === 'QUEUED' ||
+            content.status === 'OCR_FAILED' || content.status === 'OCR_PROCESSING') && (
+              <Card className={cn(
+                (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "border-destructive",
+                content.status === 'QUEUED' && "border-primary"
+              )}>
+                <CardHeader>
+                  <CardTitle className={cn(
+                    "text-base",
+                    (content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED') && "text-destructive",
+                    content.status === 'QUEUED' && "text-primary"
+                  )}>
+                    {content.status === 'ASR_FAILED' || content.status === 'OCR_FAILED'
+                      ? `${isDocumentFile(content.filename) ? '문서' : '음성'} 인식이 실패했습니다. 아래 버튼을 클릭하여 재처리하세요.`
+                      : content.status === 'QUEUED'
+                        ? `${isDocumentFile(content.filename) ? '문서' : '음성'} 인식이 대기 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`
+                        : `${isDocumentFile(content.filename) ? '문서' : '음성'} 인식이 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {!isDocumentFile(content.filename) && (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="minSpeakers">최소 화자 수 (선택사항)</Label>
+                          <Input
+                            id="minSpeakers"
+                            type="number"
+                            min="1"
+                            value={minSpeakers}
+                            onChange={(e) => setMinSpeakers(e.target.value)}
+                            placeholder="자동 결정"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="maxSpeakers">최대 화자 수 (선택사항)</Label>
+                          <Input
+                            id="maxSpeakers"
+                            type="number"
+                            min="1"
+                            value={maxSpeakers}
+                            onChange={(e) => setMaxSpeakers(e.target.value)}
+                            placeholder="자동 결정"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        화자 수 범위를 지정하지 않으면 자동으로 결정됩니다.
+                      </p>
+                    </>
+                  )}
+                  <Button
+                    type="button"
+                    onClick={() => handleRetry(isDocumentFile(content.filename) ? 'ocr' : 'asr')}
+                    variant="default"
+                    className="w-full"
+                  >
+                    {isDocumentFile(content.filename) ? 'OCR 재처리' : 'ASR 재처리'}
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
 
-      <Card>
-        <Collapsible open={isLlmLogsOpen} onOpenChange={setIsLlmLogsOpen}>
-          <CardHeader>
-            <CollapsibleTrigger className="flex items-center justify-between w-full hover:opacity-70 transition-opacity">
-              <CardTitle>LLM 로그</CardTitle>
-              <ChevronDown className={cn(
-                "h-5 w-5 transition-transform duration-200",
-                isLlmLogsOpen && "transform rotate-180"
-              )} />
-            </CollapsibleTrigger>
-          </CardHeader>
-          <CollapsibleContent>
-            <CardContent>
-              {content.llm_logs?.length ? (
-                <div className="space-y-4">
-                  {content.llm_logs.map((log) => (
-                    <div key={log.id} className="pb-4 border-b last:border-b-0">
-                      <p className="text-sm font-semibold mb-2">{log.message || '로그'}</p>
-                      <pre className="text-xs overflow-x-auto break-words whitespace-pre-wrap bg-muted p-3 rounded-md">
-                        {JSON.stringify(log.log, null, 2)}
-                      </pre>
-                      <p className="text-xs text-muted-foreground mt-2">{formatToKST(log.created_at)}</p>
+          {message && (
+            <div className={cn(
+              "p-3 rounded-md text-sm",
+              message.includes('실패') ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary"
+            )}>
+              {message}
+            </div>
+          )}
+        </div>
+
+        {/* 우측 영역: 로그 */}
+        <div className="lg:col-span-3 space-y-6">
+          <Card>
+            <Collapsible open={isLogsOpen} onOpenChange={setIsLogsOpen}>
+              <CardHeader>
+                <CollapsibleTrigger className="flex items-center justify-between w-full hover:opacity-70 transition-opacity">
+                  <CardTitle className="text-base">로그</CardTitle>
+                  <ChevronDown className={cn(
+                    "h-5 w-5 transition-transform duration-200",
+                    isLogsOpen && "transform rotate-180"
+                  )} />
+                </CollapsibleTrigger>
+              </CardHeader>
+              <CollapsibleContent>
+                <CardContent>
+                  <ScrollArea className="max-h-[500px]">
+                    <div className="space-y-4">
+                      {content.logs?.map((log) => (
+                        <div key={log.id} className="pb-4 border-b last:border-b-0">
+                          <p className="text-sm font-semibold mb-2">{log.message || '로그'}</p>
+                          <pre className="text-xs overflow-x-auto break-words whitespace-pre-wrap bg-muted p-3 rounded-md">
+                            {JSON.stringify(log.log, null, 2)}
+                          </pre>
+                          <p className="text-xs text-muted-foreground mt-2">{formatToKST(log.created_at)}</p>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-muted-foreground">LLM 로그가 없습니다.</p>
-              )}
-            </CardContent>
-          </CollapsibleContent>
-        </Collapsible>
-      </Card>
+                  </ScrollArea>
+                </CardContent>
+              </CollapsibleContent>
+            </Collapsible>
+          </Card>
+
+          <Card>
+            <Collapsible open={isLlmLogsOpen} onOpenChange={setIsLlmLogsOpen}>
+              <CardHeader>
+                <CollapsibleTrigger className="flex items-center justify-between w-full hover:opacity-70 transition-opacity">
+                  <CardTitle className="text-base">LLM 로그</CardTitle>
+                  <ChevronDown className={cn(
+                    "h-5 w-5 transition-transform duration-200",
+                    isLlmLogsOpen && "transform rotate-180"
+                  )} />
+                </CollapsibleTrigger>
+              </CardHeader>
+              <CollapsibleContent>
+                <CardContent>
+                  <ScrollArea className="max-h-[500px]">
+                    {content.llm_logs?.length ? (
+                      <div className="space-y-4">
+                        {content.llm_logs.map((log) => (
+                          <div key={log.id} className="pb-4 border-b last:border-b-0">
+                            <p className="text-sm font-semibold mb-2">{log.message || '로그'}</p>
+                            <pre className="text-xs overflow-x-auto break-words whitespace-pre-wrap bg-muted p-3 rounded-md">
+                              {JSON.stringify(log.log, null, 2)}
+                            </pre>
+                            <p className="text-xs text-muted-foreground mt-2">{formatToKST(log.created_at)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-muted-foreground">LLM 로그가 없습니다.</p>
+                    )}
+                  </ScrollArea>
+                </CardContent>
+              </CollapsibleContent>
+            </Collapsible>
+          </Card>
+        </div>
+      </div>
 
       {showScrollTop && (
         <Button
@@ -922,6 +947,6 @@ export default function ContentDetail({ content }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }
