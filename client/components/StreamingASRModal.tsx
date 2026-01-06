@@ -14,8 +14,7 @@ interface StreamingASRModalProps {
 
 export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps) {
     const [isRecording, setIsRecording] = useState(false)
-    const [transcription, setTranscription] = useState<string>('')
-    const [committedText, setCommittedText] = useState<string>('') // 확정된 텍스트
+    const [committedLines, setCommittedLines] = useState<string[]>([]) // 확정된 텍스트 라인들
     const [status, setStatus] = useState<string>('서버 연결 대기 중...')
     const [isServerReady, setIsServerReady] = useState(false) // 서버(VRAM) 준비 여부
     const [sessionId, setSessionId] = useState<string>('')
@@ -75,8 +74,7 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
         if (open) {
             const newSessionId = Math.random().toString(36).substring(2, 15);
             setSessionId(newSessionId);
-            setTranscription('');
-            setCommittedText('');
+            setCommittedLines([]);
             setStatus('서버 연결 및 모델 로딩 중...');
             setIsServerReady(false);
 
@@ -110,15 +108,10 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                 ws.onmessage = (event) => {
                     try {
                         const message = JSON.parse(event.data);
-                        if (message.type === 'transcription') {
-                            setTranscription((prev) => prev + message.text);
-                        } else if (message.type === 'full_transcription') {
-                            setTranscription(message.text);
-                        } else if (message.type === 'commit') {
-                            const textToCommit = message.text || transcription;
+                        if (message.type === 'commit') {
+                            const textToCommit = message.text;
                             if (textToCommit) {
-                                setCommittedText((prev) => prev + (prev ? ' ' : '') + textToCommit);
-                                setTranscription('');
+                                setCommittedLines((prev) => [...prev, textToCommit]);
                             }
                         } else if (message.type === 'connection') {
                             console.log('Connection established:', message);
@@ -133,10 +126,12 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
 
                         // 자동 스크롤
                         if (scrollAreaRef.current) {
-                            const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
-                            if (scrollContainer) {
-                                scrollContainer.scrollTop = scrollContainer.scrollHeight;
-                            }
+                            setTimeout(() => {
+                                const scrollContainer = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+                                if (scrollContainer) {
+                                    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+                                }
+                            }, 100);
                         }
                     } catch (e) {
                         console.error('Failed to parse websocket message:', e);
@@ -354,13 +349,13 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
         }}>
             <DialogContent className="sm:max-w-xl">
                 <DialogHeader>
-                    <DialogTitle>실시간 전사 (Streaming ASR)</DialogTitle>
+                    <DialogTitle>Streaming ASR</DialogTitle>
                     <DialogDescription>
-                        마이크 버튼을 눌러 녹음을 시작하세요. 실시간으로 전사 내용이 표시됩니다.
+                        마이크 버튼을 눌러 녹음을 시작하세요.
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="flex flex-col space-y-4 py-4">
+                <div className="flex flex-col space-y-2 py-2">
                     {/* 마이크 및 언어 선택 */}
                     <div className="flex justify-center w-full px-10 gap-2">
                         <Select value={selectedDeviceId} onValueChange={setSelectedDeviceId} disabled={isRecording}>
@@ -381,18 +376,18 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                                 <SelectValue placeholder="언어" />
                             </SelectTrigger>
                             <SelectContent>
+                                <SelectItem value="auto">자동감지</SelectItem>
                                 <SelectItem value="ko">한국어</SelectItem>
                                 <SelectItem value="en">English</SelectItem>
                                 <SelectItem value="ja">日本語</SelectItem>
                                 <SelectItem value="zh">中文</SelectItem>
-                                <SelectItem value="auto">자동감지</SelectItem>
                             </SelectContent>
                         </Select>
                     </div>
 
                     <div className="flex flex-col justify-center items-center space-y-4">
                         {/* 캔버스 영역 */}
-                        <div className="w-full h-24 bg-secondary/20 rounded-md overflow-hidden flex items-center justify-center relative">
+                        <div className="w-full h-14 bg-secondary/20 rounded-md overflow-hidden flex items-center justify-center relative">
                             <canvas
                                 ref={canvasRef}
                                 width={500}
@@ -409,7 +404,7 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                         <Button
                             variant={isRecording ? "destructive" : "outline"}
                             size="icon"
-                            className={`h-24 w-24 rounded-full transition-all duration-300 hover:scale-105 shadow-lg ${!isServerReady ? "opacity-50 cursor-not-allowed" : ""}`}
+                            className={`h-16 w-16 rounded-full transition-all duration-300 hover:scale-105 shadow-lg ${!isServerReady ? "opacity-50 cursor-not-allowed" : ""}`}
                             onClick={handleToggleRecording}
                             disabled={!isServerReady}
                         >
@@ -425,15 +420,29 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                         {status}
                     </div>
 
-                    <div className="border rounded-md p-4 bg-muted/30">
+                    <div className="border rounded-md p-2 bg-muted/30">
                         <ScrollArea className="h-[300px] w-full pr-4" ref={scrollAreaRef}>
-                            {transcription ? (
-                                <p className="whitespace-pre-wrap text-lg leading-relaxed text-foreground">
-                                    {transcription}
-                                </p>
+                            {committedLines.length > 0 ? (
+                                <div className="flex flex-col gap-2">
+                                    {committedLines.map((line, index) => (
+                                        <p key={index} className="whitespace-pre-wrap text-lg leading-relaxed text-foreground bg-white/50 p-2 rounded-md shadow-sm">
+                                            {line}
+                                        </p>
+                                    ))}
+                                    {isRecording && (
+                                        <div className="flex items-center gap-2 text-muted-foreground animate-pulse mt-2">
+                                            <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                                            <span>듣고 있는 중... (5초 단위 변환)</span>
+                                        </div>
+                                    )}
+                                </div>
                             ) : (
                                 <div className="h-full flex items-center justify-center text-muted-foreground/50">
-                                    <p>녹음을 시작하면 여기에 텍스트가 표시됩니다...</p>
+                                    {isRecording ? (
+                                        <p className="animate-pulse">듣고 있습니다...</p>
+                                    ) : (
+                                        <p>녹음을 시작하면 여기에 텍스트가 표시됩니다...</p>
+                                    )}
                                 </div>
                             )}
                         </ScrollArea>
@@ -442,18 +451,7 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
 
                 <DialogFooter className="sm:justify-between">
                     <div className="flex items-center text-xs text-muted-foreground">
-                        * whisper 사용
-                    </div>
-                    <div className="flex gap-2">
-                        <Button
-                            variant="outline"
-                            onClick={() => onOpenChange(false)}
-                        >
-                            닫기
-                        </Button>
-                        <Button onClick={() => onOpenChange(false)} disabled={!transcription}>
-                            완료
-                        </Button>
+                        맥락이 충분히 유지되어야 정확한 음성 인식이 가능합니다.
                     </div>
                 </DialogFooter>
             </DialogContent>

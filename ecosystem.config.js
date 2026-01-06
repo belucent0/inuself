@@ -174,9 +174,30 @@ const apps = [
     merge_logs: false,
     // Windows에서 콘솔 창 숨기기
     windowsHide: true,
+  },
+  {
+    name: 'flm-server',
+    cwd: 'C:\\timblo\\torch-test',
+    script: 'flm',
+    args: ['serve', '--asr', '1'],
+    env: {
+      // FastFlowLM 환경 변수 (필요시 추가)
+    },
+    autorestart: true,
+    max_restarts: 10,
+    min_uptime: '10s',
+    restart_delay: 4000,
+    watch: false,
+    error_file: 'C:\\timblo\\torch-test\\logs\\flm-server-error.log',
+    out_file: 'C:\\timblo\\torch-test\\logs\\flm-server-out.log',
+    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    merge_logs: false,
+    windowsHide: true,
   }
 ];
 
+// flm-server는 PM2로 상시 실행
+// WebSocket 연결 시 localhost:11434로 연결하여 사용
 // llama-server는 PM2에서 관리하지 않음
 // worker-llm이 요청을 받을 때마다 subprocess로 llama-server를 시작하고 종료함
 // (llamacpp_server_client.py의 _llama_server_process 컨텍스트 매니저 참조)

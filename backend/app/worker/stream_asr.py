@@ -4,29 +4,19 @@ import subprocess
 import sys
 import time
 import threading
-from pathlib import Path
-from typing import Optional
-
-
 import httpx
 from ..core.logging import logger
 
-# Whisper Server 설정
-WHISPER_SERVER_PATH = r"C:\whisper-cpp\build\bin\Release\whisper-server.exe"
-
-# 모델 경로 (우선순위: C:\whisper-cpp\models\ggml-base.bin)
-# WHISPER_MODEL_PATH = "C:\whisper-cpp\models\ggml-base.bin"
-# WHISPER_MODEL_PATH = r"C:\whisper-cpp\models\ggml-large-v3.bin"
-WHISPER_MODEL_PATH = "C:\whisper-cpp\models\ggml-large-v3-turbo-q8_0.bin"
-
-WHISPER_SERVER_PORT = 8001
-
+# FastFlowLM Server 설정
+WHISPER_SERVER_URL = "http://localhost:11434/v1"
+# flm 커맨드 (PATH에 있다고 가정)
+FLM_COMMAND = ["flm", "serve", "--asr", "1"]
 
 class StreamASRWorker:
-    """whisper-server.exe 프로세스를 관리하는 싱글톤 워커 클래스."""
+    """FastFlowLM(flm) 프로세스를 관리하는 싱글톤 워커 클래스."""
     
-    _instance: Optional["StreamASRWorker"] = None
-    _process: Optional[subprocess.Popen] = None
+    _instance = None
+    _process: subprocess.Popen | None = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -38,144 +28,72 @@ class StreamASRWorker:
         if self.initialized:
             return
         self.initialized = True
-        self.host = "127.0.0.1"
-        self.port = WHISPER_SERVER_PORT
+        # PM2로 관리되는 flm 서버에 연결
+        # Docker: host.docker.internal, 개발: 127.0.0.1
+        import os
+        self.host = os.getenv("FLM_HOST", "127.0.0.1")
+        self.port = 11434
         
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.host}:{self.port}/v1"
+
     def start(self):
-        """whisper-server.exe 실행."""
-        if self._process and self._process.poll() is None:
-            logger.info("StreamASRWorker: Server already running.")
-            return
-
-        server_path = Path(WHISPER_SERVER_PATH)
-        if not server_path.exists():
-            logger.error(f"StreamASRWorker: Server binary not found at {server_path}")
-            return
-
-        model_path = Path(WHISPER_MODEL_PATH)
-        if not model_path.exists():
-            logger.error(f"StreamASRWorker: Model not found at {model_path}")
-            return
-
-        cmd = [
-            str(server_path),
-            "-m", str(model_path),
-            "--port", str(self.port),
-            "--host", self.host,
-            "-l", "ko",  # 한국어 기본 설정
-        ]
+        """flm 서버 연결 확인 (PM2로 관리됨)."""
+        # PM2가 flm-server를 관리하므로 포트만 확인
+        if self._is_port_in_use(self.port):
+             logger.info(f"StreamASRWorker: flm server is running on port {self.port}")
+             return
         
-        logger.info(f"StreamASRWorker: Starting server... {' '.join(cmd)}")
-        
-        try:
-            # Windows 프로세스 그룹 생성 (종료 시 자식까지 정리)
-            creation_flags = 0
-            if sys.platform == "win32":
-                import subprocess as sp
-                creation_flags = sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW
-
-            self._process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                creationflags=creation_flags
-            )
-            
-            # 비동기적으로 로그 모니터링 시작
-            self._start_log_monitor()
-            
-            logger.info(f"StreamASRWorker: Server started with PID {self._process.pid}")
-            
-        except Exception as e:
-            logger.error(f"StreamASRWorker: Failed to start server: {e}")
-            self._process = None
-
+        logger.warning(f"StreamASRWorker: flm server not detected on port {self.port}. Please start with 'pm2 start ecosystem.config.js'")
     def stop(self):
-        """서버 종료."""
-        if self._process:
-            logger.info("StreamASRWorker: Stopping server...")
-            try:
-                if sys.platform == "win32":
-                    import ctypes
-                    # 강제 종료 (Terminate)
-                    ctypes.windll.kernel32.TerminateProcess(int(self._process._handle), 1)
-                else:
-                    self._process.terminate()
-                    try:
-                        self._process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        self._process.kill()
-            except Exception as e:
-                logger.error(f"StreamASRWorker: Error stopping server: {e}")
-            finally:
-                self._process = None
-                logger.info("StreamASRWorker: Server stopped.")
-
-    async def wait_for_ready(self, timeout: float = 60.0) -> bool:
-        """서버가 준비될 때까지 대기 (Warm-up Inference 포함)."""
-        if not self.is_running():
-            return False
-            
-        start_time = time.time()
-        url = f"{self.base_url}/inference"
-        
-        # 1초짜리 무음 WAV 생성 (Warm-up용)
-        import io
-        import wave
-        
-        dummy_wav = io.BytesIO()
-        with wave.open(dummy_wav, 'wb') as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(16000)
-            wf.writeframes(b'\x00' * 32000) # 1 sec of silence (16000 * 2 bytes)
-        dummy_wav_bytes = dummy_wav.getvalue()
-        
-        async with httpx.AsyncClient() as client:
-            while time.time() - start_time < timeout:
-                try:
-                    # 실제 인퍼런스 요청을 보내서 모델 로딩 여부 확인 (Warm-up)
-                    files = {'file': ('warmup.wav', dummy_wav_bytes, 'audio/wav')}
-                    data = {
-                        "temperature": "0.0",
-                        "response_format": "json",
-                        "language": "ko" 
-                    }
-                    
-                    resp = await client.post(url, files=files, data=data, timeout=5.0)
-                    
-                    if resp.status_code == 200:
-                        logger.info("StreamASRWorker: Server is fully ready (Warm-up successful)!")
-                        return True
-                    else:
-                        logger.debug(f"StreamASRWorker: Server responded {resp.status_code}, still loading...")
-                        
-                except Exception as e:
-                    # 아직 연결 안됨
-                    logger.debug(f"StreamASRWorker: Waiting for server... ({e})")
-                    pass
-                
-                if not self.is_running():
-                    return False
-                    
-                await asyncio.sleep(1.0)
-                
-        logger.error("StreamASRWorker: Timeout waiting for server ready")
-        return False
+        """서버 종료 (PM2로 관리되므로 별도 종료 불필요)."""
+        pass
 
     def is_running(self) -> bool:
         """서버 실행 여부 확인."""
-        if self._process is None:
+        if self._is_port_in_use(self.port):
+            return True
+        if self._process is not None and self._process.poll() is None:
+            return True
+        return False
+    
+    def _is_port_in_use(self, port: int) -> bool:
+        import socket
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                # 타임아웃 짧게 (빠른 체크)
+                s.settimeout(1.0)
+                return s.connect_ex((self.host, port)) == 0
+        except:
             return False
-        if self._process.poll() is not None:
-            # 프로세스가 종료된 상태
-            self._process = None
-            return False
-        return True
+
+    async def wait_for_ready(self, timeout: float = 30.0) -> bool:
+        """서버 연결 확인 (포트 체크만 수행)."""
+        start_time = time.time()
         
+        # FastFlowLM은 /v1/models 엔드포인트를 지원하지 않으므로
+        # 포트가 열려있는지만 확인
+        while time.time() - start_time < timeout:
+            # 포트 확인
+            if self._is_port_in_use(self.port):
+                logger.info("StreamASRWorker: flm server port is open and ready!")
+                # 추가로 1초 대기 (서버 완전 초기화 대기)
+                await asyncio.sleep(1.0)
+                return True
+            
+            # 프로세스가 관리 중인데 죽었는지 체크
+            if self._process and self._process.poll() is not None:
+                 logger.error(f"StreamASRWorker: Process died with code {self._process.returncode} while waiting.")
+                 self._process = None
+                 return False
+                 
+            await asyncio.sleep(0.5)
+                
+        logger.warning("StreamASRWorker: Timeout waiting for server ready")
+        return False
+
     def _start_log_monitor(self):
-        """서버 로그 모니터링 스레드 시작."""
         if not self._process:
             return
             
@@ -185,23 +103,13 @@ class StreamASRWorker:
                     if line:
                         line = line.strip()
                         if line:
-                            if level == "stderr":
-                                # whisper-server 로그는 stderr로 많이 나옴
-                                logger.info(f"[WhisperServer] {line}")
-                            else:
-                                logger.debug(f"[WhisperServer] {line}")
-            except Exception as e:
-                logger.error(f"Error reading server output: {e}")
+                            # flm 로그
+                            logger.info(f"[flm] {line}")
+            except Exception:
+                pass
 
-        # stdout, stderr 각각 모니터링 스레드 생성
-        t1 = threading.Thread(target=monitor_pipe, args=(self._process.stdout, "stdout"), daemon=True)
-        t2 = threading.Thread(target=monitor_pipe, args=(self._process.stderr, "stderr"), daemon=True)
-        t1.start()
-        t2.start()
-
-    @property
-    def base_url(self) -> str:
-        return f"http://{self.host}:{self.port}"
+        threading.Thread(target=monitor_pipe, args=(self._process.stdout, "stdout"), daemon=True).start()
+        threading.Thread(target=monitor_pipe, args=(self._process.stderr, "stderr"), daemon=True).start()
 
 # 전역 인스턴스
 stream_asr_worker = StreamASRWorker()
