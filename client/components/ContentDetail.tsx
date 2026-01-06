@@ -89,7 +89,7 @@ export default function ContentDetail({ content }: Props) {
   const [minSpeakers, setMinSpeakers] = useState<string>('')
   const [maxSpeakers, setMaxSpeakers] = useState<string>('')
   const [currentSegmentId, setCurrentSegmentId] = useState<number | null>(null)
-  const [autoScroll, setAutoScroll] = useState<boolean>(false)
+  const [autoScroll, setAutoScroll] = useState<boolean>(true)
   const [showScrollTop, setShowScrollTop] = useState<boolean>(false)
   const [showOcrRetryModal, setShowOcrRetryModal] = useState(false)
   const [ocrRetryMode, setOcrRetryMode] = useState<'portray' | 'document' | null>(null)
@@ -308,8 +308,10 @@ export default function ContentDetail({ content }: Props) {
             const elementRect = segmentElement.getBoundingClientRect()
             const scrollTop = viewport.scrollTop
             const elementOffsetTop = elementRect.top - containerRect.top + scrollTop
-            const containerCenter = viewport.clientHeight / 2
-            const targetScrollTop = elementOffsetTop - containerCenter + (elementRect.height / 2)
+
+            // 세그먼트를 뷰포트의 상단 1/3 지점에 배치 (다음 세그먼트도 미리 볼 수 있도록)
+            const viewportTopThird = viewport.clientHeight / 3
+            const targetScrollTop = elementOffsetTop - viewportTopThird
 
             viewport.scrollTo({
               top: targetScrollTop,
@@ -458,17 +460,6 @@ export default function ContentDetail({ content }: Props) {
               )}
             </div>
             <div className="flex items-center gap-3 flex-wrap">
-              {!isDocumentFile(content.filename) && (
-                <div className="flex items-center gap-2">
-                  <Switch
-                    checked={autoScroll}
-                    onCheckedChange={setAutoScroll}
-                    className="touch-manipulation"
-                    aria-label={autoScroll ? '자동 스크롤 활성화' : '자동 스크롤 비활성화'}
-                  />
-                  <Label className="text-sm">스크립트 자동 스크롤</Label>
-                </div>
-              )}
               <Button
                 type="button"
                 onClick={handleDownload}
@@ -606,7 +597,18 @@ export default function ContentDetail({ content }: Props) {
       {content.transcription && content.transcription.segments && (
         <Card>
           <CardHeader>
-            <CardTitle>세그먼트</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle>세그먼트</CardTitle>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={autoScroll}
+                  onCheckedChange={setAutoScroll}
+                  className="touch-manipulation"
+                  aria-label={autoScroll ? '자동 스크롤 활성화' : '자동 스크롤 비활성화'}
+                />
+                <Label className="text-sm">스크립트 자동 스크롤</Label>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             <ScrollArea

@@ -353,6 +353,12 @@ def merge_asr_results(
         # 최종 정렬
         merged_segments.sort(key=lambda x: x["start"])
     
+    # ID 재할당 (중복 방지)
+    # 각 청크에서 0부터 시작하는 ID가 할당되어 중복이 발생하므로
+    # 병합된 세그먼트에 순차적으로 고유한 ID를 재할당
+    for i, seg in enumerate(merged_segments):
+        seg["id"] = i
+    
     # 텍스트 재구성
     all_texts = [seg["text"] for seg in merged_segments]
     merged_text = " ".join(all_texts)
@@ -361,6 +367,7 @@ def merge_asr_results(
     merged_language = chunk_results[0].get("language", "ko")
     
     print(f"[Merging] Merged {len(all_segments)} segments into {len(merged_segments)} segments")
+    print(f"[Merging] Reassigned IDs from 0 to {len(merged_segments)-1}")
     
     return {
         "text": merged_text,
