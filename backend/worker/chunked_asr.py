@@ -264,6 +264,7 @@ def adjust_timestamps(
 def merge_asr_results(
     chunk_results: list[dict[str, Any]],
     overlap_seconds: float,
+    chunk_duration_seconds: float,
 ) -> dict[str, Any]:
     """
     여러 청크의 ASR 결과를 병합 (오버랩 구간 중복 제거).
@@ -271,6 +272,7 @@ def merge_asr_results(
     Args:
         chunk_results: 각 청크의 ASR 결과 리스트
         overlap_seconds: 오버랩 길이 (초)
+        chunk_duration_seconds: 각 청크의 길이 (초)
     
     Returns:
         병합된 ASR 결과
@@ -313,7 +315,7 @@ def merge_asr_results(
             else:
                 # 세그먼트가 없으면 이전 청크의 마지막 시간 + 오버랩으로 추정
                 if i > 0 and chunk_start_times:
-                    chunk_start_times.append(chunk_start_times[-1] + 1800 - overlap_seconds)  # 30분 청크 가정
+                    chunk_start_times.append(chunk_start_times[-1] + chunk_duration_seconds - overlap_seconds)
                 else:
                     chunk_start_times.append(0.0)
         

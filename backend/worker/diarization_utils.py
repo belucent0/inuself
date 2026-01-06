@@ -1030,26 +1030,32 @@ def merge_segments_with_speakers(
                     best_overlap_ratio = 0.5  # 중간점 매칭은 중간 신뢰도
                     break
         
-        seg["speaker"] = best_speaker or "UNKNOWN"
+        # 화자를 찾지 못한 세그먼트는 제외 (대부분 오버랩 구간)
+        if best_speaker is None:
+            logger.debug(
+                f"[Merging] Skipping segment without speaker match: "
+                f"{seg_start:.2f}s ~ {seg_end:.2f}s "
+                f"(duration: {seg_end - seg_start:.2f}s, text: '{seg.get('text', '')[:50]}')"
+            )
+            continue
+        
+        # 화자 할당
+        seg["speaker"] = best_speaker
         
         # 신뢰도 메타데이터 추가
-        if best_speaker:
-            confidence_meta = compute_segment_confidence(
-                seg_start,
-                seg_end,
-                best_speaker,
-                all_diarization_segments,
-                embeddings_dict,
-            )
-            # 겹침 비율도 신뢰도에 반영
-            confidence_meta["overlap_ratio"] = best_overlap_ratio
-            confidence_meta["overall_confidence"] = (
-                confidence_meta["overall_confidence"] * 0.7 + best_overlap_ratio * 0.3
-            )
-            seg.update(confidence_meta)
-        else:
-            seg["overall_confidence"] = 0.0
-            seg["overlap_ratio"] = 0.0
+        confidence_meta = compute_segment_confidence(
+            seg_start,
+            seg_end,
+            best_speaker,
+            all_diarization_segments,
+            embeddings_dict,
+        )
+        # 겹침 비율도 신뢰도에 반영
+        confidence_meta["overlap_ratio"] = best_overlap_ratio
+        confidence_meta["overall_confidence"] = (
+            confidence_meta["overall_confidence"] * 0.7 + best_overlap_ratio * 0.3
+        )
+        seg.update(confidence_meta)
         
         merged_segments.append(seg)
     

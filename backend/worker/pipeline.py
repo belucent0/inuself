@@ -220,7 +220,7 @@ def _run_case4_parallel_full_asr(
                         project_root=project_root,
                     )
                     # 청크 결과 병합
-                    merged_result = merge_asr_results(chunk_results, overlap_seconds)
+                    merged_result = merge_asr_results(chunk_results, overlap_seconds, chunk_duration_seconds)
                     # run_asr_transcription과 동일한 형식으로 반환 (model_load_time, transcribe_time 포함)
                     # 청킹의 경우 모델 로드 시간은 첫 번째 청크에서만 발생하므로 0으로 설정
                     return merged_result, 0.0, 0.0

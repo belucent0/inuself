@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     max_workers: int = 2
 
     # ASR 청킹 설정 (긴 오디오 파일 처리용)
-    asr_chunk_duration_minutes: int = 30  # 청크 크기 (분)
+    asr_chunk_duration_minutes: int = 10  # 청크 크기 (분)
     asr_chunk_overlap_seconds: int = 0  # 오버랩 크기 (초) - 테스트용 0으로 설정
     asr_chunk_threshold_minutes: int = 25  # 이 길이 이상인 파일만 청킹 적용 (30분 = 1800초)
 
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     
     # LLM API 서버 설정 (공통 - 모든 OpenAI 호환 API 사용, provider와 무관)
     llm_base_url: str = "http://localhost:8080"
-    llm_model_name: str = "Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf"
+    llm_model_name: str = ""
     
     # LLM 서버 설정 (요청마다 시작/종료, provider와 무관)
     llm_server_path: str = Field("", validation_alias="LLM_SERVER_PATH")  # 서버 실행 파일 경로
