@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowUp, Download, FileText, Music, Trash2, Image as ImageIcon } from 'lucide-react'
+import { ArrowUp, Download, FileText, Music, Trash2, Image as ImageIcon, ChevronDown } from 'lucide-react'
 
 import { ContentDetail as ContentDetailType, retryProcessing, reclusterSpeakers, deleteContentsBulk } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import DocumentViewer from '@/components/DocumentViewer'
 import MarkdownContent from '@/components/MarkdownContent'
 import HtmlContent from '@/components/HtmlContent'
@@ -93,6 +94,8 @@ export default function ContentDetail({ content }: Props) {
   const [showScrollTop, setShowScrollTop] = useState<boolean>(false)
   const [showOcrRetryModal, setShowOcrRetryModal] = useState(false)
   const [ocrRetryMode, setOcrRetryMode] = useState<'portray' | 'document' | null>(null)
+  const [isLogsOpen, setIsLogsOpen] = useState<boolean>(false)
+  const [isLlmLogsOpen, setIsLlmLogsOpen] = useState<boolean>(false)
 
   const previousSegmentIdRef = useRef<number | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
@@ -780,30 +783,19 @@ export default function ContentDetail({ content }: Props) {
         )}
 
       <Card>
-        <CardHeader>
-          <CardTitle>로그</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {content.logs?.map((log) => (
-            <div key={log.id} className="pb-4 border-b last:border-b-0">
-              <p className="text-sm font-semibold mb-2">{log.message || '로그'}</p>
-              <pre className="text-xs overflow-x-auto break-words whitespace-pre-wrap bg-muted p-3 rounded-md">
-                {JSON.stringify(log.log, null, 2)}
-              </pre>
-              <p className="text-xs text-muted-foreground mt-2">{formatToKST(log.created_at)}</p>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>LLM 로그</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {content.llm_logs?.length ? (
-            <div className="space-y-4">
-              {content.llm_logs.map((log) => (
+        <Collapsible open={isLogsOpen} onOpenChange={setIsLogsOpen}>
+          <CardHeader>
+            <CollapsibleTrigger className="flex items-center justify-between w-full hover:opacity-70 transition-opacity">
+              <CardTitle>로그</CardTitle>
+              <ChevronDown className={cn(
+                "h-5 w-5 transition-transform duration-200",
+                isLogsOpen && "transform rotate-180"
+              )} />
+            </CollapsibleTrigger>
+          </CardHeader>
+          <CollapsibleContent>
+            <CardContent className="space-y-4">
+              {content.logs?.map((log) => (
                 <div key={log.id} className="pb-4 border-b last:border-b-0">
                   <p className="text-sm font-semibold mb-2">{log.message || '로그'}</p>
                   <pre className="text-xs overflow-x-auto break-words whitespace-pre-wrap bg-muted p-3 rounded-md">
@@ -812,11 +804,42 @@ export default function ContentDetail({ content }: Props) {
                   <p className="text-xs text-muted-foreground mt-2">{formatToKST(log.created_at)}</p>
                 </div>
               ))}
-            </div>
-          ) : (
-            <p className="text-muted-foreground">LLM 로그가 없습니다.</p>
-          )}
-        </CardContent>
+            </CardContent>
+          </CollapsibleContent>
+        </Collapsible>
+      </Card>
+
+      <Card>
+        <Collapsible open={isLlmLogsOpen} onOpenChange={setIsLlmLogsOpen}>
+          <CardHeader>
+            <CollapsibleTrigger className="flex items-center justify-between w-full hover:opacity-70 transition-opacity">
+              <CardTitle>LLM 로그</CardTitle>
+              <ChevronDown className={cn(
+                "h-5 w-5 transition-transform duration-200",
+                isLlmLogsOpen && "transform rotate-180"
+              )} />
+            </CollapsibleTrigger>
+          </CardHeader>
+          <CollapsibleContent>
+            <CardContent>
+              {content.llm_logs?.length ? (
+                <div className="space-y-4">
+                  {content.llm_logs.map((log) => (
+                    <div key={log.id} className="pb-4 border-b last:border-b-0">
+                      <p className="text-sm font-semibold mb-2">{log.message || '로그'}</p>
+                      <pre className="text-xs overflow-x-auto break-words whitespace-pre-wrap bg-muted p-3 rounded-md">
+                        {JSON.stringify(log.log, null, 2)}
+                      </pre>
+                      <p className="text-xs text-muted-foreground mt-2">{formatToKST(log.created_at)}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted-foreground">LLM 로그가 없습니다.</p>
+              )}
+            </CardContent>
+          </CollapsibleContent>
+        </Collapsible>
       </Card>
 
       {showScrollTop && (
