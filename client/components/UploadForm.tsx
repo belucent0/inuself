@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 type SpeakerRange = 'auto' | '1-2' | '3-6' | '7-10' | '11+' | null
 type OcrMode = 'portray' | 'document' | null
+import { StreamingASRModal } from './StreamingASRModal'
 
 export default function UploadForm() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -19,6 +20,7 @@ export default function UploadForm() {
   const [isUploading, setUploading] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [showOcrModal, setShowOcrModal] = useState(false)
+  const [showStreamingModal, setShowStreamingModal] = useState(false)
   const [speakerRange, setSpeakerRange] = useState<SpeakerRange>('auto')
   const [ocrMode, setOcrMode] = useState<OcrMode>(null)
   const router = useRouter()
@@ -214,6 +216,15 @@ export default function UploadForm() {
             >
               파일 업로드
             </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setShowStreamingModal(true)}
+              disabled={isUploading}
+              className="w-full mt-2"
+            >
+              실시간 전사 (Beta)
+            </Button>
             {status && (
               <p className={status.includes('실패') ? 'text-sm text-destructive' : 'text-sm text-primary'}>
                 {status}
@@ -351,6 +362,8 @@ export default function UploadForm() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <StreamingASRModal open={showStreamingModal} onOpenChange={setShowStreamingModal} />
     </>
   )
 }

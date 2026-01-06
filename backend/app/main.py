@@ -40,6 +40,11 @@ async def lifespan(app: FastAPI):
         logger.info("[Lifespan] RedisListener started")
     except Exception as exc:
         logger.exception("[Lifespan] Failed to start RedisListener: {}", exc)
+
+    # StreamASRWorker 시작 (whisper-server.exe)
+    from .worker.stream_asr import stream_asr_worker
+    logger.info("[Lifespan] Starting StreamASRWorker...")
+    stream_asr_worker.start()
     
     # 시작 시: 워커 시작 제어
     # 개발 환경에서는 run_dev.sh가 워커를 관리하므로 기본적으로 비활성화
@@ -62,6 +67,10 @@ async def lifespan(app: FastAPI):
         logger.info("[Lifespan] RedisListener stopped")
     except Exception as exc:
         logger.exception("[Lifespan] Error stopping RedisListener: {}", exc)
+
+    # StreamASRWorker 종료
+    logger.info("[Lifespan] Stopping StreamASRWorker...")
+    stream_asr_worker.stop()
 
 
 def create_app() -> FastAPI:
