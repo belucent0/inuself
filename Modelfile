@@ -1,2 +1,0 @@
-FROM ./models/gpt-oss-20b-Q4_K_S.gguf
-
