@@ -165,7 +165,48 @@ def publish_llm_stream(file_id: int, token: str, is_final: bool = False) -> None
             file_id,
             exc,
         )
-# ... (기존 broadcast 함수들 유지)
+def publish_content_created(
+    content_id: int,
+    filename: str,
+    content_type: str,
+    status: str = "QUEUED",
+) -> None:
+    """새 콘텐츠 생성 이벤트를 Redis Pub/Sub으로 발행합니다.
+
+    Args:
+        content_id: 생성된 콘텐츠 ID
+        filename: 파일명
+        content_type: 콘텐츠 타입 (AUDIO, DOCUMENT, PORTRAY)
+        status: 초기 상태 (기본: QUEUED)
+
+    채널: events:content_created
+    """
+    try:
+        channel = "events:content_created"
+        event = {
+            "type": "content_created",
+            "content_id": content_id,
+            "filename": filename,
+            "content_type": content_type,
+            "status": status,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        redis = _get_redis()
+        redis.publish(channel, json.dumps(event))
+
+        logger.info(
+            "[EventPublisher] Published content_created: content_id={}, filename={}",
+            content_id,
+            filename,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[EventPublisher] Failed to publish content_created: content_id={}, error={}",
+            content_id,
+            exc,
+        )
+
 
 class ProgressReporter:
     """파일 진행 상태 보고 헬퍼 클래스.

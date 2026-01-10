@@ -22,6 +22,7 @@ from ..services.youtube_service import (
 from ..schemas.file import FileUploadResponse
 from ..services.content_service import ContentService
 from ..services.file_service import FileService
+from ..worker.event_publisher import publish_content_created
 
 router = APIRouter(prefix="/contents", tags=["contents"])
 
@@ -77,6 +78,15 @@ async def upload_content(
         upload_response = UploadResponse(content_id=result["file_id"], queued=True)
         logger.info("[Upload] File upload successful: file_id={}, filename={}", result["file_id"], file.filename)
         print(f"[Upload] OK 파일 업로드 완료: file_id={result['file_id']}, filename={file.filename}")
+        
+        # 콘텐츠 생성 이벤트 발행 (클라이언트 목록 자동 새로고침용)
+        publish_content_created(
+            content_id=result["file_id"],
+            filename=file.filename or "unknown",
+            content_type=str(result.get("content_type", "AUDIO")),
+            status="QUEUED",
+        )
+        
         return upload_response
     except Exception as exc:
         logger.exception("[Upload] File upload failed: filename={}, error={}", file.filename, exc)
@@ -145,6 +155,14 @@ async def upload_from_youtube(
             "[YouTube Upload] Job enqueued successfully: file_id=%s, title=%s",
             result["file_id"],
             title
+        )
+        
+        # 콘텐츠 생성 이벤트 발행 (클라이언트 목록 자동 새로고침용)
+        publish_content_created(
+            content_id=result["file_id"],
+            filename=f"{title}.mp4",
+            content_type="AUDIO",
+            status="QUEUED",
         )
         
         return YouTubeUploadResponse(

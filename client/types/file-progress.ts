@@ -19,9 +19,12 @@ export type FileProgressStep =
 
 /** 파일 진행 상태 이벤트 */
 export interface FileProgressEvent {
-    type: 'file_progress' | 'connection' | 'pong'
+    type: 'file_progress' | 'connection' | 'pong' | 'content_created'
     file_id?: number
-    status?: FileStatus
+    content_id?: number
+    filename?: string
+    content_type?: string
+    status?: FileStatus | string
     step?: FileProgressStep
     progress?: number
     message?: string

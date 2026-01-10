@@ -52,6 +52,16 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
   // /ws/file-progress/global 엔드포인트 사용
   useWebSocket<FileProgressEvent>(`${wsBase}/file-progress/global`, {
     onMessage: (event) => {
+      // content_created 타입인 경우 목록 새로고침
+      if (event.type === 'content_created') {
+        console.log('[WebSocket] Content created event received:', event)
+        // 목록 새로고침
+        if (onRefresh) {
+          onRefresh()
+        }
+        return
+      }
+      
       // file_progress 타입이고 file_id가 있는 경우 상태 업데이트
       if (event.type === 'file_progress' && event.file_id) {
         setProgressMap((prev) => ({

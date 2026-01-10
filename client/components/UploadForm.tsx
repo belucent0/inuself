@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { toast } from 'sonner'
 
 type SpeakerRange = 'auto' | '1-2' | '3-6' | '7-10' | '11+' | null
 type OcrMode = 'portray' | 'document' | null
@@ -77,7 +78,7 @@ export default function UploadForm() {
     setStatus('업로드 중...')
     try {
       await uploadContent(file, undefined, undefined, selectedOcrMode)
-      setStatus('업로드 완료! 큐에 등록되었습니다.')
+      setStatus('')
       setSelectedFile(null)
 
       // 파일 입력 필드 초기화
@@ -85,10 +86,18 @@ export default function UploadForm() {
         fileInputRef.current.value = ''
       }
 
+      // 토스트 알림
+      toast.success('파일이 처리 대기열에 추가되었습니다', {
+        description: file.name,
+      })
+
       // 목록 페이지로 이동하고 자동 새로고침
       router.push(`/contents?refresh=${Date.now()}`)
     } catch (error) {
-      setStatus('업로드 실패. 다시 시도해 주세요.')
+      setStatus('')
+      toast.error('업로드 실패', {
+        description: '다시 시도해 주세요.',
+      })
     } finally {
       setUploading(false)
     }
@@ -113,11 +122,12 @@ export default function UploadForm() {
   const handleOcrUpload = async () => {
     if (!selectedFile || !ocrMode) return
 
+    const filename = selectedFile.name
     setUploading(true)
     setStatus('업로드 중...')
     try {
       await uploadContent(selectedFile, undefined, undefined, ocrMode)
-      setStatus('업로드 완료! 큐에 등록되었습니다.')
+      setStatus('')
       setShowOcrModal(false)
       setSelectedFile(null)
       setOcrMode(null)
@@ -127,10 +137,18 @@ export default function UploadForm() {
         fileInputRef.current.value = ''
       }
 
+      // 토스트 알림
+      toast.success('파일이 처리 대기열에 추가되었습니다', {
+        description: filename,
+      })
+
       // 목록 페이지로 이동하고 자동 새로고침
       router.push(`/contents?refresh=${Date.now()}`)
     } catch (error) {
-      setStatus('업로드 실패. 다시 시도해 주세요.')
+      setStatus('')
+      toast.error('업로드 실패', {
+        description: '다시 시도해 주세요.',
+      })
     } finally {
       setUploading(false)
     }
@@ -168,11 +186,12 @@ export default function UploadForm() {
       }
     }
 
+    const filename = selectedFile.name
     setUploading(true)
     setStatus('업로드 중...')
     try {
       await uploadContent(selectedFile, minSpeakers, maxSpeakers, undefined)
-      setStatus('업로드 완료! 큐에 등록되었습니다.')
+      setStatus('')
       setShowModal(false)
       setSelectedFile(null)
       setSpeakerRange(null)
@@ -182,10 +201,18 @@ export default function UploadForm() {
         fileInputRef.current.value = ''
       }
 
+      // 토스트 알림
+      toast.success('파일이 처리 대기열에 추가되었습니다', {
+        description: filename,
+      })
+
       // 목록 페이지로 이동하고 자동 새로고침 (쿼리 파라미터로 강제 새로고침)
       router.push(`/contents?refresh=${Date.now()}`)
     } catch (error) {
-      setStatus('업로드 실패. 다시 시도해 주세요.')
+      setStatus('')
+      toast.error('업로드 실패', {
+        description: '다시 시도해 주세요.',
+      })
     } finally {
       setUploading(false)
     }
