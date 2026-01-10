@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
 import { renderAsync } from 'docx-preview'
 import { ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react'
@@ -10,10 +10,8 @@ import { cn } from '@/lib/utils'
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css'
 import 'react-pdf/dist/esm/Page/TextLayer.css'
 
-// PDF.js 워커 설정 (온프레미스 환경 지원 - 모든 리소스를 로컬에서 제공)
+// PDF.js 워커 설정
 if (typeof window !== 'undefined') {
-  // public 폴더의 워커 파일 사용 (CDN 의존성 없음)
-  // 워커 파일은 npm install 시 자동으로 public/로 복사됨
   pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
 }
 
@@ -195,6 +193,12 @@ export default function DocumentViewer({ fileUrl, filename, isPdf, isDocx }: Doc
     }
   }
 
+  // PDF Document options 메모이제이션 (불필요한 리로드 방지)
+  const pdfOptions = useMemo(() => ({
+    httpHeaders: {},
+    withCredentials: false,
+  }), [])
+
   if (isPdf) {
     return (
       <div className="w-full flex flex-col">
@@ -305,14 +309,7 @@ export default function DocumentViewer({ fileUrl, filename, isPdf, isDocx }: Doc
                   </div>
                 </div>
               }
-              options={{
-                // 온프레미스 환경 지원: 모든 리소스를 로컬(public 폴더)에서 제공
-                // cMapUrl과 standardFontDataUrl은 선택사항 (대부분의 PDF는 없어도 동작)
-                // 실제로 파일을 복사하지 않으므로 설정하지 않음
-                // 특수 폰트가 있는 PDF에서 문제가 발생하면 Dockerfile의 주석을 해제하여 복사
-                httpHeaders: {},
-                withCredentials: false,
-              }}
+              options={pdfOptions}
             >
               {numPages > 0 && pageNumber >= 1 && pageNumber <= numPages && (
                 <Page
