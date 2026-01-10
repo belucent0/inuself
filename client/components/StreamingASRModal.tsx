@@ -14,8 +14,10 @@ interface StreamingASRModalProps {
 
 export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps) {
     const [isRecording, setIsRecording] = useState(false)
-    const [committedLines, setCommittedLines] = useState<string[]>([]) // 확정된 텍스트 라인들
+    // 각 라인을 객체로 저장: { id, text (원본), processedText (후처리), segmentId (Backend ID) }
+    const [committedLines, setCommittedLines] = useState<Array<{ id: number; text: string; processedText?: string; segmentId?: string }>>([])
     const [status, setStatus] = useState<string>('서버 연결 대기 중...')
+    const lineIdRef = useRef(0) // 각 라인에 고유 ID 부여
     const [isServerReady, setIsServerReady] = useState(false) // 서버(VRAM) 준비 여부
     const [sessionId, setSessionId] = useState<string>('')
 
@@ -27,7 +29,10 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const animationFrameRef = useRef<number | null>(null)
     const audioContextRef = useRef<AudioContext | null>(null)
+    const pendingTimeoutsRef = useRef<Set<NodeJS.Timeout>>(new Set()) // setTimeout cleanup용
     const analyserRef = useRef<AnalyserNode | null>(null)
+    const currentMaxAmplitudeRef = useRef(0) // 현재 청크 구간의 최대 진폭
+    const hasSentHeaderRef = useRef(false) // WebM 헤더 전송 여부
 
     // 장치 목록 states
     const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([])
@@ -110,8 +115,37 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                         const message = JSON.parse(event.data);
                         if (message.type === 'commit') {
                             const textToCommit = message.text;
+                            const segmentId = message.segment_id;
+
                             if (textToCommit) {
-                                setCommittedLines((prev) => [...prev, textToCommit]);
+                                const lineId = lineIdRef.current++;
+
+                                // 1. 원본 텍스트로 라인 추가 (즉시 표시)
+                                setCommittedLines((prev) => [
+                                    ...prev,
+                                    { id: lineId, text: textToCommit, processedText: undefined, segmentId: segmentId }
+                                ]);
+                            }
+                        } else if (message.type === 'correction') {
+                            const segmentId = message.segment_id;
+                            const processedText = message.processed_text;
+
+                            if (segmentId && processedText) {
+                                // 2. 해당 segmentId를 가진 라인을 찾아 업데이트
+                                const timeoutId = setTimeout(() => {
+                                    setCommittedLines((prev) =>
+                                        prev.map(line =>
+                                            line.segmentId === segmentId
+                                                ? { ...line, processedText }
+                                                : line
+                                        )
+                                    );
+                                    // 완료된 timeout은 Set에서 제거
+                                    pendingTimeoutsRef.current.delete(timeoutId);
+                                }, 100); // 부드러운 전환을 위한 소량의 지연
+
+                                // pending timeout 추적
+                                pendingTimeoutsRef.current.add(timeoutId);
                             }
                         } else if (message.type === 'connection') {
                             console.log('Connection established:', message);
@@ -122,6 +156,17 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                         } else if (message.type === 'error') {
                             console.error("Server error message:", message.message);
                             setStatus(`서버 오류: ${message.message}`);
+                        } else if (message.type === 'warning') {
+                            setStatus(`⚠️ ${message.message}`);
+                            // 2초 후 상태 복귀
+                            setTimeout(() => {
+                                // 현재 녹음 중인지 확인하여 상태 복구
+                                if (isRecordingRef.current) {
+                                    setStatus("녹음 중...");
+                                } else if (isServerReady) {
+                                    setStatus('준비 완료');
+                                }
+                            }, 2000);
                         }
 
                         // 자동 스크롤
@@ -161,6 +206,9 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                 websocketRef.current.close();
                 websocketRef.current = null;
             }
+            // pending된 모든 timeout 정리
+            pendingTimeoutsRef.current.forEach(timeoutId => clearTimeout(timeoutId));
+            pendingTimeoutsRef.current.clear();
         }
 
         return () => {
@@ -168,6 +216,9 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
             if (ws) {
                 ws.close();
             }
+            // pending된 모든 timeout 정리
+            pendingTimeoutsRef.current.forEach(timeoutId => clearTimeout(timeoutId));
+            pendingTimeoutsRef.current.clear();
         };
     }, [open, selectedLanguage]); // selectedLanguage 변경 시 재연결? (일단 포함)
 
@@ -200,6 +251,17 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
             animationFrameRef.current = requestAnimationFrame(draw)
 
             analyserRef.current!.getByteTimeDomainData(dataArray)
+
+            // 진폭 계산 및 업데이트
+            let maxAmp = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                const amp = Math.abs(dataArray[i] - 128);
+                if (amp > maxAmp) maxAmp = amp;
+            }
+            // 현재 청크 구간의 최대 등폭 갱신 (더 큰 값이 있으면 유지)
+            if (maxAmp > currentMaxAmplitudeRef.current) {
+                currentMaxAmplitudeRef.current = maxAmp;
+            }
 
             // 캔버스 크기 확인 및 조정
             if (canvas.width !== canvas.offsetWidth || canvas.height !== canvas.offsetHeight) {
@@ -273,6 +335,8 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
 
             // 시각화 시작
             isRecordingRef.current = true
+            currentMaxAmplitudeRef.current = 0; // 초기화
+            hasSentHeaderRef.current = false; // 헤더 플래그 초기화
             drawWaveform()
             setIsRecording(true)
             setStatus("녹음 중...")
@@ -287,9 +351,40 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
 
             mediaRecorder.ondataavailable = async (event) => {
                 const ws = websocketRef.current;
+
+                // 클라이언트 사이드 VAD / 필터링
+                const maxAmp = currentMaxAmplitudeRef.current;
+                currentMaxAmplitudeRef.current = 0; // 리셋 (다음 청크 측정을 위해)
+
+                // Threshold 설정 (테스트 필요: 128기준, 3미만 침묵, 10미만 저음량 가정)
+                const SILENCE_THRESHOLD = 3;
+                const MIN_VOLUME_THRESHOLD = 10;
+
                 if (event.data.size > 0 && ws && ws.readyState === WebSocket.OPEN) {
-                    // console.debug(`Sending audio chunk: ${event.data.size} bytes`)
-                    ws.send(event.data)
+                    // 1. 헤더 청크(첫 번째)는 무조건 전송해야 함 (ffmpeg 디코딩 필수)
+                    if (!hasSentHeaderRef.current) {
+                        // console.debug("Sending WebM header chunk");
+                        ws.send(event.data);
+                        hasSentHeaderRef.current = true;
+                        return;
+                    }
+
+                    // 2. 이후 청크부터 VAD 필터링 적용
+                    if (maxAmp < SILENCE_THRESHOLD) {
+                        // 침묵: 전송 안 함 (서버 부하 감소)
+                        // console.debug(`Silence detected (Amp: ${maxAmp}), skipping send.`);
+                    } else if (maxAmp < MIN_VOLUME_THRESHOLD) {
+                        // 저음량: 경고 표시만 하고 전송 안 함
+                        // console.debug(`Low volume detected (Amp: ${maxAmp}), skipping send.`);
+                        setStatus(`⚠️ 목소리가 너무 작아 인식이 어렵습니다.`);
+                        setTimeout(() => {
+                            if (isRecordingRef.current) setStatus("녹음 중...");
+                            else if (isServerReady) setStatus('준비 완료');
+                        }, 2000);
+                    } else {
+                        // 정상: 전송
+                        ws.send(event.data);
+                    }
                 }
             }
 
@@ -424,10 +519,19 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                         <ScrollArea className="h-[300px] w-full pr-4" ref={scrollAreaRef}>
                             {committedLines.length > 0 ? (
                                 <div className="flex flex-col gap-2">
-                                    {committedLines.map((line, index) => (
-                                        <p key={index} className="whitespace-pre-wrap text-lg leading-relaxed text-foreground bg-white/50 p-2 rounded-md shadow-sm">
-                                            {line}
-                                        </p>
+                                    {committedLines.map((line) => (
+                                        <div key={line.id} className="relative">
+                                            <p className="whitespace-pre-wrap text-lg leading-relaxed text-foreground bg-white/50 p-2 rounded-md shadow-sm transition-all duration-300">
+                                                {/* 후처리된 텍스트가 있으면 표시, 없으면 원본 표시 */}
+                                                {line.processedText || line.text}
+                                            </p>
+                                            {/* 후처리 완료 표시 (선택사항) */}
+                                            {line.processedText && line.processedText !== line.text && (
+                                                <div className="absolute top-1 right-1 text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full opacity-70">
+                                                    ✓ 교정됨
+                                                </div>
+                                            )}
+                                        </div>
                                     ))}
                                     {isRecording && (
                                         <div className="flex items-center gap-2 text-muted-foreground animate-pulse mt-2">

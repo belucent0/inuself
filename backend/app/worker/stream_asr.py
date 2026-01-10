@@ -29,10 +29,19 @@ class StreamASRWorker:
             return
         self.initialized = True
         # PM2로 관리되는 flm 서버에 연결
-        # Docker: host.docker.internal, 개발: 127.0.0.1
+        # FLM_BASE_URL에서 호스트와 포트 추출
         import os
-        self.host = os.getenv("FLM_HOST", "127.0.0.1")
-        self.port = 11434
+        from urllib.parse import urlparse
+        
+        flm_base_url = os.getenv("FLM_BASE_URL")
+        if flm_base_url:
+            parsed = urlparse(flm_base_url)
+            self.host = parsed.hostname or "127.0.0.1"
+            self.port = parsed.port or 11434
+        else:
+            # 기본값: Docker 환경에서는 host.docker.internal, 로컬에서는 127.0.0.1
+            self.host = "host.docker.internal"
+            self.port = int(os.getenv("FLM_PORT", "11434"))
         
     @property
     def base_url(self) -> str:

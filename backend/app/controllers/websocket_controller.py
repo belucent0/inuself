@@ -4,10 +4,13 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from ..core.logging import logger
 from ..websocket.dependencies import ConnectionManagerDep
 from ..worker.stream_asr import stream_asr_worker
+from .websocket_helper import (
+    get_audio_rms, 
+    convert_webm_to_wav, 
+    is_silence, 
+    process_llm_background
+)
 import httpx
-import subprocess
-import tempfile
-import os
 import asyncio
 from typing import Optional
 
@@ -147,7 +150,14 @@ async def websocket_asr_stream(
             audio_buffer = bytearray()
             webm_header = b"" 
             chunk_count = 0
-            TARGET_CHUNKS = 10 # 0.5초 * 10 = 5초 (안정성 확보)
+            # 청킹 설정 (0.5초 단위 청크 가정)
+            MIN_CHUNKS = 10   # 5초 (기본 단위)
+            MAX_CHUNKS = 20   # 10초 (최대 연장)
+            
+            # 이전 전사 결과 저장 (맥락 유지용)
+            previous_transcriptions = []
+            MAX_PROMPT_SEGMENTS = 7  # 테스트: 4개 세그먼트 사용 (더 긴 맥락)
+            MAX_HISTORY_SIZE = 10  # 최대 히스토리 크기 (메모리 관리)
             
             while True:
                 # 1. 청크 수신
@@ -160,29 +170,82 @@ async def websocket_asr_stream(
                 audio_buffer.extend(data)
                 chunk_count += 1
                 
-                # 2. 목표량(약 5초) 도달 시 처리
-                if chunk_count >= TARGET_CHUNKS:
+                should_process = False
+                
+                # 2. 처리 여부 결정
+                if chunk_count >= MAX_CHUNKS:
+                    # 최대 시간(10초) 도달 시 강제 처리
+                    should_process = True
+                    logger.debug(f"[ASR Stream] Force processing at {chunk_count} chunks (Max duration)")
+                elif chunk_count >= MIN_CHUNKS:
+                    # 기본 시간(5초) 경과 시, 침묵 감지하여 자연스러운 끊기 시도
+                    # 현재 버퍼의 마지막 1초 구간 침묵 확인
+                    current_wav = convert_webm_to_wav(bytes(audio_buffer))
+                    if current_wav:
+                        # 마지막 0.8초 정도가 침묵인지 확인 (threshold는 실험적 조정 필요, 여기선 800 유지)
+                        if is_silence(current_wav, threshold=800, check_duration_sec=0.8):
+                            should_process = True
+                            logger.debug(f"[ASR Stream] Silence detected at {chunk_count} chunks. Processing...")
+                        else:
+                            # 말하고 있으면 처리 미룸 (최대 10초까지)
+                            pass
+                
+                if should_process:
                     # WebM -> WAV 변환
                     wav_data = convert_webm_to_wav(bytes(audio_buffer))
                     
                     if wav_data:
-                        # 무음 감지 (전체 버퍼에 대해)
-                        # Threshold 800 (샘플 코드 기준)
-                        if is_silence(wav_data, threshold=800, check_duration_sec=5.0):
-                            logger.debug("[ASR Stream] Silence detected, skipping...")
+                        # (옵션) 너무 짧은 침묵만 있는 청크는 스킵?
+                        # 전체가 침묵인 경우는 처리하지 않도록 기존 로직 유지
+                        
+                        # RMS 체크 (저음량 필터링)
+                        rms = get_audio_rms(wav_data)
+                        logger.debug(f"[ASR Stream] Audio RMS: {rms}")
+                        
+                        # 임계값 조정: 기존 800/1200은 너무 높아서 정상 발화(1000~1100)가 잘리는 문제 발생
+                        SILENCE_THRESHOLD = 300
+                        MIN_VOLUME_THRESHOLD = 600
+                        
+                        if rms < SILENCE_THRESHOLD:
+                            # 1. 아예 침묵인 경우 (경고 없음, 그냥 스킵)
+                            logger.debug("[ASR Stream] Silence detected (full buffer), skipping...")
+                        
+                        elif rms < MIN_VOLUME_THRESHOLD:
+                             # 2. 소리가 있긴 한데 너무 작은 경우 (경고 전송)
+                             logger.info(f"[ASR Stream] Low volume ({rms}), skipping to prevent hallucinations.")
+                             await websocket.send_json({
+                                "type": "warning",
+                                "message": "목소리가 너무 작아 인식이 어렵습니다."
+                            })
+                            
                         else:
+                            # 3. 정상 볼륨 (전사 진행)
                             try:
                                 # NPU 서버로 전송 (OpenAI API 포맷)
                                 files = {'file': ('audio.wav', wav_data, 'audio/wav')}
+                                
+                                # 이전 전사 내용을 prompt로 생성
+                                prompt_text = ""
+                                if previous_transcriptions:
+                                    # 마지막 N개 세그먼트를 공백으로 연결
+                                    prompt_text = " ".join(previous_transcriptions[-MAX_PROMPT_SEGMENTS:])
+                                    logger.debug(f"[ASR Stream] Using prompt: {prompt_text[:100]}..." if len(prompt_text) > 100 else f"[ASR Stream] Using prompt: {prompt_text}")
+                                
+                                # FastFlowLM NPU 서버 요청 데이터 구성
+                                request_data = {
+                                    "model": "whisper-v3", # 샘플 코드 기준
+                                    "language": lang,
+                                }
+                                
+                                # prompt가 있으면 추가
+                                if prompt_text:
+                                    request_data["prompt"] = prompt_text
                                 
                                 # FastFlowLM NPU 서버 요청
                                 response = await client.post(
                                     f"{stream_asr_worker.base_url}/audio/transcriptions",
                                     files=files,
-                                    data={
-                                        "model": "whisper-v3", # 샘플 코드 기준
-                                        "language": lang,
-                                    }
+                                    data=request_data
                                 )
                                 
                                 if response.status_code == 200:
@@ -194,12 +257,34 @@ async def websocket_asr_stream(
                                     if not text or len(text) < 2 or text in hallucinations:
                                         pass
                                     else:
-                                        logger.info(f"[ASR Stream] Result: {text}")
-                                        # 클라이언트에 'commit' 메시지로 전송 (라인 단위 출력용)
+                                        # 1. 원본 텍스트 즉시 전송 (반응성 향상)
+                                        import uuid
+                                        segment_id = str(uuid.uuid4())
+                                        
+                                        logger.info(f"[ASR Stream] Sending raw result: {text} (ID: {segment_id})")
                                         await websocket.send_json({
                                             "type": "commit",
-                                            "text": text
+                                            "segment_id": segment_id,
+                                            "text": text,
+                                            "processed_text": None # 초기엔 없음
                                         })
+                                        
+                                        # 전사 결과를 히스토리에 추가
+                                        previous_transcriptions.append(text)
+                                        if len(previous_transcriptions) > MAX_HISTORY_SIZE:
+                                            previous_transcriptions.pop(0)
+
+                                        # 2. LLM 후처리 (비동기 백그라운드 실행)
+                                        # 별도 태스크로 실행하여 다음 오디오 처리를 막지 않음
+                                        asyncio.create_task(
+                                            process_llm_background(
+                                                websocket, 
+                                                text, 
+                                                segment_id, 
+                                                stream_asr_worker.base_url
+                                            )
+                                        )
+                                        
                                 else:
                                     logger.error(f"[ASR Stream] Server error: {response.text}")
                                     
@@ -220,79 +305,3 @@ async def websocket_asr_stream(
     finally:
         await manager.disconnect(websocket)
         logger.info(f"[WebSocket] ASR Stream cleaned up: session_id={session_id}")
-
-def convert_webm_to_wav(webm_data: bytes) -> Optional[bytes]:
-    """WebM(Opus) 데이터를 16kHz Mono WAV로 변환."""
-    try:
-        # 임시 파일 생성
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as temp_webm:
-            temp_webm.write(webm_data)
-            temp_webm_path = temp_webm.name
-            
-        temp_wav_path = temp_webm_path.replace(".webm", ".wav")
-        
-        # ffmpeg 변환
-        # -y: 덮어쓰기
-        # -i: 입력
-        # -ar 16000: 샘플링 레이트 16kHz
-        # -ac 1: 채널 1 (Mono)
-        # -c:a pcm_s16le: 16비트 PCM
-        cmd = [
-            "ffmpeg", "-y", "-v", "error",
-            "-i", temp_webm_path,
-            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
-            temp_wav_path
-        ]
-        
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        if os.path.exists(temp_wav_path):
-            with open(temp_wav_path, "rb") as f:
-                wav_data = f.read()
-            
-            # 정리
-            os.remove(temp_wav_path)
-            os.remove(temp_webm_path)
-            return wav_data
-            
-        os.remove(temp_webm_path)
-        return None
-        
-    except Exception as e:
-        logger.error(f"[Convert] Error converting audio: {e}")
-        # 파일 정리 시도
-        if 'temp_webm_path' in locals() and os.path.exists(temp_webm_path):
-            os.remove(temp_webm_path)
-        if 'temp_wav_path' in locals() and os.path.exists(temp_wav_path):
-            os.remove(temp_wav_path)
-        return None
-
-def is_silence(wav_bytes: bytes, threshold: int = 500, check_duration_sec: float = 1.0) -> bool:
-    """WAV 바이트 데이터의 RMS를 계산하여 침묵 여부 판단."""
-    import audioop
-    try:
-        # WAV 헤더(44바이트) 건너뛰기
-        if len(wav_bytes) < 44:
-            return True
-            
-        # raw PCM data (16-bit mono)
-        pcm_data = wav_bytes[44:]
-        if not pcm_data:
-            return True
-            
-        # 마지막 부분만 체크 (최신 입력에 대한 반응성 확보)
-        sample_rate = 16000
-        bytes_per_sample = 2
-        check_bytes = int(sample_rate * bytes_per_sample * check_duration_sec)
-        
-        if len(pcm_data) > check_bytes:
-             pcm_data = pcm_data[-check_bytes:]
-             
-        # RMS 계산 (width=2 for 16-bit)
-        rms = audioop.rms(pcm_data, 2)
-        
-        logger.debug(f"[VAD] Audio RMS (last {check_duration_sec}s): {rms}") 
-        return rms < threshold
-    except Exception as e:
-        logger.error(f"VAD Error: {e}")
-        return False
