@@ -42,6 +42,17 @@ class TaskQueueAdapter(ABC):
         pass
     
     @abstractmethod
+    def enqueue_youtube_download_job(
+        self,
+        file_id: int,
+        youtube_url: str,
+        storage_key: str,
+        original_filename: str,
+    ) -> str:
+        """YouTube 다운로드 작업을 큐에 등록하고 작업 ID를 반환."""
+        pass
+    
+    @abstractmethod
     def get_job_status(self, job_id: str) -> str:
         """작업 상태 조회."""
         pass
@@ -116,6 +127,34 @@ class CeleryAdapter(TaskQueueAdapter):
                 "ocr_mode": ocr_mode,
             },
             queue="ocr",  # 큐를 명시적으로 지정
+        )
+        return result.id
+    
+    def enqueue_youtube_download_job(
+        self,
+        file_id: int,
+        youtube_url: str,
+        storage_key: str,
+        original_filename: str,
+    ) -> str:
+        # Lazy import: celery_tasks가 youtube_processor를 import하므로 실행 시점에만 로드
+        from .celery_tasks import process_youtube_download_task
+        
+        # ASR 큐를 사용 (GPU 워커)
+        result = process_youtube_download_task.apply_async(
+            args=(),
+            kwargs={
+                "file_id": file_id,
+                "youtube_url": youtube_url,
+                "storage_key": storage_key,
+                "original_filename": original_filename,
+            },
+            queue="asr",
+        )
+        logger.info(
+            "[TaskQueue] YouTube download job enqueued: file_id=%s, job_id=%s",
+            file_id,
+            result.id
         )
         return result.id
     

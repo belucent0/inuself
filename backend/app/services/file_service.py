@@ -299,3 +299,76 @@ class FileService:
         
         # 문서 확장자
         return ContentType.DOCUMENT
+
+    async def enqueue_youtube_download(
+        self,
+        url: str,
+        video_id: str,
+        title: str,
+    ) -> dict[str, int]:
+        """
+        YouTube 다운로드 작업을 큐에 등록.
+        
+        Args:
+            url: YouTube URL
+            video_id: YouTube video ID
+            title: 영상 제목
+            
+        Returns:
+            dict: {"file_id": int}
+        """
+        # 안전한 파일명 생성
+        import re
+        safe_title = re.sub(r'[^\w\s가-힣-]', '', title)[:50].strip()
+        if not safe_title:
+            safe_title = video_id
+        filename = f"{safe_title}.mp4"
+        object_key = self._build_object_key(filename)
+
+        logger.info("[YouTube Upload] DB에 파일 생성 시작: title=%s", title)
+
+        # DB에 File 생성 (QUEUED 상태)
+        file_obj = await self.file_repo.create_file(
+            filename=filename,
+            object_key=object_key,
+            content_type=ContentType.AUDIO,
+            status=FileStatus.QUEUED,
+        )
+
+        # Transcription 레코드 생성
+        await self.transcription_repo.create_transcription(
+            file_id=file_obj.id,
+            transcription={},
+            duration_seconds=0.0,
+        )
+        await self.session.commit()
+
+        logger.info("[YouTube Upload] DB에 파일 생성 완료: file_id=%s, title=%s", file_obj.id, title)
+
+        # YouTube 다운로드 Celery 태스크 큐잉
+        try:
+            loop = asyncio.get_running_loop()
+            from functools import partial
+            from ..worker.task_queue_adapter import get_task_queue
+
+            task_queue = get_task_queue()
+            enqueue_func = partial(
+                task_queue.enqueue_youtube_download_job,
+                file_id=file_obj.id,
+                youtube_url=url,
+                storage_key=object_key,
+                original_filename=filename,
+            )
+            job_id = await loop.run_in_executor(None, enqueue_func)
+
+            logger.info(
+                "[YouTube Upload] YouTube 다운로드 작업 큐잉 성공: file_id=%s, job_id=%s",
+                file_obj.id,
+                job_id
+            )
+        except Exception as exc:
+            error_msg = f"YouTube 다운로드 작업 큐잉 실패: file_id={file_obj.id}, error={exc}"
+            logger.exception("[YouTube Upload] %s", error_msg)
+            raise
+
+        return {"file_id": file_obj.id}

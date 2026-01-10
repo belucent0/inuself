@@ -1,10 +1,14 @@
 "use client"
 
 import * as React from "react"
-import { Send, Paperclip, Globe } from "lucide-react"
+import { useState } from "react"
+import { Send, Paperclip, Globe, Youtube } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
+import { YouTubeLinkModal } from "./YouTubeLinkModal"
+import { uploadYouTubeContent } from "@/lib/api"
 
 interface ChatPromptProps extends React.HTMLAttributes<HTMLDivElement> {
     input: string
@@ -24,6 +28,14 @@ export function ChatPrompt({
     ...props
 }: ChatPromptProps) {
     const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+    const [youtubeModalOpen, setYoutubeModalOpen] = useState(false)
+
+    const handleYouTubeSubmit = async (url: string) => {
+        const result = await uploadYouTubeContent(url)
+        toast.success("YouTube 영상이 처리 대기열에 추가되었습니다", {
+            description: "콘텐츠 목록에서 진행 상황을 확인할 수 있습니다.",
+        })
+    }
 
     const adjustHeight = () => {
         const textarea = textareaRef.current
@@ -96,6 +108,24 @@ export function ChatPrompt({
                                 <TooltipContent>웹 검색</TooltipContent>
                             </Tooltip>
                         </TooltipProvider>
+
+                        <TooltipProvider>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8 rounded-full text-muted-foreground hover:text-red-500"
+                                        onClick={() => setYoutubeModalOpen(true)}
+                                    >
+                                        <Youtube className="h-4 w-4" />
+                                        <span className="sr-only">YouTube 링크</span>
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>YouTube 링크로 콘텐츠 생성</TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
                     </div>
 
                     <TooltipProvider>
@@ -124,6 +154,12 @@ export function ChatPrompt({
             <div className="text-center mt-2 text-xs text-muted-foreground">
                 AI는 실수를 할 수 있습니다. 중요한 정보는 확인해 주세요.
             </div>
+
+            <YouTubeLinkModal
+                open={youtubeModalOpen}
+                onOpenChange={setYoutubeModalOpen}
+                onSubmit={handleYouTubeSubmit}
+            />
         </div>
     )
 }

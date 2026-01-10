@@ -306,3 +306,94 @@ def process_ocr_task(
                 # 재시도 로직
                 raise self.retry(exc=exc)
 
+
+@celery_app.task(
+    name="process_youtube_download_task",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    queue="asr",  # ASR 큐 사용 (GPU 워커)
+)
+def process_youtube_download_task(
+    self,
+    file_id: int,
+    youtube_url: str,
+    storage_key: str,
+    original_filename: str,
+    **kwargs
+):
+    """
+    YouTube 다운로드 후 ASR 파이프라인 시작 Celery 태스크.
+    
+    Args:
+        file_id: 파일 ID
+        youtube_url: YouTube 영상 URL
+        storage_key: 스토리지 키
+        original_filename: 원본 파일명
+        **kwargs: 호환성을 위한 추가 인자 (무시됨)
+    """
+    # YouTube 다운로드는 네트워크 의존적이므로 긴 TTL 사용 (30분)
+    lock_ttl = 1800.0
+    
+    with acquire_task_locks("youtube", file_id, self.request.id, lock_ttl) as (global_acquired, individual_acquired):
+        if not global_acquired:
+            return {"status": "skipped", "file_id": file_id, "reason": "global_lock_failed"}
+        if not individual_acquired:
+            return {"status": "skipped", "file_id": file_id, "reason": "individual_lock_failed"}
+        
+        try:
+            from .youtube_processor import process_youtube_download_job
+            
+            logger.info(
+                "[Celery YouTube] Starting task: file_id={}, task_id={}, url={}",
+                file_id,
+                self.request.id,
+                youtube_url,
+            )
+            
+            process_youtube_download_job(
+                file_id=file_id,
+                youtube_url=youtube_url,
+                storage_key=storage_key,
+                original_filename=original_filename,
+            )
+            
+            logger.info("[Celery YouTube] Task completed: file_id={}", file_id)
+            return {"status": "success", "file_id": file_id}
+            
+        except Exception as exc:
+            error_str = str(exc)
+            retry_count = self.request.retries
+            
+            # 재시도하지 않아야 하는 에러들
+            no_retry_keywords = [
+                "invalid youtube url",
+                "video duration exceeds",
+                "video unavailable",
+                "private video",
+                "removed",
+            ]
+            
+            should_retry = not any(keyword in error_str.lower() for keyword in no_retry_keywords)
+            
+            if not should_retry:
+                logger.error(
+                    "[Celery YouTube] Task failed (no retry): file_id={}, error={}",
+                    file_id,
+                    error_str
+                )
+                return {"status": "failed", "file_id": file_id, "error": error_str}
+            
+            if retry_count < self.max_retries:
+                logger.warning(
+                    "[Celery YouTube] Task failed (will retry {}/{}): file_id={}, error={}",
+                    retry_count + 1,
+                    self.max_retries,
+                    file_id,
+                    error_str
+                )
+            else:
+                logger.error("[Celery YouTube] Task failed (no more retries): file_id={}, error={}", file_id, error_str)
+            
+            raise self.retry(exc=exc)
+

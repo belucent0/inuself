@@ -11,6 +11,13 @@ from ..schemas.content import (
     ReclusterSpeakersRequest,
     ReclusterSpeakersResponse,
     UploadResponse,
+    YouTubeUploadRequest,
+    YouTubeUploadResponse,
+)
+from ..services.youtube_service import (
+    InvalidYouTubeURLError,
+    VideoDurationExceededError,
+    YouTubeService,
 )
 from ..schemas.file import FileUploadResponse
 from ..services.content_service import ContentService
@@ -74,6 +81,80 @@ async def upload_content(
     except Exception as exc:
         logger.exception("[Upload] File upload failed: filename={}, error={}", file.filename, exc)
         print(f"[Upload] ERROR 파일 업로드 실패: {file.filename}, error={exc}")
+        raise HTTPException(status_code=500, detail=f"업로드 실패: {str(exc)}") from exc
+
+
+@router.post("/upload-youtube", response_model=YouTubeUploadResponse)
+async def upload_from_youtube(
+    request: YouTubeUploadRequest,
+    file_service: FileService = Depends(get_file_service)
+):
+    """
+    YouTube URL로부터 콘텐츠 생성 (비동기 다운로드).
+    
+    영상이 다운로드되고 자동으로 ASR 및 요약이 진행됩니다.
+    1시간 이내의 영상만 지원됩니다.
+    """
+    from ..core.logging import logger
+    
+    youtube_service = YouTubeService()
+    
+    # URL 유효성 검증
+    try:
+        video_id = youtube_service.validate_youtube_url(request.url)
+    except InvalidYouTubeURLError:
+        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+    
+    # 영상 정보 조회 (길이 확인)
+    try:
+        info = youtube_service.get_video_info(request.url)
+        duration = info.get('duration', 0)
+        
+        if duration > 3600:  # 1시간 = 3600초
+            raise HTTPException(
+                status_code=400,
+                detail="Video duration exceeds 1 hour limit"
+            )
+            
+        title = info.get('title', f'youtube_{video_id}')
+        
+        logger.info(
+            "[YouTube Upload] Request received: url=%s, title=%s, duration=%ss",
+            request.url,
+            title,
+            duration
+        )
+        
+    except VideoDurationExceededError:
+        raise HTTPException(status_code=400, detail="Video duration exceeds 1 hour limit")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[YouTube Upload] Failed to get video info: %s", e)
+        raise HTTPException(status_code=400, detail=f"Failed to get video info: {str(e)}")
+    
+    # YouTube 다운로드 작업 큐잉
+    try:
+        result = await file_service.enqueue_youtube_download(
+            url=request.url,
+            video_id=video_id,
+            title=title,
+        )
+        
+        logger.info(
+            "[YouTube Upload] Job enqueued successfully: file_id=%s, title=%s",
+            result["file_id"],
+            title
+        )
+        
+        return YouTubeUploadResponse(
+            content_id=result["file_id"],
+            queued=True,
+            message="YouTube 다운로드가 시작되었습니다"
+        )
+        
+    except Exception as exc:
+        logger.exception("[YouTube Upload] Failed to enqueue job: %s", exc)
         raise HTTPException(status_code=500, detail=f"업로드 실패: {str(exc)}") from exc
 
 

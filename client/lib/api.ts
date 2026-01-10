@@ -1,7 +1,9 @@
 const getApiBase = (): string => {
   if (typeof window === 'undefined') {
-    return process.env.API_BASE_URL || '/api'
+    // 서버 사이드: 완전한 URL 필요
+    return process.env.API_BASE_URL || 'http://localhost:8000/api'
   }
+  // 클라이언트 사이드: 상대 경로 사용 가능
   return process.env.NEXT_PUBLIC_API_BASE_URL || '/api'
 }
 
@@ -301,6 +303,36 @@ export const getWebSocketBase = (): string => {
 
   // 기본: 상대 경로 (Nginx 프록시 사용)
   return '/ws'
+}
+
+
+/**
+ * YouTube URL로 콘텐츠 업로드 (비동기 다운로드)
+ * 
+ * @param url YouTube 영상 URL
+ * @returns content_id가 포함된 응답
+ */
+export async function uploadYouTubeContent(url: string): Promise<{ content_id: number }> {
+  const res = await fetch(`${API_BASE}/contents/upload-youtube`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ url }),
+  })
+
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}))
+    if (res.status === 400) {
+      if (errorData.detail?.includes('duration')) {
+        throw new Error('1시간 이내의 영상만 처리할 수 있습니다')
+      }
+      throw new Error('유효한 유튜브 링크가 아닙니다')
+    }
+    throw new Error(errorData.detail || '업로드에 실패했습니다')
+  }
+
+  return res.json()
 }
 
 

@@ -95,3 +95,15 @@ class ReclusterSpeakersResponse(BaseModel):
     speaker_labels: list[str]
     updated_segments_count: int
 
+
+class YouTubeUploadRequest(BaseModel):
+    """YouTube URL 업로드 요청"""
+    url: str = Field(..., description="YouTube 영상 URL")
+
+
+class YouTubeUploadResponse(BaseModel):
+    """YouTube URL 업로드 응답"""
+    content_id: int
+    queued: bool = True
+    message: str = "YouTube 다운로드가 시작되었습니다"
+

@@ -35,6 +35,7 @@ loguru = "^0.7.0"
 pillow = "^10.0.0"  # 이미지 처리 (OCR용)
 PyMuPDF = "^1.23.0"  # PDF를 이미지로 변환 (OCR용, 크로스 플랫폼, 의존성 없음)
 prometheus-fastapi-instrumentator = "^7.0.0"  # Prometheus 메트릭 수집
+yt-dlp = "^2025.12.8"  # YouTube 다운로드
 
 # ========================================
 # 오디오 처리 공통 의존성 (API/워커 공통)
@@ -48,6 +49,7 @@ soundfile = ">=0.13.1"  # pyannote.audio 4.x requires >=0.13.1
 # ========================================
 torch = {version = "*", optional = true}  # ASR 워커용 (기존 설치된 ROCm 버전 사용)
 "pyannote.audio" = {version = "4.0.3", optional = true}  # ASR 워커용 (community-1 모델 필수)
+yt-dlp-ejs = "^0.3.2"
 
 [tool.poetry.extras]
 # 워커별 extras 그룹

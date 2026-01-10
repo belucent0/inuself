@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { LogOut, Upload, Mic } from "lucide-react"
+import { LogOut, Upload, Mic, Youtube } from "lucide-react"
 
 import {
     Sidebar,
@@ -22,9 +22,21 @@ import { Separator } from "@/components/ui/separator"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import UploadForm from "./UploadForm"
 import { navigationItems } from "@/lib/navigation"
+import { YouTubeLinkModal } from "./YouTubeLinkModal"
+import { uploadYouTubeContent } from "@/lib/api"
+import { toast } from "sonner"
+import { useState } from "react"
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const pathname = usePathname()
+    const [youtubeModalOpen, setYoutubeModalOpen] = useState(false)
+
+    const handleYouTubeSubmit = async (url: string) => {
+        await uploadYouTubeContent(url)
+        toast.success("YouTube 영상이 처리 대기열에 추가되었습니다", {
+            description: "콘텐츠 목록에서 진행 상황을 확인할 수 있습니다.",
+        })
+    }
 
     const handleLogout = () => {
         if (confirm("로그아웃하시겠습니까?")) {
@@ -44,6 +56,23 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             </SidebarHeader>
 
             <SidebarContent>
+                {/* 펼쳐진 상태: YouTube 링크 */}
+                <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+                    <SidebarGroupLabel>YouTube 링크</SidebarGroupLabel>
+                    <SidebarGroupContent>
+                        <div className="px-2">
+                            <Button
+                                variant="outline"
+                                className="w-full justify-start gap-2"
+                                onClick={() => setYoutubeModalOpen(true)}
+                            >
+                                <Youtube className="h-4 w-4 text-red-500" />
+                                YouTube 영상 추가
+                            </Button>
+                        </div>
+                    </SidebarGroupContent>
+                </SidebarGroup>
+
                 {/* 펼쳐진 상태: 전체 업로드 폼 표시 */}
                 <SidebarGroup className="group-data-[collapsible=icon]:hidden">
                     <SidebarGroupLabel>파일 업로드</SidebarGroupLabel>
@@ -58,6 +87,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <SidebarGroup className="hidden group-data-[collapsible=icon]:block">
                     <SidebarGroupContent>
                         <SidebarMenu>
+                            <SidebarMenuItem>
+                                <TooltipProvider>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <SidebarMenuButton onClick={() => setYoutubeModalOpen(true)}>
+                                                <Youtube className="text-red-500" />
+                                            </SidebarMenuButton>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="right">
+                                            <p>YouTube 링크</p>
+                                        </TooltipContent>
+                                    </Tooltip>
+                                </TooltipProvider>
+                            </SidebarMenuItem>
                             <SidebarMenuItem>
                                 <TooltipProvider>
                                     <Tooltip>
@@ -167,6 +210,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             </SidebarFooter>
 
             <SidebarRail />
+
+            <YouTubeLinkModal
+                open={youtubeModalOpen}
+                onOpenChange={setYoutubeModalOpen}
+                onSubmit={handleYouTubeSubmit}
+            />
         </Sidebar>
     )
 }

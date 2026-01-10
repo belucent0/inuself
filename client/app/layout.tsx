@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { getPageTitle } from '@/lib/navigation'
+import { Toaster } from 'sonner'
 
 // 클라이언트 환경변수에서 관리자 계정 정보 읽기
 const ADMIN_USERNAME = process.env.NEXT_PUBLIC_ADMIN_USERNAME || 'admin'
@@ -129,6 +130,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </main>
           </SidebarInset>
         </SidebarProvider>
+        <Toaster richColors position="top-center" />
       </body>
     </html>
   )
