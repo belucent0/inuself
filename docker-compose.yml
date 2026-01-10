@@ -97,7 +97,8 @@ services:
       - S3_ACCESS_KEY=torchdev
       - S3_SECRET_KEY=torchdev-secret
       - S3_BUCKET_NAME=asr-media
-      - FLM_HOST=host.docker.internal
+      - FLM_BASE_URL=${FLM_BASE_URL:-http://host.docker.internal:11434}
+      - FLM_LLM_MODEL=${FLM_LLM_MODEL:-qwen3-it:4b}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
@@ -112,17 +113,12 @@ services:
       args:
         - NEXT_PUBLIC_ADMIN_USERNAME=${NEXT_PUBLIC_ADMIN_USERNAME}
         - NEXT_PUBLIC_ADMIN_PASSWORD=${NEXT_PUBLIC_ADMIN_PASSWORD}
-        - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
     container_name: asr-frontend
     ports:
       - "3000:3000"
     environment:
-      # 서버 사이드에서 사용할 API URL (Docker 내부 네트워크)
       API_BASE_URL: http://asr-backend:8000/api
-      # 클라이언트 사이드에서 사용할 API URL (브라우저 접근 가능)
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
-      # Grafana 대시보드 URL (환경변수로 관리)
-      NEXT_PUBLIC_GRAFANA_DASHBOARD_URL: ${NEXT_PUBLIC_GRAFANA_DASHBOARD_URL}
+      NEXT_PUBLIC_GRAFANA_DASHBOARD_URL: ${NEXT_PUBLIC_GRAFANA_DASHBOARD_URL:-}
     depends_on:
       backend:
         condition: service_healthy

@@ -179,9 +179,9 @@ const apps = [
     name: 'flm-server',
     cwd: 'C:\\timblo\\torch-test',
     script: 'flm',
-    args: ['serve', '--asr', '1'],
+    args: ['serve', envVars.FLM_LLM_MODEL || 'qwen3-it:4b', '--asr', '1', '--port', '11434', '--ctx-len', '4096'],
     env: {
-      // FastFlowLM 환경 변수 (필요시 추가)
+      FLM_LLM_MODEL: envVars.FLM_LLM_MODEL || 'qwen3-it:4b',
     },
     autorestart: true,
     max_restarts: 10,
