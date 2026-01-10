@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { FileText, Map, LogOut, Upload, Mic, Home, Activity } from "lucide-react"
+import { LogOut, Upload, Mic } from "lucide-react"
 
 import {
     Sidebar,
@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import UploadForm from "./UploadForm"
+import { navigationItems } from "@/lib/navigation"
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const pathname = usePathname()
@@ -31,13 +32,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             window.location.reload()
         }
     }
-
-    const navItems = [
-        { href: "/", label: "채팅", icon: Home },
-        { href: "/contents", label: "콘텐츠", icon: FileText },
-        { href: "/monitoring", label: "모니터링", icon: Activity },
-        { href: "/roadmap", label: "로드맵", icon: Map },
-    ]
 
     return (
         <Sidebar collapsible="icon" {...props}>
@@ -116,7 +110,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     </SidebarGroupLabel>
                     <SidebarGroupContent>
                         <SidebarMenu>
-                            {navItems.map((item) => {
+                            {navigationItems.map((item) => {
                                 const Icon = item.icon
                                 const isActive =
                                     pathname === item.href || pathname?.startsWith(item.href + "/")

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 from .core.config import get_settings
 from .core.logging import logger
 from .core.storage import check_storage_health
@@ -24,12 +25,64 @@ class HealthCheckLogFilter(logging.Filter):
         return True  # 다른 로그는 정상 출력
 
 
+def cleanup_temp_files() -> None:
+    """
+    서버 시작 시 임시 파일 정리.
+    
+    data/uploads/ 디렉토리에서 job_*, ocr_* 패턴의 임시 파일을 삭제합니다.
+    storage/ 서브디렉토리는 영구 저장소이므로 제외합니다.
+    """
+    settings = get_settings()
+    upload_dir = settings.upload_dir
+    
+    if not upload_dir.exists():
+        logger.info("[Cleanup] Upload directory does not exist, skipping cleanup")
+        return
+    
+    deleted_count = 0
+    error_count = 0
+    
+    # job_* 패턴 파일 삭제 (ASR 임시 파일)
+    for temp_file in upload_dir.glob("job_*"):
+        if temp_file.is_file():
+            try:
+                temp_file.unlink()
+                deleted_count += 1
+                logger.debug(f"[Cleanup] Deleted temp file: {temp_file.name}")
+            except Exception as e:
+                error_count += 1
+                logger.warning(f"[Cleanup] Failed to delete {temp_file.name}: {e}")
+    
+    # ocr_* 패턴 파일 삭제 (OCR 임시 파일)
+    for temp_file in upload_dir.glob("ocr_*"):
+        if temp_file.is_file():
+            try:
+                temp_file.unlink()
+                deleted_count += 1
+                logger.debug(f"[Cleanup] Deleted temp file: {temp_file.name}")
+            except Exception as e:
+                error_count += 1
+                logger.warning(f"[Cleanup] Failed to delete {temp_file.name}: {e}")
+    
+    if deleted_count > 0:
+        logger.info(f"[Cleanup] ✓ Cleaned up {deleted_count} temporary file(s)")
+    else:
+        logger.info("[Cleanup] No temporary files to clean up")
+    
+    if error_count > 0:
+        logger.warning(f"[Cleanup] ✗ Failed to delete {error_count} file(s)")
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 실행되는 lifespan 이벤트."""
     import asyncio
     import os
+    
+    # 임시 파일 정리 (서버 시작 시)
+    logger.info("[Lifespan] Cleaning up temporary files...")
+    cleanup_temp_files()
     
     # RedisListener 시작
     from .websocket.dependencies import get_redis_listener
@@ -56,8 +109,6 @@ async def lifespan(app: FastAPI):
         start_worker_background()
     else:
         logger.info("[FastAPI] 워커 자동 시작이 비활성화되었습니다.")
-        logger.info("[FastAPI] 개발 환경: run_dev.sh가 워커를 관리합니다.")
-        logger.info("[FastAPI] 프로덕션 환경: start.bat을 사용하면 PM2 워커도 함께 시작됩니다.")
     
     yield
     
@@ -113,6 +164,11 @@ def create_app() -> FastAPI:
 
     app.include_router(content_controller.router, prefix=settings.api_prefix)
     
+    # 채팅 라우터 추가
+    from .controllers import chat_controller
+    app.include_router(chat_controller.router)
+    logger.info("[FastAPI] Chat routes registered at /api/chat")
+    
     # WebSocket 라우터 추가 (별도 경로, prefix 없음)
     from .controllers import websocket_controller
     app.include_router(websocket_controller.router)
@@ -121,6 +177,10 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["system"])
     async def healthcheck():
         return {"status": "ok"}
+    
+    # Prometheus 메트릭 수집 초기화
+    Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+    logger.info("[FastAPI] Prometheus metrics endpoint registered at /metrics")
 
     return app
 

@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
-import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import './globals.css'
 import { AppSidebar } from '@/components/app-sidebar'
@@ -12,68 +11,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
-import {
-  Breadcrumb,
-  BreadcrumbList,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb'
+import { getPageTitle } from '@/lib/navigation'
 
 // 클라이언트 환경변수에서 관리자 계정 정보 읽기
 const ADMIN_USERNAME = process.env.NEXT_PUBLIC_ADMIN_USERNAME || 'admin'
 const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || 'admin123'
-
-// 페이지 제목 매핑
-const pageTitles: Record<string, string> = {
-  '/contents': '콘텐츠',
-  '/roadmap': '로드맵',
-}
-
-function getPageTitle(pathname: string | null): string {
-  if (!pathname) return 'ASR 파이프라인'
-
-  // 정확한 경로 매칭
-  if (pageTitles[pathname]) {
-    return pageTitles[pathname]
-  }
-
-  // /contents/[id] 같은 동적 라우트 처리
-  if (pathname.startsWith('/contents/')) {
-    return '콘텐츠 상세'
-  }
-
-  return 'ASR 파이프라인'
-}
-
-function getBreadcrumbItems(pathname: string | null) {
-  if (!pathname) return []
-
-  if (pathname === '/contents') {
-    return [
-      { label: '홈', href: '/' },
-      { label: '콘텐츠' },
-    ]
-  }
-
-  if (pathname.startsWith('/contents/')) {
-    return [
-      { label: '홈', href: '/' },
-      { label: '콘텐츠', href: '/contents' },
-      { label: '콘텐츠 상세' },
-    ]
-  }
-
-  if (pathname === '/roadmap') {
-    return [
-      { label: '홈', href: '/' },
-      { label: '로드맵' },
-    ]
-  }
-
-  return []
-}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -85,7 +27,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
   // 컨텐츠 상세 페이지인지 확인
   const isDetailPage = pathname?.startsWith('/contents/') && pathname !== '/contents'
-  const breadcrumbItems = getBreadcrumbItems(pathname)
 
   useEffect(() => {
     // localStorage에 인증 플래그가 있으면 통과
@@ -179,36 +120,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
               <SidebarTrigger className="-ml-1" />
               <Separator orientation="vertical" className="mr-2 h-4" />
-              {breadcrumbItems.length > 0 ? (
-                <Breadcrumb className="text-base">
-                  <BreadcrumbList>
-                    {breadcrumbItems.map((item, index) => {
-                      const isLast = index === breadcrumbItems.length - 1
-
-                      return (
-                        <div key={index} className="flex items-center">
-                          <BreadcrumbItem>
-                            {isLast ? (
-                              <BreadcrumbPage className="font-bold">{item.label}</BreadcrumbPage>
-                            ) : item.href ? (
-                              <BreadcrumbLink asChild className="font-normal">
-                                <Link href={item.href}>{item.label}</Link>
-                              </BreadcrumbLink>
-                            ) : (
-                              <BreadcrumbPage className="font-bold">{item.label}</BreadcrumbPage>
-                            )}
-                          </BreadcrumbItem>
-                          {!isLast && <BreadcrumbSeparator />}
-                        </div>
-                      )
-                    })}
-                  </BreadcrumbList>
-                </Breadcrumb>
-              ) : (
-                <h1 className="text-lg font-semibold">
-                  {getPageTitle(pathname)}
-                </h1>
-              )}
+              <h1 className="text-lg font-semibold">
+                {getPageTitle(pathname)}
+              </h1>
             </header>
             <main className="flex-1 p-4 md:p-8">
               {children}
