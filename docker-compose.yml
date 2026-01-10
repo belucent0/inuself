@@ -26,7 +26,7 @@ services:
     command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
     volumes:
       - redis-data:/data
-      - ./infra/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
     ports:
       - "6379:6379"
     restart: unless-stopped
@@ -158,7 +158,6 @@ services:
 
 volumes:
   redis-data:
-  redis-insight-data:
   minio-data:
   postgres-data:
   prometheus-data:
