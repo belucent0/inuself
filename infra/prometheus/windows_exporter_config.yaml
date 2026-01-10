@@ -1,0 +1,27 @@
+collectors:
+  enabled: cpu,logical_disk,net,os,system,memory,performancecounter
+
+collector:
+  performancecounter:
+    objects: |-
+      - name: gpu_engine
+        object: "GPU Engine"
+        instances: ["*"]
+        type: formatted
+        counters:
+          - name: "Utilization Percentage"
+            metric: windows_gpu_engine_utilization_percentage
+            type: gauge
+      - name: gpu_adapter_memory
+        object: "GPU Adapter Memory"
+        instances: ["*"]
+        counters:
+          - name: "Dedicated Usage"
+            metric: windows_gpu_dedicated_memory_usage_bytes
+            type: gauge
+          - name: "Shared Usage"
+            metric: windows_gpu_shared_memory_usage_bytes
+            type: gauge
+          - name: "Total Committed"
+            metric: windows_gpu_total_committed_bytes
+            type: gauge

@@ -34,6 +34,7 @@ httpx = "^0.27.0"  # LLM 워커와 통신용
 loguru = "^0.7.0"
 pillow = "^10.0.0"  # 이미지 처리 (OCR용)
 PyMuPDF = "^1.23.0"  # PDF를 이미지로 변환 (OCR용, 크로스 플랫폼, 의존성 없음)
+prometheus-fastapi-instrumentator = "^7.0.0"  # Prometheus 메트릭 수집
 
 # ========================================
 # 오디오 처리 공통 의존성 (API/워커 공통)

@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'asr-monitoring'
+
+scrape_configs:
+  # Prometheus 자체 모니터링
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['prometheus:9090']
+
+  # FastAPI Backend
+  - job_name: 'backend'
+    static_configs:
+      - targets: ['asr-backend:8000']
+    metrics_path: '/metrics'
+
+  # Windows Host (windows_exporter)
+  - job_name: 'windows'
+    static_configs:
+      - targets: ['host.docker.internal:9182']
+    metrics_path: '/metrics'
+
+
+  # AMD NPU Exporter  
+  - job_name: 'npu'
+    static_configs:
+      - targets: ['host.docker.internal:9183']
+    metrics_path: '/metrics'

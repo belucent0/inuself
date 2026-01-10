@@ -1,6 +1,13 @@
+// 루트 .env 파일 로드
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') })
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  // 루트 .env의 환경변수를 Next.js에 주입
+  env: {
+    NEXT_PUBLIC_GRAFANA_DASHBOARD_URL: process.env.NEXT_PUBLIC_GRAFANA_DASHBOARD_URL,
+  },
   // 개발 모드에서 외부 도메인 접근 허용
   allowedDevOrigins: process.env.ALLOWED_DEV_ORIGINS
     ? process.env.ALLOWED_DEV_ORIGINS.split(',')
@@ -26,6 +33,10 @@ const nextConfig = {
     const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
     return [
       {
+        source: '/api/chat',
+        destination: '/api/chat', // Next.js API Route로 유지
+      },
+      {
         source: '/api/:path*',
         destination: `${backendUrl}/api/:path*`,
       },
@@ -36,6 +47,14 @@ const nextConfig = {
       {
         source: '/media/:path*',
         destination: 'http://localhost:9000/asr-media/:path*',
+      },
+      {
+        source: '/grafana/:path*',
+        destination: 'http://localhost:3002/:path*',
+      },
+      {
+        source: '/public/:path*',
+        destination: 'http://localhost:3002/public/:path*',
       },
     ]
   },

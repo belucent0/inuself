@@ -19,34 +19,7 @@ services:
       - "9001:9001" # MinIO Console
     volumes:
       - minio-data:/data
-    # MinIO Client(mc)와 alias 설정 예시:
-    #   docker run --rm --network host minio/mc \
-    #     alias set local http://127.0.0.1:9000 torchdev torchdev-secret
-
-    # minio-bootstrap:
-    #   image: minio/mc:latest
-    #   container_name: asr-minio-bootstrap
-    #   depends_on:
-    #     minio:
-    #       condition: service_healthy
-    #   environment:
-    #     MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
-    #   command: ["mb", "--ignore-existing", "local/asr-media"]
-    #   restart: "no"
-
-    # minio-policy-setup:
-    #   image: minio/mc:latest
-    #   container_name: asr-minio-policy-setup
-    #   depends_on:
-    #     minio-bootstrap:
-    #       condition: service_completed_successfully
-    #   environment:
-    #     MC_HOST_local: http://torchdev:torchdev-secret@asr-minio:9000
-    #   entrypoint: /bin/sh
-    #   command: -c "mc anonymous set download local/asr-media"
-    #   restart: "no"
-
-
+      
   redis:
     image: redis:7.2-alpine
     container_name: asr-redis
@@ -62,18 +35,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # redis-insight:
-  #   image: redis/redisinsight:latest
-  #   container_name: asr-redis-insight
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #   ports:
-  #     - "5540:5540"
-  #   volumes:
-  #     - redis-insight-data:/data
-  #   restart: unless-stopped
 
   postgres:
     image: postgres:18.1
@@ -160,9 +121,43 @@ services:
       API_BASE_URL: http://asr-backend:8000/api
       # 클라이언트 사이드에서 사용할 API URL (브라우저 접근 가능)
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
+      # Grafana 대시보드 URL (환경변수로 관리)
+      NEXT_PUBLIC_GRAFANA_DASHBOARD_URL: ${NEXT_PUBLIC_GRAFANA_DASHBOARD_URL}
     depends_on:
       backend:
         condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: asr-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: asr-grafana
+    ports:
+      - "3002:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ./infra/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./infra/grafana/provisioning/dashboards/dashboard.yml:/etc/grafana/provisioning/dashboards/dashboard.yml:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
     restart: unless-stopped
 
 volumes:
@@ -170,3 +165,5 @@ volumes:
   redis-insight-data:
   minio-data:
   postgres-data:
+  prometheus-data:
+  grafana-data:
