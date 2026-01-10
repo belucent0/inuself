@@ -62,7 +62,7 @@ export default function RoadmapPage() {
   }, [activeTab])
 
   const breadcrumbItems = [
-    { label: '홈', href: '/' },
+    { label: '채팅', href: '/' },
     { label: '로드맵' },
   ]
 

@@ -119,7 +119,6 @@ async def _process_ocr_job(
         # txt 파일인 경우 OCR을 건너뛰고 파일 내용을 직접 읽기
         if temp_path.suffix.lower() == '.txt':
             logger.info("[OCR] Text file detected, skipping OCR and reading file directly...")
-            reporter.processing("ocr_running", 40.0, "텍스트 파일 읽는 중...")
             try:
                 # UTF-8로 먼저 시도
                 used_encoding = "utf-8"

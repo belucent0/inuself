@@ -1,27 +1,8 @@
-// 서버 사이드(SSR/SSG)와 클라이언트 사이드를 구분
-// 서버 사이드: 환경 변수로 개발/프로덕션 구분
-//   - 개발 모드: http://localhost:8000/api
-//   - 프로덕션(Docker): http://asr-backend:8000/api
-// 클라이언트 사이드: 브라우저에서 접근 가능한 URL 사용 (nginx 프록시 또는 절대 URL)
 const getApiBase = (): string => {
-  // 서버 사이드인지 확인 (Node.js 환경)
   if (typeof window === 'undefined') {
-    // 서버 사이드: 환경 변수 우선 사용, 없으면 개발 모드 가정
-    const serverUrl = process.env.API_BASE_URL
-    if (serverUrl) {
-      return serverUrl
-    }
-    // 개발 모드 기본값: localhost 사용
-    return 'http://localhost:8000/api'
+    return process.env.API_BASE_URL || '/api'
   }
-  // 클라이언트 사이드: 브라우저에서 접근 가능한 URL
-  // 상대 경로를 사용하면 nginx를 통해 프록시됨
-  const clientUrl = process.env.NEXT_PUBLIC_API_BASE_URL
-  if (clientUrl) {
-    return clientUrl
-  }
-  // 기본값: 상대 경로 (nginx 프록시 사용)
-  return '/api'
+  return process.env.NEXT_PUBLIC_API_BASE_URL || '/api'
 }
 
 const API_BASE = getApiBase()

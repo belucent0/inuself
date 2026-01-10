@@ -17,7 +17,7 @@ export default function NotFound() {
             <div className="flex gap-2">
                 <Button asChild variant="default">
                     <Link href="/" className="text-white">
-                        홈으로 이동
+                        채팅으로 이동
                     </Link>
                 </Button>
             </div>
