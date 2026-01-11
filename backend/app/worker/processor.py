@@ -11,6 +11,7 @@ from ..db.session import AsyncSessionLocal, engine
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..services.transcription_postprocess import (
+    split_long_segments,
     merge_consecutive_speaker_segments,
     rebuild_speaker_stats,
     rebuild_transcription_text,
@@ -40,15 +41,16 @@ def process_transcription_job(
     num_asr_chunks: int,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
+    accuracy_mode: str = "speed",
 ) -> None:
     """RQ 워커가 호출하는 진입점."""
     logger.info("[Worker] ========================================")
     logger.info(f"[Worker] Job started: file_id={file_id}")
     logger.info(f"[Worker] File: {original_filename}")
     logger.info(f"[Worker] Storage key: {storage_key}")
-    logger.info(f"[Worker] Model: {model_size}, Mode: {processing_mode}")
-    logger.info("Job started: file_id={}, file={}, key={}, min_speakers={}, max_speakers={}", 
-               file_id, original_filename, storage_key, min_speakers, max_speakers)
+    logger.info(f"[Worker] Model: {model_size}, Mode: {processing_mode}, Accuracy: {accuracy_mode}")
+    logger.info("Job started: file_id={}, file={}, key={}, min_speakers={}, max_speakers={}, accuracy_mode={}", 
+               file_id, original_filename, storage_key, min_speakers, max_speakers, accuracy_mode)
     
     # 이벤트 루프 설정 (Windows/Linux 분기 처리는 system_utils 내부에서 수행)
     loop = setup_worker_event_loop()
@@ -64,6 +66,7 @@ def process_transcription_job(
                 num_asr_chunks=num_asr_chunks,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
+                accuracy_mode=accuracy_mode,
             )
         )
         logger.info(f"[Worker] OK Job completed: file_id={file_id}")
@@ -86,6 +89,7 @@ async def _process_job(
     num_asr_chunks: int,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
+    accuracy_mode: str = "speed",
 ) -> None:
     """
     ASR 작업 처리 함수.
@@ -170,6 +174,7 @@ async def _process_job(
             min_speakers=min_speakers,
             max_speakers=max_speakers,
             file_id=file_id,
+            accuracy_mode=accuracy_mode,
         )
         
         loop = asyncio.get_running_loop()
@@ -221,11 +226,19 @@ async def _process_job(
             if temp_path.exists():
                 temp_path.unlink()
 
-    logger.info("[Worker] Post-processing: Merging consecutive speaker segments...")
+    logger.info("[Worker] Post-processing: Splitting long segments and merging consecutive speaker segments...")
     reporter.processing("post_processing", 80.0, "결과 데이터 후처리 중...")
     
     original_segments = result.transcription.get("segments", [])
-    processed_segments = merge_consecutive_speaker_segments(original_segments, max_duration=30.0)
+    
+    # Step 1: 긴 세그먼트 분할 (30초 초과 세그먼트를 분할)
+    # FLM 등 세그먼트가 길게 나오는 엔진에 대응
+    split_segments = split_long_segments(original_segments, max_duration=30.0)
+    if len(split_segments) != len(original_segments):
+        logger.info(f"[Worker] Split long segments: {len(original_segments)} -> {len(split_segments)}")
+    
+    # Step 2: 같은 화자의 연속 세그먼트 병합 (30초 이하 범위에서)
+    processed_segments = merge_consecutive_speaker_segments(split_segments, max_duration=30.0)
 
     if original_segments:
         result.transcription["segments"] = processed_segments

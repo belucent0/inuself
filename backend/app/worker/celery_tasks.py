@@ -30,12 +30,14 @@ def process_asr_task(
     num_asr_chunks: int,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
+    accuracy_mode: str = "speed",
     **kwargs
 ):
     """
     ASR 작업 처리 Celery 태스크.
     
     Args:
+        accuracy_mode: 전사 모드 ('speed' - FLM/NPU, 'accuracy' - whisper.cpp/GPU)
         **kwargs: 호환성을 위한 추가 인자 (무시됨)
     """
     # 오디오 파일 길이에 따라 락 TTL 동적 계산
@@ -68,11 +70,12 @@ def process_asr_task(
             from .processor import process_transcription_job
             
             logger.info(
-                "[Celery ASR] Starting task: file_id={}, task_id={}, min_speakers={}, max_speakers={}",
+                "[Celery ASR] Starting task: file_id={}, task_id={}, min_speakers={}, max_speakers={}, accuracy_mode={}",
                 file_id,
                 self.request.id,
                 min_speakers,
                 max_speakers,
+                accuracy_mode,
             )
             
             process_transcription_job(
@@ -84,6 +87,7 @@ def process_asr_task(
                 num_asr_chunks=num_asr_chunks,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
+                accuracy_mode=accuracy_mode,
             )
             
             logger.info("[Celery ASR] Task completed: file_id={}", file_id)

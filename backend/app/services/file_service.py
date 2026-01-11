@@ -110,10 +110,11 @@ class FileService:
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         ocr_mode: str = "document",
+        accuracy_mode: str = "speed",
     ) -> dict[str, int]:
         """파일 업로드 및 처리 큐에 등록."""
-        logger.info("[Upload] 파일 업로드 시작: filename=%s", file.filename)
-        print(f"[Upload] [1/4] 파일 업로드 시작: {file.filename}")
+        logger.info("[Upload] 파일 업로드 시작: filename=%s, accuracy_mode=%s", file.filename, accuracy_mode)
+        print(f"[Upload] [1/4] 파일 업로드 시작: {file.filename}, accuracy_mode={accuracy_mode}")
         
         object_key = self._build_object_key(file.filename)
         logger.info("[Upload] 스토리지 키 생성: object_key=%s", object_key)
@@ -180,6 +181,7 @@ class FileService:
                     num_asr_chunks=self.settings.max_workers,
                     min_speakers=min_speakers,
                     max_speakers=max_speakers,
+                    accuracy_mode=accuracy_mode,
                 )
                 job_id = await loop.run_in_executor(None, enqueue_func)
                 logger.info("[Upload] ASR 작업 큐잉 성공: file_id=%s, job_id=%s", file_obj.id, job_id)

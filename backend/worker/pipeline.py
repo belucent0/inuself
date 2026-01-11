@@ -20,6 +20,14 @@ from .diarization_utils import (
 )
 from .whisper_utils import run_asr_transcription
 from .chunked_asr import run_chunked_asr, merge_asr_results
+from .flm_asr import (
+    run_flm_asr_transcription, 
+    run_chunked_flm_asr, 
+    is_flm_server_available, 
+    FLMServerUnavailableError,
+    run_flm_asr_with_diarization_segments,
+    run_flm_asr_parallel_with_vad,
+)
 
 # distributed_lock을 import하기 위해 경로 추가
 # pipeline.py는 backend/worker/에 있고, distributed_lock은 backend/app/worker/에 있음
@@ -59,6 +67,7 @@ def run_asr_diarization_pipeline(
     min_speakers: int | None = None,
     max_speakers: int | None = None,
     file_id: int | None = None,  # 락 회복을 위한 file_id
+    accuracy_mode: str = "speed",  # "speed" (FLM/NPU) or "accuracy" (whisper.cpp/GPU)
 ) -> PipelineResult:
     """
     ASR + 화자분리 파이프라인 실행.
@@ -132,6 +141,7 @@ def run_asr_diarization_pipeline(
             min_speakers=min_speakers,
             max_speakers=max_speakers,
             file_id=file_id,
+            accuracy_mode=accuracy_mode,
         )
     else:
         raise ValueError(f"Unsupported processing mode: {processing_mode}")
@@ -149,10 +159,11 @@ def _run_case4_parallel_full_asr(
     min_speakers: int | None = None,
     max_speakers: int | None = None,
     file_id: int | None = None,  # 락 회복을 위한 file_id
+    accuracy_mode: str = "speed",  # "speed" (FLM/NPU) or "accuracy" (whisper.cpp/GPU)
 ) -> PipelineResult:
     """Case 4: 화자분리와 ASR(전체 파일 또는 청킹) 병렬 처리."""
     print(f"\n{'='*60}")
-    print("[Case 4] Parallel Processing: Diarization and ASR")
+    print(f"[Case 4] Parallel Processing: Diarization and ASR (accuracy_mode={accuracy_mode})")
     print(f"{'='*60}")
     
     # 설정값 가져오기
@@ -191,57 +202,109 @@ def _run_case4_parallel_full_asr(
     asr_lock_ctx = nullcontext()
     diarization_lock_ctx = nullcontext()
     
+    use_flm = False  # 실제 사용된 ASR 엔진 추적
+    
     try:
-        print(f"[Step 2] Starting Diarization and ASR simultaneously (with locks)...")
+        print(f"[Step 2] Starting ASR pipeline...")
+        print(f"[DEBUG] accuracy_mode={accuracy_mode}, type={type(accuracy_mode)}")
         
-        # 화자분리와 ASR을 동시에 실행 (락을 획득한 상태에서)
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            # 화자분리 작업 제출
-            diarization_future = executor.submit(
-                run_diarization,
-                waveform=waveform,
-                sample_rate=sample_rate,
-                device=device,
-                audio_duration=audio_duration,
-                min_speakers=min_speakers,
-                max_speakers=max_speakers,
-            )
+        # FLM 서버 사용 가능 여부 확인 (속도 우선 모드일 때만)
+        use_flm = accuracy_mode == "speed" and is_flm_server_available()
+        
+        if accuracy_mode == "speed" and not use_flm:
+            print(f"[ASR] FLM server not available, falling back to whisper.cpp")
+        
+        if use_flm:
+            # ============================================================
+            # FLM 모드: 병렬 처리 (VAD 기반 청킹 + 화자분리 동시 실행)
+            # VAD로 음성 구간을 감지하고 30초 이하 청크로 분할하여 전사합니다.
+            # 각 청크의 시작 시간(offset)을 기록하여 세그먼트 타임스탬프를 생성합니다.
+            # ============================================================
+            print(f"[FLM] Parallel processing: VAD-based transcription and Diarization simultaneously")
             
-            # ASR 작업 제출 (청킹 여부에 따라 다름)
-            if use_chunking:
-                # 청킹된 ASR 실행 (순차 처리)
-                def run_chunked_asr_wrapper():
-                    """청킹된 ASR을 실행하고 결과를 병합하는 래퍼 함수."""
-                    chunk_results = run_chunked_asr(
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                # 화자분리 작업 제출 (GPU)
+                diarization_future = executor.submit(
+                    run_diarization,
+                    waveform=waveform,
+                    sample_rate=sample_rate,
+                    device=device,
+                    audio_duration=audio_duration,
+                    min_speakers=min_speakers,
+                    max_speakers=max_speakers,
+                )
+                
+                # VAD 기반 FLM 전사 (NPU)
+                print(f"[ASR] Using FLM server with VAD-based chunking (speed mode)")
+                asr_future = executor.submit(
+                    run_flm_asr_parallel_with_vad,
+                    audio_path=audio_file_path,
+                    language="ko",
+                    max_chunk_duration=30.0,
+                )
+                
+                # 두 작업 모두 완료 대기
+                print(f"[Parallel] Waiting for both Diarization and FLM ASR to complete...")
+                diarization, diarization_load_time, diarization_time, embeddings_dict, pipeline, diarization_params = diarization_future.result()
+                asr_result, model_load_time, transcribe_time = asr_future.result()
+            
+            print(f"[FLM] Parallel processing completed")
+            
+        else:
+            # ============================================================
+            # whisper.cpp 모드: 병렬 처리 (화자분리 + ASR 동시 실행)
+            # whisper.cpp는 세그먼트(타임스탬프)를 자체 생성하므로 병렬 처리 가능
+            # ============================================================
+            print(f"[whisper.cpp] Parallel processing: Diarization and ASR simultaneously")
+            
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                # 화자분리 작업 제출
+                diarization_future = executor.submit(
+                    run_diarization,
+                    waveform=waveform,
+                    sample_rate=sample_rate,
+                    device=device,
+                    audio_duration=audio_duration,
+                    min_speakers=min_speakers,
+                    max_speakers=max_speakers,
+                )
+                
+                # whisper.cpp를 통한 전사 (GPU, 정확도 우선)
+                print(f"[ASR] Using whisper.cpp (accuracy mode)")
+                if use_chunking:
+                    # 청킹된 ASR 실행 (순차 처리)
+                    def run_chunked_asr_wrapper():
+                        """청킹된 ASR을 실행하고 결과를 병합하는 래퍼 함수."""
+                        chunk_results = run_chunked_asr(
+                            audio_path=audio_file_path,
+                            model_size=model_size,
+                            chunk_duration_seconds=chunk_duration_seconds,
+                            overlap_seconds=overlap_seconds,
+                            project_root=project_root,
+                        )
+                        # 청크 결과 병합
+                        merged_result = merge_asr_results(chunk_results, overlap_seconds, chunk_duration_seconds)
+                        # run_asr_transcription과 동일한 형식으로 반환 (model_load_time, transcribe_time 포함)
+                        # 청킹의 경우 모델 로드 시간은 첫 번째 청크에서만 발생하므로 0으로 설정
+                        return merged_result, 0.0, 0.0
+                    
+                    asr_future = executor.submit(run_chunked_asr_wrapper)
+                else:
+                    # 전체 파일 ASR 실행
+                    asr_future = executor.submit(
+                        run_asr_transcription,
                         audio_path=audio_file_path,
                         model_size=model_size,
-                        chunk_duration_seconds=chunk_duration_seconds,
-                        overlap_seconds=overlap_seconds,
                         project_root=project_root,
                     )
-                    # 청크 결과 병합
-                    merged_result = merge_asr_results(chunk_results, overlap_seconds, chunk_duration_seconds)
-                    # run_asr_transcription과 동일한 형식으로 반환 (model_load_time, transcribe_time 포함)
-                    # 청킹의 경우 모델 로드 시간은 첫 번째 청크에서만 발생하므로 0으로 설정
-                    return merged_result, 0.0, 0.0
                 
-                asr_future = executor.submit(run_chunked_asr_wrapper)
-            else:
-                # 전체 파일 ASR 실행
-                asr_future = executor.submit(
-                    run_asr_transcription,
-                    audio_path=audio_file_path,
-                    model_size=model_size,
-                    project_root=project_root,
-                )
-            
-            # 두 작업 모두 완료 대기
-            print(f"[Parallel] Waiting for both Diarization and ASR to complete...")
-            diarization, diarization_load_time, diarization_time, embeddings_dict, pipeline, diarization_params = diarization_future.result()
-            asr_result, model_load_time, transcribe_time = asr_future.result()
+                # 두 작업 모두 완료 대기
+                print(f"[Parallel] Waiting for both Diarization and ASR to complete...")
+                diarization, diarization_load_time, diarization_time, embeddings_dict, pipeline, diarization_params = diarization_future.result()
+                asr_result, model_load_time, transcribe_time = asr_future.result()
         
         # 락은 컨텍스트 매니저가 자동으로 해제
-        print(f"[Step 3] Locks released after completion")
+        print(f"[Step 3] Processing completed")
     finally:
         # diarization 락 해제
         try:
@@ -258,15 +321,21 @@ def _run_case4_parallel_full_asr(
     
     print(f"\n[Case 4] All tasks completed in {execution_time:.2f} seconds")
     print(f"  - Diarization (load + process): {diarization_load_time + diarization_time:.2f}s")
-    if use_chunking:
-        print(f"  - ASR (chunked): completed")
+    asr_mode_label = "FLM/NPU" if use_flm else "whisper.cpp/GPU"
+    if use_flm:
+        print(f"  - ASR ({asr_mode_label}, sequential): {model_load_time + transcribe_time:.2f}s")
+    elif use_chunking:
+        print(f"  - ASR ({asr_mode_label}, chunked): {model_load_time + transcribe_time:.2f}s")
     else:
-        print(f"  - ASR (load + transcribe): {model_load_time + transcribe_time:.2f}s")
+        print(f"  - ASR ({asr_mode_label}): {model_load_time + transcribe_time:.2f}s")
+    
+    # FLM 모드에서는 이미 세그먼트가 생성되어 있으므로 재전사 불필요
+    asr_segments = asr_result.get("segments", [])
     
     # 화자 정보 병합
     print(f"\n[Merging] Combining ASR and diarization results...")
     merged_segments = merge_segments_with_speakers(
-        asr_result.get("segments", []),
+        asr_segments,
         diarization,
     )
     
@@ -312,6 +381,9 @@ def _run_case4_parallel_full_asr(
         "diarization_time": diarization_load_time + diarization_time,
         "asr_time": model_load_time + transcribe_time,
         "asr_chunked": use_chunking,
+        "accuracy_mode": accuracy_mode,
+        "asr_engine": "flm" if use_flm else "whisper.cpp",
+        "flm_used": use_flm,
         "speaker_stats": speaker_stats,
         "diarization_params": diarization_params,
     })

@@ -168,7 +168,8 @@ export async function uploadContent(
   file: File,
   minSpeakers?: number,
   maxSpeakers?: number,
-  ocrMode?: string
+  ocrMode?: string,
+  accuracyMode?: 'speed' | 'accuracy'
 ): Promise<{ content_id: number }> {
   const formData = new FormData()
   formData.append('file', file)
@@ -182,6 +183,9 @@ export async function uploadContent(
   }
   if (ocrMode !== undefined) {
     params.append('ocr_mode', ocrMode)
+  }
+  if (accuracyMode !== undefined) {
+    params.append('accuracy_mode', accuracyMode)
   }
 
   const queryString = params.toString()
@@ -231,7 +235,8 @@ export async function retryProcessing(
   type: 'asr' | 'summary' | 'ocr',
   minSpeakers?: number,
   maxSpeakers?: number,
-  ocrMode?: string
+  ocrMode?: string,
+  accuracyMode?: 'speed' | 'accuracy'
 ): Promise<{ success: boolean; message: string; job_id?: string }> {
   const params = new URLSearchParams({ type })
   if (minSpeakers !== undefined) {
@@ -242,6 +247,9 @@ export async function retryProcessing(
   }
   if (ocrMode !== undefined) {
     params.append('ocr_mode', ocrMode)
+  }
+  if (accuracyMode !== undefined) {
+    params.append('accuracy_mode', accuracyMode)
   }
 
   const res = await fetch(`${API_BASE}/contents/${contentId}/retry?${params.toString()}`, {

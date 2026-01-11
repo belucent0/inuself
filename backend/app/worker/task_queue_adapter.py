@@ -21,6 +21,7 @@ class TaskQueueAdapter(ABC):
         num_asr_chunks: int,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
+        accuracy_mode: str = "speed",
     ) -> str:
         """ASR 작업을 큐에 등록하고 작업 ID를 반환."""
         pass
@@ -71,6 +72,7 @@ class CeleryAdapter(TaskQueueAdapter):
         num_asr_chunks: int,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
+        accuracy_mode: str = "speed",
     ) -> str:
         # Lazy import: celery_tasks가 processor를 import하므로 실행 시점에만 로드
         from .celery_tasks import process_asr_task
@@ -87,6 +89,7 @@ class CeleryAdapter(TaskQueueAdapter):
                 "num_asr_chunks": num_asr_chunks,
                 "min_speakers": min_speakers,
                 "max_speakers": max_speakers,
+                "accuracy_mode": accuracy_mode,
             },
             queue="asr",  # 큐를 명시적으로 지정
         )

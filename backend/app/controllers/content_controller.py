@@ -58,14 +58,15 @@ async def upload_content(
     min_speakers: int | None = Query(None, ge=1, description="최소 화자 수 (선택사항)"),
     max_speakers: int | None = Query(None, ge=1, description="최대 화자 수 (선택사항)"),
     ocr_mode: str = Query("document", description="OCR 처리 모드 ('document' 또는 'portray')"),
+    accuracy_mode: str = Query("speed", description="전사 모드 ('speed' 또는 'accuracy')"),
     file_service: FileService = Depends(get_file_service)
 ):
     """파일 업로드 (오디오 및 문서 지원)."""
     from ..core.logging import logger
     
-    logger.info("[Upload] File upload request received: filename={}, content_type={}, min_speakers={}, max_speakers={}, ocr_mode={}", 
-               file.filename, file.content_type, min_speakers, max_speakers, ocr_mode)
-    print(f"[Upload] 파일 업로드 요청: {file.filename} ({file.content_type}), min_speakers={min_speakers}, max_speakers={max_speakers}, ocr_mode={ocr_mode}")
+    logger.info("[Upload] File upload request received: filename={}, content_type={}, min_speakers={}, max_speakers={}, ocr_mode={}, accuracy_mode={}", 
+               file.filename, file.content_type, min_speakers, max_speakers, ocr_mode, accuracy_mode)
+    print(f"[Upload] 파일 업로드 요청: {file.filename} ({file.content_type}), min_speakers={min_speakers}, max_speakers={max_speakers}, ocr_mode={ocr_mode}, accuracy_mode={accuracy_mode}")
     
     try:
         result = await file_service.upload_and_enqueue(
@@ -73,6 +74,7 @@ async def upload_content(
             min_speakers=min_speakers, 
             max_speakers=max_speakers, 
             ocr_mode=ocr_mode,
+            accuracy_mode=accuracy_mode,
         )
         # 하위 호환성을 위해 content_id로 변환
         upload_response = UploadResponse(content_id=result["file_id"], queued=True)
@@ -222,6 +224,7 @@ async def retry_processing(
     min_speakers: int | None = Query(None, ge=1, description="최소 화자 수 (ASR 재처리 시에만 사용)"),
     max_speakers: int | None = Query(None, ge=1, description="최대 화자 수 (ASR 재처리 시에만 사용)"),
     ocr_mode: str = Query("document", description="OCR 처리 모드 ('document' 또는 'portray')"),
+    accuracy_mode: str = Query("speed", description="전사 모드 ('speed' 또는 'accuracy')"),
     service: ContentService = Depends(get_service)
 ):
     """
@@ -232,6 +235,7 @@ async def retry_processing(
         min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
         max_speakers: 최대 화자 수 (선택사항, ASR 재처리 시에만 사용)
         ocr_mode: OCR 처리 모드 (선택사항, OCR 재처리 시에만 사용: "document", "portray")
+        accuracy_mode: 전사 모드 (선택사항, ASR 재처리 시에만 사용: "speed", "accuracy")
     """
     try:
         result = await service.retry_processing(
@@ -239,7 +243,8 @@ async def retry_processing(
             type, 
             min_speakers=min_speakers, 
             max_speakers=max_speakers,
-            ocr_mode=ocr_mode
+            ocr_mode=ocr_mode,
+            accuracy_mode=accuracy_mode
         )
         return result
     except ValueError as exc:

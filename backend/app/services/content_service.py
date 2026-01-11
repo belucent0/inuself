@@ -220,6 +220,7 @@ class ContentService:
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         ocr_mode: str = "document",
+        accuracy_mode: str = "speed",
     ) -> dict:
         """
         실패한 콘텐츠를 재처리합니다.
@@ -228,10 +229,9 @@ class ContentService:
             content_id: 콘텐츠 ID (또는 File ID)
             retry_type: "asr", "summary", 또는 "ocr"
             min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
-            retry_type: "asr", "summary", 또는 "ocr"
-            min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
             max_speakers: 최대 화자 수 (선택사항, ASR 재처리 시에만 사용)
             ocr_mode: OCR 처리 모드 ("document", "portray")
+            accuracy_mode: 전사 모드 ("speed", "accuracy")
         
         Returns:
             {"success": True, "message": "...", "job_id": "..."}
@@ -335,11 +335,12 @@ class ContentService:
                     num_asr_chunks=self.settings.max_workers,
                     min_speakers=min_speakers,
                     max_speakers=max_speakers,
+                    accuracy_mode=accuracy_mode,
                 )
                 job_id = await loop.run_in_executor(None, enqueue_func)
                 
-                logger.info("Manual ASR retry enqueued: file_id=%s, job_id=%s, min_speakers=%s, max_speakers=%s", 
-                           content_id, job_id, min_speakers, max_speakers)
+                logger.info("Manual ASR retry enqueued: file_id=%s, job_id=%s, min_speakers=%s, max_speakers=%s, accuracy_mode=%s", 
+                           content_id, job_id, min_speakers, max_speakers, accuracy_mode)
                 return {"success": True, "message": "ASR reprocessing started", "job_id": job_id}
             
             elif retry_type == "summary":
@@ -407,7 +408,7 @@ class ContentService:
             task_queue = get_task_queue()
             enqueue_func = partial(
                 task_queue.enqueue_asr_job,
-                content_id=content_id,
+                file_id=content_id,
                 storage_key=content.object_key,
                 original_filename=content.filename,
                 model_size=self.settings.whisper_model_default,
@@ -415,11 +416,12 @@ class ContentService:
                 num_asr_chunks=self.settings.max_workers,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
+                accuracy_mode=accuracy_mode,
             )
             job_id = await loop.run_in_executor(None, enqueue_func)
             
-            logger.info("Manual ASR retry enqueued: content_id=%s, job_id=%s, min_speakers=%s, max_speakers=%s", 
-                       content_id, job_id, min_speakers, max_speakers)
+            logger.info("Manual ASR retry enqueued: content_id=%s, job_id=%s, min_speakers=%s, max_speakers=%s, accuracy_mode=%s", 
+                       content_id, job_id, min_speakers, max_speakers, accuracy_mode)
             return {"success": True, "message": "ASR reprocessing started", "job_id": job_id}
         
         elif retry_type == "summary":

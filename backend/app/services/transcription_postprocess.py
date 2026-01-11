@@ -6,6 +6,70 @@ from copy import deepcopy
 from typing import Any
 
 
+def split_long_segments(
+    segments: list[dict[str, Any]],
+    *,
+    max_duration: float = 30.0,
+) -> list[dict[str, Any]]:
+    """
+    긴 세그먼트를 지정된 최대 길이로 분할한다.
+    
+    FLM 등 세그먼트가 없거나 매우 긴 경우에 대응하기 위한 공통 후처리.
+    whisper.cpp처럼 이미 적절히 분할된 경우에는 영향 없음.
+    
+    Args:
+        segments: ASR 세그먼트 목록.
+        max_duration: 세그먼트 최대 길이(초). 이 값을 초과하면 분할.
+    
+    Returns:
+        분할 처리된 세그먼트 목록.
+    """
+    if not segments:
+        return []
+    
+    result: list[dict[str, Any]] = []
+    
+    for segment in segments:
+        seg_start = segment.get("start", 0.0)
+        seg_end = segment.get("end", 0.0)
+        duration = seg_end - seg_start
+        
+        if duration <= max_duration:
+            # 세그먼트가 충분히 짧으면 그대로 추가
+            result.append(deepcopy(segment))
+        else:
+            # 긴 세그먼트를 max_duration 단위로 분할
+            # 텍스트는 분할하지 않고 첫 세그먼트에만 포함 (FLM 특성상 세그먼트별 텍스트가 이미 있음)
+            text = segment.get("text", "")
+            speaker = segment.get("speaker")
+            
+            current_start = seg_start
+            is_first = True
+            
+            while current_start < seg_end:
+                current_end = min(current_start + max_duration, seg_end)
+                
+                new_segment = {
+                    "start": current_start,
+                    "end": current_end,
+                    "text": text if is_first else "",  # 첫 세그먼트에만 텍스트
+                }
+                if speaker:
+                    new_segment["speaker"] = speaker
+                
+                # 원본 세그먼트의 다른 필드도 복사 (첫 세그먼트에만)
+                if is_first:
+                    for key, value in segment.items():
+                        if key not in ("start", "end", "text", "speaker"):
+                            new_segment[key] = deepcopy(value)
+                
+                result.append(new_segment)
+                current_start = current_end
+                is_first = False
+    
+    return result
+
+
 def merge_consecutive_speaker_segments(
     segments: list[dict[str, Any]],
     *,
