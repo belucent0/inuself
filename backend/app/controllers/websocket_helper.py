@@ -138,7 +138,7 @@ async def post_process_with_llm(text: str, base_url: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{base_url}/chat/completions",
+                f"{base_url}/v1/chat/completions",
                 json={
                     "model": os.getenv("FLM_LLM_MODEL", "qwen3-it:4b"),
                     "messages": [

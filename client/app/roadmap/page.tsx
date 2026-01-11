@@ -6,25 +6,28 @@ import { Card, CardContent } from '@/components/ui/card'
 import PageHeader from '@/components/PageHeader'
 import MarkdownContent from '@/components/MarkdownContent'
 
-type TabType = 'developing' | 'considering' | 'longterm'
+type TabType = 'completed' | 'developing' | 'considering' | 'longterm'
 
 export default function RoadmapPage() {
-  const [activeTab, setActiveTab] = useState<TabType>('developing')
+  const [activeTab, setActiveTab] = useState<TabType>('completed')
   const [markdownCache, setMarkdownCache] = useState<Record<TabType, string>>({
+    completed: '',
     developing: '',
     considering: '',
     longterm: '',
   })
-  const [loadingTabs, setLoadingTabs] = useState<Set<TabType>>(new Set<TabType>(['developing']))
+  const [loadingTabs, setLoadingTabs] = useState<Set<TabType>>(new Set<TabType>(['completed']))
   const [error, setError] = useState<string | null>(null)
 
   const tabFiles: Record<TabType, string> = {
+    completed: '/ROADMAP_COMPLETED.md',
     developing: '/ROADMAP_DEVELOPING.md',
     considering: '/ROADMAP_CONSIDERING.md',
     longterm: '/ROADMAP_LONGTERM.md',
   }
 
   const tabLabels: Record<TabType, string> = {
+    completed: '✅ 완료',
     developing: '🔨 개발 중',
     considering: '💭 고려 중',
     longterm: '🎯 장기 도전',
@@ -72,8 +75,8 @@ export default function RoadmapPage() {
       <Card>
         <CardContent className="pt-6">
           <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as TabType)} className="w-full">
-            <TabsList className="grid w-full grid-cols-3 mb-6 h-11 md:h-10 p-1">
-              {(['developing', 'considering', 'longterm'] as TabType[]).map((tab) => (
+            <TabsList className="grid w-full grid-cols-4 mb-6 h-11 md:h-10 p-1">
+              {(['completed', 'developing', 'considering', 'longterm'] as TabType[]).map((tab) => (
                 <TabsTrigger 
                   key={tab} 
                   value={tab}
@@ -84,7 +87,7 @@ export default function RoadmapPage() {
               ))}
             </TabsList>
 
-            {(['developing', 'considering', 'longterm'] as TabType[]).map((tab) => (
+            {(['completed', 'developing', 'considering', 'longterm'] as TabType[]).map((tab) => (
               <TabsContent key={tab} value={tab} className="mt-0">
                 {loadingTabs.has(tab) ? (
                   <p className="text-muted-foreground">로딩 중...</p>

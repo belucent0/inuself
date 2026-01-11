@@ -37,7 +37,7 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
     // 장치 목록 states
     const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([])
     const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
-    const [selectedLanguage, setSelectedLanguage] = useState<string>('ko')
+    const [selectedLanguage, setSelectedLanguage] = useState<string>('auto')
 
     // 장치 목록 가져오기
     useEffect(() => {
@@ -341,55 +341,86 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
             setIsRecording(true)
             setStatus("녹음 중...")
 
-            // MediaRecorder 설정
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                ? 'audio/webm;codecs=opus' : 'audio/webm'
-
-            console.log('Using mimeType:', mimeType)
-            const mediaRecorder = new MediaRecorder(stream, { mimeType })
-            mediaRecorderRef.current = mediaRecorder
-
-            mediaRecorder.ondataavailable = async (event) => {
-                const ws = websocketRef.current;
-
-                // 클라이언트 사이드 VAD / 필터링
-                const maxAmp = currentMaxAmplitudeRef.current;
-                currentMaxAmplitudeRef.current = 0; // 리셋 (다음 청크 측정을 위해)
-
-                // Threshold 설정 (테스트 필요: 128기준, 3미만 침묵, 10미만 저음량 가정)
-                const SILENCE_THRESHOLD = 3;
-                const MIN_VOLUME_THRESHOLD = 10;
-
-                if (event.data.size > 0 && ws && ws.readyState === WebSocket.OPEN) {
-                    // 1. 헤더 청크(첫 번째)는 무조건 전송해야 함 (ffmpeg 디코딩 필수)
-                    if (!hasSentHeaderRef.current) {
-                        // console.debug("Sending WebM header chunk");
+            // 실시간 스트리밍: 5초마다 독립적인 WebM 청크 전송
+            let chunkCount = 0;
+            let chunkIntervalId: NodeJS.Timeout | null = null;
+            
+            const createNewRecorder = () => {
+                const newMimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                    ? 'audio/webm;codecs=opus' : 'audio/webm';
+                const newRecorder = new MediaRecorder(stream, { mimeType: newMimeType });
+                
+                newRecorder.ondataavailable = async (event) => {
+                    const ws = websocketRef.current;
+                    
+                    if (event.data.size > 0 && ws && ws.readyState === WebSocket.OPEN) {
+                        // VAD 필터링
+                        const maxAmp = currentMaxAmplitudeRef.current;
+                        currentMaxAmplitudeRef.current = 0;
+                        
+                        const SILENCE_THRESHOLD = 3;
+                        const MIN_VOLUME_THRESHOLD = 10;
+                        
+                        if (maxAmp < SILENCE_THRESHOLD) {
+                            console.log('Skipping silent chunk');
+                            return; // 침묵은 전송 안 함
+                        } else if (maxAmp < MIN_VOLUME_THRESHOLD) {
+                            setStatus(`⚠️ 목소리가 너무 작아 인식이 어렵습니다.`);
+                            setTimeout(() => {
+                                if (isRecordingRef.current) setStatus("녹음 중...");
+                            }, 2000);
+                            return;
+                        }
+                        
+                        // 오디오 청크를 전송 (독립적인 WebM 파일)
+                        chunkCount++;
+                        
+                        // 1. 먼저 바이너리 오디오 데이터 전송
                         ws.send(event.data);
-                        hasSentHeaderRef.current = true;
-                        return;
+                        
+                        // 2. 그 다음 JSON 제어 메시지 전송 (전사 트리거)
+                        const wsMessage = JSON.stringify({
+                            type: "audio_chunk",
+                            chunk_id: chunkCount,
+                            is_last: false,
+                        });
+                        ws.send(wsMessage);
+                        
+                        console.log(`Sent audio chunk ${chunkCount}, size: ${event.data.size} bytes`);
+                        
+                        // 진행 상태
+                        setStatus(`전사 중... (청크 ${chunkCount})`);
                     }
-
-                    // 2. 이후 청크부터 VAD 필터링 적용
-                    if (maxAmp < SILENCE_THRESHOLD) {
-                        // 침묵: 전송 안 함 (서버 부하 감소)
-                        // console.debug(`Silence detected (Amp: ${maxAmp}), skipping send.`);
-                    } else if (maxAmp < MIN_VOLUME_THRESHOLD) {
-                        // 저음량: 경고 표시만 하고 전송 안 함
-                        // console.debug(`Low volume detected (Amp: ${maxAmp}), skipping send.`);
-                        setStatus(`⚠️ 목소리가 너무 작아 인식이 어렵습니다.`);
-                        setTimeout(() => {
-                            if (isRecordingRef.current) setStatus("녹음 중...");
-                            else if (isServerReady) setStatus('준비 완료');
-                        }, 2000);
-                    } else {
-                        // 정상: 전송
-                        ws.send(event.data);
-                    }
+                };
+                
+                return newRecorder;
+            };
+            
+            // 첫 번째 레코더 생성 및 시작
+            let mediaRecorder = createNewRecorder();
+            mediaRecorderRef.current = mediaRecorder;
+            mediaRecorder.start();
+            
+            // 5초마다 레코더 재시작 (각 청크가 독립적인 WebM 파일이 됨)
+            chunkIntervalId = setInterval(() => {
+                if (!isRecordingRef.current) {
+                    if (chunkIntervalId) clearInterval(chunkIntervalId);
+                    return;
                 }
-            }
-
-            // 0.5초마다 데이터 청크 전송 (VAD 반응 속도 향상)
-            mediaRecorder.start(500)
+                
+                // 현재 레코더 중지 (ondataavailable 트리거)
+                if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+                    mediaRecorderRef.current.stop();
+                }
+                
+                // 새 레코더 생성 및 시작
+                const newRecorder = createNewRecorder();
+                mediaRecorderRef.current = newRecorder;
+                newRecorder.start();
+            }, 5000);
+            
+            // cleanup을 위해 intervalId 저장
+            (mediaRecorderRef.current as any)._chunkIntervalId = chunkIntervalId;
 
         } catch (error) {
             console.error('Error starting recording:', error)
@@ -407,8 +438,14 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
             setStatus('종료됨')
         }
 
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-            mediaRecorderRef.current.stop()
+        if (mediaRecorderRef.current) {
+            // interval 정리
+            const intervalId = (mediaRecorderRef.current as any)._chunkIntervalId;
+            if (intervalId) clearInterval(intervalId);
+            
+            if (mediaRecorderRef.current.state !== 'inactive') {
+                mediaRecorderRef.current.stop();
+            }
         }
 
         if (streamRef.current) {
@@ -431,7 +468,14 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
 
     const handleToggleRecording = () => {
         if (isRecording) {
+            // 녹음 중지 후 finish 메시지 전송
             stopRecording()
+            
+            // finish 메시지 전송 (오디오 전사 요청)
+            if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
+                websocketRef.current.send(JSON.stringify({ type: "finish" }));
+                console.log('Sent finish message');
+            }
         } else {
             startRecording()
         }
@@ -472,10 +516,10 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                             </SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="auto">자동감지</SelectItem>
-                                <SelectItem value="ko">한국어</SelectItem>
+                                {/* <SelectItem value="ko">한국어</SelectItem>
                                 <SelectItem value="en">English</SelectItem>
                                 <SelectItem value="ja">日本語</SelectItem>
-                                <SelectItem value="zh">中文</SelectItem>
+                                <SelectItem value="zh">中文</SelectItem> */}
                             </SelectContent>
                         </Select>
                     </div>
@@ -516,7 +560,7 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                     </div>
 
                     <div className="border rounded-md p-2 bg-muted/30">
-                        <ScrollArea className="h-[300px] w-full pr-4" ref={scrollAreaRef}>
+                        <ScrollArea className="h-[300px] w-full" ref={scrollAreaRef}>
                             {committedLines.length > 0 ? (
                                 <div className="flex flex-col gap-2">
                                     {committedLines.map((line) => (
@@ -527,8 +571,15 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                                             </p>
                                             {/* 후처리 완료 표시 (선택사항) */}
                                             {line.processedText && line.processedText !== line.text && (
-                                                <div className="absolute top-1 right-1 text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full opacity-70">
-                                                    ✓ 교정됨
+                                                <div className="absolute top-1 right-0.5">
+                                                    {/* 모바일: 작은 체크마크만 */}
+                                                    <div className="sm:hidden text-green-600 bg-green-50 w-5 h-5 rounded-full flex items-center justify-center opacity-80 shadow-sm">
+                                                        <span className="text-xs leading-none">✓</span>
+                                                    </div>
+                                                    {/* 데스크톱: 체크마크 + 텍스트 */}
+                                                    <div className="hidden sm:flex text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full opacity-70 items-center gap-0.5">
+                                                        ✓ 교정됨
+                                                    </div>
                                                 </div>
                                             )}
                                         </div>
@@ -536,7 +587,7 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                                     {isRecording && (
                                         <div className="flex items-center gap-2 text-muted-foreground animate-pulse mt-2">
                                             <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                                            <span>듣고 있는 중... (5초 단위 변환)</span>
+                                            <span>듣고 있는 중...</span>
                                         </div>
                                     )}
                                 </div>
