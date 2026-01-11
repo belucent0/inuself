@@ -94,23 +94,28 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.exception("[Lifespan] Failed to start RedisListener: {}", exc)
 
-    # StreamASRWorker 시작 (whisper-server.exe)
-    from .worker.stream_asr import stream_asr_worker
-    logger.info("[Lifespan] Starting StreamASRWorker...")
-    stream_asr_worker.start()
-    
-    # 시작 시: 워커 시작 제어
-    # 개발 환경에서는 run_dev.sh가 워커를 관리하므로 기본적으로 비활성화
-    # 프로덕션에서는 START_WORKER=true로 설정하여 FastAPI가 워커를 시작하도록 할 수 있음
-    should_start_worker = os.getenv("START_WORKER", "false").lower() == "true"
-    
-    if should_start_worker:
-        logger.info("[FastAPI] 워커를 백그라운드에서 시작합니다...")
-        start_worker_background()
-    else:
-        logger.info("[FastAPI] 워커 자동 시작이 비활성화되었습니다.")
+    # StreamConsumer 시작 (워커 결과 수신)
+    from .services.stream_consumer import get_stream_consumer
+    stream_consumer = get_stream_consumer()
+    stream_consumer_task = asyncio.create_task(stream_consumer.start())
+    logger.info("[Lifespan] StreamConsumer started")
+
+    # NOTE: 워커는 PM2로 별도 관리됩니다 (worker/celery_app.py 사용)
+    logger.info("[Lifespan] Workers are managed externally via PM2")
     
     yield
+    
+    # 종료 시: StreamConsumer 중지
+    try:
+        await stream_consumer.stop()
+        stream_consumer_task.cancel()
+        try:
+            await stream_consumer_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("[Lifespan] StreamConsumer stopped")
+    except Exception as exc:
+        logger.exception("[Lifespan] Error stopping StreamConsumer: {}", exc)
     
     # 종료 시: RedisListener 중지
     try:
@@ -119,9 +124,6 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.exception("[Lifespan] Error stopping RedisListener: {}", exc)
 
-    # StreamASRWorker 종료
-    logger.info("[Lifespan] Stopping StreamASRWorker...")
-    stream_asr_worker.stop()
 
 
 def create_app() -> FastAPI:

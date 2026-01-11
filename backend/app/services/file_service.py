@@ -10,14 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
 from ..core.logging import logger
-from ..core.storage import delete_file, upload_fileobj, get_public_media_url
+from ..core.storage import delete_file, upload_fileobj, get_public_media_url, wait_for_file, download_file
 from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
 from ..schemas.content import ContentDetail, ContentListItem, ContentListResponse, SttLogSchema, LlmLogSchema
 from ..schemas.file import DocumentSchema, TranscriptionSchema
-from ..worker.celery_queue import cancel_celery_tasks_by_content_ids
+from ..utils.celery_queue import cancel_celery_tasks_by_content_ids
 
 
 class FileService:
@@ -133,6 +133,16 @@ class FileService:
         logger.info("[Upload] 스토리지 업로드 완료: object_key=%s", object_key)
         print(f"[Upload] OK 스토리지 업로드 완료: {object_key}")
         
+        # 파일 가용성 확인 (S3 eventual consistency 대응)
+        # 워커가 파일을 다운로드하기 전에 파일이 실제로 가용 상태인지 확인
+        loop = asyncio.get_running_loop()
+        file_ready = await loop.run_in_executor(None, lambda: wait_for_file(object_key))
+        if not file_ready:
+            error_msg = f"파일 가용성 확인 실패: object_key={object_key}"
+            logger.error("[Upload] %s", error_msg)
+            raise RuntimeError(error_msg)
+        logger.info("[Upload] 파일 가용성 확인 완료: object_key=%s", object_key)
+        
         # 파일 닫기
         await file.close()
         
@@ -168,7 +178,7 @@ class FileService:
             try:
                 loop = asyncio.get_running_loop()
                 from functools import partial
-                from ..worker.task_queue_adapter import get_task_queue
+                from ..utils.task_queue_adapter import get_task_queue
                 
                 task_queue = get_task_queue()
                 enqueue_func = partial(
@@ -192,7 +202,7 @@ class FileService:
                 print(f"[Upload] ERROR {error_msg}")
         
         elif content_type in (ContentType.DOCUMENT, ContentType.PORTRAY):
-            # 문서 또는 이미지 묘사: Document 생성 + OCR 작업 큐잉
+            # 문서 또는 이미지 묘사: Document 생성 + OCR 전처리 + 작업 큐잉
             await self.document_repo.create_document(
                 file_id=file_obj.id,
                 ocr_text="",
@@ -201,29 +211,81 @@ class FileService:
             )
             await self.session.commit()
             
-            # OCR 작업 큐잉
-            logger.info("[Upload] OCR 작업 큐잉: file_id=%s, ocr_mode=%s", file_obj.id, ocr_mode)
-            print(f"[Upload] [4/4] OCR 작업 큐잉 중: file_id={file_obj.id}, ocr_mode={ocr_mode}")
+            # OCR 전처리 및 작업 큐잉
+            logger.info("[Upload] OCR 전처리 시작: file_id=%s, ocr_mode=%s", file_obj.id, ocr_mode)
+            print(f"[Upload] [4/4] OCR 전처리 및 큐잉 중: file_id={file_obj.id}, ocr_mode={ocr_mode}")
+            
+            import tempfile
+            temp_file_path = None
             try:
-                loop = asyncio.get_running_loop()
-                from functools import partial
-                from ..worker.task_queue_adapter import get_task_queue
+                # S3에서 파일 다운로드
+                temp_dir = Path(tempfile.gettempdir())
+                temp_file_path = temp_dir / f"ocr_prep_{file_obj.id}_{uuid4().hex[:8]}{Path(file.filename or '').suffix}"
+                download_file(object_key, destination=temp_file_path)
+                logger.info("[Upload] OCR 전처리: 파일 다운로드 완료: %s", temp_file_path)
                 
-                task_queue = get_task_queue()
-                enqueue_func = partial(
-                    task_queue.enqueue_ocr_job,
-                    file_id=file_obj.id,
-                    storage_key=object_key,
-                    original_filename=file.filename or "",
-                    ocr_mode=ocr_mode,
-                )
-                job_id = await loop.run_in_executor(None, enqueue_func)
-                logger.info("[Upload] OCR 작업 큐잉 성공: file_id=%s, job_id=%s, ocr_mode=%s", file_obj.id, job_id, ocr_mode)
-                print(f"[Upload] OK OCR 큐 등록 완료: file_id={file_obj.id}, job_id={job_id}, ocr_mode={ocr_mode}")
+                # 전처리 (PDF/이미지 → 이미지 목록 → S3 업로드)
+                from .ocr_service import OcrPreprocessor
+                preprocessor = OcrPreprocessor()
+                prep_result = preprocessor.prepare_for_ocr(temp_file_path, file_obj.id)
+                
+                image_s3_keys = prep_result["image_s3_keys"]
+                is_text_file = prep_result.get("is_text_file", False)
+                text_content = prep_result.get("text_content")
+                page_count = prep_result.get("page_count", 0)
+                
+                if is_text_file and text_content:
+                    # 텍스트 파일은 OCR 불필요, 직접 저장
+                    logger.info("[Upload] 텍스트 파일 직접 저장: file_id=%s", file_obj.id)
+                    await self.document_repo.update_document(
+                        file_id=file_obj.id,
+                        ocr_text=text_content,
+                        page_count=page_count,
+                        ocr_metadata={"file_type": ".txt", "direct_read": True},
+                    )
+                    await self.file_repo.update_file_status(file_obj.id, FileStatus.SUMMARY_QUEUED)
+                    await self.session.commit()
+                    
+                    # LLM 요약 큐잉
+                    loop = asyncio.get_running_loop()
+                    from functools import partial
+                    from ..utils.task_queue_adapter import get_task_queue
+                    task_queue = get_task_queue()
+                    enqueue_func = partial(
+                        task_queue.enqueue_llm_job,
+                        file_id=file_obj.id,
+                        text_to_summarize=text_content,
+                    )
+                    await loop.run_in_executor(None, enqueue_func)
+                    print(f"[Upload] OK 텍스트 파일 저장 완료, LLM 큐잉: file_id={file_obj.id}")
+                else:
+                    # 이미지로 변환된 파일: OCR 워커 큐잉
+                    loop = asyncio.get_running_loop()
+                    from functools import partial
+                    from ..utils.task_queue_adapter import get_task_queue
+                    
+                    task_queue = get_task_queue()
+                    enqueue_func = partial(
+                        task_queue.enqueue_ocr_job,
+                        file_id=file_obj.id,
+                        image_s3_keys=image_s3_keys,
+                        ocr_mode=ocr_mode,
+                    )
+                    job_id = await loop.run_in_executor(None, enqueue_func)
+                    logger.info("[Upload] OCR 작업 큐잉 성공: file_id=%s, job_id=%s, images=%d", file_obj.id, job_id, len(image_s3_keys))
+                    print(f"[Upload] OK OCR 큐 등록 완료: file_id={file_obj.id}, job_id={job_id}, images={len(image_s3_keys)}")
+                    
             except Exception as exc:
-                error_msg = f"OCR 작업 큐잉 실패: file_id={file_obj.id}, error={exc}"
+                error_msg = f"OCR 전처리/큐잉 실패: file_id={file_obj.id}, error={exc}"
                 logger.exception("[Upload] %s", error_msg)
                 print(f"[Upload] ERROR {error_msg}")
+            finally:
+                # 임시 파일 삭제
+                if temp_file_path and temp_file_path.exists():
+                    try:
+                        temp_file_path.unlink()
+                    except Exception:
+                        pass
         
         logger.info("[Upload] 파일 업로드 전체 프로세스 완료: file_id=%s, filename=%s", file_obj.id, file.filename)
         print(f"[Upload] ========================================")
@@ -309,7 +371,9 @@ class FileService:
         title: str,
     ) -> dict[str, int]:
         """
-        YouTube 다운로드 작업을 큐에 등록.
+        YouTube 영상을 다운로드하고 ASR 작업을 큐에 등록.
+        
+        백엔드에서 직접 다운로드 후 ASR만 워커로 전달합니다.
         
         Args:
             url: YouTube URL
@@ -319,58 +383,124 @@ class FileService:
         Returns:
             dict: {"file_id": int}
         """
-        # 안전한 파일명 생성
         import re
+        from .youtube_service import YouTubeService
+        
+        youtube_service = YouTubeService()
+        
+        # 안전한 파일명 생성
         safe_title = re.sub(r'[^\w\s가-힣-]', '', title)[:50].strip()
         if not safe_title:
             safe_title = video_id
         filename = f"{safe_title}.mp4"
         object_key = self._build_object_key(filename)
-
-        logger.info("[YouTube Upload] DB에 파일 생성 시작: title=%s", title)
-
-        # DB에 File 생성 (QUEUED 상태)
-        file_obj = await self.file_repo.create_file(
-            filename=filename,
-            object_key=object_key,
-            content_type=ContentType.AUDIO,
-            status=FileStatus.QUEUED,
-        )
-
-        # Transcription 레코드 생성
-        await self.transcription_repo.create_transcription(
-            file_id=file_obj.id,
-            transcription={},
-            duration_seconds=0.0,
-        )
-        await self.session.commit()
-
-        logger.info("[YouTube Upload] DB에 파일 생성 완료: file_id=%s, title=%s", file_obj.id, title)
-
-        # YouTube 다운로드 Celery 태스크 큐잉
+        
+        # 임시 다운로드 디렉토리
+        temp_dir = self.settings.upload_dir / "youtube_temp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        downloaded_file = None
+        file_obj = None
+        
         try:
+            # 1. YouTube 다운로드 (백엔드에서 직접)
+            logger.info("[YouTube] 다운로드 시작: url=%s, title=%s", url, title)
+            video_info = await asyncio.get_running_loop().run_in_executor(
+                None, youtube_service.download_video, url, temp_dir
+            )
+            downloaded_file = video_info.temp_path
+            
+            if not downloaded_file or not downloaded_file.exists():
+                raise RuntimeError("YouTube 다운로드 실패: 파일을 찾을 수 없습니다")
+            
+            logger.info("[YouTube] 다운로드 완료: %s (%d초)", video_info.title, video_info.duration)
+            
+            # 2. S3에 업로드
+            logger.info("[YouTube] S3 업로드 시작: key=%s", object_key)
+            with open(downloaded_file, "rb") as f:
+                upload_fileobj(f, key=object_key)
+            
+            # 파일 가용성 확인
+            if not wait_for_file(object_key):
+                raise RuntimeError(f"S3 파일 가용성 확인 실패: {object_key}")
+            
+            logger.info("[YouTube] S3 업로드 완료: key=%s", object_key)
+            
+            # 3. DB에 File 생성
+            file_obj = await self.file_repo.create_file(
+                filename=filename,
+                object_key=object_key,
+                content_type=ContentType.AUDIO,
+                status=FileStatus.QUEUED,
+            )
+            
+            # Transcription 레코드 생성
+            await self.transcription_repo.create_transcription(
+                file_id=file_obj.id,
+                transcription={},
+                duration_seconds=float(video_info.duration),
+            )
+            
+            # 다운로드 완료 로그
+            await self.file_repo.add_log(
+                file_id=file_obj.id,
+                log={
+                    "event": "youtube_download_complete",
+                    "video_id": video_info.video_id,
+                    "title": video_info.title,
+                    "duration": video_info.duration,
+                    "url": url,
+                },
+                message=f"YouTube 다운로드 완료: {video_info.title}",
+            )
+            await self.session.commit()
+            
+            logger.info("[YouTube] DB 레코드 생성 완료: file_id=%s", file_obj.id)
+            
+            # 4. ASR 작업 큐잉 (일반 오디오와 동일)
             loop = asyncio.get_running_loop()
             from functools import partial
-            from ..worker.task_queue_adapter import get_task_queue
-
+            from ..utils.task_queue_adapter import get_task_queue
+            
             task_queue = get_task_queue()
             enqueue_func = partial(
-                task_queue.enqueue_youtube_download_job,
+                task_queue.enqueue_asr_job,
                 file_id=file_obj.id,
-                youtube_url=url,
                 storage_key=object_key,
                 original_filename=filename,
+                model_size=self.settings.whisper_model_default,
+                processing_mode="case4",
+                num_asr_chunks=self.settings.max_workers,
+                min_speakers=None,
+                max_speakers=None,
+                accuracy_mode="speed",
             )
             job_id = await loop.run_in_executor(None, enqueue_func)
-
-            logger.info(
-                "[YouTube Upload] YouTube 다운로드 작업 큐잉 성공: file_id=%s, job_id=%s",
-                file_obj.id,
-                job_id
-            )
+            
+            logger.info("[YouTube] ASR 작업 큐잉 완료: file_id=%s, job_id=%s", file_obj.id, job_id)
+            
+            return {"file_id": file_obj.id}
+            
         except Exception as exc:
-            error_msg = f"YouTube 다운로드 작업 큐잉 실패: file_id={file_obj.id}, error={exc}"
-            logger.exception("[YouTube Upload] %s", error_msg)
+            logger.exception("[YouTube] 처리 실패: url=%s, error=%s", url, exc)
+            
+            # 실패 시 DB 레코드가 있으면 상태 업데이트
+            if file_obj:
+                await self.file_repo.update_file_status(file_obj.id, FileStatus.ASR_FAILED)
+                await self.file_repo.add_log(
+                    file_id=file_obj.id,
+                    log={"event": "youtube_error", "error": str(exc)},
+                    message=f"YouTube 처리 실패: {exc}",
+                )
+                await self.session.commit()
+            
             raise
-
-        return {"file_id": file_obj.id}
+            
+        finally:
+            # 임시 파일 정리
+            if downloaded_file and downloaded_file.exists():
+                try:
+                    downloaded_file.unlink()
+                    logger.info("[YouTube] 임시 파일 삭제: %s", downloaded_file)
+                except Exception as e:
+                    logger.warning("[YouTube] 임시 파일 삭제 실패: %s", e)

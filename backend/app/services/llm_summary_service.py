@@ -1,6 +1,13 @@
+"""LLM 요약 서비스.
+
+worker/pipelines/llm/summarizer.py의 summarize_transcription()을 사용합니다.
+이 함수는 llama-server를 시작/종료하며, 청킹 및 통합 요약을 처리합니다.
+"""
 from __future__ import annotations
 
+import sys
 import time
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,7 +17,114 @@ from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
-from ..worker.llm_summarizer import summarize_transcription, sanitize_summary_output
+
+# worker 모듈 접근을 위한 경로 추가
+_project_root = Path(__file__).parent.parent.parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+
+def sanitize_summary_output(summary_md: str, original_text: str) -> str:
+    """요약 결과를 정리합니다.
+    
+    Args:
+        summary_md: LLM이 생성한 요약
+        original_text: 원본 텍스트
+        
+    Returns:
+        정리된 요약 텍스트
+    """
+    if not summary_md:
+        return ""
+    
+    # 프롬프트/지시사항 제거
+    lines = summary_md.split('\n')
+    cleaned_lines = []
+    skip_next = False
+    
+    for line in lines:
+        line = line.strip()
+        
+        # 지시사항 라인 제거
+        if skip_next:
+            skip_next = False
+            continue
+            
+        # 프롬프트 제거 패턴
+        if any(pattern in line for pattern in [
+            "당신은",
+            "요약하십시오",
+            "마크다운 형식으로",
+            "프롬프트는 절대 포함하지",
+            "지시사항은 절대 포함하지",
+            "## 지시사항",
+            "## 프롬프트"
+        ]):
+            if ":" in line:
+                skip_next = True
+                continue
+            
+        if line:
+            cleaned_lines.append(line)
+    
+    return '\n'.join(cleaned_lines)
+
+
+def _call_llm_api(settings, text: str) -> str:
+    """llama.cpp 서버 API를 직접 호출합니다."""
+    import httpx
+    
+    messages = [
+        {"role": "system", "content": settings.llm_system_prompt},
+        {"role": "user", "content": f"다음 텍스트를 요약해 주세요:\n\n{text[:10000]}"}
+    ]
+    
+    base_url = settings.llm_api_base_url.rstrip("/")
+    model_name = settings.llm_api_model_name
+    url = f"{base_url}/v1/chat/completions"
+    
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": settings.llm_temperature,
+        "max_tokens": settings.llm_max_tokens
+    }
+    
+    with httpx.Client(timeout=300.0) as client:
+        response = client.post(url, json=payload)
+        response.raise_for_status()
+        result = response.json()
+    
+    choices = result.get("choices")
+    if not choices:
+        return ""
+    
+    message = choices[0].get("message") or {}
+    return message.get("content", "").strip()
+
+
+def summarize_transcription(text: str) -> tuple[str, str]:
+    """전사 텍스트를 요약합니다.
+    
+    worker/pipelines/llm/summarizer.py의 summarize_transcription()을 사용합니다.
+    이 함수는 llama-server를 시작/종료하며, 청킹 및 통합 요약을 처리합니다.
+    
+    Args:
+        text: 요약할 텍스트
+        
+    Returns:
+        (제목, 요약된 텍스트) - worker 모듈과 동일한 순서
+    """
+    try:
+        # worker 모듈의 summarizer 사용 (llama-server 시작/종료 포함)
+        from worker.pipelines.llm.summarizer import summarize_transcription as worker_summarize
+        
+        # worker의 summarize_transcription은 (title, summary_md)를 반환
+        title, summary_md = worker_summarize(text)
+        
+        return title, summary_md
+    except Exception as exc:
+        return f"요약 실패: {str(exc)}", ""
 
 
 class LlmSummaryService:
@@ -106,13 +220,8 @@ class LlmSummaryService:
             title, summary_md = summarize_transcription(text_to_summarize)
             summary_md = sanitize_summary_output(summary_md, text_to_summarize)
         except Exception as exc:
-            await self.file_repo.update_file_status(file_id, FileStatus.SUMMARY_FAILED)
-            await self.file_repo.add_llm_log(
-                file_id,
-                log={"event": "summarizing_failed", "error": str(exc)},
-                message="LLM summarization failed",
-            )
-            await self.session.commit()
+            # DB 상태 업데이트는 llm_task.py에서 마지막 재시도 실패 시에만 수행
+            # 여기서는 예외만 로깅하고 다시 던짐
             logger.exception("LLM summarization failed for file_id={}", file_id)
             raise
         

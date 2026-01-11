@@ -14,7 +14,7 @@ from ..core.storage import delete_file, upload_fileobj, get_public_media_url
 from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
 from ..schemas.content import ContentDetail, ContentListItem, ContentListResponse, UploadResponse
-from ..worker.celery_queue import cancel_celery_tasks_by_content_ids
+from ..utils.celery_queue import cancel_celery_tasks_by_content_ids
 
 
 class ContentService:
@@ -114,7 +114,7 @@ class ContentService:
             loop = asyncio.get_running_loop()
             # Task Queue Adapter 사용 (Celery)
             from functools import partial
-            from ..worker.task_queue_adapter import get_task_queue
+            from ..utils.task_queue_adapter import get_task_queue
             
             task_queue = get_task_queue()
             queue_type_name = type(task_queue).__name__
@@ -279,7 +279,7 @@ class ContentService:
                 # OCR 작업 큐잉
                 loop = asyncio.get_running_loop()
                 from functools import partial
-                from ..worker.task_queue_adapter import get_task_queue
+                from ..utils.task_queue_adapter import get_task_queue
                 
                 task_queue = get_task_queue()
                 enqueue_func = partial(
@@ -322,7 +322,7 @@ class ContentService:
                 # ASR 작업 큐잉
                 loop = asyncio.get_running_loop()
                 from functools import partial
-                from ..worker.task_queue_adapter import get_task_queue
+                from ..utils.task_queue_adapter import get_task_queue
                 
                 task_queue = get_task_queue()
                 enqueue_func = partial(
@@ -360,7 +360,7 @@ class ContentService:
                 # LLM 작업 큐잉
                 loop = asyncio.get_running_loop()
                 from functools import partial
-                from ..worker.task_queue_adapter import get_task_queue
+                from ..utils.task_queue_adapter import get_task_queue
                 
                 task_queue = get_task_queue()
                 enqueue_func = partial(task_queue.enqueue_llm_job, file_id=content_id)
@@ -403,7 +403,7 @@ class ContentService:
             # 큐에 작업 등록
             loop = asyncio.get_running_loop()
             from functools import partial
-            from ..worker.task_queue_adapter import get_task_queue
+            from ..utils.task_queue_adapter import get_task_queue
             
             task_queue = get_task_queue()
             enqueue_func = partial(
@@ -440,7 +440,7 @@ class ContentService:
             # 큐에 작업 등록
             loop = asyncio.get_running_loop()
             from functools import partial
-            from ..worker.task_queue_adapter import get_task_queue
+            from ..utils.task_queue_adapter import get_task_queue
             
             task_queue = get_task_queue()
             enqueue_func = partial(task_queue.enqueue_llm_job, file_id=content_id)
@@ -496,11 +496,7 @@ class ContentService:
         
         # 재클러스터링 수행 (torch 의존성 없는 별도 모듈 사용)
         import sys
-        from pathlib import Path
-        backend_dir = Path(__file__).parent.parent.parent
-        if str(backend_dir) not in sys.path:
-            sys.path.insert(0, str(backend_dir))
-        from worker.reclustering import (
+        from asr_pipeline.reclustering import (
             recluster_speakers_from_embeddings,
             update_transcription_with_new_speakers,
         )

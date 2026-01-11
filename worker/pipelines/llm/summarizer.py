@@ -6,8 +6,8 @@ from typing import Any
 
 import httpx
 
-from ..core.config import get_settings
-from .llamacpp_server_client import LlamaServerClientError, request_chat_completion
+from worker.config import get_settings
+from .llamacpp_client import LlamaServerClientError, request_chat_completion
 
 logger = logging.getLogger(__name__)
 

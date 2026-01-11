@@ -1,7 +1,35 @@
 """Celery 큐 작업 취소 및 확인 유틸리티."""
+from celery import Celery
+
 from ..core.config import get_settings
 from ..core.logging import logger
-from .celery_app import celery_app
+
+settings = get_settings()
+
+# Celery 클라이언트 앱 (태스크 정의 없이 상태 확인용)
+celery_app = Celery(
+    "torch_client",
+    broker=settings.redis_url,
+    backend=settings.redis_url,
+)
+
+
+# 태스크 이름 매핑 (이전 이름 -> 새 이름)
+_TASK_NAME_MAPPING = {
+    "process_asr_task": "worker.tasks.asr_task.process_asr_task",
+    "process_llm_task": "worker.tasks.llm_task.process_llm_task",
+    "process_ocr_task": "worker.tasks.ocr_task.process_ocr_task",
+}
+
+
+def _match_task_name(actual_name: str, expected_name: str) -> bool:
+    """태스크 이름이 일치하는지 확인 (이전 이름과 새 이름 모두 지원)."""
+    if actual_name == expected_name:
+        return True
+    # 이전 이름으로 호출된 경우, 새 이름과도 비교
+    if expected_name in _TASK_NAME_MAPPING:
+        return actual_name == _TASK_NAME_MAPPING[expected_name]
+    return False
 
 
 def is_celery_task_in_queue(*, file_id: int, task_name: str = "process_llm_task") -> bool:
@@ -27,7 +55,7 @@ def is_celery_task_in_queue(*, file_id: int, task_name: str = "process_llm_task"
         if active:
             for worker_name, tasks in active.items():
                 for task in tasks:
-                    if task.get("name") == task_name:
+                    if _match_task_name(task.get("name", ""), task_name):
                         task_kwargs = task.get("kwargs", {})
                         task_args = task.get("args", [])
                         # file_id 확인
@@ -40,7 +68,7 @@ def is_celery_task_in_queue(*, file_id: int, task_name: str = "process_llm_task"
         if reserved:
             for worker_name, tasks in reserved.items():
                 for task in tasks:
-                    if task.get("name") == task_name:
+                    if _match_task_name(task.get("name", ""), task_name):
                         task_kwargs = task.get("kwargs", {})
                         task_args = task.get("args", [])
                         # file_id 확인
@@ -54,7 +82,7 @@ def is_celery_task_in_queue(*, file_id: int, task_name: str = "process_llm_task"
             for worker_name, tasks in scheduled.items():
                 for task in tasks:
                     request = task.get("request", {})
-                    if request.get("task") == task_name:
+                    if _match_task_name(request.get("task", ""), task_name):
                         task_kwargs = request.get("kwargs", {})
                         task_args = request.get("args", [])
                         # file_id 확인
@@ -102,8 +130,14 @@ def cancel_celery_tasks_by_content_ids(file_ids: list[int]) -> int:
                     task_kwargs = task.get("kwargs", {})
                     task_args = task.get("args", [])
                     
-                    # ASR, LLM, 또는 OCR 작업인지 확인
-                    if task_name in ["process_asr_task", "process_llm_task", "process_ocr_task"]:
+                    # ASR, LLM, 또는 OCR 작업인지 확인 (새로운 worker 패키지 태스크 이름)
+                    if task_name in [
+                        "worker.tasks.asr_task.process_asr_task",
+                        "worker.tasks.llm_task.process_llm_task", 
+                        "worker.tasks.ocr_task.process_ocr_task",
+                        # 하위 호환성 (이전 태스크 이름)
+                        "process_asr_task", "process_llm_task", "process_ocr_task"
+                    ]:
                         # file_id 추출
                         task_file_id = task_kwargs.get("file_id") or (task_args[0] if task_args else None)
                         
@@ -126,7 +160,12 @@ def cancel_celery_tasks_by_content_ids(file_ids: list[int]) -> int:
                     task_kwargs = task.get("kwargs", {})
                     task_args = task.get("args", [])
                     
-                    if task_name in ["process_asr_task", "process_llm_task", "process_ocr_task"]:
+                    if task_name in [
+                        "worker.tasks.asr_task.process_asr_task",
+                        "worker.tasks.llm_task.process_llm_task", 
+                        "worker.tasks.ocr_task.process_ocr_task",
+                        "process_asr_task", "process_llm_task", "process_ocr_task"
+                    ]:
                         # file_id 추출
                         task_file_id = task_kwargs.get("file_id") or (task_args[0] if task_args else None)
                         
@@ -150,7 +189,12 @@ def cancel_celery_tasks_by_content_ids(file_ids: list[int]) -> int:
                     task_kwargs = request.get("kwargs", {})
                     task_args = request.get("args", [])
                     
-                    if task_name in ["process_asr_task", "process_llm_task", "process_ocr_task"]:
+                    if task_name in [
+                        "worker.tasks.asr_task.process_asr_task",
+                        "worker.tasks.llm_task.process_llm_task", 
+                        "worker.tasks.ocr_task.process_ocr_task",
+                        "process_asr_task", "process_llm_task", "process_ocr_task"
+                    ]:
                         # file_id 추출
                         task_file_id = task_kwargs.get("file_id") or (task_args[0] if task_args else None)
                         

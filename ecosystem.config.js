@@ -26,11 +26,17 @@ if (fs.existsSync(envPath)) {
 // Poetry 가상환경 경로 (하드코딩)
 // 가상환경 경로가 변경되면 이 경로를 수정하세요
 // 경로 확인: cd backend && poetry env info --path
-const VENV_PATH = 'C:\\Users\\jg\\AppData\\Local\\pypoetry\\Cache\\virtualenvs\\torch-asr-backend-D1eM01ne-py3.12';
-const PYTHONW_PATH = `${VENV_PATH}\\Scripts\\pythonw.exe`;
+const BACKEND_VENV_PATH = 'C:\\Users\\jg\\AppData\\Local\\pypoetry\\Cache\\virtualenvs\\torch-asr-backend-D1eM01ne-py3.12';
+const BACKEND_PYTHONW_PATH = `${BACKEND_VENV_PATH}\\Scripts\\pythonw.exe`;
+
+// Worker 가상환경 경로 (독립 가상환경)
+// 경로 확인: cd worker && poetry env info --path
+const WORKER_VENV_PATH = 'C:\\Users\\jg\\AppData\\Local\\pypoetry\\Cache\\virtualenvs\\torch-asr-worker-NVZIb8FW-py3.12';
+const WORKER_PYTHONW_PATH = `${WORKER_VENV_PATH}\\Scripts\\pythonw.exe`;
+
 // pythonw.exe를 사용하여 콘솔 창이 나타나지 않도록 함
 // celery.exe는 콘솔 애플리케이션이므로 CMD 창이 나타남
-const CELERY_PATH = PYTHONW_PATH;
+const CELERY_PATH = WORKER_PYTHONW_PATH;  // 워커는 독립 가상환경 사용
 
 // llama-server 관련 설정은 PM2에서 관리하지 않음
 // worker-llm이 .env 파일에서 직접 읽어서 subprocess로 llama-server를 시작함
@@ -39,11 +45,11 @@ const CELERY_PATH = PYTHONW_PATH;
 const apps = [
   {
     name: 'worker-asr',
-    cwd: 'C:\\timblo\\torch-test\\backend',
+    cwd: 'C:\\timblo\\torch-test',  // 프로젝트 루트 (worker 패키지 접근용)
     script: CELERY_PATH,
     args: [
       '-m', 'celery',
-      '-A', 'app.worker.celery_app',
+      '-A', 'worker.celery_app',  // 독립 worker 패키지
       'worker',
       '--pool=solo',
       '--loglevel=info',
@@ -78,11 +84,11 @@ const apps = [
   },
   {
     name: 'worker-llm',
-    cwd: 'C:\\timblo\\torch-test\\backend',
+    cwd: 'C:\\timblo\\torch-test',  // 프로젝트 루트 (worker 패키지 접근용)
     script: CELERY_PATH,
     args: [
       '-m', 'celery',
-      '-A', 'app.worker.celery_app',
+      '-A', 'worker.celery_app',  // 독립 worker 패키지
       'worker',
       '--pool=solo',
       '--loglevel=info',
@@ -133,11 +139,11 @@ const apps = [
   },
   {
     name: 'worker-ocr',
-    cwd: 'C:\\timblo\\torch-test\\backend',
+    cwd: 'C:\\timblo\\torch-test',  // 프로젝트 루트 (worker 패키지 접근용)
     script: CELERY_PATH,
     args: [
       '-m', 'celery',
-      '-A', 'app.worker.celery_app',
+      '-A', 'worker.celery_app',  // 독립 worker 패키지
       'worker',
       '--pool=solo',
       '--loglevel=info',

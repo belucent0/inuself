@@ -9,19 +9,7 @@ from . import rocm_env as _rocm_env  # noqa: F401  # sys.path side-effect
 import numpy as np
 # PyTorch와 pyannote.audio는 lazy import로 처리 (torchaudio DLL 로드 오류 방지)
 
-# logger import를 위한 경로 조정
-_backend_dir = Path(__file__).parent.parent
-if str(_backend_dir) not in sys.path:
-    sys.path.insert(0, str(_backend_dir))
-
-try:
-    from app.core.logging import logger
-except ImportError:
-    # fallback: 직접 경로 구성
-    _app_dir = _backend_dir / "app"
-    if str(_app_dir) not in sys.path:
-        sys.path.insert(0, str(_app_dir))
-    from core.logging import logger
+from worker.logging_config import logger
 
 
 # HuggingFace Hub validation 패치 (로컬 경로 허용) - community-1 모델 로딩에 필수

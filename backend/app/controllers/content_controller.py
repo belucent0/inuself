@@ -22,7 +22,7 @@ from ..services.youtube_service import (
 from ..schemas.file import FileUploadResponse
 from ..services.content_service import ContentService
 from ..services.file_service import FileService
-from ..worker.event_publisher import publish_content_created
+from ..utils.event_publisher import publish_content_created
 
 router = APIRouter(prefix="/contents", tags=["contents"])
 

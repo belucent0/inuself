@@ -1,6 +1,12 @@
-# PyAnnote Speaker Diarization with ROCm on Windows
+# ASR/LLM/OCR Processing Platform with AMD GPU/NPU Acceleration
 
-Speaker diarization using PyAnnote with AMD GPU (ROCm) acceleration on Windows.
+음성 인식(ASR), LLM 요약, OCR 처리를 지원하는 통합 플랫폼입니다. AMD GPU (ROCm) 및 NPU (Ryzen AI) 가속을 지원합니다.
+
+**주요 기능:**
+- 실시간 ASR 스트리밍 (WebSocket, FLM/Whisper NPU 가속)
+- 화자 분리 (PyAnnote, ROCm GPU 가속)
+- LLM 요약 및 교정 (FLM/llama.cpp)
+- PDF/이미지 OCR (LLM Vision)
 
 ## 📋 Table of Contents
 
@@ -201,72 +207,110 @@ def check_version(library: Text, theirs: Text, mine: Text, what: Text = "Pipelin
 
 ASR/화자분리 결과는 이제 LLM으로 2차 요약됩니다. 전체 파이프라인은 `QUEUED → PROCESSING → SUMMARIZING → COMPLETED`(또는 `FAILED`/`SUMMARY_FAILED`)로 진행되며, 결과 Markdown은 `summary_md` 컬럼과 `/contents/{id}` API에서 확인할 수 있습니다.
 
-### 1. LLM Provider 선택
+### 1. ASR/LLM Provider 선택
 
-두 가지 LLM provider를 지원합니다:
+용도에 따라 두 가지 ASR 모드를 지원합니다:
 
-#### 옵션 A: LM Studio
+| 모드 | Provider | 가속 | 용도 |
+|------|----------|------|------|
+| **실시간 스트리밍** | FLM (Whisper) | NPU | WebSocket 실시간 전사 |
+| **정확도 모드** | whisper.cpp | Vulkan GPU | 파일 업로드 배치 처리 |
 
-LM Studio는 Windows에서 실행되는 LLM 서버입니다.
+#### FLM (FastFlowLM) - NPU 가속 ⭐
 
-**설정:**
-1. LM Studio 앱을 다운로드하고 설치합니다
-2. 모델을 로드하고 Local Server를 시작합니다 (포트 1234)
-3. `.env` 파일 설정:
-   ```env
-   LLM_PROVIDER=llamacpp_server
-   LLM_BASE_URL=http://localhost:1234
-   LLM_MODEL_NAME=gpt-oss-20b
+FLM은 AMD Ryzen AI NPU를 활용하는 고성능 추론 서버입니다. **실시간 ASR 스트리밍**과 **LLM 처리**에 사용됩니다.
+
+**설치 및 실행:**
+1. [FastFlowLM 릴리즈](https://github.com/FastFlowLM/FastFlowLM/releases)에서 `flm-setup.exe` 다운로드
+2. 설치 후 모델 다운로드 (Whisper-V3-Turbo, Qwen3 등)
+3. PM2로 서버 관리:
+   ```bash
+   pm2 start ecosystem.config.js --only flm-server
+   pm2 logs flm-server
    ```
+
+**`.env` 설정:**
+```env
+FLM_BASE_URL=http://127.0.0.1:11434
+FLM_LLM_MODEL=qwen3-it:4b
+```
+
+**지원 엔드포인트:**
+- `/v1/audio/transcriptions` - Whisper ASR (실시간 스트리밍용)
+- `/v1/chat/completions` - LLM Chat (요약, 교정용)
+
+#### whisper.cpp - Vulkan GPU 가속
+
+whisper.cpp는 Vulkan GPU 가속을 사용하여 **높은 정확도의 배치 ASR 처리**에 사용됩니다.
+
+**설치:** Installation 섹션 4 참조 (whisper.cpp 빌드 및 모델 다운로드)
+
+**사용 시나리오:**
+- 파일 업로드 후 배치 처리 (정확도 우선)
+- 긴 오디오 파일의 고품질 전사
+
+#### llama.cpp 서버 - GPU/CPU 가속 (대안)
+
+llama.cpp 서버는 Vulkan GPU 또는 CPU로 LLM을 실행합니다. FLM 대안으로 사용할 수 있습니다.
+
+**설치 및 실행:**
+```bash
+# llama.cpp 빌드 (Vulkan 지원)
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp && mkdir build && cd build
+cmake .. -DLLAMA_VULKAN=ON
+cmake --build . --config Release
+
+# 서버 실행
+./bin/llama-server -m /path/to/model.gguf --port 8080
+```
+
+**`.env` 설정:**
+```env
+LLM_BASE_URL=http://localhost:8080
+LLM_MODEL_NAME=Qwen3-4B-Instruct-Q4_K_M.gguf
+```
 
 ### 2. 환경 변수 / 설정
 
 `backend/app/core/config.py`에 다음 설정이 추가되었습니다. 필요 시 `.env`에서 오버라이드하면 됩니다.
 
-#### 공통 LLM 설정 (모든 provider에서 사용)
+#### FLM 서버 설정 (권장)
 
 | 설정 | 기본값 | 설명 |
 | --- | --- | --- |
-| `LLM_PROVIDER` | `llamacpp_server` | LLM provider: `llamacpp_server` (권장) 또는 `lmstudio` (deprecated) |
-| `LLM_SYSTEM_PROMPT` | (기본값 참조) | 시스템 프롬프트 (모든 provider에서 사용) |
-| `LLM_CONTEXT_LENGTH` | `15016` | Context window (토큰 수) |
+| `FLM_BASE_URL` | `http://127.0.0.1:11434` | FLM 서버 엔드포인트 |
+| `FLM_LLM_MODEL` | `qwen3-it:4b` | FLM LLM 모델명 |
+
+#### llama.cpp 서버 설정
+
+| 설정 | 기본값 | 설명 |
+| --- | --- | --- |
+| `LLM_BASE_URL` | `http://localhost:8080` | llama.cpp 서버 엔드포인트 |
+| `LLM_MODEL_NAME` | `Qwen3-4B-Instruct-Q4_K_M.gguf` | 모델 파일명 |
+
+#### 공통 LLM 설정
+
+| 설정 | 기본값 | 설명 |
+| --- | --- | --- |
 | `LLM_TEMPERATURE` | `0.4` | 생성 온도 (0.0 ~ 1.0) |
-| `LLM_TOP_P` | `0.9` | Top-p nucleus 샘플링 (0.0 ~ 1.0) |
 | `LLM_MAX_TOKENS` | `1024` | 최대 토큰 수 |
-| `LLM_N_THREADS` | `8` | CPU 스레드 수 (llama_cpp 사용 시) |
 
-#### LLM API 서버 설정 (llama.cpp 서버, LM Studio 등)
+### 3. 워커 실행
 
-| 설정 | 기본값 | 설명 |
-| --- | --- | --- |
-| `LLM_BASE_URL` | `http://localhost:8080` | LLM API 서버 엔드포인트 (llama.cpp 서버, LM Studio 등) |
-| `LLM_MODEL_NAME` | `Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf` | LLM API 서버에서 사용할 모델 이름 |
-
-#### llama_cpp 전용 설정
-
-| 설정 | 기본값 | 설명 |
-| --- | --- | --- |
-| `LLM_MODEL_PATH` | `models/gpt-oss-20b-Q4_K_S.gguf` | 모델 파일 경로 (상대 또는 절대 경로) |
-| `LLM_N_GPU_LAYERS` | `-1` | GPU 레이어 수 (-1: 모든 레이어 GPU, 0: CPU만, 양수: 지정된 레이어 수만큼 GPU) |
-
-> ⚠️ **llama_cpp 직접 사용 시**: 
-> - Vulkan 가속을 사용합니다 (`n_gpu_layers=-1`). CPU 폴백은 제공되지 않으므로, 모델 로딩 실패 시 바로 `SUMMARY_FAILED` 상태로 기록됩니다.
-> - 긴 텍스트는 자동으로 청크로 분할하여 처리합니다.
-> - 모델 파일이 존재하지 않거나 손상된 경우 헬스체크에서 실패합니다.
-
-### 3. 요약 워커 실행
-
-LLM 요약은 RQ 큐(`llm_tasks`)를 통해 비동기 실행됩니다. 개발 스크립트(`run_dev.sh`)는 ASR/LLM 워커를 모두 자동으로 띄우지만, 수동으로 실행하려면 아래 명령을 사용하세요.
+LLM/ASR/OCR 처리는 Celery 큐를 통해 비동기 실행됩니다.
 
 ```bash
-# ASR + 화자분리 워커
-cd backend && poetry run python -m app.worker.run_worker
+# PM2로 모든 워커 시작 (권장)
+pm2 start ecosystem.config.js
 
-# LLM 요약 워커
-cd backend && poetry run python -m app.worker.run_llm_worker
+# 또는 개별 Celery 워커 실행
+celery -A worker.celery_app worker --pool=solo --queues=asr --hostname=worker-asr@%h
+celery -A worker.celery_app worker --pool=solo --queues=llm --hostname=worker-llm@%h
+celery -A worker.celery_app worker --pool=solo --queues=ocr --hostname=worker-ocr@%h
 ```
 
-실패한 요약 작업은 `SUMMARY_FAILED` 상태로 표시되며, 콘텐츠를 다시 큐에 넣으면 재시도할 수 있습니다. 요약 로그는 `llm_log` 테이블에 저장되어 클라이언트 UI에서 확인 가능합니다.
+실패한 작업은 `FAILED` 또는 `SUMMARY_FAILED` 상태로 표시되며, 콘텐츠를 다시 큐에 넣으면 재시도할 수 있습니다.
 
 ## 🔌 FastAPI API & Next.js 콘솔
 
@@ -300,15 +344,104 @@ poetry run uvicorn app.main:app --reload
 
 ### 워커 & Redis 큐
 
-1. Redis 서버 실행
-2. 워커 시작:
+#### 아키텍처 개요 (Backend-Worker 완전 분리)
+
+이 프로젝트는 **Backend API 서버**와 **GPU Worker**가 완전히 분리된 아키텍처를 사용합니다:
 
 ```
-cd backend
-poetry run python -m app.worker.run_worker
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  FastAPI API    │────▶│  Redis/Celery   │────▶│  GPU Workers    │
+│  (backend/)     │     │  (Task Queue)   │     │  (worker/)      │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+        │                       │                       │
+        │                       ▼                       │
+        │              ┌─────────────────┐              │
+        │              │  Redis Stream   │◀─────────────┘
+        │              │  (Result Queue) │   결과 발행
+        │              └─────────────────┘
+        │                       │
+        ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐
+│   PostgreSQL    │◀────│ StreamConsumer  │
+│   (Results DB)  │     │  (Backend)      │
+└─────────────────┘     └─────────────────┘
 ```
 
-워커는 Redis 큐(`asr_tasks`)를 소비하며 업로드된 파일에 대해 ASR+화자분리를 실행하고 PostgreSQL에 결과/로그를 기록합니다.
+**핵심 원칙: 워커는 GPU 작업만 수행, DB 접근 없음**
+
+| 컴포넌트 | 역할 | DB 접근 |
+|----------|------|---------|
+| **Backend API** | 비즈니스 로직, 전처리, DB 저장 | ✅ |
+| **GPU Worker** | ASR/LLM/OCR GPU 연산만 | ❌ |
+| **StreamConsumer** | Redis Stream 구독 → DB 저장 | ✅ |
+
+- **완전한 분리**: 워커는 DB 의존성 없이 순수 GPU 작업만 수행
+- **Redis Stream**: 워커 결과를 백엔드로 전달하는 경량 메시지 큐 (Kafka 대안)
+- **전처리 분리**: PDF→이미지 변환 등 CPU 작업은 백엔드에서 수행
+- **확장성**: 워커를 여러 대 실행하여 수평 확장 가능
+
+#### 워커 실행 방법
+
+**방법 1: PM2 사용 (권장)**
+
+```bash
+# PM2로 모든 워커 시작
+pm2 start ecosystem.config.js
+
+# 개별 워커 시작
+pm2 start ecosystem.config.js --only worker-asr
+pm2 start ecosystem.config.js --only worker-llm
+pm2 start ecosystem.config.js --only worker-ocr
+
+# 상태 확인
+pm2 status
+pm2 logs worker-asr
+```
+
+**방법 2: 직접 Celery 명령 실행**
+
+```bash
+# 프로젝트 루트에서 실행 (worker 패키지 접근)
+cd C:\timblo\torch-test
+
+# ASR 워커
+celery -A worker.celery_app worker --pool=solo --queues=asr --hostname=worker-asr@%h
+
+# LLM 워커
+celery -A worker.celery_app worker --pool=solo --queues=llm --hostname=worker-llm@%h
+
+# OCR 워커
+celery -A worker.celery_app worker --pool=solo --queues=ocr --hostname=worker-ocr@%h
+```
+
+#### 워커 큐 구성
+
+| 워커 | 큐 | 입력 | 출력 | 설명 |
+|------|-----|------|------|------|
+| `worker-asr` | `asr` | `file_id`, `s3_key` | S3 결과 + Redis Stream | ASR + 화자분리 (GPU) |
+| `worker-llm` | `llm` | `file_id`, `text_to_summarize` | Redis Stream | LLM 요약 (GPU/NPU) |
+| `worker-ocr` | `ocr` | `file_id`, `image_s3_keys` | Redis Stream | OCR Vision (GPU/NPU) |
+
+**워커 처리 흐름:**
+
+```
+1. 백엔드: 작업 큐잉 (Celery task)
+   - ASR: enqueue_asr_job(file_id, s3_key)
+   - LLM: enqueue_llm_job(file_id, text_to_summarize)  ← 텍스트 직접 전달
+   - OCR: enqueue_ocr_job(file_id, image_s3_keys)      ← 이미지 S3 키 전달
+
+2. 워커: GPU 작업만 수행 (DB 접근 없음)
+   - S3에서 파일 다운로드 → GPU 처리 → 결과 S3 저장
+   - Redis Stream으로 결과 발행
+
+3. 백엔드 StreamConsumer: Redis Stream 구독
+   - 결과 수신 → PostgreSQL 저장
+   - OCR: 임시 이미지 S3 삭제
+```
+
+**OCR 전처리 분리:**
+- 이전: 워커가 PDF → 이미지 변환 + OCR 전체 처리
+- 현재: 백엔드(CPU)에서 PDF → 이미지 변환 → S3 임시 저장 → 워커는 이미지 OCR만
 
 ### Next.js 클라이언트
 
@@ -486,18 +619,37 @@ The script will:
 
 ## ✨ Features
 
-- ✅ AMD GPU (ROCm) acceleration support for speaker diarization
-- ✅ **Vulkan GPU acceleration for ASR** (via whisper.cpp) - Fast processing (e.g., 14min audio in ~5min)
+### 핵심 기능
+- ✅ **실시간 ASR 스트리밍** - WebSocket 기반, 5초 단위 실시간 전사 (FLM/NPU)
+- ✅ **정확도 모드 ASR** - whisper.cpp Vulkan GPU 가속, 배치 처리
+- ✅ **NPU 가속 LLM** (FLM/Qwen3) - 요약, 문법 교정, 언어 필터링
+- ✅ **GPU 가속 화자분리** (PyAnnote/ROCm) - AMD GPU 활용
+- ✅ **PDF/이미지 OCR** (LLM Vision) - 문서 텍스트 추출
+
+### 아키텍처
+- ✅ **Backend-Worker 완전 분리** - 워커는 GPU 작업만, DB 접근 없음
+- ✅ **Redis Stream 기반 결과 전달** - 경량 메시지 큐
+- ✅ **Celery 분산 처리** - ASR/LLM/OCR 워커 분리
+
+### 기타
+- ✅ AMD GPU (ROCm) acceleration for speaker diarization
 - ✅ Automatic logging (text + JSON format)
-- ✅ Detailed statistics (processing time, speed, number of speakers, etc.)
 - ✅ MIOpen error handling and automatic workarounds
-- ✅ Windows console encoding fixes
-- ✅ Real-time GPU monitoring during processing
 - ✅ Media file conversion tool (MP3, MP4, etc. → WAV)
-- ✅ Batch processing support for multiple media files
 - ✅ Parallel processing (ASR and diarization run simultaneously)
 
 ## 🗺️ 로드맵
+
+### ✅ 완료된 항목
+
+| 항목 | 설명 | 완료일 |
+|------|------|--------|
+| ASR 실시간 스트리밍 | WebSocket 기반 5초 단위 실시간 전사 | 2026-01 |
+| ASR NPU 가속 | FLM/Whisper를 통한 NPU 가속 지원 | 2026-01 |
+| LLM NPU 가속 | FLM/Qwen3를 통한 NPU 가속 지원 | 2026-01 |
+| ASR 전사 정확도 LLM 후처리 | 실시간 스트리밍에서 문법 교정, 언어 필터링 | 2026-01 |
+| Backend-Worker 완전 분리 | 워커 DB 의존성 제거, Redis Stream 결과 전달 | 2026-01 |
+| PDF OCR 전처리 분리 | 백엔드에서 PDF→이미지 변환, 워커는 OCR만 | 2026-01 |
 
 ### 현재 개발 중인 항목
 
@@ -512,15 +664,13 @@ The script will:
 
 | 항목 | 설명 |
 |------|------|
-| ASR 전사 정확도 LLM 후처리 | ASR 결과를 LLM으로 후처리하여 전사 정확도 향상 |
 | 음성 프로필을 통한 화자 인식 | 화자의 음성 프로필을 학습하여 화자 자동 인식 기능 제공 |
-| LLM 처리시 NPU 가속 | LLM 처리 성능 향상을 위한 NPU 가속 지원 |
+| 실시간 스트리밍 화자분리 | 실시간 ASR에 화자분리 기능 통합 |
 
 ### 장기 도전 과제
 
 | 항목 | 설명 |
 |------|------|
-| ASR 처리시 NPU 가속 | ASR 처리 성능 향상을 위한 NPU 가속 지원 |
 | Linux 기반 GPU 가속 ASR 워커 지원 | Linux 환경에서 GPU 가속을 활용한 ASR 워커 지원 |
 | Whisper 모델 경량화 | Whisper 모델의 크기 및 연산량 최적화를 통한 경량화 |
 
@@ -793,70 +943,95 @@ print(torch.cuda.get_device_name(0))  # Should print GPU name
 
 ```
 torch-test/
-├── backend/                  # FastAPI 백엔드
-│   ├── app/                  # 메인 애플리케이션
+├── worker/                   # GPU 워커 (독립 패키지, DB 접근 없음) ⭐
+│   ├── celery_app.py         # Celery 앱 설정
+│   ├── config.py             # 환경변수 기반 독립 설정
+│   ├── logging_config.py     # loguru 기반 로깅
+│   ├── tasks/                # Celery 태스크 정의
+│   │   ├── asr_task.py       # ASR 처리 태스크
+│   │   ├── llm_task.py       # LLM 요약 태스크
+│   │   └── ocr_task.py       # OCR 처리 태스크
+│   ├── processors/           # GPU 처리 로직 ⭐ NEW
+│   │   ├── asr_processor.py  # ASR 처리 (S3 저장 → Stream 발행)
+│   │   ├── llm_processor.py  # LLM 요약 (text_to_summarize 입력)
+│   │   └── ocr_processor.py  # OCR 처리 (image_s3_keys 입력)
+│   ├── utils/                # 워커 전용 유틸리티 ⭐ NEW
+│   │   ├── storage.py        # S3 다운로드/업로드 (백엔드 독립)
+│   │   ├── result_publisher.py # Redis Stream 발행
+│   │   └── postprocess.py    # ASR 후처리 함수
+│   ├── pipelines/            # 파이프라인 코드
+│   │   ├── asr/              # ASR 파이프라인 (whisper, diarization)
+│   │   ├── llm/              # LLM 파이프라인 (summarizer)
+│   │   └── ocr/              # OCR 파이프라인
+│   └── pyproject.toml        # 독립 의존성 관리
+├── backend/                  # FastAPI 백엔드 (비즈니스 로직, DB 접근)
+│   ├── app/
 │   │   ├── controllers/      # API 컨트롤러
-│   │   ├── core/             # 핵심 설정 (config, logging, redis, storage)
+│   │   │   ├── websocket_controller.py  # 실시간 ASR WebSocket ⭐
+│   │   │   └── websocket_helper.py      # LLM 후처리 함수
+│   │   ├── core/             # 핵심 설정
+│   │   │   ├── config.py     # 환경변수 설정
+│   │   │   ├── storage.py    # S3 클라이언트 (download_json, delete_files_by_prefix 추가)
+│   │   │   └── redis.py      # Redis 클라이언트
+│   │   ├── services/         # 비즈니스 로직 ⭐
+│   │   │   ├── ocr_service.py     # OcrPreprocessor (PDF→이미지 전처리만)
+│   │   │   └── stream_consumer.py # Redis Stream 구독 → DB 저장 ⭐ NEW
+│   │   ├── utils/
+│   │   │   └── task_queue_adapter.py # 워커 큐잉 인터페이스 ⭐
 │   │   ├── db/               # 데이터베이스 모델 및 세션
 │   │   ├── repositories/     # 데이터 접근 계층
 │   │   ├── schemas/          # Pydantic 스키마
-│   │   ├── services/         # 비즈니스 로직
-│   │   ├── utils/            # 유틸리티 함수
-│   │   ├── worker/           # 워커 모듈 (Celery, LLM 처리)
 │   │   └── main.py           # FastAPI 앱 진입점
-│   ├── worker/               # 워커 실행 스크립트
 │   ├── alembic/              # 데이터베이스 마이그레이션
-│   ├── tests/                # 테스트 코드
-│   ├── scripts/              # 유틸리티 스크립트
 │   └── pyproject.toml        # Poetry 의존성 관리
 ├── client/                   # Next.js 클라이언트
 │   ├── app/                  # Next.js 앱 라우터
-│   │   ├── contents/         # 콘텐츠 목록/상세 페이지
-│   │   ├── layout.tsx        # 레이아웃
-│   │   └── page.tsx          # 메인 페이지
 │   ├── components/           # React 컴포넌트
+│   │   ├── StreamingASRModal.tsx  # 실시간 ASR 모달 ⭐
 │   │   ├── ContentDetail.tsx
 │   │   ├── ContentList.tsx
-│   │   ├── UploadForm.tsx
-│   │   └── Sidebar.tsx
-│   ├── lib/                  # 유틸리티 라이브러리
-│   │   ├── api.ts            # API 클라이언트
-│   │   └── utils.ts          # 유틸리티 함수
-│   └── package.json          # npm 의존성 관리
-├── src/                      # ASR/화자분리 모듈
-│   ├── asr/                  # ASR (음성 인식) 모듈
-│   │   ├── models/          # 모델 파일들
-│   │   ├── logs/            # ASR 로그 파일들
-│   │   └── test_asr.py      # ASR 테스트 스크립트
-│   ├── diarization/         # 화자분리 모듈
-│   │   ├── test_pyannote.py
-│   │   └── diarization_logger.py
-│   ├── llm/                  # LLM 요약 모듈
-│   │   └── summarizer.py
-│   ├── pipeline/             # 통합 파이프라인
-│   │   └── test_asr_with_diarization.py
-│   └── utils/                # 유틸리티 모듈
-│       └── media_converter.py  # 미디어 파일 변환 도구
+│   │   └── UploadForm.tsx
+│   └── package.json
+├── src/                      # 독립 실행 가능한 테스트 모듈
+│   ├── asr/                  # ASR 테스트
+│   ├── diarization/          # 화자분리 테스트
+│   └── utils/                # 유틸리티 (media_converter 등)
 ├── docs/                     # 연구/테스트/결과 문서
-│   ├── GPU_OPTIMIZATION_RESEARCH.md
-│   ├── BOTTLENECK_ANALYSIS.md
-│   ├── performance_analysis.md
-│   ├── PARALLEL_PROCESSING_RESULTS.md
-│   ├── transcription_comparison.md
-│   └── ...                   # 기타 문서들
-├── infra/                    # 인프라 설정
-│   ├── nginx/                # Nginx 설정
-│   └── redis/                # Redis 설정
-├── media/                    # 미디어 파일 폴더
-│   ├── upload/              # 입력 미디어 파일 (원본)
-│   └── wav/                 # 변환된 WAV 파일
-├── models/                   # LLM 모델 파일
-├── logs/                     # 애플리케이션 로그
-├── scripts/                  # 실행 스크립트
+├── infra/                    # 인프라 설정 (nginx, redis)
 ├── docker-compose.yml        # Docker Compose 설정
-├── README.md                 # 이 파일
-└── .gitignore               # Git ignore 파일 목록
+└── ecosystem.config.js       # PM2 설정 (FLM 서버 포함)
 ```
+
+### 실시간 ASR 스트리밍 아키텍처
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Client         │────▶│  Backend        │────▶│  FLM Server     │
+│  (Next.js)      │ WS  │  (FastAPI)      │HTTP │  (PM2 관리)     │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+        │                       │                       │
+        │ 1. 5초 오디오 청크     │ 2. WebM→WAV 변환      │ 3. Whisper 전사
+        │    (바이너리 전송)     │    FLM 전사 요청      │    NPU 가속
+        │                       │                       │
+        │◀──────────────────────│◀──────────────────────│
+        │ 5. "commit" 메시지     │ 4. 전사 결과 반환      │
+        │    (즉시 표시)         │                       │
+        │                       │                       │
+        │◀──────────────────────│ 6. LLM 후처리 (백그라운드)
+        │ 7. "correction" 메시지 │    - 언어 필터링 (한/영 외 → "음성 인식 불가")
+        │    (교정 텍스트)       │    - 문법 교정, 구두점 추가
+```
+
+**WebSocket 메시지 프로토콜:**
+
+| 방향 | 타입 | 설명 |
+|------|------|------|
+| Client → Server | 바이너리 | WebM 오디오 데이터 |
+| Client → Server | `audio_chunk` | 전사 트리거 (chunk_id, is_last) |
+| Client → Server | `finish` | 녹음 종료 |
+| Server → Client | `ready` | 서버 준비 완료 |
+| Server → Client | `commit` | 전사 결과 (즉시 표시) |
+| Server → Client | `correction` | LLM 교정 결과 (업데이트) |
 
 ## 📝 References
 

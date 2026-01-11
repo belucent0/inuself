@@ -11,7 +11,7 @@ from typing import Any
 import librosa
 import soundfile as sf
 
-from .config import setup_rocm_environment
+from .rocm_config import setup_rocm_environment
 from .diarization_utils import (
     build_nominal_ranges,
     find_optimal_split_points,
@@ -29,14 +29,9 @@ from .flm_asr import (
     run_flm_asr_parallel_with_vad,
 )
 
-# distributed_lock을 import하기 위해 경로 추가
-# pipeline.py는 backend/worker/에 있고, distributed_lock은 backend/app/worker/에 있음
-_backend_dir = Path(__file__).parent.parent
-if str(_backend_dir) not in sys.path:
-    sys.path.insert(0, str(_backend_dir))
-
+# worker 패키지에서 distributed_lock 가져오기
 try:
-    from app.worker.distributed_lock import acquire_lock
+    from worker.distributed_lock import acquire_lock
 except ImportError:
     # distributed_lock을 import할 수 없는 경우 (테스트 환경 등)
     # 락 없이 진행하도록 더미 함수 제공
@@ -168,10 +163,7 @@ def _run_case4_parallel_full_asr(
     
     # 설정값 가져오기
     try:
-        _backend_dir = Path(__file__).parent.parent
-        if str(_backend_dir) not in sys.path:
-            sys.path.insert(0, str(_backend_dir))
-        from app.core.config import get_settings
+        from worker.config import get_settings
         settings = get_settings()
         chunk_threshold_seconds = settings.asr_chunk_threshold_minutes * 60  # 분을 초로 변환
         chunk_duration_seconds = settings.asr_chunk_duration_minutes * 60

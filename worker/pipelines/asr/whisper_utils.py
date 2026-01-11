@@ -12,21 +12,8 @@ from typing import Any
 import librosa
 import soundfile as sf
 
-from .config import get_whisper_cli_path, get_whispercpp_model_path
-
-# logger import를 위한 경로 조정
-_backend_dir = Path(__file__).parent.parent
-if str(_backend_dir) not in sys.path:
-    sys.path.insert(0, str(_backend_dir))
-
-try:
-    from app.core.logging import logger
-except ImportError:
-    # fallback: 직접 경로 구성
-    _app_dir = _backend_dir / "app"
-    if str(_app_dir) not in sys.path:
-        sys.path.insert(0, str(_app_dir))
-    from core.logging import logger
+from .rocm_config import get_whisper_cli_path, get_whispercpp_model_path
+from worker.logging_config import logger
 
 # 전역 자식 프로세스 리스트 (종료 시 정리용)
 _active_child_processes: list[subprocess.Popen] = []
@@ -61,6 +48,12 @@ def _register_signal_handlers():
         return
     _register_signal_handlers._registered = True
     
+    # Celery 워커 등 메인 스레드가 아닌 경우 signal 등록 건너뜀
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        logger.info("[ASR] Not main thread, skipping signal handler registration")
+        return
+    
     def signal_handler(signum, frame):
         """워커 종료 시 자식 프로세스 정리."""
         logger.info(f"[ASR] Received signal {signum}, cleaning up child processes...")
@@ -69,11 +62,17 @@ def _register_signal_handlers():
     
     if sys.platform != "win32":
         # Unix: SIGTERM, SIGINT 처리
-        signal.signal(signal.SIGTERM, signal_handler)
-        signal.signal(signal.SIGINT, signal_handler)
+        try:
+            signal.signal(signal.SIGTERM, signal_handler)
+            signal.signal(signal.SIGINT, signal_handler)
+        except ValueError:
+            logger.warning("[ASR] Failed to register signal handlers (not in main thread)")
     else:
         # Windows: SIGINT만 처리 (SIGTERM은 없음)
-        signal.signal(signal.SIGINT, signal_handler)
+        try:
+            signal.signal(signal.SIGINT, signal_handler)
+        except ValueError:
+            logger.warning("[ASR] Failed to register signal handlers (not in main thread)")
 
 
 # 모듈 로드 시 시그널 핸들러 등록
