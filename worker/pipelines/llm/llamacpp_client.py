@@ -20,18 +20,31 @@ class LlamaServerClientError(RuntimeError):
 
 
 @contextmanager
-def _llama_server_process(settings: Settings):
+def _llama_server_process(settings: Settings, ocr_provider: str | None = None):
     """
     llama-server를 subprocess로 시작하고 종료하는 컨텍스트 매니저.
     whisper-cli.exe처럼 요청마다 시작하고 종료함.
     
     Note: 락 없이 동작합니다. Celery concurrency=1에 의해 
     한 워커 프로세스 내에서 한 번에 하나의 태스크만 실행됩니다.
+    
+    Args:
+        settings: WorkerSettings 객체
+        ocr_provider: OCR provider (None이면 llm_provider 확인, "llamacpp_server"면 서버 시작)
     """
+    # OCR provider가 지정된 경우 OCR provider 확인, 아니면 LLM provider 확인
     # llamacpp_server provider가 아니면 서버를 시작하지 않음
-    if settings.llm_provider != "llamacpp_server":
-        yield None
-        return
+    # flm provider는 외부 서버를 사용하므로 서버 시작 불필요
+    if ocr_provider is not None:
+        # OCR 요청인 경우
+        if ocr_provider != "llamacpp_server":
+            yield None
+            return
+    else:
+        # LLM 요청인 경우
+        if settings.llm_provider != "llamacpp_server":
+            yield None
+            return
     
     # LLM 서버 설정 확인
     if not settings.llm_server_path or not Path(settings.llm_server_path).exists():
@@ -253,7 +266,12 @@ def request_chat_completion(
             "stream": stream,
         }
 
-        logger.info("LLM API server call: url=%s model=%s", url, model_name)
+        logger.info("LLM API server call: url=%s model=%s provider=%s", url, model_name, settings.llm_provider)
+
+        # FLM provider는 Authorization 헤더 추가
+        headers = {}
+        if settings.llm_provider == "flm":
+            headers["Authorization"] = "Bearer flm"
 
         # 모델이 로드될 때까지 재시도 (최대 180초)
         max_retry_time = 180
@@ -263,7 +281,7 @@ def request_chat_completion(
         
         while elapsed < max_retry_time:
             try:
-                with httpx.Client(timeout=120.0) as client:
+                with httpx.Client(timeout=120.0, headers=headers) as client:
                     response = client.post(url, json=payload)
             
                 # 503 "Loading model" 에러인 경우 재시도

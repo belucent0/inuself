@@ -22,6 +22,7 @@ def process_ocr_task(
     file_id: int,
     image_s3_keys: list[str],
     ocr_mode: str = "document",
+    ocr_accuracy_mode: str = "speed",
 ):
     """OCR 작업 처리 Celery 태스크.
     
@@ -29,13 +30,14 @@ def process_ocr_task(
         file_id: 파일 ID
         image_s3_keys: 이미지 S3 경로 목록 (백엔드에서 전처리된 이미지들)
         ocr_mode: OCR 모드 ("document" 또는 "portray")
+        ocr_accuracy_mode: OCR 정확도 모드 ("speed" 또는 "accuracy")
     """
     from worker.processors.ocr_processor import process_ocr_job
     from worker.utils.result_publisher import publish_ocr_failed
     
     logger.info(
-        "[Celery OCR] Starting task: file_id={}, task_id={}, images={}, ocr_mode={}, retry={}",
-        file_id, self.request.id, len(image_s3_keys), ocr_mode, self.request.retries
+        "[Celery OCR] Starting task: file_id={}, task_id={}, images={}, ocr_mode={}, ocr_accuracy_mode={}, retry={}",
+        file_id, self.request.id, len(image_s3_keys), ocr_mode, ocr_accuracy_mode, self.request.retries
     )
     
     try:
@@ -43,6 +45,7 @@ def process_ocr_task(
             file_id=file_id,
             image_s3_keys=image_s3_keys,
             ocr_mode=ocr_mode,
+            ocr_accuracy_mode=ocr_accuracy_mode,
         )
         
         logger.info("[Celery OCR] Task completed: file_id={}", file_id)

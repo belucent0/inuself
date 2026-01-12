@@ -138,6 +138,71 @@ def wait_for_file(
     return False
 
 
+def wait_for_files(
+    keys: list[str],
+    *,
+    max_attempts: int = 10,
+    interval: float = 0.5,
+    context: str = "",
+) -> tuple[bool, list[str]]:
+    """
+    여러 파일의 가용성을 확인합니다.
+    
+    업로드 직후 파일이 즉시 가용하지 않을 수 있는 eventual consistency 문제를 해결합니다.
+    Celery 태스크 큐잉 전에 호출하여 워커가 파일을 찾지 못하는 race condition을 방지합니다.
+    
+    Args:
+        keys: S3 키 목록 (object keys)
+        max_attempts: 파일당 최대 시도 횟수 (기본값: 10)
+        interval: 시도 간 대기 시간 (초, 기본값: 0.5)
+        context: 로그에 표시할 컨텍스트 정보 (예: "file_id=123")
+    
+    Returns:
+        (all_ready, failed_keys): 
+            - all_ready: 모든 파일이 가용한지 여부
+            - failed_keys: 가용하지 않은 파일 키 목록
+    """
+    if not keys:
+        return True, []
+    
+    settings = get_settings()
+    failed_keys: list[str] = []
+    
+    logger.info(
+        "[Storage] 여러 파일 가용성 확인 시작: %s, count=%d, endpoint=%s, bucket=%s",
+        context, len(keys), settings.s3_endpoint, settings.s3_bucket
+    )
+    
+    for idx, key in enumerate(keys):
+        file_ready = wait_for_file(key, max_attempts=max_attempts, interval=interval)
+        if not file_ready:
+            logger.error(
+                "[Storage] 파일 가용 확인 실패: %s, file=%d/%d, key=%s",
+                context, idx + 1, len(keys), key
+            )
+            failed_keys.append(key)
+        else:
+            logger.debug(
+                "[Storage] 파일 가용 확인 완료: %s, file=%d/%d, key=%s",
+                context, idx + 1, len(keys), key
+            )
+    
+    all_ready = len(failed_keys) == 0
+    
+    if all_ready:
+        logger.info(
+            "[Storage] 모든 파일 가용 확인 완료: %s, count=%d",
+            context, len(keys)
+        )
+    else:
+        logger.warning(
+            "[Storage] 일부 파일 가용 확인 실패: %s, total=%d, failed=%d, failed_keys=%s",
+            context, len(keys), len(failed_keys), failed_keys
+        )
+    
+    return all_ready, failed_keys
+
+
 def download_file(key: str, *, destination: Path) -> Path:
     """스토리지에서 파일 다운로드 (로컬 파일 시스템 또는 S3)."""
     settings = get_settings()

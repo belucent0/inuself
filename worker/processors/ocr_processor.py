@@ -33,6 +33,7 @@ def process_ocr_job(
     file_id: int,
     image_s3_keys: list[str],
     ocr_mode: OcrMode = "document",
+    ocr_accuracy_mode: str = "speed",
 ) -> None:
     """Celery 워커가 호출하는 OCR 작업 진입점.
     
@@ -40,11 +41,13 @@ def process_ocr_job(
         file_id: 파일 ID
         image_s3_keys: 이미지 S3 경로 목록 (백엔드에서 전처리된 이미지들)
         ocr_mode: OCR 모드 ("document" 또는 "portray")
+        ocr_accuracy_mode: OCR 정확도 모드 ("speed" 또는 "accuracy")
     """
     logger.info("[OCR] ========================================")
     logger.info(f"[OCR] OCR job started: file_id={file_id}")
     logger.info(f"[OCR] Image count: {len(image_s3_keys)}")
     logger.info(f"[OCR] Mode: {ocr_mode}")
+    logger.info(f"[OCR] Accuracy mode: {ocr_accuracy_mode}")
     logger.info("[OCR] ========================================")
     
     # 이벤트 루프 설정
@@ -56,6 +59,7 @@ def process_ocr_job(
                 file_id=file_id,
                 image_s3_keys=image_s3_keys,
                 ocr_mode=ocr_mode,
+                ocr_accuracy_mode=ocr_accuracy_mode,
             )
         )
         logger.info(f"[OCR] OK OCR job completed: file_id={file_id}")
@@ -71,9 +75,14 @@ async def _process_job(
     file_id: int,
     image_s3_keys: list[str],
     ocr_mode: OcrMode = "document",
+    ocr_accuracy_mode: str = "speed",
 ) -> None:
     """OCR 작업 처리 함수."""
     logger.info(f"[OCR] [1/4] Starting OCR job: file_id={file_id}, images={len(image_s3_keys)}")
+    logger.info(
+        "[OCR] Received image S3 keys: file_id=%s, keys=%s, endpoint=%s, bucket=%s",
+        file_id, image_s3_keys, settings.s3_endpoint, settings.s3_bucket
+    )
     
     # Redis Stream: 작업 시작 알림
     publish_ocr_started(file_id)
@@ -88,22 +97,61 @@ async def _process_job(
     try:
         for idx, s3_key in enumerate(image_s3_keys):
             temp_path = temp_dir / f"page_{idx + 1}.jpg"
-            download_file(s3_key, destination=temp_path)
-            
-            image = Image.open(temp_path)
-            images.append(image)
-            logger.debug(f"[OCR] Downloaded image {idx + 1}/{len(image_s3_keys)}: {s3_key}")
+            try:
+                logger.debug(
+                    "[OCR] Download attempt: %d/%d - key=%s",
+                    idx + 1, len(image_s3_keys), s3_key
+                )
+                download_file(s3_key, destination=temp_path)
+                
+                if not temp_path.exists():
+                    raise FileNotFoundError(
+                        f"File does not exist after download: {temp_path}"
+                    )
+                
+                image = Image.open(temp_path)
+                images.append(image)
+                logger.debug(
+                    "[OCR] Image download completed: %d/%d - key=%s, size=%s",
+                    idx + 1, len(image_s3_keys), s3_key, image.size
+                )
+            except FileNotFoundError as fnf_err:
+                logger.error(
+                    "[OCR] File download failed: %d/%d - key=%s, error=%s",
+                    idx + 1, len(image_s3_keys), s3_key, fnf_err
+                )
+                raise FileNotFoundError(
+                    f"Image file not found: {s3_key} "
+                    f"(file_id={file_id}, page={idx + 1}/{len(image_s3_keys)})"
+                ) from fnf_err
         
         logger.info(f"[OCR] [3/4] Downloaded {len(images)} images, starting OCR...")
         
         # OCR 처리
-        ocr_processor = OcrVisionProcessor()
+        # ocr_accuracy_mode에 따라 ocr_provider 결정
+        # speed -> flm (NPU), accuracy -> llamacpp_server (GPU/CPU)
+        if ocr_accuracy_mode == "speed":
+            ocr_provider = "flm"
+        elif ocr_accuracy_mode == "accuracy":
+            ocr_provider = "llamacpp_server"
+        else:
+            # 기본값은 speed (flm)
+            logger.warning(f"[OCR] Unknown ocr_accuracy_mode: {ocr_accuracy_mode}, using default 'speed' (flm)")
+            ocr_provider = "flm"
+        
+        logger.info(f"[OCR] OCR accuracy mode: {ocr_accuracy_mode}, selected provider: {ocr_provider}")
+        
+        ocr_processor = OcrVisionProcessor(ocr_provider=ocr_provider)
+        logger.info(f"[OCR] OcrVisionProcessor created with provider override: {ocr_processor._ocr_provider_override}")
         result = ocr_processor.process_images(images, ocr_mode=ocr_mode)
         
         logger.info(f"[OCR] [4/4] OCR completed: {len(result['ocr_text'])} chars extracted")
         
     except Exception as exc:
-        logger.error(f"[OCR] ERROR Error occurred: {exc}")
+        logger.error(
+            "[OCR] ERROR Error occurred: file_id={}, error={}",
+            file_id, exc
+        )
         logger.exception("OCR processing failed for file_id={}", file_id)
         
         # Redis Stream: 실패 알림

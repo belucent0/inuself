@@ -5,6 +5,7 @@
 """
 
 import base64
+import re
 import time
 from io import BytesIO
 from pathlib import Path
@@ -25,8 +26,13 @@ class OcrVisionProcessor:
     이미지를 받아서 LLM Vision API로 텍스트를 추출합니다.
     """
 
-    def __init__(self):
+    def __init__(self, ocr_provider: str | None = None):
         self.settings = get_settings()
+        # ocr_provider가 지정되면 임시로 오버라이드 (이 작업에만 적용)
+        if ocr_provider is not None:
+            self._ocr_provider_override = ocr_provider
+        else:
+            self._ocr_provider_override = None
 
     def _image_to_base64(self, image: Image.Image, max_size: tuple[int, int] = (2048, 2048), quality: int = 85) -> str:
         """이미지를 base64 문자열로 변환."""
@@ -49,15 +55,11 @@ class OcrVisionProcessor:
             gc.collect()
 
     def _get_default_ocr_prompt(self) -> str:
-        """기본 OCR 프롬프트."""
-        return """이 이미지에서 모든 텍스트를 정확하게 추출하여 **반드시 HTML 형식으로만** 반환해주세요.
-
-**중요: 언어 준수 사항**
-1. 이 문서는 **한국어(Korean)** 또는 **영어(English)** 문서입니다.
-2. **절대로 중국어를 출력하지 마세요.**
-3. 한자가 명확히 포함된 경우에만 제한적으로 표시하세요.
-
-**중요: 마크다운 문법을 사용하지 마세요. 오직 HTML 태그만 사용하세요.**
+        """기본 OCR 프롬프트.
+        
+        System message에서 형식 규칙을 정의하므로, 여기서는 구체적인 작업 지시만 포함합니다.
+        """
+        return """이 이미지에서 모든 텍스트를 정확하게 추출해주세요.
 
 요구사항:
 1. 제목은 <h1>, <h2>, <h3> 등 HTML 헤더 태그 사용
@@ -68,15 +70,11 @@ class OcrVisionProcessor:
 6. 추출된 텍스트만 반환하고 설명은 포함하지 마세요"""
 
     def _get_table_ocr_prompt(self) -> str:
-        """표 전용 OCR 프롬프트."""
-        return """이 이미지에서 모든 텍스트를 정확하게 추출하여 **반드시 HTML 형식으로만** 반환해주세요.
-이 이미지에는 표(table)가 포함되어 있습니다. 표 구조를 정확히 인식하는 것이 매우 중요합니다.
-
-**중요: 언어 준수 사항**
-1. 이 문서는 **한국어(Korean)** 또는 **영어(English)** 문서입니다.
-2. **절대로 중국어를 출력하지 마세요.**
-
-**중요: 마크다운 문법을 사용하지 마세요. 오직 HTML 태그만 사용하세요.**
+        """표 전용 OCR 프롬프트.
+        
+        System message에서 형식 규칙을 정의하므로, 여기서는 표 처리 요구사항만 포함합니다.
+        """
+        return """이 이미지에는 표(table)가 포함되어 있습니다. 표 구조를 정확히 인식하는 것이 매우 중요합니다.
 
 표 처리 요구사항:
 1. 표는 반드시 HTML <table> 태그 사용
@@ -99,6 +97,86 @@ class OcrVisionProcessor:
 
 **언어**: 한국어로 작성
 **스타일**: 객관적이고 전문적인 어조, 구체적이고 생생하게 묘사"""
+
+    def _get_ocr_system_message(self) -> str:
+        """OCR용 system message.
+        
+        LLM의 역할과 응답 형식을 명확히 정의하여 마크다운 코드 블록 없이
+        순수 HTML만 반환하도록 지시합니다.
+        """
+        return """당신은 전문 OCR(광학 문자 인식) 시스템입니다.
+
+**응답 형식 규칙 (절대 준수):**
+1. 응답은 순수 HTML 태그만 사용하세요.
+2. 마크다운 코드 블록(```html, ``` 등)을 절대 사용하지 마세요.
+3. 응답 시작과 끝에 ``` 같은 마크다운 문법을 사용하지 마세요.
+4. HTML 태그만 직접 반환하세요. 설명이나 주석을 추가하지 마세요.
+
+**언어 규칙:**
+- 한국어와 영어만 인식하고 반환하세요.
+- 중국어는 절대 출력하지 마세요.
+- 한자는 제한적으로만 사용하세요.
+
+**HTML 태그 사용 규칙:**
+- 제목: <h1>, <h2>, <h3> 등
+- 단락: <p>
+- 목록: <ul>, <ol>, <li>
+- 표: <table>, <thead>, <tbody>, <tr>, <th>, <td>
+- 강조: <strong>, <em>"""
+
+    def _remove_markdown_code_blocks(self, content: str) -> str:
+        """마크다운 코드 블록을 제거하고 내부 내용만 추출.
+        
+        FLM 등 일부 LLM이 응답을 마크다운 코드 블록(```html ... ```)으로 감싸서
+        반환하는 경우를 처리합니다.
+        
+        Args:
+            content: 원본 응답 텍스트
+            
+        Returns:
+            마크다운 코드 블록이 제거된 텍스트
+        """
+        if not content:
+            return content
+        
+        # 마크다운 코드 블록 패턴: ```[language]? ... ```
+        # 예: ```html ... ``` 또는 ``` ... ```
+        pattern = r'```[a-zA-Z]*\n(.*?)```'
+        
+        # 모든 코드 블록 찾기
+        matches = re.finditer(pattern, content, re.DOTALL)
+        
+        if not matches:
+            # 코드 블록이 없으면 원본 반환
+            return content
+        
+        # 코드 블록이 있는 경우, 각 블록의 내용을 추출하여 결합
+        cleaned_parts = []
+        last_end = 0
+        
+        for match in matches:
+            # 코드 블록 이전의 텍스트 추가
+            if match.start() > last_end:
+                cleaned_parts.append(content[last_end:match.start()])
+            
+            # 코드 블록 내부 내용 추가
+            code_content = match.group(1).strip()
+            if code_content:
+                cleaned_parts.append(code_content)
+            
+            last_end = match.end()
+        
+        # 마지막 코드 블록 이후의 텍스트 추가
+        if last_end < len(content):
+            cleaned_parts.append(content[last_end:])
+        
+        result = '\n'.join(cleaned_parts).strip()
+        
+        # 결과가 비어있으면 원본 반환 (코드 블록만 있었던 경우)
+        if not result:
+            return content
+        
+        return result
 
     def _detect_table(self, image_base64: str, server_process=None) -> bool:
         """이미지에서 표 존재 여부 감지."""
@@ -125,15 +203,42 @@ class OcrVisionProcessor:
         from contextlib import nullcontext
         from worker.pipelines.llm.llamacpp_client import _llama_server_process
         
+        # ocr_provider 오버라이드 확인
+        current_ocr_provider = self._ocr_provider_override if self._ocr_provider_override is not None else self.settings.ocr_provider
+        logger.debug(f"[OCR Vision] _call_llm_api: ocr_provider_override={self._ocr_provider_override}, settings.ocr_provider={self.settings.ocr_provider}, current_ocr_provider={current_ocr_provider}")
+        
         if server_process is None:
-            server_context = _llama_server_process(self.settings)
+            # OCR은 ocr_provider를 사용 (기본값: llamacpp_server)
+            # OCR provider가 llamacpp_server일 때만 서버 시작
+            if current_ocr_provider == "llamacpp_server":
+                # OCR에서 llamacpp_server 사용 시 ocr_provider 파라미터 전달
+                server_context = _llama_server_process(self.settings, ocr_provider=current_ocr_provider)
+            else:
+                # FLM 등 외부 서버 사용 시 서버 시작 불필요
+                server_context = nullcontext(None)
         else:
             server_context = nullcontext(server_process)
         
         with server_context:
-            url = f"{self.settings.llm_api_base_url}/v1/chat/completions"
+            # current_ocr_provider에 따라 API URL과 모델 결정
+            import os
+            if current_ocr_provider == "flm":
+                api_base_url = os.getenv("FLM_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+                api_model_name = os.getenv("FLM_OCR_MODEL", "qwen3vl-it:4b")
+                logger.info(f"[OCR Vision] Using FLM provider: url={api_base_url}, model={api_model_name}")
+            else:
+                api_base_url = f"http://localhost:{self.settings.llm_server_port}"
+                api_model_name = self.settings.llm_model_name or "default"
+                logger.info(f"[OCR Vision] Using llamacpp_server provider: url={api_base_url}, model={api_model_name}")
             
-            messages = []
+            url = f"{api_base_url}/v1/chat/completions"
+            
+            # System message로 응답 형식 명확히 정의
+            messages = [
+                {"role": "system", "content": self._get_ocr_system_message()}
+            ]
+            
+            # User message에 실제 작업 지시
             if image_base64:
                 messages.append({
                     "role": "user",
@@ -149,18 +254,23 @@ class OcrVisionProcessor:
                 messages.append({"role": "user", "content": prompt})
             
             payload = {
-                "model": self.settings.llm_api_model_name,
+                "model": api_model_name,
                 "messages": messages,
                 "temperature": 0.1,
                 "max_tokens": 4096,
             }
+            
+            # OCR provider에 따라 Authorization 헤더 추가
+            headers = {}
+            if current_ocr_provider == "flm":
+                headers["Authorization"] = "Bearer flm"
             
             max_retries = 3
             retry_delay = 3
             
             for attempt in range(max_retries):
                 try:
-                    with httpx.Client(timeout=300.0) as client:
+                    with httpx.Client(timeout=300.0, headers=headers) as client:
                         response = client.post(url, json=payload)
                         
                         if response.status_code == 503:
@@ -175,7 +285,9 @@ class OcrVisionProcessor:
                         
                         if "choices" in result and len(result["choices"]) > 0:
                             content = result["choices"][0].get("message", {}).get("content", "")
-                            return content.strip()
+                            # FLM 등이 마크다운 코드 블록으로 감싸서 반환하는 경우 처리
+                            cleaned_content = self._remove_markdown_code_blocks(content)
+                            return cleaned_content.strip()
                         else:
                             raise ValueError(f"Unexpected API response: {result}")
                             
@@ -280,8 +392,22 @@ class OcrVisionProcessor:
             "pages": []
         }
         
-        # llama-server를 한 번만 시작
-        with _llama_server_process(self.settings) as server_process:
+        # OCR provider에 따라 서버 시작 (llamacpp_server일 때만)
+        from contextlib import nullcontext
+        from worker.pipelines.llm.llamacpp_client import _llama_server_process
+        
+        # ocr_provider 오버라이드 확인
+        current_ocr_provider = self._ocr_provider_override if self._ocr_provider_override is not None else self.settings.ocr_provider
+        logger.info(f"[OCR Vision] process_images: ocr_provider_override={self._ocr_provider_override}, settings.ocr_provider={self.settings.ocr_provider}, current_ocr_provider={current_ocr_provider}")
+        
+        if current_ocr_provider == "llamacpp_server":
+            # OCR에서 llamacpp_server 사용 시 ocr_provider 파라미터 전달
+            server_context = _llama_server_process(self.settings, ocr_provider=current_ocr_provider)
+        else:
+            # FLM 등 외부 서버 사용 시 서버 시작 불필요
+            server_context = nullcontext(None)
+        
+        with server_context as server_process:
             for idx, image in enumerate(images):
                 page_num = idx + 1
                 logger.info(f"Processing page {page_num}/{len(images)}")

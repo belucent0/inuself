@@ -82,17 +82,52 @@ class WorkerSettings(BaseSettings):
 
     @property
     def llm_api_base_url(self) -> str:
-        """LLM API base URL (llama-server 포트 사용)."""
-        return f"http://localhost:{self.llm_server_port}"
+        """LLM API base URL (LLM 요약용)."""
+        import os
+        if self.llm_provider == "flm":
+            # FLM은 FLM_BASE_URL 환경 변수 사용
+            return os.getenv("FLM_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+        else:
+            # llama-server 포트 사용
+            return f"http://localhost:{self.llm_server_port}"
 
     @property
     def llm_api_model_name(self) -> str:
-        """LLM API 모델 이름."""
-        return self.llm_model_name or "default"
+        """LLM API 모델 이름 (LLM 요약용)."""
+        import os
+        if self.llm_provider == "flm":
+            # FLM은 FLM_LLM_MODEL 환경 변수 사용
+            return os.getenv("FLM_LLM_MODEL", "qwen3-it:4b")
+        else:
+            return self.llm_model_name or "default"
+    
+    @property
+    def ocr_api_base_url(self) -> str:
+        """OCR API base URL (OCR 전용)."""
+        import os
+        if self.ocr_provider == "flm":
+            # FLM은 FLM_BASE_URL 환경 변수 사용
+            return os.getenv("FLM_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+        else:
+            # llama-server 포트 사용 (OCR은 항상 llama.cpp 서버 사용 권장)
+            return f"http://localhost:{self.llm_server_port}"
+    
+    @property
+    def ocr_api_model_name(self) -> str:
+        """OCR API 모델 이름 (OCR 전용)."""
+        import os
+        if self.ocr_provider == "flm":
+            # FLM OCR 모델 (환경 변수에서 가져오거나 기본값 사용)
+            # Qwen3-VL 4B 모델: qwen3vl-it:4b (NPU 지원)
+            return os.getenv("FLM_OCR_MODEL", "qwen3vl-it:4b")
+        else:
+            # llama.cpp 서버 모델 사용
+            return self.llm_model_name or "default"
 
     # ========================================
     # OCR 설정
     # ========================================
+    ocr_provider: str = Field("flm", validation_alias="OCR_PROVIDER")  # OCR 전용 provider (기본값: flm, NPU 지원)
     ocr_model_path: str = Field("", validation_alias="OCR_SERVER_MODEL")
     ocr_server_mmproj: str = Field("", validation_alias="OCR_SERVER_MMPROJ")
     poppler_path: str = Field("", validation_alias="POPPLER_PATH")

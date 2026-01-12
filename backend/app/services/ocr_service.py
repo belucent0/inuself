@@ -312,8 +312,16 @@ class OcrPreprocessor:
             
             for idx, image in enumerate(images):
                 s3_key = f"temp/ocr/{file_id}/{batch_id}/page_{idx + 1}.jpg"
+                logger.debug(
+                    "[OCR Preprocessor] 이미지 업로드 시작: file_id=%s, page=%d/%d, key=%s",
+                    file_id, idx + 1, len(images), s3_key
+                )
                 self._save_image_to_s3(image, s3_key)
                 image_s3_keys.append(s3_key)
+                logger.info(
+                    "[OCR Preprocessor] 이미지 업로드 완료: file_id=%s, page=%d/%d, key=%s",
+                    file_id, idx + 1, len(images), s3_key
+                )
                 
                 # 메모리 정리
                 try:
@@ -321,7 +329,10 @@ class OcrPreprocessor:
                 except Exception:
                     pass
             
-            logger.info(f"Prepared {len(image_s3_keys)} images for OCR: file_id={file_id}")
+            logger.info(
+                "[OCR Preprocessor] 모든 이미지 준비 완료: file_id=%s, count=%d, keys=%s",
+                file_id, len(image_s3_keys), image_s3_keys
+            )
             
             return {
                 "image_s3_keys": image_s3_keys,

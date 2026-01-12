@@ -192,7 +192,11 @@ const apps = [
     autorestart: true,
     max_restarts: 10,
     min_uptime: '10s',
-    restart_delay: 4000,
+    restart_delay: 10000,  // 재시작 지연 증가 (10초) - FLM 모델 언로드 시간 확보
+    kill_timeout: 15000,   // 프로세스 종료 대기 시간 (15초) - Windows + 모델 언로드 시간
+    instance: 1,           // 단일 인스턴스만 실행
+    stop_exit_codes: [0, 1],  // 정상 종료 코드
+    listen_timeout: 10000, // 포트 리스닝 대기 시간 (10초)
     watch: false,
     error_file: 'C:\\timblo\\torch-test\\logs\\flm-server-error.log',
     out_file: 'C:\\timblo\\torch-test\\logs\\flm-server-out.log',

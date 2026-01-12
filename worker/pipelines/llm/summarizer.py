@@ -57,12 +57,13 @@ def summarize_transcription(text: str) -> tuple[str, str]:
     settings = get_settings()
     
     # LLM 호출
-    if settings.llm_provider in ("lmstudio", "llamacpp_server"):
-        # "lmstudio"는 deprecated이지만 하위 호환성 유지
+    if settings.llm_provider in ("llamacpp_server", "flm"):
+
         # "llamacpp_server"는 llama.cpp 서버를 명시적으로 사용
+        # "flm"은 FastFlowLM 서버를 사용 (OpenAI 호환 API)
         raw_response = _summarize_with_llm(normalized, settings)
     else:
-        raise ValueError(f"지원하지 않는 LLM provider: {settings.llm_provider}. 'llamacpp_server' 또는 'lmstudio'만 지원됩니다.")
+        raise ValueError(f"지원하지 않는 LLM provider: {settings.llm_provider}. 'llamacpp_server', 또는 'flm'만 지원됩니다.")
     
     # JSON 파싱 시도
     title, summary_md = _parse_json_response(raw_response, normalized)
@@ -405,10 +406,10 @@ def extract_title(summary_md: str, transcript_text: str) -> str:
     prompt = title_prompt.format(summary=summary_md[:2000])  # 요약의 앞부분만 사용
     
     try:
-        if settings.llm_provider in ("lmstudio", "llamacpp_server"):
-            # "lmstudio"는 deprecated이지만 하위 호환성 유지
+        if settings.llm_provider in ("llamacpp_server", "flm"):
             # "llamacpp_server"는 llama.cpp 서버를 명시적으로 사용
-            title = _extract_title_with_lmstudio(prompt, settings)
+            # "flm"은 FastFlowLM 서버를 사용 (OpenAI 호환 API)
+            title = _extract_title_with_llm(prompt, settings)
         else:
             logger.warning("Title extraction failed with unsupported LLM provider: %s", settings.llm_provider)
             return _extract_title_fallback(summary_md, transcript_text)
@@ -491,9 +492,9 @@ def extract_title(summary_md: str, transcript_text: str) -> str:
         return _extract_title_fallback(summary_md, transcript_text)
 
 
-def _extract_title_with_lmstudio(prompt: str, settings) -> str:
-    """OpenAI 호환 API 서버(llama.cpp 서버, LM Studio 등)를 사용한 제목 추출."""
-    from .llamacpp_server_client import request_chat_completion
+def _extract_title_with_llm(prompt: str, settings) -> str:
+    """OpenAI 호환 API 서버(llama.cpp 서버, FastFlowLM 등)를 사용한 제목 추출."""
+    from .llamacpp_client import request_chat_completion
     
     system_prompt = "당신은 회의록 요약에서 제목을 추출하는 도우미입니다. 한글로만 제목을 출력하세요. 다른 설명이나 영어는 절대 포함하지 마세요."
     messages = [

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
 from ..core.logging import logger
-from ..core.storage import delete_file, upload_fileobj, get_public_media_url, wait_for_file, download_file
+from ..core.storage import delete_file, upload_fileobj, get_public_media_url, wait_for_file, wait_for_files, download_file
 from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
@@ -110,6 +110,7 @@ class FileService:
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         ocr_mode: str = "document",
+        ocr_accuracy_mode: str = "speed",
         accuracy_mode: str = "speed",
     ) -> dict[str, int]:
         """파일 업로드 및 처리 큐에 등록."""
@@ -136,9 +137,16 @@ class FileService:
         # 파일 가용성 확인 (S3 eventual consistency 대응)
         # 워커가 파일을 다운로드하기 전에 파일이 실제로 가용 상태인지 확인
         loop = asyncio.get_running_loop()
-        file_ready = await loop.run_in_executor(None, lambda: wait_for_file(object_key))
+        file_ready = await loop.run_in_executor(
+            None, 
+            lambda: wait_for_file(object_key, max_attempts=10, interval=0.5)
+        )
         if not file_ready:
-            error_msg = f"파일 가용성 확인 실패: object_key={object_key}"
+            settings = get_settings()
+            error_msg = (
+                f"파일 가용성 확인 실패: object_key={object_key}, "
+                f"endpoint={settings.s3_endpoint}, bucket={settings.s3_bucket}"
+            )
             logger.error("[Upload] %s", error_msg)
             raise RuntimeError(error_msg)
         logger.info("[Upload] 파일 가용성 확인 완료: object_key=%s", object_key)
@@ -212,8 +220,8 @@ class FileService:
             await self.session.commit()
             
             # OCR 전처리 및 작업 큐잉
-            logger.info("[Upload] OCR 전처리 시작: file_id=%s, ocr_mode=%s", file_obj.id, ocr_mode)
-            print(f"[Upload] [4/4] OCR 전처리 및 큐잉 중: file_id={file_obj.id}, ocr_mode={ocr_mode}")
+            logger.info("[Upload] OCR 전처리 시작: file_id=%s, ocr_mode=%s, ocr_accuracy_mode=%s", file_obj.id, ocr_mode, ocr_accuracy_mode)
+            print(f"[Upload] [4/4] OCR 전처리 및 큐잉 중: file_id={file_obj.id}, ocr_mode={ocr_mode}, ocr_accuracy_mode={ocr_accuracy_mode}")
             
             import tempfile
             temp_file_path = None
@@ -233,6 +241,35 @@ class FileService:
                 is_text_file = prep_result.get("is_text_file", False)
                 text_content = prep_result.get("text_content")
                 page_count = prep_result.get("page_count", 0)
+                
+                # 이미지 파일인 경우, S3 업로드 후 파일 가용성 확인
+                if not is_text_file and image_s3_keys:
+                    logger.info(
+                        "[Upload] 업로드된 OCR 이미지 경로 목록: file_id=%s, keys=%s",
+                        file_obj.id, image_s3_keys
+                    )
+                    
+                    loop = asyncio.get_running_loop()
+                    all_ready, failed_keys = await loop.run_in_executor(
+                        None,
+                        lambda: wait_for_files(
+                            image_s3_keys,
+                            max_attempts=10,
+                            interval=0.5,
+                            context=f"file_id={file_obj.id}"
+                        )
+                    )
+                    
+                    if not all_ready:
+                        settings = get_settings()
+                        error_msg = (
+                            f"OCR 이미지 파일이 S3에서 가용하지 않습니다: "
+                            f"file_id={file_obj.id}, uploaded={len(image_s3_keys)}, "
+                            f"failed={len(failed_keys)}, failed_keys={failed_keys}, "
+                            f"endpoint={settings.s3_endpoint}, bucket={settings.s3_bucket}"
+                        )
+                        logger.error(f"[Upload] {error_msg}")
+                        raise FileNotFoundError(error_msg)
                 
                 if is_text_file and text_content:
                     # 텍스트 파일은 OCR 불필요, 직접 저장
@@ -270,6 +307,7 @@ class FileService:
                         file_id=file_obj.id,
                         image_s3_keys=image_s3_keys,
                         ocr_mode=ocr_mode,
+                        ocr_accuracy_mode=ocr_accuracy_mode,
                     )
                     job_id = await loop.run_in_executor(None, enqueue_func)
                     logger.info("[Upload] OCR 작업 큐잉 성공: file_id=%s, job_id=%s, images=%d", file_obj.id, job_id, len(image_s3_keys))
@@ -420,9 +458,17 @@ class FileService:
             with open(downloaded_file, "rb") as f:
                 upload_fileobj(f, key=object_key)
             
-            # 파일 가용성 확인
-            if not wait_for_file(object_key):
-                raise RuntimeError(f"S3 파일 가용성 확인 실패: {object_key}")
+            # 파일 가용성 확인 (S3 eventual consistency 대응)
+            settings = get_settings()
+            file_ready = wait_for_file(object_key, max_attempts=10, interval=0.5)
+            if not file_ready:
+                error_msg = (
+                    f"S3 파일 가용성 확인 실패: object_key={object_key}, "
+                    f"endpoint={settings.s3_endpoint}, bucket={settings.s3_bucket}"
+                )
+                logger.error("[YouTube] %s", error_msg)
+                raise RuntimeError(error_msg)
+            logger.info("[YouTube] 파일 가용성 확인 완료: object_key=%s", object_key)
             
             logger.info("[YouTube] S3 업로드 완료: key=%s", object_key)
             

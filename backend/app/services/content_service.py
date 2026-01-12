@@ -220,6 +220,7 @@ class ContentService:
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         ocr_mode: str = "document",
+        ocr_accuracy_mode: str = "speed",
         accuracy_mode: str = "speed",
     ) -> dict:
         """
@@ -231,6 +232,7 @@ class ContentService:
             min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
             max_speakers: 최대 화자 수 (선택사항, ASR 재처리 시에만 사용)
             ocr_mode: OCR 처리 모드 ("document", "portray")
+            ocr_accuracy_mode: OCR 정확도 모드 ("speed", "accuracy")
             accuracy_mode: 전사 모드 ("speed", "accuracy")
         
         Returns:
@@ -276,23 +278,95 @@ class ContentService:
                 )
                 await self.session.commit()
                 
-                # OCR 작업 큐잉
-                loop = asyncio.get_running_loop()
-                from functools import partial
-                from ..utils.task_queue_adapter import get_task_queue
+                # OCR 전처리: 원본 파일을 이미지로 변환하고 S3에 업로드
+                import tempfile
+                from ..core.storage import download_file, wait_for_files
+                from ..services.ocr_service import OcrPreprocessor
                 
-                task_queue = get_task_queue()
-                enqueue_func = partial(
-                    task_queue.enqueue_ocr_job,
-                    file_id=content_id,
-                    storage_key=file_obj.object_key,
-                    original_filename=file_obj.filename,
-                    ocr_mode=ocr_mode,
-                )
-                job_id = await loop.run_in_executor(None, enqueue_func)
-                
-                logger.info("Manual OCR retry enqueued: file_id=%s, job_id=%s", content_id, job_id)
-                return {"success": True, "message": "OCR reprocessing started", "job_id": job_id}
+                temp_file_path = None
+                try:
+                    # S3에서 원본 파일 다운로드
+                    temp_dir = Path(tempfile.gettempdir())
+                    temp_file_path = temp_dir / f"ocr_retry_{content_id}_{uuid4().hex[:8]}{Path(file_obj.filename or '').suffix}"
+                    
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(
+                        None,
+                        lambda: download_file(file_obj.object_key, destination=temp_file_path)
+                    )
+                    logger.info("[Retry OCR] 파일 다운로드 완료: file_id=%s, path=%s", content_id, temp_file_path)
+                    
+                    # OCR 전처리 수행
+                    preprocessor = OcrPreprocessor()
+                    prep_result = await loop.run_in_executor(
+                        None,
+                        lambda: preprocessor.prepare_for_ocr(temp_file_path, content_id)
+                    )
+                    
+                    image_s3_keys = prep_result["image_s3_keys"]
+                    is_text_file = prep_result.get("is_text_file", False)
+                    text_content = prep_result.get("text_content")
+                    
+                    if is_text_file and text_content:
+                        # 텍스트 파일은 OCR 불필요, 직접 저장
+                        logger.info("[Retry OCR] 텍스트 파일 직접 저장: file_id=%s", content_id)
+                        from ..repositories.document_repository import DocumentRepository
+                        document_repo = DocumentRepository(self.session)
+                        await document_repo.update_document(
+                            file_id=content_id,
+                            ocr_text=text_content,
+                            page_count=prep_result.get("page_count", 1),
+                            ocr_metadata={"file_type": ".txt", "direct_read": True},
+                        )
+                        await file_repo.update_file_status(content_id, FileStatus.SUMMARY_QUEUED)
+                        await self.session.commit()
+                        return {"success": True, "message": "OCR reprocessing completed (text file)", "job_id": None}
+                    
+                    if not image_s3_keys:
+                        raise ValueError(f"No images generated for OCR retry: file_id={content_id}")
+                    
+                    # 이미지 파일 가용성 확인
+                    all_ready, failed_keys = await loop.run_in_executor(
+                        None,
+                        lambda: wait_for_files(
+                            image_s3_keys,
+                            max_attempts=10,
+                            interval=0.5,
+                            context=f"file_id={content_id}"
+                        )
+                    )
+                    
+                    if not all_ready:
+                        raise FileNotFoundError(
+                            f"OCR 이미지 파일이 S3에서 가용하지 않습니다: "
+                            f"file_id={content_id}, failed_keys={failed_keys}"
+                        )
+                    
+                    # OCR 작업 큐잉
+                    from functools import partial
+                    from ..utils.task_queue_adapter import get_task_queue
+                    
+                    task_queue = get_task_queue()
+                    enqueue_func = partial(
+                        task_queue.enqueue_ocr_job,
+                        file_id=content_id,
+                        image_s3_keys=image_s3_keys,
+                        ocr_mode=ocr_mode,
+                        ocr_accuracy_mode=ocr_accuracy_mode,
+                    )
+                    job_id = await loop.run_in_executor(None, enqueue_func)
+                    
+                    logger.info("Manual OCR retry enqueued: file_id=%s, job_id=%s, images=%d", 
+                               content_id, job_id, len(image_s3_keys))
+                    return {"success": True, "message": "OCR reprocessing started", "job_id": job_id}
+                    
+                finally:
+                    # 임시 파일 삭제
+                    if temp_file_path and temp_file_path.exists():
+                        try:
+                            temp_file_path.unlink()
+                        except Exception:
+                            pass
             elif retry_type == "asr":
                 # ASR 재처리
                 if file_obj.content_type != ContentType.AUDIO:
@@ -348,6 +422,29 @@ class ContentService:
                 if file_obj.status not in [FileStatus.SUMMARY_FAILED, FileStatus.SUMMARY_QUEUED, FileStatus.SUMMARIZING]:
                     raise ValueError(f"Cannot retry LLM summary for file with status: {file_obj.status.value}")
                 
+                # 텍스트 추출 (타입에 따라)
+                from ..repositories.transcription_repository import TranscriptionRepository
+                from ..repositories.document_repository import DocumentRepository
+                
+                transcription_repo = TranscriptionRepository(self.session)
+                document_repo = DocumentRepository(self.session)
+                
+                text_to_summarize = ""
+                if file_obj.content_type == ContentType.AUDIO:
+                    transcription = await transcription_repo.get_by_file_id(content_id)
+                    if transcription and transcription.transcription:
+                        text_to_summarize = str(transcription.transcription.get("text", "")).strip()
+                elif file_obj.content_type in [ContentType.DOCUMENT, ContentType.PORTRAY]:
+                    document = await document_repo.get_by_file_id(content_id)
+                    if document:
+                        text_to_summarize = (document.ocr_text or "").strip()
+                
+                if not text_to_summarize:
+                    raise ValueError(
+                        f"Cannot retry LLM summary: no text available for file_id={content_id} "
+                        f"(content_type: {file_obj.content_type.value})"
+                    )
+                
                 # 상태를 SUMMARY_QUEUED로 변경 (큐에 등록)
                 await file_repo.update_file_status(content_id, FileStatus.SUMMARY_QUEUED)
                 await file_repo.add_llm_log(
@@ -363,10 +460,15 @@ class ContentService:
                 from ..utils.task_queue_adapter import get_task_queue
                 
                 task_queue = get_task_queue()
-                enqueue_func = partial(task_queue.enqueue_llm_job, file_id=content_id)
+                enqueue_func = partial(
+                    task_queue.enqueue_llm_job,
+                    file_id=content_id,
+                    text_to_summarize=text_to_summarize,
+                )
                 job_id = await loop.run_in_executor(None, enqueue_func)
                 
-                logger.info("Manual LLM retry enqueued: file_id=%s, job_id=%s", content_id, job_id)
+                logger.info("Manual LLM retry enqueued: file_id=%s, job_id=%s, text_length=%d", 
+                           content_id, job_id, len(text_to_summarize))
                 return {"success": True, "message": "LLM summary reprocessing started", "job_id": job_id}
             
             else:
@@ -428,6 +530,21 @@ class ContentService:
             if content.status not in [ContentStatus.SUMMARY_FAILED, ContentStatus.SUMMARY_QUEUED, ContentStatus.SUMMARIZING]:
                 raise ValueError(f"Cannot retry LLM summary for content with status: {content.status.value}")
             
+            # 텍스트 추출 (Content 모델에서 직접 가져오기)
+            text_to_summarize = ""
+            if hasattr(content, 'transcription') and content.transcription:
+                # ASR 전사 텍스트
+                transcript_data = content.transcription.get("transcription", {}) if isinstance(content.transcription, dict) else {}
+                text_to_summarize = str(transcript_data.get("text", "")).strip()
+            elif hasattr(content, 'document') and content.document:
+                # OCR 텍스트
+                text_to_summarize = (content.document.get("ocr_text", "") if isinstance(content.document, dict) else "").strip()
+            
+            if not text_to_summarize:
+                raise ValueError(
+                    f"Cannot retry LLM summary: no text available for content_id={content_id}"
+                )
+            
             # 상태를 SUMMARY_QUEUED로 변경 (큐에 등록)
             await self.repo.update_content_status(content_id, ContentStatus.SUMMARY_QUEUED)
             await self.repo.add_llm_log(
@@ -443,11 +560,15 @@ class ContentService:
             from ..utils.task_queue_adapter import get_task_queue
             
             task_queue = get_task_queue()
-            enqueue_func = partial(task_queue.enqueue_llm_job, file_id=content_id)
-            enqueue_func = partial(task_queue.enqueue_llm_job, file_id=content_id)
+            enqueue_func = partial(
+                task_queue.enqueue_llm_job,
+                file_id=content_id,
+                text_to_summarize=text_to_summarize,
+            )
             job_id = await loop.run_in_executor(None, enqueue_func)
             
-            logger.info("Manual LLM retry enqueued: content_id=%s, job_id=%s", content_id, job_id)
+            logger.info("Manual LLM retry enqueued: content_id=%s, job_id=%s, text_length=%d", 
+                       content_id, job_id, len(text_to_summarize))
             return {"success": True, "message": "LLM summary reprocessing started", "job_id": job_id}
         
         else:

@@ -169,6 +169,7 @@ export async function uploadContent(
   minSpeakers?: number,
   maxSpeakers?: number,
   ocrMode?: string,
+  ocrAccuracyMode?: 'speed' | 'accuracy',
   accuracyMode?: 'speed' | 'accuracy'
 ): Promise<{ content_id: number }> {
   const formData = new FormData()
@@ -183,6 +184,9 @@ export async function uploadContent(
   }
   if (ocrMode !== undefined) {
     params.append('ocr_mode', ocrMode)
+  }
+  if (ocrAccuracyMode !== undefined) {
+    params.append('ocr_accuracy_mode', ocrAccuracyMode)
   }
   if (accuracyMode !== undefined) {
     params.append('accuracy_mode', accuracyMode)
@@ -236,6 +240,7 @@ export async function retryProcessing(
   minSpeakers?: number,
   maxSpeakers?: number,
   ocrMode?: string,
+  ocrAccuracyMode?: 'speed' | 'accuracy',
   accuracyMode?: 'speed' | 'accuracy'
 ): Promise<{ success: boolean; message: string; job_id?: string }> {
   const params = new URLSearchParams({ type })
@@ -247,6 +252,9 @@ export async function retryProcessing(
   }
   if (ocrMode !== undefined) {
     params.append('ocr_mode', ocrMode)
+  }
+  if (ocrAccuracyMode !== undefined) {
+    params.append('ocr_accuracy_mode', ocrAccuracyMode)
   }
   if (accuracyMode !== undefined) {
     params.append('accuracy_mode', accuracyMode)

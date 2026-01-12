@@ -42,6 +42,7 @@ class TaskQueueAdapter(ABC):
         file_id: int,
         image_s3_keys: list[str],
         ocr_mode: str = "document",
+        ocr_accuracy_mode: str = "speed",
     ) -> str:
         """OCR 작업을 큐에 등록하고 작업 ID를 반환.
         
@@ -49,6 +50,7 @@ class TaskQueueAdapter(ABC):
             file_id: 파일 ID
             image_s3_keys: 이미지 S3 경로 목록 (백엔드에서 전처리된 이미지들)
             ocr_mode: OCR 모드 ("document" 또는 "portray")
+            ocr_accuracy_mode: OCR 정확도 모드 ("speed" 또는 "accuracy")
         """
         pass
     
@@ -122,6 +124,7 @@ class CeleryAdapter(TaskQueueAdapter):
         file_id: int,
         image_s3_keys: list[str],
         ocr_mode: str = "document",
+        ocr_accuracy_mode: str = "speed",
     ) -> str:
         result = self.celery.send_task(
             "worker.tasks.ocr_task.process_ocr_task",
@@ -129,6 +132,7 @@ class CeleryAdapter(TaskQueueAdapter):
                 "file_id": file_id,
                 "image_s3_keys": image_s3_keys,
                 "ocr_mode": ocr_mode,
+                "ocr_accuracy_mode": ocr_accuracy_mode,
             },
             queue="ocr",
         )

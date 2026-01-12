@@ -49,28 +49,78 @@ def download_file(key: str, *, destination: Path) -> Path:
         
     Returns:
         다운로드된 파일 경로
+        
+    Raises:
+        FileNotFoundError: S3와 로컬 모두에서 파일을 찾을 수 없을 때
     """
     settings = get_settings()
     client = get_s3_client()
     
     if client:
         try:
+            # 버킷 접근 가능 여부 확인
             client.head_bucket(Bucket=settings.s3_bucket)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            client.download_file(settings.s3_bucket, key, str(destination))
-            logger.debug("[Storage] S3 다운로드 완료: key={}", key)
-            return destination
+            
+            # 파일 존재 여부 먼저 확인
+            try:
+                client.head_object(Bucket=settings.s3_bucket, Key=key)
+            except ClientError as head_err:
+                error_code = head_err.response.get("Error", {}).get("Code", "")
+                if error_code == "404" or error_code == "NoSuchKey":
+                    logger.warning(
+                        "[Storage] S3 파일 없음 (404): key={}, bucket={}, endpoint={}",
+                        key, settings.s3_bucket, settings.s3_endpoint
+                    )
+                else:
+                    logger.warning(
+                        "[Storage] S3 파일 확인 실패: key={}, error={}",
+                        key, head_err
+                    )
+                # head_object 실패 시 로컬 폴백으로 진행
+            else:
+                # 파일이 존재하면 다운로드
+                try:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    client.download_file(settings.s3_bucket, key, str(destination))
+                    logger.debug("[Storage] S3 다운로드 완료: key={}", key)
+                    return destination
+                except ClientError as download_err:
+                    logger.warning(
+                        "[Storage] S3 다운로드 실패: key={}, error={}",
+                        key, download_err
+                    )
+                    # 다운로드 실패 시 로컬 폴백으로 진행
         except ClientError as e:
-            logger.warning("[Storage] S3 다운로드 실패, 로컬 확인: {}", e)
+            error_code = e.response.get("Error", {}).get("Code", "")
+            if error_code == "404" or error_code == "NoSuchBucket":
+                logger.warning(
+                    "[Storage] S3 버킷 접근 실패 또는 파일 없음: bucket={}, key={}, error={}",
+                    settings.s3_bucket, key, e
+                )
+            else:
+                logger.warning(
+                    "[Storage] S3 접근 실패, 로컬 확인: key={}, error={}",
+                    key, e
+                )
+        except Exception as e:
+            logger.warning(
+                "[Storage] S3 처리 중 예외 발생, 로컬 확인: key={}, error={}",
+                key, e
+            )
     
     # 로컬 파일 시스템 폴백
     local_path = _get_local_storage_path(key)
     if local_path.exists():
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(local_path, destination)
+        logger.debug("[Storage] 로컬 파일 사용: key={}", key)
         return destination
     
-    raise FileNotFoundError(f"File not found: {key}")
+    # S3와 로컬 모두에서 파일을 찾을 수 없음
+    raise FileNotFoundError(
+        f"File not found: {key} (S3 bucket: {settings.s3_bucket}, "
+        f"endpoint: {settings.s3_endpoint}, local path: {local_path})"
+    )
 
 
 def upload_file(source: Path, *, key: str) -> str:
