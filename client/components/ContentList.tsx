@@ -47,6 +47,14 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
   // 모든 파일의 진행 상태를 관리하는 Map
   const [progressMap, setProgressMap] = useState<Record<number, FileProgress>>({})
 
+  // 콘텐츠 목록을 내부 상태로 관리 (소켓 이벤트로 실시간 업데이트)
+  const [localContents, setLocalContents] = useState<ContentSummary[]>(contents)
+
+  // contents prop이 변경되면 localContents 업데이트
+  useEffect(() => {
+    setLocalContents(contents)
+  }, [contents])
+
   // Global WebSocket 연결
   const wsBase = getWebSocketBase()
   // /ws/file-progress/global 엔드포인트 사용
@@ -64,10 +72,13 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
       
       // file_progress 타입이고 file_id가 있는 경우 상태 업데이트
       if (event.type === 'file_progress' && event.file_id) {
+        const fileId = event.file_id
+        
+        // progressMap 업데이트
         setProgressMap((prev) => ({
           ...prev,
-          [event.file_id!]: {
-            fileId: event.file_id!,
+          [fileId]: {
+            fileId: fileId,
             status: (event.status as FileStatus) || 'processing',
             step: event.step || null,
             progress: event.progress || 0,
@@ -76,13 +87,69 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
             isConnected: true,
           },
         }))
+
+        // metadata가 있으면 콘텐츠 목록 업데이트
+        if (event.metadata) {
+          setLocalContents((prev) =>
+            prev.map((item) => {
+              if (item.id !== fileId) {
+                return item
+              }
+
+              // 업데이트할 필드들
+              const updates: Partial<ContentSummary> = {}
+
+              // 제목 업데이트
+              if (event.metadata?.title !== undefined) {
+                updates.title = event.metadata.title
+              }
+
+              // duration_seconds 업데이트
+              if (event.metadata?.duration_seconds !== undefined) {
+                updates.duration_seconds = event.metadata.duration_seconds
+                // transcription 객체도 업데이트
+                if (item.transcription) {
+                  updates.transcription = {
+                    ...item.transcription,
+                    duration_seconds: event.metadata.duration_seconds,
+                  }
+                }
+              }
+
+              // speakers 업데이트
+              if (event.metadata?.speakers !== undefined) {
+                updates.speakers = event.metadata.speakers
+                // transcription 객체도 업데이트
+                if (item.transcription) {
+                  updates.transcription = {
+                    ...item.transcription,
+                    speakers: event.metadata.speakers,
+                  }
+                }
+              }
+
+              // page_count 업데이트 (document 객체 내부)
+              if (event.metadata?.page_count !== undefined && item.document) {
+                updates.document = {
+                  ...item.document,
+                  page_count: event.metadata.page_count,
+                }
+              }
+
+              return {
+                ...item,
+                ...updates,
+              }
+            })
+          )
+        }
       }
     },
     reconnect: true,
     reconnectInterval: 3000,
   })
 
-  const selectableIds = useMemo(() => contents.map((content) => content.id), [contents])
+  const selectableIds = useMemo(() => localContents.map((content) => content.id), [localContents])
 
   useEffect(() => {
     setSelectedIds((prev) => {
@@ -171,7 +238,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
     }
   }
 
-  if (!contents.length) {
+  if (!localContents.length) {
     return (
       <Card>
         <CardContent className="pt-6">
@@ -215,7 +282,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
       )}
 
       <div className="space-y-2.5 md:space-y-4">
-        {contents.map((item) => (
+        {localContents.map((item) => (
           <ContentItem
             key={item.id}
             item={item}

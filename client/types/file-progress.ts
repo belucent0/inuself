@@ -30,6 +30,12 @@ export interface FileProgressEvent {
     message?: string
     timestamp?: string
     channel?: string
+    metadata?: {
+        title?: string
+        duration_seconds?: number
+        speakers?: string[]
+        page_count?: number
+    }
 }
 
 /** 파일 진행 상태 */

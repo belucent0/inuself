@@ -196,6 +196,10 @@ class StreamConsumer:
                     step="asr_completed",
                     progress=50.0,
                     message="음성 인식 완료, 요약 대기 중...",
+                    metadata={
+                        "duration_seconds": duration_seconds,
+                        "speakers": speaker_labels,
+                    },
                 )
                 
                 # LLM 요약 큐잉
@@ -289,6 +293,7 @@ class StreamConsumer:
                     step="completed",
                     progress=100.0,
                     message="모든 처리가 완료되었습니다.",
+                    metadata={"title": title} if title else None,
                 )
                 
             elif event == "failed":
@@ -387,6 +392,7 @@ class StreamConsumer:
                     step="ocr_completed",
                     progress=50.0,
                     message="문서 인식 완료, 요약 대기 중...",
+                    metadata={"page_count": page_count},
                 )
                 
                 # 임시 이미지 삭제
