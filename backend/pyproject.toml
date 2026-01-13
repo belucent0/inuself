@@ -31,6 +31,7 @@ python-multipart = "^0.0.9"
 tenacity = "^8.2.3"
 boto3 = "^1.34.0"
 httpx = "^0.27.0"  # LLM 워커와 통신용
+openai = "^1.0.0"  # LiteLLM 표준 인터페이스
 loguru = "^0.7.0"
 pillow = "^10.0.0"  # 이미지 처리 (OCR용)
 PyMuPDF = "^1.23.0"  # PDF를 이미지로 변환 (OCR용, 크로스 플랫폼, 의존성 없음)

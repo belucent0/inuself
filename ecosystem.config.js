@@ -35,136 +35,45 @@ const WORKER_VENV_PATH = 'C:\\Users\\jg\\AppData\\Local\\pypoetry\\Cache\\virtua
 const WORKER_PYTHONW_PATH = `${WORKER_VENV_PATH}\\Scripts\\pythonw.exe`;
 
 // pythonw.exe를 사용하여 콘솔 창이 나타나지 않도록 함
-// celery.exe는 콘솔 애플리케이션이므로 CMD 창이 나타남
-const CELERY_PATH = WORKER_PYTHONW_PATH;  // 워커는 독립 가상환경 사용
-
-// llama-server 관련 설정은 PM2에서 관리하지 않음
-// worker-llm이 .env 파일에서 직접 읽어서 subprocess로 llama-server를 시작함
-// LLAMA_SERVER_* 환경변수는 .env 파일에 설정하고, worker-llm의 Settings 클래스가 읽음
+const CELERY_PATH = WORKER_PYTHONW_PATH;
 
 const apps = [
+  // ========================================
+  // 통합 워커 (V5): ASR, LLM, OCR 모든 작업 처리
+  // ========================================
   {
-    name: 'worker-asr',
-    cwd: 'C:\\timblo\\torch-test',  // 프로젝트 루트 (worker 패키지 접근용)
+    name: 'worker-unified',
+    cwd: 'C:\\timblo\\torch-test',
     script: CELERY_PATH,
     args: [
       '-m', 'celery',
-      '-A', 'worker.celery_app',  // 독립 worker 패키지
+      '-A', 'worker.celery_app',
       'worker',
       '--pool=solo',
       '--loglevel=info',
       '--concurrency=1',
       '--max-tasks-per-child=100',
-      '--queues=asr',
-      '--hostname=worker-asr@%h'
+      '--queues=asr,llm,ocr',  // 모든 큐 처리
+      '--hostname=worker-unified@%h'
     ],
     env: {
-      // Python 출력 버퍼링 비활성화 (실시간 로그 출력)
       PYTHONUNBUFFERED: '1',
-      // 워커 타입 설정
-      WORKER_TYPE: 'asr',
-      // 순차 처리 설정 (기본값: true)
-      // true: ASR과 LLM 작업을 순차 처리 (concurrency=1) - GPU 메모리 안정적
-      // false: ASR과 LLM 작업을 동시 처리 (concurrency=2) - 더 빠르지만 GPU 메모리 부족 가능
-      SEQUENTIAL_PROCESSING: envVars.SEQUENTIAL_PROCESSING || 'true',
-    },
-    autorestart: true,
-    max_restarts: 10,
-    min_uptime: '10s',
-    restart_delay: 4000,
-    watch: false,
-    error_file: 'C:\\timblo\\torch-test\\logs\\worker-asr-error.log',
-    out_file: 'C:\\timblo\\torch-test\\logs\\worker-asr-out.log',
-    // PM2 타임스탬프는 유지하되, Python logging의 타임스탬프는 제거하여 중복 방지
-    // PM2의 타임스탬프 형식: YYYY-MM-DD HH:mm:ss Z
-    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-    merge_logs: false,
-    // Windows에서 콘솔 창 숨기기
-    windowsHide: true,
-  },
-  {
-    name: 'worker-llm',
-    cwd: 'C:\\timblo\\torch-test',  // 프로젝트 루트 (worker 패키지 접근용)
-    script: CELERY_PATH,
-    args: [
-      '-m', 'celery',
-      '-A', 'worker.celery_app',  // 독립 worker 패키지
-      'worker',
-      '--pool=solo',
-      '--loglevel=info',
-      '--concurrency=1',
-      '--max-tasks-per-child=100',
-      '--queues=llm',  // LLM 요약만 처리
-      '--hostname=worker-llm@%h'
-    ],
-    env: {
-      // Python 출력 버퍼링 비활성화 (실시간 로그 출력)
-      PYTHONUNBUFFERED: '1',
-      // 워커 타입 설정
-      WORKER_TYPE: 'llm',
-      // 순차 처리 설정 (기본값: true)
+      WORKER_TYPE: 'unified',
       SEQUENTIAL_PROCESSING: envVars.SEQUENTIAL_PROCESSING || 'true',
 
-      // LLM 설정 (.env에서 읽어옴)
-      LLM_PROVIDER: envVars.LLM_PROVIDER || 'llamacpp_server',
+      // LiteLLM 설정 (V4 표준)
+      LLM_PROVIDER: 'litellm',
+      LITELLM_BASE_URL: envVars.LITELLM_BASE_URL || 'http://localhost:4000',
+      LITELLM_API_KEY: envVars.LITELLM_API_KEY || 'sk-litellm-master',
+      LITELLM_MODEL: envVars.LITELLM_MODEL || 'qwen3-4b',
+
+      // LLM 공통 설정
       LLM_SYSTEM_PROMPT: envVars.LLM_SYSTEM_PROMPT || '',
-      LLM_CONTEXT_LENGTH: envVars.LLM_CONTEXT_LENGTH || '15000',  // 메모리 사용량 최적화
+      LLM_CONTEXT_LENGTH: envVars.LLM_CONTEXT_LENGTH || '15000',
       LLM_TEMPERATURE: envVars.LLM_TEMPERATURE || '0.4',
-      LLM_TOP_P: envVars.LLM_TOP_P || '0.9',
       LLM_MAX_TOKENS: envVars.LLM_MAX_TOKENS || '1024',
-      LLM_N_THREADS: envVars.LLM_N_THREADS || '8',
 
-      // LLM API 서버 설정 (모든 OpenAI 호환 API, provider와 무관)
-      LLM_BASE_URL: envVars.LLM_BASE_URL || 'http://localhost:8080',
-      LLM_MODEL_NAME: envVars.LLM_MODEL_NAME || 'Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf',
-
-      // llama_cpp 전용 설정 (.env에서 읽어옴, llama-cpp-python 직접 사용 시)
-      LLM_SERVER_PATH: envVars.LLM_SERVER_PATH || '',
-      LLM_SERVER_MODEL: envVars.LLM_SERVER_MODEL || '',
-      LLM_N_GPU_LAYERS: envVars.LLM_N_GPU_LAYERS || '-1',  // -1: 모든 레이어 GPU, 0: CPU만, 양수: 하이브리드
-    },
-    autorestart: true,
-    max_restarts: 10,
-    min_uptime: '10s',
-    restart_delay: 4000,
-    watch: false,
-    error_file: 'C:\\timblo\\torch-test\\logs\\worker-llm-error.log',
-    out_file: 'C:\\timblo\\torch-test\\logs\\worker-llm-out.log',
-    // PM2 타임스탬프는 유지하되, Python logging의 타임스탬프는 제거하여 중복 방지
-    // PM2의 타임스탬프 형식: YYYY-MM-DD HH:mm:ss Z
-    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-    merge_logs: false,
-    // Windows에서 콘솔 창 숨기기
-    windowsHide: true,
-  },
-  {
-    name: 'worker-ocr',
-    cwd: 'C:\\timblo\\torch-test',  // 프로젝트 루트 (worker 패키지 접근용)
-    script: CELERY_PATH,
-    args: [
-      '-m', 'celery',
-      '-A', 'worker.celery_app',  // 독립 worker 패키지
-      'worker',
-      '--pool=solo',
-      '--loglevel=info',
-      '--concurrency=1',
-      '--max-tasks-per-child=100',
-      '--queues=ocr',  // OCR 처리만 (기본 모드: Qwen3-VL API, Docling 모드: Docling)
-      '--hostname=worker-ocr@%h'
-    ],
-    env: {
-      // Python 출력 버퍼링 비활성화 (실시간 로그 출력)
-      PYTHONUNBUFFERED: '1',
-      // 워커 타입 설정
-      WORKER_TYPE: 'ocr',
-      // 순차 처리 설정 (기본값: true)
-      SEQUENTIAL_PROCESSING: envVars.SEQUENTIAL_PROCESSING || 'true',
-
-      // LLM API 서버 설정 (기본 모드에서 Qwen3-VL API 사용)
-      LLM_BASE_URL: envVars.LLM_BASE_URL || 'http://localhost:8080',
-      LLM_MODEL_NAME: 'models/Qwen3-VL-8B-Instruct/Qwen3-VL-8B-Instruct-Q8_0.gguf',
-
-      // llama_cpp 전용 설정 (OCR 비전 모델 분리)
+      // OCR 설정 (On-Demand llama-server용)
       OCR_SERVER_MODEL: 'models/Qwen3-VL-8B-Instruct/Qwen3-VL-8B-Instruct-Q8_0.gguf',
       OCR_SERVER_MMPROJ: 'models/Qwen3-VL-8B-Instruct/mmproj-F32.gguf',
     },
@@ -173,15 +82,15 @@ const apps = [
     min_uptime: '10s',
     restart_delay: 4000,
     watch: false,
-    error_file: 'C:\\timblo\\torch-test\\logs\\worker-ocr-error.log',
-    out_file: 'C:\\timblo\\torch-test\\logs\\worker-ocr-out.log',
-    // PM2 타임스탬프는 유지하되, Python logging의 타임스탬프는 제거하여 중복 방지
-    // PM2의 타임스탬프 형식: YYYY-MM-DD HH:mm:ss Z
+    error_file: 'C:\\timblo\\torch-test\\logs\\worker-unified-error.log',
+    out_file: 'C:\\timblo\\torch-test\\logs\\worker-unified-out.log',
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     merge_logs: false,
-    // Windows에서 콘솔 창 숨기기
     windowsHide: true,
   },
+  // ========================================
+  // FLM 서버 (NPU)
+  // ========================================
   {
     name: 'flm-server',
     cwd: 'C:\\timblo\\torch-test',
@@ -193,11 +102,11 @@ const apps = [
     autorestart: true,
     max_restarts: 10,
     min_uptime: '10s',
-    restart_delay: 10000,  // 재시작 지연 증가 (10초) - FLM 모델 언로드 시간 확보
-    kill_timeout: 15000,   // 프로세스 종료 대기 시간 (15초) - Windows + 모델 언로드 시간
-    instance: 1,           // 단일 인스턴스만 실행
-    stop_exit_codes: [0, 1],  // 정상 종료 코드
-    listen_timeout: 10000, // 포트 리스닝 대기 시간 (10초)
+    restart_delay: 10000,
+    kill_timeout: 15000,
+    instance: 1,
+    stop_exit_codes: [0, 1],
+    listen_timeout: 10000,
     watch: false,
     error_file: 'C:\\timblo\\torch-test\\logs\\flm-server-error.log',
     out_file: 'C:\\timblo\\torch-test\\logs\\flm-server-out.log',
@@ -205,6 +114,9 @@ const apps = [
     merge_logs: false,
     windowsHide: true,
   },
+  // ========================================
+  // Llama 서버 (GPU - 채팅용)
+  // ========================================
   {
     name: 'llama-server',
     cwd: 'C:\\timblo\\torch-test',
@@ -217,7 +129,6 @@ const apps = [
       '--threads', envVars.LLM_N_THREADS || '8',
     ],
     env: {
-      // llama.cpp GPU 설정
       CUDA_VISIBLE_DEVICES: '0',
     },
     autorestart: true,
@@ -236,13 +147,6 @@ const apps = [
     windowsHide: true,
   }
 ];
-
-// flm-server는 PM2로 상시 실행
-// WebSocket 연결 시 localhost:11434로 연결하여 사용
-// llama-server는 PM2에서 관리하지 않음
-// worker-llm이 요청을 받을 때마다 subprocess로 llama-server를 시작하고 종료함
-// (llamacpp_server_client.py의 _llama_server_process 컨텍스트 매니저 참조)
-// 따라서 PM2 설정에서 제외하여 메모리 낭비를 방지함
 
 module.exports = {
   apps: apps

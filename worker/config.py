@@ -2,7 +2,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -60,28 +60,8 @@ class WorkerSettings(BaseSettings):
     asr_chunk_threshold_minutes: int = 25
 
     # ========================================
-    # LLM 설정
-    # ========================================
-    llm_provider: str = Field("llamacpp_server", validation_alias="LLM_PROVIDER")
-    llm_base_url: str = "http://localhost:8080"
-    llm_model_name: str = ""
-    llm_system_prompt: str = "당신은 회의록을 요약하는 전문가입니다. 모든 응답은 반드시 한글로 작성하세요."
-    llm_context_length: int = 15000
-    llm_temperature: float = 0.4
-    llm_top_p: float = 0.9
-    llm_max_tokens: int = 1024
-    llm_n_threads: int = 8
-
-    # LLM 서버 관리 설정
-    llm_server_path: str = Field("", validation_alias="LLM_SERVER_PATH")
-    llm_server_model: str = Field("", validation_alias="LLM_SERVER_MODEL")
-    llm_server_port: int = Field(8080, validation_alias="LLM_SERVER_PORT")
-    llm_server_threads: int = Field(8, validation_alias="LLM_SERVER_THREADS")
-    llm_server_gpu_layers: int = Field(99, validation_alias="LLM_SERVER_GPU_LAYERS")
-    llm_server_batch_size: int = Field(512, validation_alias="LLM_SERVER_BATCH_SIZE")
-
-    # ========================================
-    # LiteLLM 프록시 설정
+    # LiteLLM 프록시 설정 (V4 표준)
+    # 모든 LLM 요청은 LiteLLM을 통해 라우팅됨
     # ========================================
     litellm_base_url: str = Field(
         "http://localhost:4000", 
@@ -96,55 +76,40 @@ class WorkerSettings(BaseSettings):
         validation_alias="LITELLM_MODEL"
     )
 
-    @property
-    def llm_api_base_url(self) -> str:
-        """LLM API base URL (LLM 요약용)."""
-        import os
-        if self.llm_provider == "flm":
-            # FLM은 FLM_BASE_URL 환경 변수 사용
-            return os.getenv("FLM_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-        else:
-            # llama-server 포트 사용
-            return f"http://localhost:{self.llm_server_port}"
+    @field_validator("litellm_base_url")
+    @classmethod
+    def resolve_docker_host(cls, v: str) -> str:
+        """Docker 서비스명(asr-litellm)을 로컬 환경(localhost)에 맞게 변환."""
+        if "asr-litellm" in v:
+            return v.replace("asr-litellm", "localhost")
+        return v
 
-    @property
-    def llm_api_model_name(self) -> str:
-        """LLM API 모델 이름 (LLM 요약용)."""
-        import os
-        if self.llm_provider == "flm":
-            # FLM은 FLM_LLM_MODEL 환경 변수 사용
-            return os.getenv("FLM_LLM_MODEL", "qwen3-it:4b")
-        else:
-            return self.llm_model_name or "default"
-    
-    @property
-    def ocr_api_base_url(self) -> str:
-        """OCR API base URL (OCR 전용)."""
-        import os
-        if self.ocr_provider == "flm":
-            # FLM은 FLM_BASE_URL 환경 변수 사용
-            return os.getenv("FLM_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-        else:
-            # llama-server 포트 사용 (OCR은 항상 llama.cpp 서버 사용 권장)
-            return f"http://localhost:{self.llm_server_port}"
-    
-    @property
-    def ocr_api_model_name(self) -> str:
-        """OCR API 모델 이름 (OCR 전용)."""
-        import os
-        if self.ocr_provider == "flm":
-            # FLM OCR 모델 (환경 변수에서 가져오거나 기본값 사용)
-            # Qwen3-VL 4B 모델: qwen3vl-it:4b (NPU 지원)
-            return os.getenv("FLM_OCR_MODEL", "qwen3vl-it:4b")
-        else:
-            # llama.cpp 서버 모델 사용
-            return self.llm_model_name or "default"
+    # ========================================
+    # LLM 공통 설정 (LiteLLM 또는 직접 호출 시 사용)
+    # ========================================
+    llm_provider: str = Field("litellm", validation_alias="LLM_PROVIDER")
+    llm_system_prompt: str = "당신은 회의록을 요약하는 전문가입니다. 모든 응답은 반드시 한글로 작성하세요."
+    llm_context_length: int = 15000
+    llm_temperature: float = 0.4
+    llm_top_p: float = 0.9
+    llm_max_tokens: int = 1024
+
+    # ========================================
+    # On-Demand LLM 서버 설정 (OCR 정밀모드용)
+    # llama.cpp 서버를 필요시 띄우는 경우에만 사용
+    # ========================================
+    llm_server_path: str = Field("", validation_alias="LLM_SERVER_PATH")
+    llm_server_model: str = Field("", validation_alias="LLM_SERVER_MODEL")
+    llm_server_port: int = Field(8080, validation_alias="LLM_SERVER_PORT")
+    llm_n_threads: int = 8
+    llm_server_gpu_layers: int = Field(99, validation_alias="LLM_SERVER_GPU_LAYERS")
+    llm_server_batch_size: int = Field(512, validation_alias="LLM_SERVER_BATCH_SIZE")
 
     # ========================================
     # OCR 설정
     # ========================================
     ocr_server_port: int = Field(8082, validation_alias="OCR_SERVER_PORT")
-    ocr_provider: str = Field("flm", validation_alias="OCR_PROVIDER")  # OCR 전용 provider (기본값: flm, NPU 지원)
+    ocr_provider: str = Field("flm", validation_alias="OCR_PROVIDER")  # flm=NPU, llamacpp=GPU
     ocr_model_path: str = Field("", validation_alias="OCR_SERVER_MODEL")
     ocr_server_mmproj: str = Field("", validation_alias="OCR_SERVER_MMPROJ")
     poppler_path: str = Field("", validation_alias="POPPLER_PATH")
@@ -155,6 +120,9 @@ class WorkerSettings(BaseSettings):
     # ========================================
     temp_dir: Path = Path("data/temp")
 
+    # ========================================
+    # 헬퍼 프로퍼티
+    # ========================================
     @property
     def is_ocr_worker(self) -> bool:
         """워커 타입이 OCR인지 여부."""
@@ -173,6 +141,22 @@ class WorkerSettings(BaseSettings):
         if self.is_ocr_worker:
             return self.ocr_server_mmproj
         return ""
+
+    @property
+    def ocr_api_base_url(self) -> str:
+        """OCR API base URL."""
+        if self.ocr_provider == "flm":
+            return os.getenv("FLM_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+        else:
+            return f"http://localhost:{self.ocr_server_port}"
+    
+    @property
+    def ocr_api_model_name(self) -> str:
+        """OCR API 모델 이름."""
+        if self.ocr_provider == "flm":
+            return os.getenv("FLM_OCR_MODEL", "qwen3vl-it:4b")
+        else:
+            return self.ocr_model_path.split("/")[-1] if self.ocr_model_path else "default"
 
 
 @lru_cache
