@@ -226,6 +226,7 @@ async def retry_processing(
     min_speakers: int | None = Query(None, ge=1, description="최소 화자 수 (ASR 재처리 시에만 사용)"),
     max_speakers: int | None = Query(None, ge=1, description="최대 화자 수 (ASR 재처리 시에만 사용)"),
     ocr_mode: str = Query("document", description="OCR 처리 모드 ('document' 또는 'portray')"),
+    ocr_accuracy_mode: str = Query("speed", description="OCR 정확도 모드 ('speed' 또는 'accuracy')"),
     accuracy_mode: str = Query("speed", description="전사 모드 ('speed' 또는 'accuracy')"),
     service: ContentService = Depends(get_service)
 ):
