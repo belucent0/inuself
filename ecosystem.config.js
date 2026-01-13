@@ -203,6 +203,36 @@ const apps = [
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     merge_logs: false,
     windowsHide: true,
+  },
+  {
+    name: 'llama-server',
+    cwd: 'C:\\timblo\\torch-test',
+    script: envVars.LLM_SERVER_PATH || 'llama-server',
+    args: [
+      '-m', envVars.LLM_SERVER_MODEL || 'models/Qwen3-4B-Instruct-2507-Q4_K_S.gguf',
+      '--port', envVars.LLM_SERVER_PORT || '8080',
+      '--ctx-size', envVars.LLM_CONTEXT_LENGTH || '15000',
+      '--n-gpu-layers', envVars.LLM_N_GPU_LAYERS || '99',
+      '--threads', envVars.LLM_N_THREADS || '8',
+    ],
+    env: {
+      // llama.cpp GPU 설정
+      CUDA_VISIBLE_DEVICES: '0',
+    },
+    autorestart: true,
+    max_restarts: 10,
+    min_uptime: '10s',
+    restart_delay: 10000,
+    kill_timeout: 15000,
+    instance: 1,
+    stop_exit_codes: [0, 1],
+    listen_timeout: 10000,
+    watch: false,
+    error_file: 'C:\\timblo\\torch-test\\logs\\llama-server-error.log',
+    out_file: 'C:\\timblo\\torch-test\\logs\\llama-server-out.log',
+    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    merge_logs: false,
+    windowsHide: true,
   }
 ];
 

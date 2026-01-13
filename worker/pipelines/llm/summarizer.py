@@ -8,6 +8,7 @@ import httpx
 
 from worker.config import get_settings
 from .llamacpp_client import LlamaServerClientError, request_chat_completion
+from .litellm_client import LiteLLMClientError, request_litellm_completion
 
 logger = logging.getLogger(__name__)
 
@@ -56,14 +57,16 @@ def summarize_transcription(text: str) -> tuple[str, str]:
 
     settings = get_settings()
     
-    # LLM 호출
-    if settings.llm_provider in ("llamacpp_server", "flm"):
-
+    # LLM 호출 - provider에 따라 분기
+    if settings.llm_provider == "litellm":
+        # LiteLLM 프록시를 통한 GPU/NPU 자동 라우팅
+        raw_response = _summarize_with_litellm(normalized, settings)
+    elif settings.llm_provider in ("llamacpp_server", "flm"):
         # "llamacpp_server"는 llama.cpp 서버를 명시적으로 사용
         # "flm"은 FastFlowLM 서버를 사용 (OpenAI 호환 API)
         raw_response = _summarize_with_llm(normalized, settings)
     else:
-        raise ValueError(f"지원하지 않는 LLM provider: {settings.llm_provider}. 'llamacpp_server', 또는 'flm'만 지원됩니다.")
+        raise ValueError(f"지원하지 않는 LLM provider: {settings.llm_provider}. 'litellm', 'llamacpp_server', 또는 'flm'만 지원됩니다.")
     
     # JSON 파싱 시도
     title, summary_md = _parse_json_response(raw_response, normalized)
@@ -375,6 +378,109 @@ def _summarize_with_llm(text: str, settings) -> str:
         return f"## 요약\n\n{combined_summaries}"
 
 
+def _summarize_with_litellm(text: str, settings) -> str:
+    """
+    LiteLLM 프록시를 통한 LLM 요약.
+    GPU/NPU 자원 상태에 따라 자동으로 라우팅됩니다.
+    """
+    logger.info("[LiteLLM Summarizer] Starting summarization via LiteLLM proxy")
+    
+    # 텍스트가 너무 길면 청킹 필요 (기존 로직 재사용)
+    actual_context = settings.llm_context_length
+    prompt_overhead = 2500
+    available_tokens = actual_context - settings.llm_max_tokens - prompt_overhead
+    chars_per_token = 2.5
+    max_chunk_chars = int(available_tokens * chars_per_token)
+    safe_max_chars = int(max_chunk_chars * 0.8)
+    
+    if len(text) <= safe_max_chars:
+        # 한 번에 처리 가능
+        return _summarize_chunk_with_litellm(text, 1, 1, settings)
+    
+    # 긴 텍스트는 청킹
+    logger.info("[LiteLLM Summarizer] Text is long, using chunked summarization")
+    safe_chunk_tokens = int(available_tokens * 0.6)
+    chunks = _split_text_into_chunks(text, max_tokens_per_chunk=safe_chunk_tokens, overlap_tokens=500)
+    logger.info("Split text into %d chunks", len(chunks))
+    
+    successful_chunks = []
+    failed_chunks = []
+    chunk_errors = []
+    
+    for i, chunk in enumerate(chunks, 1):
+        logger.info("Summarizing chunk %d/%d via LiteLLM...", i, len(chunks))
+        try:
+            chunk_summary = _summarize_chunk_with_litellm(chunk, i, len(chunks), settings)
+            successful_chunks.append({"chunk_index": i, "summary": chunk_summary})
+        except Exception as exc:
+            logger.error("Chunk %d summarization failed: %s", i, exc)
+            failed_chunks.append(i)
+            chunk_errors.append(f"Chunk {i}: {exc}")
+    
+    if not successful_chunks:
+        error_details = "; ".join(chunk_errors[:3])
+        raise RuntimeError(f"All chunk summarizations failed. Errors: {error_details}")
+    
+    # 통합 요약
+    combined_summaries = "\n\n".join([
+        f"## 부분 {cs['chunk_index']}\n\n{cs['summary']}"
+        for cs in successful_chunks
+    ])
+    
+    # 통합 요약 프롬프트
+    merge_prompt = """당신은 회의록을 요약하는 전문가입니다. 다음은 긴 회의 전사의 여러 부분에 대한 요약입니다. 
+모든 부분을 통합하여 하나의 포괄적인 요약을 작성하고 적절한 제목을 생성하세요.
+
+다음 JSON 형식으로 응답하세요:
+{{
+    "title": "제목",
+    "summary": "## 요약\\n\\n- 내용..."
+}}
+
+부분별 요약:
+{transcript}
+"""
+    
+    try:
+        prompt = merge_prompt.format(transcript=combined_summaries)
+        messages = [
+            {"role": "system", "content": settings.llm_system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        
+        raw_response = request_litellm_completion(settings=settings, messages=messages)
+        if not raw_response:
+            raise RuntimeError("LiteLLM merge summarization result is empty")
+        
+        return raw_response
+    except Exception as exc:
+        logger.warning("Merge summarization via LiteLLM failed: %s", exc)
+        return f"## 요약\n\n{combined_summaries}"
+
+
+def _summarize_chunk_with_litellm(chunk: str, chunk_index: int, total_chunks: int, settings) -> str:
+    """단일 청크를 LiteLLM 프록시로 요약합니다."""
+    prompt = DEFAULT_SUMMARY_PROMPT.format(transcript=chunk)
+    system_prompt = settings.llm_system_prompt.strip()
+    
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+    
+    try:
+        raw_response = request_litellm_completion(settings=settings, messages=messages)
+        raw_response = raw_response.strip()
+        if not raw_response:
+            raise RuntimeError("LiteLLM summarization result is empty")
+        logger.info("Chunk %d/%d via LiteLLM completed (length: %d chars)", chunk_index, total_chunks, len(raw_response))
+        return raw_response
+    except LiteLLMClientError as exc:
+        error_msg = f"LiteLLM summarization failed (chunk {chunk_index}/{total_chunks}): {exc}"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg) from exc
+
+
 def extract_title(summary_md: str, transcript_text: str) -> str:
     """
     요약 텍스트와 전사 텍스트를 기반으로 제목을 추출합니다.
@@ -406,7 +512,10 @@ def extract_title(summary_md: str, transcript_text: str) -> str:
     prompt = title_prompt.format(summary=summary_md[:2000])  # 요약의 앞부분만 사용
     
     try:
-        if settings.llm_provider in ("llamacpp_server", "flm"):
+        if settings.llm_provider == "litellm":
+            # LiteLLM 프록시를 통한 제목 추출
+            title = _extract_title_with_litellm(prompt, settings)
+        elif settings.llm_provider in ("llamacpp_server", "flm"):
             # "llamacpp_server"는 llama.cpp 서버를 명시적으로 사용
             # "flm"은 FastFlowLM 서버를 사용 (OpenAI 호환 API)
             title = _extract_title_with_llm(prompt, settings)
@@ -521,6 +630,40 @@ def _extract_title_with_llm(prompt: str, settings) -> str:
             if len(parts) > 1:
                 title = parts[1].strip()
         # 영어 프롬프트가 시작 부분에 있으면 제거
+        elif title_lower.startswith("the user") or title_lower.startswith("user wants"):
+            first_period = title.find(".")
+            if first_period > 0:
+                title = title[first_period + 1:].strip()
+            else:
+                first_newline = title.find("\n")
+                if first_newline > 0:
+                    title = title[first_newline + 1:].strip()
+    
+    return title
+
+
+def _extract_title_with_litellm(prompt: str, settings) -> str:
+    """LiteLLM 프록시를 통한 제목 추출."""
+    system_prompt = "당신은 회의록 요약에서 제목을 추출하는 도우미입니다. 한글로만 제목을 출력하세요. 다른 설명이나 영어는 절대 포함하지 마세요."
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt},
+    ]
+    
+    title = request_litellm_completion(
+        settings=settings,
+        messages=messages,
+        temperature=0.3,
+        max_tokens=100,
+    )
+    
+    # reasoning 필드가 포함되어 있을 수 있으므로 제거
+    title_lower = title.lower()
+    if "reasoning" in title_lower or "the user:" in title_lower or title_lower.startswith("the user"):
+        if "제목:" in title:
+            parts = title.split("제목:", 1)
+            if len(parts) > 1:
+                title = parts[1].strip()
         elif title_lower.startswith("the user") or title_lower.startswith("user wants"):
             first_period = title.find(".")
             if first_period > 0:

@@ -1,130 +1,201 @@
 """LLM 요약 서비스.
 
-worker/pipelines/llm/summarizer.py의 summarize_transcription()을 사용합니다.
-이 함수는 llama-server를 시작/종료하며, 청킹 및 통합 요약을 처리합니다.
+백엔드에서 LiteLLM 프록시를 직접 호출하여 LLM 요약을 수행합니다.
+LiteLLM이 GPU/NPU 자원 상태에 따라 자동으로 라우팅합니다.
 """
 from __future__ import annotations
 
-import sys
+import json
+import re
 import time
-from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.config import get_settings
+from ..core.config import get_settings, Settings
 from ..core.logging import logger
 from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
+from .litellm_client import request_litellm_completion, LiteLLMClientError
 
-# worker 모듈 접근을 위한 경로 추가
-_project_root = Path(__file__).parent.parent.parent.parent
-if str(_project_root) not in sys.path:
-    sys.path.insert(0, str(_project_root))
+
+DEFAULT_SUMMARY_PROMPT = """당신은 회의록을 요약하는 전문가입니다. 주어진 전사 내용을 분석하여 핵심만 추출한 요약을 생성하세요.
+
+⚠️ 중요: 절대 전사 내용을 그대로 반환하지 마세요. 반드시 요약만 생성하세요.
+
+1. (필수) title: 회의의 핵심 주제를 담은 제목을 생성하세요. 제목은 반드시 한글로 작성하세요.
+
+2. summary: 전사 내용을 요약하여 마크다운 형식으로 작성하세요.
+   - 모든 내용은 반드시 한글로 작성하세요
+   - `## 요약` 제목으로 시작하세요
+   - 핵심 내용만 불릿 포인트(-)로 간결하게 제공하세요
+   - `## 세부 사항` 섹션에 중요한 결정 사항이나 액션 아이템을 번호(1., 2., ...)로 나열하세요
+
+---
+
+다음 JSON 형식으로만 응답하세요:
+
+{{
+    "title": "회의 제목",
+    "summary": "## 요약\\n\\n- 핵심 내용 1\\n- 핵심 내용 2\\n\\n## 세부 사항\\n\\n1. 결정 사항 1"
+}}
+
+전사 내용:
+{transcript}
+"""
 
 
 def sanitize_summary_output(summary_md: str, original_text: str) -> str:
-    """요약 결과를 정리합니다.
-    
-    Args:
-        summary_md: LLM이 생성한 요약
-        original_text: 원본 텍스트
-        
-    Returns:
-        정리된 요약 텍스트
-    """
+    """요약 결과를 정리합니다."""
     if not summary_md:
         return ""
     
     # 프롬프트/지시사항 제거
     lines = summary_md.split('\n')
     cleaned_lines = []
-    skip_next = False
     
     for line in lines:
-        line = line.strip()
+        line_stripped = line.strip()
         
-        # 지시사항 라인 제거
-        if skip_next:
-            skip_next = False
-            continue
-            
         # 프롬프트 제거 패턴
-        if any(pattern in line for pattern in [
+        if any(pattern in line_stripped for pattern in [
             "당신은",
             "요약하십시오",
             "마크다운 형식으로",
             "프롬프트는 절대 포함하지",
-            "지시사항은 절대 포함하지",
             "## 지시사항",
             "## 프롬프트"
         ]):
-            if ":" in line:
-                skip_next = True
-                continue
+            continue
             
-        if line:
+        if line_stripped:
             cleaned_lines.append(line)
     
     return '\n'.join(cleaned_lines)
 
 
-def _call_llm_api(settings, text: str) -> str:
-    """llama.cpp 서버 API를 직접 호출합니다."""
-    import httpx
+def _parse_json_response(raw_response: str, transcript_text: str) -> tuple[str, str]:
+    """LLM 응답에서 JSON을 파싱하여 title과 summary를 추출합니다."""
+    # ```json ... ``` 블록 찾기
+    json_match = re.search(r'```json\s*(\{.*?\})\s*```', raw_response, re.DOTALL)
+    if json_match:
+        json_str = json_match.group(1)
+    else:
+        # ``` 없이 JSON만 있는 경우
+        start_idx = raw_response.find('{')
+        if start_idx >= 0:
+            # 중괄호 균형 맞추기
+            brace_count = 0
+            end_idx = start_idx
+            for i in range(start_idx, len(raw_response)):
+                if raw_response[i] == '{':
+                    brace_count += 1
+                elif raw_response[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = i
+                        break
+            
+            if end_idx > start_idx:
+                json_str = raw_response[start_idx:end_idx + 1]
+            else:
+                # JSON 파싱 실패
+                return _extract_title_fallback(raw_response, transcript_text), raw_response
+        else:
+            return _extract_title_fallback(raw_response, transcript_text), raw_response
     
-    messages = [
-        {"role": "system", "content": settings.llm_system_prompt},
-        {"role": "user", "content": f"다음 텍스트를 요약해 주세요:\n\n{text[:10000]}"}
-    ]
+    try:
+        data = json.loads(json_str)
+        title = str(data.get("title", "")).strip()
+        summary_md = str(data.get("summary", "")).strip()
+        
+        if not title:
+            title = _extract_title_fallback(summary_md or raw_response, transcript_text)
+        
+        if not summary_md:
+            summary_md = raw_response
+        
+        return title, summary_md
+        
+    except json.JSONDecodeError as e:
+        logger.warning("JSON parsing failed: %s", e)
+        return _extract_title_fallback(raw_response, transcript_text), raw_response
+
+
+def _extract_title_fallback(summary_md: str, transcript_text: str) -> str:
+    """제목 추출 실패 시 대체 방법으로 제목 생성."""
+    # 요약의 첫 번째 헤더 추출
+    lines = summary_md.split("\n")
+    for line in lines:
+        line = line.strip()
+        if line.startswith("# "):
+            title = line[2:].strip()
+            if title and len(title) <= 100:
+                return title
+        elif line.startswith("## "):
+            title = line[3:].strip()
+            if title and len(title) <= 100:
+                return title
     
-    base_url = settings.llm_api_base_url.rstrip("/")
-    model_name = settings.llm_api_model_name
-    url = f"{base_url}/v1/chat/completions"
+    # 전사 텍스트의 첫 문장 사용
+    first_sentence = transcript_text.split(".")[0].strip()
+    if first_sentence:
+        if len(first_sentence) > 100:
+            first_sentence = first_sentence[:97] + "..."
+        return first_sentence
     
-    payload = {
-        "model": model_name,
-        "messages": messages,
-        "temperature": settings.llm_temperature,
-        "max_tokens": settings.llm_max_tokens
-    }
-    
-    with httpx.Client(timeout=300.0) as client:
-        response = client.post(url, json=payload)
-        response.raise_for_status()
-        result = response.json()
-    
-    choices = result.get("choices")
-    if not choices:
-        return ""
-    
-    message = choices[0].get("message") or {}
-    return message.get("content", "").strip()
+    return "회의록"
 
 
 def summarize_transcription(text: str) -> tuple[str, str]:
     """전사 텍스트를 요약합니다.
     
-    worker/pipelines/llm/summarizer.py의 summarize_transcription()을 사용합니다.
-    이 함수는 llama-server를 시작/종료하며, 청킹 및 통합 요약을 처리합니다.
+    LiteLLM 프록시를 통해 GPU/NPU로 자동 라우팅됩니다.
     
     Args:
         text: 요약할 텍스트
         
     Returns:
-        (제목, 요약된 텍스트) - worker 모듈과 동일한 순서
+        (제목, 요약된 텍스트) 튜플
     """
+    settings = get_settings()
+    
+    normalized = text.strip()
+    if not normalized:
+        raise ValueError("Transcription text to summarize is empty.")
+    
+    # 텍스트가 너무 길면 앞부분만 사용 (청킹은 향후 구현)
+    max_chars = 30000  # 약 10000 토큰
+    if len(normalized) > max_chars:
+        logger.warning("Text too long (%d chars), truncating to %d chars", len(normalized), max_chars)
+        normalized = normalized[:max_chars]
+    
+    prompt = DEFAULT_SUMMARY_PROMPT.format(transcript=normalized)
+    messages = [
+        {"role": "system", "content": settings.llm_system_prompt},
+        {"role": "user", "content": prompt},
+    ]
+    
     try:
-        # worker 모듈의 summarizer 사용 (llama-server 시작/종료 포함)
-        from worker.pipelines.llm.summarizer import summarize_transcription as worker_summarize
+        if settings.llm_provider == "litellm":
+            raw_response = request_litellm_completion(
+                settings=settings,
+                messages=messages,
+            )
+        else:
+            # 기존 provider 지원 (fallback)
+            logger.warning("Non-litellm provider '%s' not supported in backend, use litellm", settings.llm_provider)
+            raise ValueError(f"Backend only supports 'litellm' provider, got: {settings.llm_provider}")
         
-        # worker의 summarize_transcription은 (title, summary_md)를 반환
-        title, summary_md = worker_summarize(text)
+        title, summary_md = _parse_json_response(raw_response, normalized)
+        summary_md = sanitize_summary_output(summary_md, normalized)
         
         return title, summary_md
-    except Exception as exc:
-        return f"요약 실패: {str(exc)}", ""
+        
+    except LiteLLMClientError as exc:
+        logger.error("LLM summarization failed: %s", exc)
+        raise RuntimeError(f"LLM summarization failed: {exc}") from exc
 
 
 class LlmSummaryService:

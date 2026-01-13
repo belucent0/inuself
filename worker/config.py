@@ -80,6 +80,22 @@ class WorkerSettings(BaseSettings):
     llm_server_gpu_layers: int = Field(99, validation_alias="LLM_SERVER_GPU_LAYERS")
     llm_server_batch_size: int = Field(512, validation_alias="LLM_SERVER_BATCH_SIZE")
 
+    # ========================================
+    # LiteLLM 프록시 설정
+    # ========================================
+    litellm_base_url: str = Field(
+        "http://localhost:4000", 
+        validation_alias="LITELLM_BASE_URL"
+    )
+    litellm_api_key: str = Field(
+        "sk-litellm-master", 
+        validation_alias="LITELLM_API_KEY"
+    )
+    litellm_model: str = Field(
+        "qwen3-4b", 
+        validation_alias="LITELLM_MODEL"
+    )
+
     @property
     def llm_api_base_url(self) -> str:
         """LLM API base URL (LLM 요약용)."""

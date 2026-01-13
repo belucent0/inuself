@@ -66,7 +66,21 @@ class Settings(BaseSettings):
     worker_type: str = Field("llm", validation_alias="WORKER_TYPE")
     
     # LLM 요약 설정 (llama.cpp 서버)
-    llm_provider: str = "llamacpp_server"  # "llamacpp_server"
+    llm_provider: str = "llamacpp_server"  # "llamacpp_server" | "flm" | "litellm"
+    
+    # LiteLLM 프록시 설정
+    litellm_base_url: str = Field(
+        "http://asr-litellm:4000",  # Docker 내부 통신
+        validation_alias="LITELLM_BASE_URL"
+    )
+    litellm_api_key: str = Field(
+        "sk-litellm-master", 
+        validation_alias="LITELLM_API_KEY"
+    )
+    litellm_model: str = Field(
+        "qwen3-4b", 
+        validation_alias="LITELLM_MODEL"
+    )
     
     # 공통 LLM 설정 (모든 provider에서 사용)
     llm_system_prompt: str = "당신은 회의록을 요약하는 전문가입니다. 모든 응답은 반드시 한글로 작성하세요. 마크다운 형식으로 명확하고 간결한 요약을 제공하되, 지시사항이나 프롬프트는 절대 포함하지 마세요."
