@@ -20,7 +20,7 @@ class LlamaServerClientError(RuntimeError):
 
 
 @contextmanager
-def _llama_server_process(settings: Settings, ocr_provider: str | None = None):
+def _llama_server_process(settings: Settings, ocr_provider: str | None = None, port: int | None = None):
     """
     llama-server를 subprocess로 시작하고 종료하는 컨텍스트 매니저.
     whisper-cli.exe처럼 요청마다 시작하고 종료함.
@@ -31,6 +31,7 @@ def _llama_server_process(settings: Settings, ocr_provider: str | None = None):
     Args:
         settings: WorkerSettings 객체
         ocr_provider: OCR provider (None이면 llm_provider 확인, "llamacpp_server"면 서버 시작)
+        port: 사용할 포트 번호 (None이면 설정값 사용)
     """
     # OCR provider가 지정된 경우 OCR provider 확인, 아니면 LLM provider 확인
     # llamacpp_server provider가 아니면 서버를 시작하지 않음
@@ -97,7 +98,7 @@ def _llama_server_process(settings: Settings, ocr_provider: str | None = None):
         '--model', model_path,
         '--n-gpu-layers', str(settings.llm_server_gpu_layers),
         '--host', '0.0.0.0',
-        '--port', str(settings.llm_server_port),
+        '--port', str(port) if port else str(settings.llm_server_port),
         '--ctx-size', str(settings.llm_context_length),  # LLM_CONTEXT_LENGTH 사용
         '--threads', str(settings.llm_server_threads),
         '--batch-size', str(settings.llm_server_batch_size),
@@ -136,7 +137,7 @@ def _llama_server_process(settings: Settings, ocr_provider: str | None = None):
         creationflags=creation_flags if sys.platform == "win32" else 0,
     )
     
-    base_url = f"http://localhost:{settings.llm_server_port}"
+    base_url = f"http://localhost:{port if port else settings.llm_server_port}"
     # llama.cpp 서버는 /v1/models 엔드포인트를 사용하여 헬스체크
     health_url = f"{base_url}/v1/models"
     
@@ -190,12 +191,14 @@ def _llama_server_process(settings: Settings, ocr_provider: str | None = None):
         logger.info("[LLM] Stopping llama-server...")
         try:
             if sys.platform == "win32":
-                # Windows에서는 프로세스 그룹 전체를 종료
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                # Windows에서는 taskkill을 사용하여 프로세스 트리 전체를 강제 종료
+                # /F: Forcefully terminate
+                # /T: Terminate child processes (process tree)
+                # /PID: Process ID
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], 
+                             stdout=subprocess.DEVNULL, 
+                             stderr=subprocess.DEVNULL,
+                             check=False)
             else:
                 proc.terminate()
                 try:

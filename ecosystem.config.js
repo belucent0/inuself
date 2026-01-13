@@ -162,10 +162,11 @@ const apps = [
 
       // LLM API 서버 설정 (기본 모드에서 Qwen3-VL API 사용)
       LLM_BASE_URL: envVars.LLM_BASE_URL || 'http://localhost:8080',
-      LLM_MODEL_NAME: envVars.LLM_MODEL_NAME || 'Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf',
+      LLM_MODEL_NAME: 'models/Qwen3-VL-8B-Instruct/Qwen3-VL-8B-Instruct-Q8_0.gguf',
 
       // llama_cpp 전용 설정 (OCR 비전 모델 분리)
-      OCR_SERVER_MODEL: envVars.OCR_SERVER_MODEL || '',
+      OCR_SERVER_MODEL: 'models/Qwen3-VL-8B-Instruct/Qwen3-VL-8B-Instruct-Q8_0.gguf',
+      OCR_SERVER_MMPROJ: 'models/Qwen3-VL-8B-Instruct/mmproj-F32.gguf',
     },
     autorestart: true,
     max_restarts: 10,

@@ -227,7 +227,11 @@ class OcrVisionProcessor:
                 api_model_name = os.getenv("FLM_OCR_MODEL", "qwen3vl-it:4b")
                 logger.info(f"[OCR Vision] Using FLM provider: url={api_base_url}, model={api_model_name}")
             else:
-                api_base_url = f"http://localhost:{self.settings.llm_server_port}"
+                if server_process and current_ocr_provider == "llamacpp_server":
+                    api_base_url = f"http://localhost:{self.settings.ocr_server_port}"
+                else:
+                    api_base_url = f"http://localhost:{self.settings.llm_server_port}"
+                
                 api_model_name = self.settings.llm_model_name or "default"
                 logger.info(f"[OCR Vision] Using llamacpp_server provider: url={api_base_url}, model={api_model_name}")
             
@@ -382,82 +386,92 @@ class OcrVisionProcessor:
             }
         """
         from worker.pipelines.llm.llamacpp_client import _llama_server_process
+        from worker.utils.semaphore import WorkerSemaphore
         
         logger.info(f"Processing {len(images)} images for OCR")
         
-        page_texts: list[str] = []
-        ocr_metadata: dict[str, Any] = {
-            "page_count": len(images),
-            "processing_mode": ocr_mode,
-            "pages": []
-        }
-        
-        # OCR provider에 따라 서버 시작 (llamacpp_server일 때만)
-        from contextlib import nullcontext
-        from worker.pipelines.llm.llamacpp_client import _llama_server_process
         
         # ocr_provider 오버라이드 확인
         current_ocr_provider = self._ocr_provider_override if self._ocr_provider_override is not None else self.settings.ocr_provider
         logger.info(f"[OCR Vision] process_images: ocr_provider_override={self._ocr_provider_override}, settings.ocr_provider={self.settings.ocr_provider}, current_ocr_provider={current_ocr_provider}")
-        
-        if current_ocr_provider == "llamacpp_server":
-            # OCR에서 llamacpp_server 사용 시 ocr_provider 파라미터 전달
-            server_context = _llama_server_process(self.settings, ocr_provider=current_ocr_provider)
-        else:
-            # FLM 등 외부 서버 사용 시 서버 시작 불필요
-            server_context = nullcontext(None)
-        
-        with server_context as server_process:
-            for idx, image in enumerate(images):
-                page_num = idx + 1
-                logger.info(f"Processing page {page_num}/{len(images)}")
-                
-                try:
-                    text = self.process_image(image, ocr_mode=ocr_mode, server_process=server_process)
-                    page_texts.append(text)
+
+        # OCR provider에 따라 세마포어 키 결정
+        # llamacpp_server (GPU 모드) -> gpu, flm (NPU 모드, speed) -> npu
+        semaphore_key = "gpu" if current_ocr_provider == "llamacpp_server" else "npu"
+        logger.info(f"[OCR Vision] Using semaphore: worker:{semaphore_key}:active for provider={current_ocr_provider}")
+
+        # OCR 작업 중 해당 리소스를 '사용 중'으로 표시하여 채팅 트래픽을 우회 유도
+        with WorkerSemaphore(semaphore_key):
+            page_texts: list[str] = []
+            ocr_metadata: dict[str, Any] = {
+                "page_count": len(images),
+                "processing_mode": ocr_mode,
+                "pages": []
+            }
+            
+            # OCR provider에 따라 서버 시작 (llamacpp_server일 때만)
+            from contextlib import nullcontext
+            from worker.pipelines.llm.llamacpp_client import _llama_server_process
+            
+            if current_ocr_provider == "llamacpp_server":
+                # OCR에서 llamacpp_server 사용 시 ocr_provider 파라미터 전달 및 OCR 전용 포트 사용
+                server_context = _llama_server_process(self.settings, ocr_provider=current_ocr_provider, port=self.settings.ocr_server_port)
+            else:
+                # FLM 등 외부 서버 사용 시 서버 시작 불필요
+                server_context = nullcontext(None)
+            
+            with server_context as server_process:
+                for idx, image in enumerate(images):
+                    page_num = idx + 1
+                    logger.info(f"Processing page {page_num}/{len(images)}")
                     
-                    ocr_metadata["pages"].append({
-                        "page_number": page_num,
-                        "text_length": len(text),
-                        "status": "success"
-                    })
-                    logger.info(f"Page {page_num} completed ({len(text)} chars)")
-                    
-                except Exception as e:
-                    logger.error(f"Failed to process page {page_num}: {e}")
-                    page_texts.append("")
-                    ocr_metadata["pages"].append({
-                        "page_number": page_num,
-                        "status": "failed",
-                        "error": str(e)
-                    })
-                    
-                    # 첫 페이지 실패는 치명적
-                    if idx == 0:
-                        raise RuntimeError(f"OCR failed for first page: {e}") from e
-                
-                finally:
                     try:
-                        image.close()
-                    except Exception:
-                        pass
-        
-        # 텍스트 결합
-        if len(page_texts) > 1:
-            combined_texts = []
-            for idx, text in enumerate(page_texts, 1):
-                if text.strip():
-                    combined_texts.append(f"## 페이지 {idx}\n\n{text}")
-            ocr_text = "\n\n---\n\n".join(combined_texts)
-        else:
-            ocr_text = page_texts[0] if page_texts else ""
-        
-        # 모든 페이지 실패 체크
-        if not ocr_text.strip():
-            failed_pages = [p for p in ocr_metadata["pages"] if p.get("status") == "failed"]
-            if failed_pages:
-                errors = [p.get("error", "Unknown") for p in failed_pages[:3]]
-                raise RuntimeError(f"All pages OCR failed: {'; '.join(errors)}")
+                        text = self.process_image(image, ocr_mode=ocr_mode, server_process=server_process)
+                        page_texts.append(text)
+                        
+                        ocr_metadata["pages"].append({
+                            "page_number": page_num,
+                            "text_length": len(text),
+                            "status": "success"
+                        })
+                        logger.info(f"Page {page_num} completed ({len(text)} chars)")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to process page {page_num}: {e}")
+                        page_texts.append("")
+                        ocr_metadata["pages"].append({
+                            "page_number": page_num,
+                            "status": "failed",
+                            "error": str(e)
+                        })
+                        
+                        # 첫 페이지 실패는 치명적
+                        if idx == 0:
+                            raise RuntimeError(f"OCR failed for first page: {e}") from e
+                    
+                    finally:
+                        try:
+                            image.close()
+                        except Exception:
+                            pass
+            
+            # 텍스트 결합
+            if len(page_texts) > 1:
+                combined_texts = []
+                for idx, text in enumerate(page_texts, 1):
+                    if text.strip():
+                        combined_texts.append(f"## 페이지 {idx}\n\n{text}")
+                ocr_text = "\n\n---\n\n".join(combined_texts)
+            else:
+                ocr_text = page_texts[0] if page_texts else ""
+            
+            # 모든 페이지 실패 체크
+            if not ocr_text.strip():
+                failed_pages = [p for p in ocr_metadata["pages"] if p.get("status") == "failed"]
+                if failed_pages:
+                    errors = [p.get("error", "Unknown") for p in failed_pages[:3]]
+                    raise RuntimeError(f"All pages OCR failed: {'; '.join(errors)}")
+
         
         return {
             "ocr_text": ocr_text,

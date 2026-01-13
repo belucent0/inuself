@@ -143,6 +143,7 @@ class WorkerSettings(BaseSettings):
     # ========================================
     # OCR 설정
     # ========================================
+    ocr_server_port: int = Field(8082, validation_alias="OCR_SERVER_PORT")
     ocr_provider: str = Field("flm", validation_alias="OCR_PROVIDER")  # OCR 전용 provider (기본값: flm, NPU 지원)
     ocr_model_path: str = Field("", validation_alias="OCR_SERVER_MODEL")
     ocr_server_mmproj: str = Field("", validation_alias="OCR_SERVER_MMPROJ")
