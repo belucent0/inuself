@@ -37,6 +37,10 @@ const WORKER_PYTHONW_PATH = `${WORKER_VENV_PATH}\\Scripts\\pythonw.exe`;
 // pythonw.exe를 사용하여 콘솔 창이 나타나지 않도록 함
 const CELERY_PATH = WORKER_PYTHONW_PATH;
 
+// ROCm 환경 경로 (Audio Gateway용)
+const ROCM_VENV_PATH = 'C:\\timblo\\torch-test\\rocm_env';
+const ROCM_PYTHON_PATH = `${ROCM_VENV_PATH}\\Scripts\\python.exe`;
+
 const apps = [
   // ========================================
   // 통합 워커 (V5): ASR, LLM, OCR 모든 작업 처리
@@ -61,11 +65,15 @@ const apps = [
       WORKER_TYPE: 'unified',
       SEQUENTIAL_PROCESSING: envVars.SEQUENTIAL_PROCESSING || 'true',
 
+      // Architecture V4: 모든 AI 요청은 LiteLLM/Audio Gateway를 통해 라우팅
       // LiteLLM 설정 (V4 표준)
       LLM_PROVIDER: 'litellm',
-      LITELLM_BASE_URL: envVars.LITELLM_BASE_URL || 'http://localhost:4000',
+      LITELLM_BASE_URL: 'http://127.0.0.1:4000',
       LITELLM_API_KEY: envVars.LITELLM_API_KEY || 'sk-litellm-master',
       LITELLM_MODEL: envVars.LITELLM_MODEL || 'qwen3-4b',
+
+      // Audio Gateway 설정 (ASR/Diarization API)
+      AUDIO_GATEWAY_URL: 'http://127.0.0.1:8001',
 
       // LLM 공통 설정
       LLM_SYSTEM_PROMPT: envVars.LLM_SYSTEM_PROMPT || '',
@@ -89,59 +97,77 @@ const apps = [
     windowsHide: true,
   },
   // ========================================
-  // FLM 서버 (NPU)
+  // Provider Manager (Host Process Manager)
   // ========================================
   {
-    name: 'flm-server',
+    name: 'provider-manager',
     cwd: 'C:\\timblo\\torch-test',
-    script: 'flm',
-    args: ['serve', envVars.FLM_LLM_MODEL || 'qwen3-it:4b', '--asr', '1', '--port', '11434', '--ctx-len', '4096'],
+    script: 'infra/provider_manager/main.py',
+    interpreter: BACKEND_PYTHONW_PATH,
+    args: [],
     env: {
+      PYTHONUNBUFFERED: '1',
+      REDIS_URL: envVars.REDIS_URL || 'redis://localhost:6379/0',
+
+      // FLM 설정 (Manager가 사용)
       FLM_LLM_MODEL: envVars.FLM_LLM_MODEL || 'qwen3-it:4b',
+      FLM_PORT: '11434',
+
+      // Llama 서버 설정 (Manager가 사용)
+      LLM_SERVER_PATH: envVars.LLM_SERVER_PATH || 'llama-server',
+      LLM_SERVER_MODEL: envVars.LLM_SERVER_MODEL || 'models/Qwen3-4B-Instruct-2507-Q4_K_S.gguf',
+      LLM_SERVER_PORT: envVars.LLM_SERVER_PORT || '8080',
+      LLM_CONTEXT_LENGTH: envVars.LLM_CONTEXT_LENGTH || '15000',
+      LLM_N_GPU_LAYERS: envVars.LLM_N_GPU_LAYERS || '99',
+      LLM_N_THREADS: envVars.LLM_N_THREADS || '8',
     },
     autorestart: true,
     max_restarts: 10,
     min_uptime: '10s',
-    restart_delay: 10000,
-    kill_timeout: 15000,
-    instance: 1,
-    stop_exit_codes: [0, 1],
-    listen_timeout: 10000,
+    restart_delay: 4000,
     watch: false,
-    error_file: 'C:\\timblo\\torch-test\\logs\\flm-server-error.log',
-    out_file: 'C:\\timblo\\torch-test\\logs\\flm-server-out.log',
+    error_file: 'C:\\timblo\\torch-test\\logs\\provider-manager-error.log',
+    out_file: 'C:\\timblo\\torch-test\\logs\\provider-manager-out.log',
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     merge_logs: false,
     windowsHide: true,
   },
   // ========================================
-  // Llama 서버 (GPU - 채팅용)
+  // Audio Gateway (GPU Whisper + Diarization)
+  // Architecture V4: GPU 기반 ASR 및 화자분리 서비스
+  // ROCm 환경에서 실행 (rocm_env 가상환경)
   // ========================================
   {
-    name: 'llama-server',
+    name: 'audio-gateway',
     cwd: 'C:\\timblo\\torch-test',
-    script: envVars.LLM_SERVER_PATH || 'llama-server',
-    args: [
-      '-m', envVars.LLM_SERVER_MODEL || 'models/Qwen3-4B-Instruct-2507-Q4_K_S.gguf',
-      '--port', envVars.LLM_SERVER_PORT || '8080',
-      '--ctx-size', envVars.LLM_CONTEXT_LENGTH || '15000',
-      '--n-gpu-layers', envVars.LLM_N_GPU_LAYERS || '99',
-      '--threads', envVars.LLM_N_THREADS || '8',
-    ],
+    script: ROCM_PYTHON_PATH,
+    args: ['-m', 'uvicorn', 'audio_gateway.main:app', '--host', '0.0.0.0', '--port', '8001'],
     env: {
+      PYTHONUNBUFFERED: '1',
+      // Audio Gateway 설정
+      AUDIO_GATEWAY_HOST: '0.0.0.0',
+      AUDIO_GATEWAY_PORT: '8001',
+      // Whisper 모델 설정 (정확도 모드: v3 사용)
+      WHISPER_MODEL: 'openai/whisper-large-v3',
+      WHISPER_DEVICE: '0',
+      // Diarization 모델 설정
+      DIARIZATION_MODEL: 'pyannote/speaker-diarization-community-1',
+      CLUSTERING_THRESHOLD: '0.45',
+      // HuggingFace 토큰 (pyannote 모델 접근용)
+      HF_TOKEN: envVars.HF_TOKEN || '',
+      // 임시 디렉토리
+      TEMP_DIR: 'C:\\timblo\\torch-test\\data\\temp\\audio_gateway',
+      // ROCm/CUDA 설정
       CUDA_VISIBLE_DEVICES: '0',
+      HIP_VISIBLE_DEVICES: '0',
     },
     autorestart: true,
     max_restarts: 10,
-    min_uptime: '10s',
-    restart_delay: 10000,
-    kill_timeout: 15000,
-    instance: 1,
-    stop_exit_codes: [0, 1],
-    listen_timeout: 10000,
+    min_uptime: '30s',  // 모델 로딩 시간 고려
+    restart_delay: 10000,  // 재시작 전 10초 대기 (GPU 메모리 해제 시간)
     watch: false,
-    error_file: 'C:\\timblo\\torch-test\\logs\\llama-server-error.log',
-    out_file: 'C:\\timblo\\torch-test\\logs\\llama-server-out.log',
+    error_file: 'C:\\timblo\\torch-test\\logs\\audio-gateway-error.log',
+    out_file: 'C:\\timblo\\torch-test\\logs\\audio-gateway-out.log',
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     merge_logs: false,
     windowsHide: true,

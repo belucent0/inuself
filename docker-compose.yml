@@ -104,9 +104,6 @@ services:
       - LITELLM_BASE_URL=http://asr-litellm:4000
       - LITELLM_API_KEY=sk-litellm-master
       - LITELLM_MODEL=qwen3-4b
-      # 기존 FLM 설정 (호환성)
-      - FLM_BASE_URL=${FLM_BASE_URL:-http://host.docker.internal:11434}
-      - FLM_LLM_MODEL=${FLM_LLM_MODEL:-qwen3-it:4b}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
@@ -167,7 +164,7 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: asr-litellm
-    command: [ "--config", "/app/config.yaml", "--port", "4000" ]
+    entrypoint: [ "sh", "-c", "pip install redis && python3 /app/custom/run_proxy.py" ]
     ports:
       - "4000:4000"
     volumes:
@@ -185,9 +182,9 @@ services:
       - redis
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:4000/health" ]
+      test: [ "CMD", "python3", "-c", "import urllib.request; req = urllib.request.Request('http://localhost:4000/health'); req.add_header('Authorization', 'Bearer sk-litellm-master'); response = urllib.request.urlopen(req); assert response.getcode() == 200" ]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
 
 volumes:

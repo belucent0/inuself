@@ -1,8 +1,24 @@
 model_list:
-  # Prometheus 기반 라우팅 모델
+  # Prometheus 기반 라우팅 모델 (Chat)
   - model_name: "qwen3-4b"
     litellm_params:
       model: "prometheus-router/qwen3-4b"
+      stream: true
+
+  # Audio Models - OpenAI 호환 모드로 Audio Gateway 직접 연결
+  # LiteLLM transcription은 커스텀 프로바이더 미지원, OpenAI 호환으로 우회
+  # 주의: OpenAI SDK가 /audio/transcriptions를 호출하므로 api_base에 /v1 포함 필요
+  - model_name: "whisper-large-v3"
+    litellm_params:
+      model: "openai/whisper-large-v3"
+      api_base: "http://host.docker.internal:8001/v1"
+      api_key: "dummy-key"
+
+  - model_name: "whisper-turbo"
+    litellm_params:
+      model: "openai/whisper-turbo"
+      api_base: "http://host.docker.internal:8001/v1"
+      api_key: "dummy-key"
 
 litellm_settings:
   custom_provider_map:
