@@ -17,10 +17,27 @@ from .websocket_helper import process_llm_background
 router = APIRouter(prefix="/ws", tags=["websocket"])
 
 
-@router.get("/test")
+@router.get("/ws/test")
 async def test_router():
     """라우터 테스트용 엔드포인트"""
     return {"status": "ok", "message": "WebSocket router is working"}
+
+
+async def _send_provider_control(action: str, provider: str):
+    """Provider Manager에게 제어 메시지 전송."""
+    try:
+        import redis.asyncio as redis
+        settings = get_settings()
+        r = redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+        message = {
+            "action": action,
+            "provider": provider
+        }
+        await r.publish("provider.control", json.dumps(message))
+        await r.close()
+        logger.info(f"[WebSocket] Sent provider signal: {action} {provider}")
+    except Exception as e:
+        logger.error(f"[WebSocket] Failed to send provider signal: {e}")
 
 
 @router.get("/debug-headers")
@@ -85,6 +102,9 @@ async def websocket_file_progress_global(
             "message": "Global File Progress Channel",
         })
 
+        # 채팅/요약용 모델 준비 (Llama) - 온디맨드 시작
+        asyncio.create_task(_send_provider_control("start", "llama"))
+
         while True:
             data = await websocket.receive_text()
             if data == "ping":
@@ -123,44 +143,50 @@ async def websocket_asr_stream(
     await websocket.accept()
     
     settings = get_settings()
-    flm_base_url = os.getenv("FLM_BASE_URL", "http://127.0.0.1:11434")
-    flm_url = f"{flm_base_url}/v1/audio/transcriptions"
+    # LiteLLM Gateway URL 사용 (architecture v4: One Gateway)
+    litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
+    # LiteLLM endpoint (OpenAI compatible)
+    transcribe_url = f"{litellm_base_url}/v1/audio/transcriptions"
+    api_key = os.getenv("LITELLM_API_KEY", "sk-litellm-master")
     
-    # FLM 서버 사용 가능 여부 확인
+    # LiteLLM Gateway 연결 확인
     try:
         import socket
         from urllib.parse import urlparse
-        parsed = urlparse(flm_base_url)
+        parsed = urlparse(litellm_base_url)
         host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or 11434
+        port = parsed.port or 4000
         
-        logger.info(f"[WebSocket ASR] Checking FLM server: {flm_base_url} (host={host}, port={port})")
+        logger.info(f"[WebSocket ASR] Checking LiteLLM Gateway: {litellm_base_url} (host={host}, port={port})")
         
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(2.0)
             result = s.connect_ex((host, port))
             if result != 0:
-                logger.error(f"[WebSocket ASR] FLM server connection failed: result={result}")
+                logger.error(f"[WebSocket ASR] LiteLLM Gateway connection failed: result={result}")
                 await websocket.send_json({
                     "type": "error",
-                    "message": "FLM 서버에 연결할 수 없습니다. FLM 서버가 실행 중인지 확인해주세요.",
+                    "message": "AI Gateway(LiteLLM)에 연결할 수 없습니다. 서비스 상태를 확인해주세요.",
                 })
-                await websocket.close(code=1011, reason="FLM server unavailable")
+                await websocket.close(code=1011, reason="Gateway unavailable")
                 return
         
-        logger.info(f"[WebSocket ASR] FLM server check passed, sending ready message")
+        logger.info(f"[WebSocket ASR] Gateway check passed, sending ready message")
         
         await websocket.send_json({
             "type": "ready",
             "status": "ready",
-            "message": "실시간 ASR 서버가 준비되었습니다.",
+            "message": "실시간 ASR(Gateway)가 준비되었습니다.",
         })
+        
+        # ASR용 모델 준비 (FLM) - 온디맨드 시작
+        asyncio.create_task(_send_provider_control("start", "flm"))
     except Exception as e:
         await websocket.send_json({
             "type": "error",
-            "message": f"서버 초기화 오류: {str(e)}",
+            "message": f"Gateway 초기화 오류: {str(e)}",
         })
-        await websocket.close(code=1011, reason="Server initialization error")
+        await websocket.close(code=1011, reason="Gateway initialization error")
         return
     
     # 오디오 데이터 버퍼
@@ -198,19 +224,19 @@ async def websocket_asr_stream(
                 lambda: subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             )
             
-            # FLM 서버에 전사 요청
+            # Gateway에 전사 요청 (Unified Routing)
             with open(wav_path, "rb") as f:
                 audio_file_data = f.read()
                 
             files = {"file": ("audio.wav", audio_file_data, "audio/wav")}
             data = {
-                "model": "whisper-v3",
+                "model": "audio-router",  # Routing Model
                 "language": lang,
                 "response_format": "verbose_json",
             }
             
-            async with httpx.AsyncClient(timeout=30.0, headers={"Authorization": "Bearer flm"}) as client:
-                response = await client.post(flm_url, files=files, data=data)
+            async with httpx.AsyncClient(timeout=30.0, headers={"Authorization": f"Bearer {api_key}"}) as client:
+                response = await client.post(transcribe_url, files=files, data=data)
                 
                 if response.status_code == 200:
                     result = response.json()
@@ -297,8 +323,9 @@ async def websocket_asr_stream(
                                     logger.info(f"[WebSocket ASR] Sent commit: segment_id={segment_id}, text_length={len(text)}")
                                     
                                     # LLM 후처리 (백그라운드): 언어 필터링 + 문법 교정
+                                    # LLM 후처리 (백그라운드): 언어 필터링 + 문법 교정 (LiteLLM 사용)
                                     asyncio.create_task(
-                                        process_llm_background(websocket, text, segment_id, flm_base_url)
+                                        process_llm_background(websocket, text, segment_id, litellm_base_url)
                                     )
                                 
                                 # 전체 텍스트 버퍼 업데이트
@@ -352,27 +379,27 @@ async def websocket_asr_stream(
                             )
                             logger.info(f"[WebSocket ASR] ffmpeg completed: wav_path={wav_path}")
                             
-                            # FLM 서버에 전사 요청
+                            # Gateway에 전사 요청
                             await websocket.send_json({
                                 "type": "status",
-                                "message": "전사 중...",
+                                "message": "전사 중(Gateway)...",
                             })
                             
                             try:
                                 with open(wav_path, "rb") as f:
                                     audio_file_data = f.read()
                                     
-                                logger.info(f"[WebSocket ASR] Sending to FLM: wav_size={len(audio_file_data)} bytes")
+                                logger.info(f"[WebSocket ASR] Sending to Gateway: wav_size={len(audio_file_data)} bytes")
                                     
                                 files = {"file": ("audio.wav", audio_file_data, "audio/wav")}
                                 data = {
-                                    "model": "whisper-v3",
+                                    "model": "audio-router",
                                     "language": lang,
                                     "response_format": "verbose_json",
                                 }
                                 
-                                async with httpx.AsyncClient(timeout=120.0, headers={"Authorization": "Bearer flm"}) as client:
-                                    response = await client.post(flm_url, files=files, data=data)
+                                async with httpx.AsyncClient(timeout=120.0, headers={"Authorization": f"Bearer {api_key}"}) as client:
+                                    response = await client.post(transcribe_url, files=files, data=data)
                                 
                                 logger.info(f"[WebSocket ASR] FLM response: status={response.status_code}")
                                 
@@ -430,10 +457,13 @@ async def websocket_asr_stream(
                     logger.error(f"[WebSocket ASR] JSON parsing error: {e}")
                 except Exception as e:
                     logger.error(f"[WebSocket ASR] Message processing error: {e}")
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": f"메시지 처리 오류: {str(e)}",
-                    })
+                    try:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"메시지 처리 오류: {str(e)}",
+                        })
+                    except RuntimeError:
+                        logger.warning("[WebSocket ASR] Cannot send error message: connection closed")
     
     except WebSocketDisconnect:
         logger.info(f"[WebSocket ASR] Client disconnected: session_id={session_id}")
@@ -444,8 +474,8 @@ async def websocket_asr_stream(
                 "type": "error",
                 "message": f"서버 오류: {str(exc)}",
             })
-        except:
-            pass
+        except RuntimeError:
+            logger.warning("[WebSocket ASR] Cannot send server error message: connection closed")
     finally:
         # 연결 종료
         logger.info(f"[WebSocket ASR] Connection cleaned up: session_id={session_id}")

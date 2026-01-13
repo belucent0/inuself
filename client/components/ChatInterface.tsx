@@ -41,15 +41,22 @@ export function ChatInterface() {
         try {
             // Next.js 개발 서버의 rewrites는 스트리밍을 버퍼링하므로
             // localhost에서는 백엔드로 직접 요청하여 스트리밍 보장
-            const apiUrl = typeof window !== 'undefined' && 
-                          (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-                          ? 'http://localhost:8000/api/chat'
-                          : '/api/chat'
-            
+            // 프로덕션 도메인(asr.timblo.io)에서는 Nginx를 통해 직접 요청
+            const apiUrl = typeof window !== 'undefined' &&
+                (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                ? 'http://localhost:8000/api/chat'
+                : `${window.location.origin}/api/chat`
+
+            // Simple short ID generator (CUID-like behavior but lightweight)
+            const shortId = Math.random().toString(36).substring(2, 10);
+            const traceId = `trc_${shortId}`;
+            console.log(`[Chat] Sending request with Trace-ID: ${traceId}`);
+
             const response = await fetch(apiUrl, {
-                method: 'POST',
+                method: "POST",
                 headers: {
-                    'Content-Type': 'application/json',
+                    "Content-Type": "application/json",
+                    "X-Trace-Id": traceId,
                 },
                 body: JSON.stringify({
                     messages: [...messages, userMessage].map(m => ({
@@ -57,7 +64,7 @@ export function ChatInterface() {
                         content: m.content
                     }))
                 }),
-            })
+            });
 
             if (!response.ok) {
                 throw new Error('Failed to get response')
@@ -80,7 +87,7 @@ export function ChatInterface() {
 
             let accumulatedContent = ''
             let buffer = ''
-            
+
             while (true) {
                 const { done, value } = await reader.read()
                 if (done) break
@@ -91,7 +98,7 @@ export function ChatInterface() {
 
                 for (const line of lines) {
                     if (line.trim() === '') continue
-                    
+
                     if (line.startsWith('data: ')) {
                         const data = line.slice(6).trim()
                         if (data === '[DONE]') continue

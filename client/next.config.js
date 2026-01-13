@@ -12,6 +12,12 @@ const nextConfig = {
   allowedDevOrigins: process.env.ALLOWED_DEV_ORIGINS
     ? process.env.ALLOWED_DEV_ORIGINS.split(',')
     : ['asr.timblo.io'],
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '50mb'
+    },
+    middlewareClientMaxBodySize: '50mb'
+  },
   turbopack: {}, // Webpack 설정 사용
   webpack: (config, { isServer }) => {
     // react-pdf 설정

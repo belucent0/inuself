@@ -15,28 +15,31 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 
 def get_litellm_base_url() -> str:
-    """LiteLLM 프록시 URL 반환."""
-    if litellm_url := os.getenv("LITELLM_BASE_URL"):
-        return litellm_url
-    return "http://localhost:4000"
+    """FLM 서버 URL 반환 (LiteLLM 우회)."""
+    # LiteLLM 프록시 연결 (Gateway Strategy)
+    return os.getenv("LITELLM_BASE_URL", "http://asr-litellm:4000")
 
 
 def get_litellm_api_key() -> str:
-    """LiteLLM API 키 반환."""
+    """API 키 반환."""
     return os.getenv("LITELLM_API_KEY", "sk-litellm-master")
 
 
 def get_litellm_model() -> str:
-    """LiteLLM 모델명 반환."""
+    """FLM 모델명 반환."""
+    # FLM 요청이므로 flm-audio 또는 qwen3-4b 등 LiteLLM 라우팅 키 사용
     return os.getenv("LITELLM_MODEL", "qwen3-4b")
 
 
 @lru_cache(maxsize=1)
 def get_async_openai_client() -> AsyncOpenAI:
-    """AsyncOpenAI 클라이언트 싱글톤."""
+    """AsyncOpenAI 클라이언트 싱글톤 (LiteLLM 프록시 연결)."""
     base_url = get_litellm_base_url().rstrip("/")
     return AsyncOpenAI(
-        base_url=f"{base_url}/v1",
+        base_url=f"{base_url}", # LiteLLM은 /v1 불필요할 수 있으나 보통 포함됨, 하지만 asr-litellm:4000은 보통 root
+        # OpenAI SDK requires base_url to effectively be base endpoint. LiteLLM proxy usually exposes /v1 or /chat/completions directly.
+        # But here we assume http://asr-litellm:4000
+        # Safe to append /v1 if LiteLLM mimics OpenAI exactly.
         api_key=get_litellm_api_key(),
         timeout=120.0,
     )
@@ -72,28 +75,69 @@ async def chat_completions(request: Request):
             })
         
         litellm_model = get_litellm_model()
+        client = get_async_openai_client()
         
         logger.info(f"[Chat] Request to LiteLLM: model={litellm_model}, messages_count={len(openai_messages)}")
         
+        # 온디맨드 서버 시작 요청 (FLM)
+        from .websocket_controller import _send_provider_control
+        await _send_provider_control("start", "flm")
+        
         async def generate():
             try:
-                client = get_async_openai_client()
+                # 1. FLM 서버 직접 헬스체크 (host.docker.internal)
+                # LiteLLM에게 요청하기 전에, 실제 Provider가 떴는지 확인
+                import httpx
+                import asyncio
+                import time
                 
-                stream = await client.chat.completions.create(
+                # FLM Check URL
+                # 참고: Docker 내부에서 Host의 FLM(11434) 접근
+                flm_health_url = "http://host.docker.internal:11434/v1/models"
+                
+                start_time = time.time()
+                server_ready = False
+                
+                async with httpx.AsyncClient(timeout=1.0) as health_client:
+                    while time.time() - start_time < 60:
+                        try:
+                            resp = await health_client.get(flm_health_url)
+                            if resp.status_code == 200:
+                                server_ready = True
+                                logger.info("[Chat] FLM Provider is ready.")
+                                break
+                        except Exception:
+                            # Connection refused or timeout -> server staring
+                            pass
+                        await asyncio.sleep(0.5)
+                
+                if not server_ready:
+                     yield f'data: {{"error": "AI Server start timeout (60s)"}}\n\n'.encode('utf-8')
+                     return
+
+                # 2. LiteLLM으로 실제 추론 요청 (스트리밍 활성화)
+                # 사용자의 피드백에 따라 스트리밍 모드로 복구
+                # 2. LiteLLM으로 실제 추론 요청 (스트리밍 활성화)
+                # ClientTraceId 전파
+                trace_id = request.headers.get("X-Trace-Id", "no-trace-id")
+                logger.info(f"[Chat] Sending request to LiteLLM: model={litellm_model}, stream=True, trace_id={trace_id}")
+                
+                response = await client.chat.completions.create(
                     model=litellm_model,
                     messages=openai_messages,
                     stream=True,
+                    extra_body={"metadata": {"trace_id": trace_id}}
                 )
                 
-                async for chunk in stream:
-                    # OpenAI 표준 SSE JSON 형식으로 전송
+                # 스트리밍 응답을 실시간으로 중계
+                async for chunk in response:
                     chunk_json = chunk.model_dump_json()
                     yield f"data: {chunk_json}\n\n".encode('utf-8')
                 
                 yield "data: [DONE]\n\n".encode('utf-8')
                         
             except Exception as e:
-                logger.exception(f"[Chat] Streaming error: {e}")
+                logger.exception(f"[Chat] Error: {e}")
                 yield f'data: {{"error": "{str(e)}"}}\n\n'.encode('utf-8')
         
         return StreamingResponse(

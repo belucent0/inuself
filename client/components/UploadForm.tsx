@@ -321,7 +321,7 @@ export default function UploadForm() {
                       <span className="text-sm font-semibold">속도 우선</span>
                     </div>
                     <p className="text-xs text-muted-foreground ml-6">
-                      빠른 처리 (NPU)
+                      빠른 처리
                     </p>
                   </Label>
                   <Label
@@ -333,7 +333,7 @@ export default function UploadForm() {
                       <span className="text-sm font-semibold">정확도 우선</span>
                     </div>
                     <p className="text-xs text-muted-foreground ml-6">
-                      높은 정확도 (GPU)
+                      높은 정확도
                     </p>
                   </Label>
                 </div>
