@@ -79,7 +79,7 @@ def run_flm_asr_transcription(
         # FLM 서버에 전사 요청
         files = {"file": ("audio.wav", audio_data, "audio/wav")}
         data = {
-            "model": "whisper-v3",
+            "model": os.getenv("FLM_WHISPER_MODEL", "whisper-turbo"),
             "language": language,
             "response_format": "verbose_json",  # 세그먼트 정보 포함
         }
@@ -259,7 +259,7 @@ def run_flm_asr_with_diarization_segments(
                 
                 files = {"file": ("audio.wav", audio_data, "audio/wav")}
                 data = {
-                    "model": "whisper-v3",
+                    "model": os.getenv("FLM_WHISPER_MODEL", "whisper-turbo"),
                     "language": language,
                 }
                 
@@ -703,7 +703,7 @@ def run_flm_asr_parallel_with_vad(
                 
                 files = {"file": ("audio.wav", audio_data, "audio/wav")}
                 data = {
-                    "model": "whisper-v3",
+                    "model": os.getenv("FLM_WHISPER_MODEL", "whisper-turbo"),
                     "language": language,
                 }
                 

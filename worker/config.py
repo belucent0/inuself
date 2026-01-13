@@ -101,7 +101,7 @@ class WorkerSettings(BaseSettings):
     llm_server_path: str = Field("", validation_alias="LLM_SERVER_PATH")
     llm_server_model: str = Field("", validation_alias="LLM_SERVER_MODEL")
     llm_server_port: int = Field(8080, validation_alias="LLM_SERVER_PORT")
-    llm_n_threads: int = 8
+    llm_server_threads: int = Field(8, validation_alias="LLM_SERVER_THREADS")
     llm_server_gpu_layers: int = Field(99, validation_alias="LLM_SERVER_GPU_LAYERS")
     llm_server_batch_size: int = Field(512, validation_alias="LLM_SERVER_BATCH_SIZE")
 
