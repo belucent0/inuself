@@ -101,7 +101,7 @@ services:
       - S3_BUCKET_NAME=asr-media
       # LiteLLM 프록시 설정
       - LLM_PROVIDER=litellm
-      - LITELLM_BASE_URL=http://asr-litellm:4000
+      - LITELLM_BASE_URL=http://litellm:4000
       - LITELLM_API_KEY=sk-litellm-master
       - LITELLM_MODEL=qwen3-4b
     healthcheck:
@@ -160,21 +160,80 @@ services:
     depends_on:
       - prometheus
     restart: unless-stopped
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: asr-worker:1.0.0
+    container_name: asr-worker-unified
+    command: celery -A worker.celery_app worker --loglevel=info -Q celery,asr,asr_tasks,llm_summary,ocr_tasks
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./backend/data:/app/data
+      - ./backend/app:/app/app:ro
+      - ./worker:/app/worker
+    environment:
+      - TASK_QUEUE_TYPE=celery
+      - DATABASE_URL=postgresql+asyncpg://user:pass@asr-postgres:5432/asr
+      - REDIS_URL=redis://asr-redis:6379/0
+      - S3_ENDPOINT=http://asr-minio:9000
+      - S3_ACCESS_KEY=torchdev
+      - S3_SECRET_KEY=torchdev-secret
+      - S3_BUCKET_NAME=asr-media
+      # Architecture V5: Audio Gateway 직접 호출 (LiteLLM audio transcription은 custom provider 미지원)
+      - WHISPER_CPP_URL=http://host.docker.internal:8001
+      - INSANELY_FAST_URL=http://host.docker.internal:8002
+      - DIARIZATION_URL=http://host.docker.internal:8003
+      # FLM NPU 서버 3개 (호스트에서 실행)
+      - FLM_ASR_URL=http://host.docker.internal:11434   # ASR (whisper-v3:turbo)
+      - FLM_LLM_URL=http://host.docker.internal:11435   # LLM (qwen3-it:4b)
+      - FLM_OCR_URL=http://host.docker.internal:11436   # OCR Vision (qwen3vl-it:4b)
+      - FLM_BASE_URL=http://host.docker.internal:11436  # 기본값: OCR
+      # Prometheus for dynamic routing (speed mode: NPU vs GPU)
+      - PROMETHEUS_URL=http://asr-prometheus:9090
+      - GPU_DEVICE_ID=0x000142B6
+      - NPU_DEVICE_ID=0x000160E6
+      - BUSY_THRESHOLD=70
+      # LiteLLM 프록시 설정 (LLM 요약용)
+      - LITELLM_BASE_URL=http://litellm:4000
+      - LITELLM_API_KEY=sk-litellm-master
+      - LITELLM_MODEL=qwen3-4b
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    container_name: asr-litellm
-    entrypoint: [ "sh", "-c", "pip install redis && python3 /app/custom/run_proxy.py" ]
+    build:
+      context: ./infra/litellm
+      dockerfile: Dockerfile
+    image: asr-litellm-proxy:1.0.0
+    container_name: asr-litellm-proxy
     ports:
       - "4000:4000"
     volumes:
       - ./litellm_config.yaml:/app/config.yaml:ro
       - ./infra/litellm:/app/custom:ro
+      - ./infra/litellm/custom_handler.py:/app/custom/custom_handler.py:ro
+    env_file:
+      - .env
     environment:
+      # Docker 전용 오버라이드 (호스트와 다른 설정)
       - PROMETHEUS_URL=http://asr-prometheus:9090
       - REDIS_URL=redis://asr-redis:6379/0
-      - GPU_DEVICE_ID=0x000142B6
-      - NPU_DEVICE_ID=0x000160E6
+      - LITELLM_CONFIG_PATH=/app/config.yaml
+      # LiteLLM은 DB 사용 안 함 (Prisma 에러 방지)
+      - DATABASE_URL=
+      - WHISPER_API_BASE=http://host.docker.internal:8001/v1
+      - INSANELY_FAST_API_BASE=http://host.docker.internal:8002/v1
+      # Background health checks 비활성화
+      - DISABLE_SPEND_LOGS=true
+      - BACKGROUND_HEALTH_CHECKS=false
+      - HEALTH_CHECK_INTERVAL=86400
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -182,7 +241,7 @@ services:
       - redis
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "python3", "-c", "import urllib.request; req = urllib.request.Request('http://localhost:4000/health'); req.add_header('Authorization', 'Bearer sk-litellm-master'); response = urllib.request.urlopen(req); assert response.getcode() == 200" ]
+      test: [ "CMD", "python", "-c", "import urllib.request; req = urllib.request.Request('http://localhost:4000/health'); req.add_header('Authorization', 'Bearer sk-litellm-master'); response = urllib.request.urlopen(req); assert response.getcode() == 200" ]
       interval: 30s
       timeout: 10s
       retries: 3

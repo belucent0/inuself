@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Python virtual environments
+.venv
+rocm_env
+litellm_env
+*.pyc
+*.pyo
+*.pyd
+__pycache__
+
+# Node.js
+node_modules
+.next
+
+# Data & Models
+backend/data
+uploads
+logs
+models
+*.gguf
+*.bin
+
+# Frontend (not needed for worker/backend)
+client
+
+# Config & Infra
+.env
+".env copy"
+infra/prometheus
+infra/grafana
+scripts
+
+# IDE & OS
+.vscode
+.idea
+*.swp
+Thumbs.db
+.DS_Store
