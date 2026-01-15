@@ -1,21 +1,58 @@
 """OCR Vision 모듈 - Qwen3-VL을 사용한 이미지 OCR.
 
-이미지에서 텍스트를 추출하는 GPU 작업을 담당합니다.
+이미지에서 텍스트를 추출하는 GPU/NPU 작업을 담당합니다.
 이미지 전처리(PDF → 이미지 변환 등)는 백엔드에서 수행합니다.
+
+Architecture V6.1: 중앙집중 리소스 관리
+- LiteLLM /resource/acquire, /resource/release를 통한 리소스 관리
+- GPU/NPU 리소스 충돌 방지 및 순차 처리 보장
 """
 
 import base64
+import json
 import re
 import time
+import uuid
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+import redis
 from PIL import Image
 
 from worker.config import get_settings
 from worker.logging_config import logger
+from worker.utils.resource_client import (
+    acquire_resource,
+    release_resource,
+    ResourceAcquisitionError,
+)
+
+
+def _signal_provider_start(provider: str) -> None:
+    """Provider Manager에게 서버 시작 신호를 보냅니다."""
+    settings = get_settings()
+    try:
+        r = redis.from_url(settings.redis_url)
+        message = json.dumps({"action": "start", "provider": provider})
+        r.publish("provider.control", message)
+        logger.info(f"[OCR Vision] Sent provider start signal: {provider}")
+        r.close()
+    except Exception as e:
+        logger.warning(f"[OCR Vision] Failed to signal provider start: {e}")
+
+
+def _signal_provider_touch(provider: str) -> None:
+    """Provider Manager에게 활동 신호를 보냅니다 (idle timeout 리셋)."""
+    settings = get_settings()
+    try:
+        r = redis.from_url(settings.redis_url)
+        message = json.dumps({"action": "touch", "provider": provider})
+        r.publish("provider.control", message)
+        r.close()
+    except Exception as e:
+        logger.warning(f"[OCR Vision] Failed to signal provider touch: {e}")
 
 OcrMode = Literal["document", "portray"]
 
@@ -223,17 +260,50 @@ class OcrVisionProcessor:
             # current_ocr_provider에 따라 API URL과 모델 결정
             import os
             if current_ocr_provider == "flm":
-                api_base_url = os.getenv("FLM_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+                # FLM OCR 서버 시작 신호 전송 (flm-ocr-server)
+                _signal_provider_start("flm-ocr")
+                # FLM 서버 시작 대기 (최대 30초)
+                # FLM은 /health 없음, /v1/models 사용
+                # FLM OCR 서버는 11436 포트 사용
+                flm_base = os.getenv("FLM_OCR_URL", "http://127.0.0.1:11436").rstrip("/")
+                for i in range(30):
+                    try:
+                        with httpx.Client(timeout=2.0) as client:
+                            resp = client.get(f"{flm_base}/v1/models")
+                            if resp.status_code == 200:
+                                logger.info(f"[OCR Vision] FLM server ready after {i}s")
+                                break
+                    except Exception:
+                        pass
+                    time.sleep(1)
+                else:
+                    logger.warning("[OCR Vision] FLM server may not be ready after 30s")
+
+                api_base_url = flm_base
                 api_model_name = os.getenv("FLM_OCR_MODEL", "qwen3vl-it:4b")
                 logger.info(f"[OCR Vision] Using FLM provider: url={api_base_url}, model={api_model_name}")
             else:
-                if server_process and current_ocr_provider == "llamacpp_server":
-                    api_base_url = f"http://localhost:{self.settings.ocr_server_port}"
+                # GPU OCR Vision: llama-ocr-server 사용 (Port 8081)
+                _signal_provider_start("llama-ocr")
+
+                # llama-ocr-server 시작 대기 (최대 60초, Vision 모델 로딩 시간 고려)
+                ocr_base = f"http://127.0.0.1:{self.settings.ocr_server_port}"
+                for i in range(60):
+                    try:
+                        with httpx.Client(timeout=2.0) as client:
+                            resp = client.get(f"{ocr_base}/health")
+                            if resp.status_code == 200:
+                                logger.info(f"[OCR Vision] llama-ocr-server ready after {i}s")
+                                break
+                    except Exception:
+                        pass
+                    time.sleep(1)
                 else:
-                    api_base_url = f"http://localhost:{self.settings.llm_server_port}"
-                
-                api_model_name = self.settings.llm_model_name or "default"
-                logger.info(f"[OCR Vision] Using llamacpp_server provider: url={api_base_url}, model={api_model_name}")
+                    logger.warning("[OCR Vision] llama-ocr-server may not be ready after 60s")
+
+                api_base_url = ocr_base
+                api_model_name = os.getenv("OCR_MODEL_NAME", "qwen3-vl")
+                logger.info(f"[OCR Vision] Using llama-ocr-server: url={api_base_url}, model={api_model_name}")
             
             url = f"{api_base_url}/v1/chat/completions"
             
@@ -291,6 +361,11 @@ class OcrVisionProcessor:
                             content = result["choices"][0].get("message", {}).get("content", "")
                             # FLM 등이 마크다운 코드 블록으로 감싸서 반환하는 경우 처리
                             cleaned_content = self._remove_markdown_code_blocks(content)
+                            # Provider touch 신호 전송 (idle timeout 리셋)
+                            if current_ocr_provider == "flm":
+                                _signal_provider_touch("flm-ocr")
+                            else:
+                                _signal_provider_touch("llama-ocr")
                             return cleaned_content.strip()
                         else:
                             raise ValueError(f"Unexpected API response: {result}")
@@ -334,19 +409,26 @@ class OcrVisionProcessor:
         
         try:
             has_table = False
-            
+
+            # OCR provider 확인 (FLM은 더 작은 이미지 크기 필요)
+            current_ocr_provider = self._ocr_provider_override if self._ocr_provider_override is not None else self.settings.ocr_provider
+            is_flm = current_ocr_provider != "llamacpp_server"
+
             if ocr_mode != "portray":
-                # 표 감지를 위한 저해상도 이미지
-                detection_base64 = self._image_to_base64(image, max_size=(1536, 1536), quality=75)
+                # 표 감지를 위한 저해상도 이미지 (FLM: 1024x1024, GPU: 1536x1536)
+                detection_size = (1024, 1024) if is_flm else (1536, 1536)
+                detection_base64 = self._image_to_base64(image, max_size=detection_size, quality=70)
                 has_table = self._detect_table(detection_base64, server_process=server_process)
                 logger.info(f"Table detection: {'found' if has_table else 'not found'}")
-            
-            # 표 여부에 따라 해상도 결정
+
+            # 표 여부에 따라 해상도 결정 (FLM: NPU 메모리 제한으로 더 작은 크기)
             if has_table:
-                max_size = (2560, 2560)
-                quality = 85
+                # FLM(NPU): 1536x1536, GPU: 2560x2560
+                max_size = (1536, 1536) if is_flm else (2560, 2560)
+                quality = 80 if is_flm else 85
             else:
-                max_size = (1536, 1536)
+                # FLM(NPU): 1280x1280, GPU: 1536x1536
+                max_size = (1280, 1280) if is_flm else (1536, 1536)
                 quality = 75
             
             image_base64 = self._image_to_base64(image, max_size=max_size, quality=quality)
@@ -370,13 +452,21 @@ class OcrVisionProcessor:
         self,
         images: list[Image.Image],
         ocr_mode: OcrMode = "document",
+        resource_timeout: float = 120.0,
+        on_resource_acquired: callable = None,
     ) -> dict[str, Any]:
         """여러 이미지를 OCR 처리.
-        
+
+        Architecture V6.1: 중앙집중 리소스 관리 사용
+        - LiteLLM /resource/acquire로 리소스 획득
+        - 모든 이미지 처리 완료 후 /resource/release로 해제
+
         Args:
             images: PIL Image 객체 목록
             ocr_mode: OCR 모드
-            
+            resource_timeout: 리소스 획득 대기 시간 (초)
+            on_resource_acquired: 리소스 획득 후 호출할 콜백 (UI 상태 업데이트용)
+
         Returns:
             {
                 "ocr_text": str,      # 전체 텍스트
@@ -385,57 +475,82 @@ class OcrVisionProcessor:
                 "ocr_metadata": dict, # 메타데이터
             }
         """
-        from worker.pipelines.llm.llamacpp_client import _llama_server_process
-        from worker.utils.semaphore import WorkerSemaphore
-        
+        from contextlib import nullcontext
+
         logger.info(f"Processing {len(images)} images for OCR")
-        
-        
+
         # ocr_provider 오버라이드 확인
         current_ocr_provider = self._ocr_provider_override if self._ocr_provider_override is not None else self.settings.ocr_provider
         logger.info(f"[OCR Vision] process_images: ocr_provider_override={self._ocr_provider_override}, settings.ocr_provider={self.settings.ocr_provider}, current_ocr_provider={current_ocr_provider}")
 
-        # OCR provider에 따라 세마포어 키 결정
-        # llamacpp_server (GPU 모드) -> gpu, flm (NPU 모드, speed) -> npu
-        semaphore_key = "gpu" if current_ocr_provider == "llamacpp_server" else "npu"
-        logger.info(f"[OCR Vision] Using semaphore: worker:{semaphore_key}:active for provider={current_ocr_provider}")
+        # OCR provider에 따라 리소스 타입 결정
+        # llamacpp_server (GPU 모드) -> gpu, flm (NPU 모드) -> npu
+        resource_type = "gpu" if current_ocr_provider == "llamacpp_server" else "npu"
+        task_id = f"ocr-{uuid.uuid4().hex[:8]}"
+        logger.info(f"[OCR Vision] Using resource: {resource_type}/ocr for provider={current_ocr_provider}")
 
-        # OCR 작업 중 해당 리소스를 '사용 중'으로 표시하여 채팅 트래픽을 우회 유도
-        with WorkerSemaphore(semaphore_key):
+        # ============================================================
+        # Step 1: 중앙집중 리소스 획득
+        # ============================================================
+        resource_info = None
+        try:
+            resource_info = acquire_resource(
+                resource_type=resource_type,
+                task_type="ocr",
+                task_id=task_id,
+                accuracy_mode="speed",  # OCR은 accuracy_mode 무관
+                timeout=resource_timeout,
+            )
+            logger.info(f"[OCR Vision] Resource acquired: provider={resource_info.provider}, wait={resource_info.wait_time:.2f}s")
+        except ResourceAcquisitionError as e:
+            logger.error(f"[OCR Vision] Failed to acquire OCR resource: {e}")
+            raise RuntimeError(f"OCR resource unavailable: {e}")
+
+        # 리소스 획득 성공 → UI 상태 업데이트 콜백 호출
+        if on_resource_acquired:
+            try:
+                on_resource_acquired()
+            except Exception as cb_err:
+                logger.warning(f"[OCR Vision] on_resource_acquired callback failed: {cb_err}")
+
+        # ============================================================
+        # Step 2: 이미지 OCR 처리
+        # ============================================================
+        try:
             page_texts: list[str] = []
             ocr_metadata: dict[str, Any] = {
                 "page_count": len(images),
                 "processing_mode": ocr_mode,
+                "resource_type": resource_type,
+                "resource_wait_time": resource_info.wait_time,
                 "pages": []
             }
-            
+
             # OCR provider에 따라 서버 시작 (llamacpp_server일 때만)
-            from contextlib import nullcontext
             from worker.pipelines.llm.llamacpp_client import _llama_server_process
-            
+
             if current_ocr_provider == "llamacpp_server":
-                # OCR에서 llamacpp_server 사용 시 ocr_provider 파라미터 전달 및 OCR 전용 포트 사용
                 server_context = _llama_server_process(self.settings, ocr_provider=current_ocr_provider, port=self.settings.ocr_server_port)
             else:
                 # FLM 등 외부 서버 사용 시 서버 시작 불필요
                 server_context = nullcontext(None)
-            
+
             with server_context as server_process:
                 for idx, image in enumerate(images):
                     page_num = idx + 1
                     logger.info(f"Processing page {page_num}/{len(images)}")
-                    
+
                     try:
                         text = self.process_image(image, ocr_mode=ocr_mode, server_process=server_process)
                         page_texts.append(text)
-                        
+
                         ocr_metadata["pages"].append({
                             "page_number": page_num,
                             "text_length": len(text),
                             "status": "success"
                         })
                         logger.info(f"Page {page_num} completed ({len(text)} chars)")
-                        
+
                     except Exception as e:
                         logger.error(f"Failed to process page {page_num}: {e}")
                         page_texts.append("")
@@ -444,17 +559,17 @@ class OcrVisionProcessor:
                             "status": "failed",
                             "error": str(e)
                         })
-                        
+
                         # 첫 페이지 실패는 치명적
                         if idx == 0:
                             raise RuntimeError(f"OCR failed for first page: {e}") from e
-                    
+
                     finally:
                         try:
                             image.close()
                         except Exception:
                             pass
-            
+
             # 텍스트 결합
             if len(page_texts) > 1:
                 combined_texts = []
@@ -464,7 +579,7 @@ class OcrVisionProcessor:
                 ocr_text = "\n\n---\n\n".join(combined_texts)
             else:
                 ocr_text = page_texts[0] if page_texts else ""
-            
+
             # 모든 페이지 실패 체크
             if not ocr_text.strip():
                 failed_pages = [p for p in ocr_metadata["pages"] if p.get("status") == "failed"]
@@ -472,10 +587,17 @@ class OcrVisionProcessor:
                     errors = [p.get("error", "Unknown") for p in failed_pages[:3]]
                     raise RuntimeError(f"All pages OCR failed: {'; '.join(errors)}")
 
-        
-        return {
-            "ocr_text": ocr_text,
-            "page_count": len(images),
-            "page_texts": page_texts,
-            "ocr_metadata": ocr_metadata,
-        }
+            return {
+                "ocr_text": ocr_text,
+                "page_count": len(images),
+                "page_texts": page_texts,
+                "ocr_metadata": ocr_metadata,
+            }
+
+        finally:
+            # ============================================================
+            # Step 3: 리소스 해제 (항상 실행)
+            # ============================================================
+            if resource_info:
+                release_resource(resource_type, "ocr", task_id)
+                logger.info(f"[OCR Vision] Resource released: {resource_type}/ocr")
