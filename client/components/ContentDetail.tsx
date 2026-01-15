@@ -21,6 +21,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import DocumentViewer from '@/components/DocumentViewer'
 import MarkdownContent from '@/components/MarkdownContent'
 import HtmlContent from '@/components/HtmlContent'
+import { OcrRetryModal, OcrMode, AccuracyMode } from '@/components/OcrRetryModal'
+import { AsrRetryModal, AsrRetryOptions } from '@/components/AsrRetryModal'
 
 type Props = {
   content: ContentDetailType
@@ -87,14 +89,12 @@ export default function ContentDetail({ content }: Props) {
   const [isReclustering, setIsReclustering] = useState<boolean>(false)
   const [numSpeakers, setNumSpeakers] = useState<string>('')
   const [similarityThreshold, setSimilarityThreshold] = useState<number>(0.7)
-  const [minSpeakers, setMinSpeakers] = useState<string>('')
-  const [maxSpeakers, setMaxSpeakers] = useState<string>('')
   const [currentSegmentId, setCurrentSegmentId] = useState<number | null>(null)
   const [autoScroll, setAutoScroll] = useState<boolean>(true)
   const [showScrollTop, setShowScrollTop] = useState<boolean>(false)
   const [showOcrRetryModal, setShowOcrRetryModal] = useState(false)
-  const [ocrRetryMode, setOcrRetryMode] = useState<'portray' | 'document' | null>(null)
-  const [ocrRetryAccuracyMode, setOcrRetryAccuracyMode] = useState<'speed' | 'accuracy'>('speed')
+  const [showAsrRetryModal, setShowAsrRetryModal] = useState(false)
+  const [isRetrying, setIsRetrying] = useState(false)
   const [isLogsOpen, setIsLogsOpen] = useState<boolean>(false)
   const [isLlmLogsOpen, setIsLlmLogsOpen] = useState<boolean>(false)
 
@@ -105,52 +105,70 @@ export default function ContentDetail({ content }: Props) {
   const segmentViewportRef = useRef<HTMLDivElement | null>(null)
 
   const handleRetry = async (type: 'asr' | 'summary' | 'ocr') => {
-    const isDocument = isDocumentFile(content.filename)
-
     // OCR 재처리인 경우 모달 표시
     if (type === 'ocr') {
-      setOcrRetryMode(null) // 초기화
-      setOcrRetryAccuracyMode('speed') // 초기화
       setShowOcrRetryModal(true)
       return
     }
 
-    const typeLabel = type === 'asr' ? (isDocument ? 'OCR 처리' : 'ASR 처리') : 'LLM 요약'
-    if (!confirm(`${typeLabel}를 다시 시도하시겠습니까?`)) {
+    // ASR 재처리인 경우 모달 표시
+    if (type === 'asr') {
+      setShowAsrRetryModal(true)
+      return
+    }
+
+    // LLM 요약만 confirm으로 처리
+    if (!confirm('LLM 요약을 다시 시도하시겠습니까?')) {
       return
     }
 
     try {
-      let minSpeakersValue: number | undefined = undefined
-      let maxSpeakersValue: number | undefined = undefined
-
-      // 문서 타입이 아닐 때만 화자 수 처리
-      if (type === 'asr' && !isDocument) {
-        if (minSpeakers.trim()) {
-          const parsed = parseInt(minSpeakers.trim())
-          if (isNaN(parsed) || parsed < 1) {
-            throw new Error('최소 화자 수는 1 이상의 정수여야 합니다.')
-          }
-          minSpeakersValue = parsed
-        }
-        if (maxSpeakers.trim()) {
-          const parsed = parseInt(maxSpeakers.trim())
-          if (isNaN(parsed) || parsed < 1) {
-            throw new Error('최대 화자 수는 1 이상의 정수여야 합니다.')
-          }
-          maxSpeakersValue = parsed
-        }
-        if (minSpeakersValue !== undefined && maxSpeakersValue !== undefined && minSpeakersValue > maxSpeakersValue) {
-          throw new Error('최소 화자 수는 최대 화자 수보다 작거나 같아야 합니다.')
-        }
-      }
-
-      const result = await retryProcessing(content.id, type, minSpeakersValue, maxSpeakersValue)
+      const result = await retryProcessing(content.id, type)
       setMessage(result.message)
       router.refresh()
       setTimeout(() => setMessage(''), 3000)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '재처리 실패')
+    }
+  }
+
+  // OCR 재처리 확인 핸들러
+  const handleOcrRetryConfirm = async (ocrMode: OcrMode, accuracyMode: AccuracyMode) => {
+    setIsRetrying(true)
+    try {
+      const result = await retryProcessing(content.id, 'ocr', undefined, undefined, ocrMode, accuracyMode)
+      setMessage(result.message)
+      router.refresh()
+      setTimeout(() => setMessage(''), 3000)
+      setShowOcrRetryModal(false)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '재처리 실패')
+    } finally {
+      setIsRetrying(false)
+    }
+  }
+
+  // ASR 재처리 확인 핸들러
+  const handleAsrRetryConfirm = async (options: AsrRetryOptions) => {
+    setIsRetrying(true)
+    try {
+      const result = await retryProcessing(
+        content.id,
+        'asr',
+        options.minSpeakers,
+        options.maxSpeakers,
+        undefined,
+        undefined,
+        options.accuracyMode
+      )
+      setMessage(result.message)
+      router.refresh()
+      setTimeout(() => setMessage(''), 3000)
+      setShowAsrRetryModal(false)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '재처리 실패')
+    } finally {
+      setIsRetrying(false)
     }
   }
 
@@ -253,21 +271,6 @@ export default function ContentDetail({ content }: Props) {
     } catch (error) {
       console.error('다운로드 오류:', error)
       alert('파일 다운로드에 실패했습니다.')
-    }
-  }
-
-  const handleOcrRetryConfirm = async () => {
-    if (!ocrRetryMode) return
-
-    try {
-      // 기존 handleRetry 로직과 유사하지만 ocrMode와 ocrAccuracyMode를 추가로 전달
-      const result = await retryProcessing(content.id, 'ocr', undefined, undefined, ocrRetryMode, ocrRetryAccuracyMode)
-      setMessage(result.message)
-      router.refresh()
-      setTimeout(() => setMessage(''), 3000)
-      setShowOcrRetryModal(false)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '재처리 실패')
     }
   }
 
@@ -745,38 +748,7 @@ export default function ContentDetail({ content }: Props) {
                         : `${isDocumentFile(content.filename) ? '문서' : '음성'} 인식이 진행 중입니다. 재시도하려면 아래 버튼을 클릭하세요.`}
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  {!isDocumentFile(content.filename) && (
-                    <>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="minSpeakers">최소 화자 수 (선택사항)</Label>
-                          <Input
-                            id="minSpeakers"
-                            type="number"
-                            min="1"
-                            value={minSpeakers}
-                            onChange={(e) => setMinSpeakers(e.target.value)}
-                            placeholder="자동 결정"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="maxSpeakers">최대 화자 수 (선택사항)</Label>
-                          <Input
-                            id="maxSpeakers"
-                            type="number"
-                            min="1"
-                            value={maxSpeakers}
-                            onChange={(e) => setMaxSpeakers(e.target.value)}
-                            placeholder="자동 결정"
-                          />
-                        </div>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        화자 수 범위를 지정하지 않으면 자동으로 결정됩니다.
-                      </p>
-                    </>
-                  )}
+                <CardContent>
                   <Button
                     type="button"
                     onClick={() => handleRetry(isDocumentFile(content.filename) ? 'ocr' : 'asr')}
@@ -882,108 +854,21 @@ export default function ContentDetail({ content }: Props) {
       )}
 
       {/* OCR 재처리 모달 */}
-      <Dialog open={showOcrRetryModal} onOpenChange={setShowOcrRetryModal}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>OCR 재처리 옵션</DialogTitle>
-            <DialogDescription>
-              *문서의 특성에 맞는 처리 방식을 선택하세요.
-            </DialogDescription>
-          </DialogHeader>
+      <OcrRetryModal
+        open={showOcrRetryModal}
+        onOpenChange={setShowOcrRetryModal}
+        filename={content.filename}
+        onConfirm={handleOcrRetryConfirm}
+        isLoading={isRetrying}
+      />
 
-          <div className="py-4">
-            <RadioGroup
-              value={ocrRetryMode || ''}
-              onValueChange={(value) => setOcrRetryMode(value as 'portray' | 'document')}
-            >
-              <div className="space-y-3">
-                <Label
-                  htmlFor="retry-portray"
-                  className={`flex flex-col space-y-1 rounded-md border border-input bg-background p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary ${isOfficeFile(content.filename) || isPdfFile(content.filename) ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                >
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem
-                      value="portray"
-                      id="retry-portray"
-                      disabled={isOfficeFile(content.filename) || isPdfFile(content.filename)}
-                    />
-                    <span className="text-sm font-semibold">이미지 묘사</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground ml-6">
-                    전문적인 시각으로 이미지의 대상, 인물, 상황을 분석하고 상세하게 묘사합니다. (이미지 파일 전용)
-                  </p>
-                </Label>
-                <Label
-                  htmlFor="retry-document"
-                  className="flex flex-col space-y-1 rounded-md border border-input bg-background p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                >
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="document" id="retry-document" />
-                    <span className="text-sm font-semibold">문서 분석</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground ml-6">
-                    Qwen3-VL 모델을 사용하여 문서의 텍스트와 구조를 심층적으로 분석합니다.
-                    (일반 문서, 표가 포함된 문서에 권장)
-                  </p>
-                </Label>
-              </div>
-            </RadioGroup>
-
-            <div className="mt-6">
-              <Label className="text-sm font-medium mb-3 block">처리 모드</Label>
-              <RadioGroup
-                value={ocrRetryAccuracyMode}
-                onValueChange={(value) => setOcrRetryAccuracyMode(value as 'speed' | 'accuracy')}
-              >
-                <div className="grid grid-cols-2 gap-3">
-                  <Label
-                    htmlFor="retry-ocr-speed"
-                    className="flex flex-col space-y-1 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="speed" id="retry-ocr-speed" />
-                      <span className="text-sm font-semibold">신속 모드</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground ml-6">
-                      빠른 처리
-                    </p>
-                  </Label>
-                  <Label
-                    htmlFor="retry-ocr-accuracy"
-                    className="flex flex-col space-y-1 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="accuracy" id="retry-ocr-accuracy" />
-                      <span className="text-sm font-semibold">정확도 모드</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground ml-6">
-                      높은 정확도
-                    </p>
-                  </Label>
-                </div>
-              </RadioGroup>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setShowOcrRetryModal(false)}
-            >
-              취소
-            </Button>
-            <Button
-              type="button"
-              onClick={handleOcrRetryConfirm}
-              disabled={!ocrRetryMode}
-            >
-              재처리 시작
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* ASR 재처리 모달 */}
+      <AsrRetryModal
+        open={showAsrRetryModal}
+        onOpenChange={setShowAsrRetryModal}
+        onConfirm={handleAsrRetryConfirm}
+        isLoading={isRetrying}
+      />
     </>
   )
 }

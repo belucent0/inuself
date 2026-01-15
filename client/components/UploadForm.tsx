@@ -197,7 +197,7 @@ export default function UploadForm() {
     setUploading(true)
     setStatus('업로드 중...')
     try {
-      await uploadContent(selectedFile, minSpeakers, maxSpeakers, undefined, accuracyMode)
+      await uploadContent(selectedFile, minSpeakers, maxSpeakers, undefined, undefined, accuracyMode)
       setStatus('')
       setShowModal(false)
       setSelectedFile(null)

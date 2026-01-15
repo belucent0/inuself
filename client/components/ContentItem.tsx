@@ -80,7 +80,7 @@ interface ContentItemProps {
     item: ContentSummary
     selected: boolean
     onToggle: (id: number) => void
-    onRetry: (id: number, type: 'asr' | 'summary', event: React.MouseEvent) => void
+    onRetry: (id: number, type: 'asr' | 'ocr' | 'summary', event: React.MouseEvent) => void
     liveProgress?: FileProgress
 }
 
@@ -109,13 +109,23 @@ export function ContentItem({ item, selected, onToggle, onRetry, liveProgress }:
         // ContentStatus는 'PROCESSING', 'QUEUED' (대문자)
         let wsStatusUpper = progress.status.toUpperCase() as string
 
-        // 소켓에서 'FAILED'가 오면 콘텐츠 타입에 따라 구체적인 실패 상태로 매핑
+        // 소켓에서 'FAILED'가 오면 step 필드를 확인하여 구체적인 실패 상태로 매핑
         if (wsStatusUpper === 'FAILED') {
-            if (item.content_type === 'DOCUMENT') {
+            // step 필드에서 구체적인 실패 유형 확인 (asr_failed, ocr_failed, llm_failed)
+            const stepLower = progress.step?.toLowerCase() || ''
+            if (stepLower === 'ocr_failed') {
                 wsStatusUpper = 'OCR_FAILED'
-            } else {
-                // 오디오/비디오는 ASR_FAILED (요약 실패는 별도 처리가 필요할 수 있으나, 보통 워커 레벨 실패는 ASR/OCR 단계)
+            } else if (stepLower === 'llm_failed') {
+                wsStatusUpper = 'SUMMARY_FAILED'
+            } else if (stepLower === 'asr_failed') {
                 wsStatusUpper = 'ASR_FAILED'
+            } else {
+                // step 정보가 없는 경우 content_type으로 fallback
+                if (item.content_type === 'DOCUMENT') {
+                    wsStatusUpper = 'OCR_FAILED'
+                } else {
+                    wsStatusUpper = 'ASR_FAILED'
+                }
             }
         }
 
@@ -175,15 +185,19 @@ export function ContentItem({ item, selected, onToggle, onRetry, liveProgress }:
                     </div>
                 </div>
             </CardHeader>
-            {(displayStatus === 'ASR_FAILED' || displayStatus === 'SUMMARY_FAILED') && (
+            {(displayStatus === 'ASR_FAILED' || displayStatus === 'OCR_FAILED' || displayStatus === 'SUMMARY_FAILED') && (
                 <CardContent className="pt-0 px-4 md:px-6 pb-3 md:pb-6">
                     <Button
                         type="button"
-                        variant={displayStatus === 'ASR_FAILED' ? 'default' : 'secondary'}
-                        onClick={(e) => onRetry(item.id, displayStatus === 'ASR_FAILED' ? 'asr' : 'summary', e)}
+                        variant={displayStatus === 'SUMMARY_FAILED' ? 'secondary' : 'default'}
+                        onClick={(e) => onRetry(
+                            item.id,
+                            displayStatus === 'ASR_FAILED' ? 'asr' : displayStatus === 'OCR_FAILED' ? 'ocr' : 'summary',
+                            e
+                        )}
                         className="w-full h-8 md:h-10 text-xs md:text-sm"
                     >
-                        {displayStatus === 'ASR_FAILED' ? 'ASR 재처리' : '요약 재처리'}
+                        {displayStatus === 'ASR_FAILED' ? 'ASR 재처리' : displayStatus === 'OCR_FAILED' ? 'OCR 재처리' : '요약 재처리'}
                     </Button>
                 </CardContent>
             )}

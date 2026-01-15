@@ -22,6 +22,8 @@ import {
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { ContentItem } from './ContentItem'
+import { OcrRetryModal, OcrMode, AccuracyMode } from '@/components/OcrRetryModal'
+import { AsrRetryModal, AsrRetryOptions } from '@/components/AsrRetryModal'
 
 type PaginationProps = {
   currentPage: number
@@ -43,6 +45,12 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [isDeleting, setIsDeleting] = useState(false)
   const [message, setMessage] = useState<string>('')
+
+  // 재시도 모달 상태
+  const [showOcrRetryModal, setShowOcrRetryModal] = useState(false)
+  const [showAsrRetryModal, setShowAsrRetryModal] = useState(false)
+  const [retryTargetContent, setRetryTargetContent] = useState<ContentSummary | null>(null)
+  const [isRetrying, setIsRetrying] = useState(false)
 
   // 모든 파일의 진행 상태를 관리하는 Map
   const [progressMap, setProgressMap] = useState<Record<number, FileProgress>>({})
@@ -217,15 +225,37 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
     }
   }
 
-  const handleRetry = async (contentId: number, type: 'asr' | 'summary', event: React.MouseEvent) => {
+  const handleRetry = (contentId: number, type: 'asr' | 'ocr' | 'summary', event: React.MouseEvent) => {
     event.stopPropagation()
-    const typeLabel = type === 'asr' ? 'ASR 처리' : 'LLM 요약'
-    if (!confirm(`${typeLabel}를 다시 시도하시겠습니까?`)) {
+
+    // 재시도 대상 콘텐츠 찾기
+    const targetContent = localContents.find((c) => c.id === contentId)
+    if (!targetContent) return
+
+    if (type === 'ocr') {
+      setRetryTargetContent(targetContent)
+      setShowOcrRetryModal(true)
       return
     }
 
+    if (type === 'asr') {
+      setRetryTargetContent(targetContent)
+      setShowAsrRetryModal(true)
+      return
+    }
+
+    // LLM 요약만 confirm으로 처리
+    if (!confirm('LLM 요약을 다시 시도하시겠습니까?')) {
+      return
+    }
+
+    handleSummaryRetry(contentId)
+  }
+
+  // LLM 요약 재처리
+  const handleSummaryRetry = async (contentId: number) => {
     try {
-      const result = await retryProcessing(contentId, type)
+      const result = await retryProcessing(contentId, 'summary')
       setMessage(result.message)
       if (onRefresh) {
         onRefresh()
@@ -235,6 +265,60 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
       setTimeout(() => setMessage(''), 3000)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '재처리 실패')
+    }
+  }
+
+  // OCR 재처리 확인 핸들러
+  const handleOcrRetryConfirm = async (ocrMode: OcrMode, accuracyMode: AccuracyMode) => {
+    if (!retryTargetContent) return
+
+    setIsRetrying(true)
+    try {
+      const result = await retryProcessing(retryTargetContent.id, 'ocr', undefined, undefined, ocrMode, accuracyMode)
+      setMessage(result.message)
+      if (onRefresh) {
+        onRefresh()
+      } else {
+        router.refresh()
+      }
+      setTimeout(() => setMessage(''), 3000)
+      setShowOcrRetryModal(false)
+      setRetryTargetContent(null)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '재처리 실패')
+    } finally {
+      setIsRetrying(false)
+    }
+  }
+
+  // ASR 재처리 확인 핸들러
+  const handleAsrRetryConfirm = async (options: AsrRetryOptions) => {
+    if (!retryTargetContent) return
+
+    setIsRetrying(true)
+    try {
+      const result = await retryProcessing(
+        retryTargetContent.id,
+        'asr',
+        options.minSpeakers,
+        options.maxSpeakers,
+        undefined,
+        undefined,
+        options.accuracyMode
+      )
+      setMessage(result.message)
+      if (onRefresh) {
+        onRefresh()
+      } else {
+        router.refresh()
+      }
+      setTimeout(() => setMessage(''), 3000)
+      setShowAsrRetryModal(false)
+      setRetryTargetContent(null)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '재처리 실패')
+    } finally {
+      setIsRetrying(false)
     }
   }
 
@@ -383,6 +467,31 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
 
         </div>
       )}
+
+      {/* OCR 재처리 모달 */}
+      {retryTargetContent && (
+        <OcrRetryModal
+          open={showOcrRetryModal}
+          onOpenChange={(open) => {
+            setShowOcrRetryModal(open)
+            if (!open) setRetryTargetContent(null)
+          }}
+          filename={retryTargetContent.filename}
+          onConfirm={handleOcrRetryConfirm}
+          isLoading={isRetrying}
+        />
+      )}
+
+      {/* ASR 재처리 모달 */}
+      <AsrRetryModal
+        open={showAsrRetryModal}
+        onOpenChange={(open) => {
+          setShowAsrRetryModal(open)
+          if (!open) setRetryTargetContent(null)
+        }}
+        onConfirm={handleAsrRetryConfirm}
+        isLoading={isRetrying}
+      />
     </div>
   )
 }
