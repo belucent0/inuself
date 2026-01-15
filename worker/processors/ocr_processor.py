@@ -83,17 +83,34 @@ async def _process_job(
         "[OCR] Received image S3 keys: file_id=%s, keys=%s, endpoint=%s, bucket=%s",
         file_id, image_s3_keys, settings.s3_endpoint, settings.s3_bucket
     )
-    
-    # Redis Stream: 작업 시작 알림
-    publish_ocr_started(file_id)
-    
-    # 이미지 다운로드
+
+    # OCR provider 결정 (리소스 획득 전에 필요)
+    if ocr_accuracy_mode == "speed":
+        ocr_provider = "flm"
+    elif ocr_accuracy_mode == "accuracy":
+        ocr_provider = "llamacpp_server"
+    else:
+        # 기본값은 speed (flm)
+        logger.warning(f"[OCR] Unknown ocr_accuracy_mode: {ocr_accuracy_mode}, using default 'speed' (flm)")
+        ocr_provider = "flm"
+
+    logger.info(f"[OCR] OCR accuracy mode: {ocr_accuracy_mode}, selected provider: {ocr_provider}")
+
+    ocr_processor = OcrVisionProcessor(ocr_provider=ocr_provider)
+    logger.info(f"[OCR] OcrVisionProcessor created with provider override: {ocr_processor._ocr_provider_override}")
+
+    # 리소스 획득 후 started 이벤트 발행 콜백
+    def on_resource_acquired():
+        publish_ocr_started(file_id)
+        logger.info(f"[OCR] Resource acquired, published 'started' event for file_id={file_id}")
+
+    # 이미지 다운로드 (리소스 획득 전에 미리 다운로드 - S3 다운로드는 리소스와 무관)
     logger.info("[OCR] [2/4] Downloading images from S3...")
-    
+
     images: list[Image.Image] = []
     temp_dir = settings.temp_dir / f"ocr_{file_id}_{uuid4().hex[:8]}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    
+
     try:
         for idx, s3_key in enumerate(image_s3_keys):
             temp_path = temp_dir / f"page_{idx + 1}.jpg"
@@ -103,12 +120,12 @@ async def _process_job(
                     idx + 1, len(image_s3_keys), s3_key
                 )
                 download_file(s3_key, destination=temp_path)
-                
+
                 if not temp_path.exists():
                     raise FileNotFoundError(
                         f"File does not exist after download: {temp_path}"
                     )
-                
+
                 image = Image.open(temp_path)
                 images.append(image)
                 logger.debug(
@@ -124,26 +141,15 @@ async def _process_job(
                     f"Image file not found: {s3_key} "
                     f"(file_id={file_id}, page={idx + 1}/{len(image_s3_keys)})"
                 ) from fnf_err
-        
-        logger.info(f"[OCR] [3/4] Downloaded {len(images)} images, starting OCR...")
-        
-        # OCR 처리
-        # ocr_accuracy_mode에 따라 ocr_provider 결정
-        # speed -> flm (NPU), accuracy -> llamacpp_server (GPU/CPU)
-        if ocr_accuracy_mode == "speed":
-            ocr_provider = "flm"
-        elif ocr_accuracy_mode == "accuracy":
-            ocr_provider = "llamacpp_server"
-        else:
-            # 기본값은 speed (flm)
-            logger.warning(f"[OCR] Unknown ocr_accuracy_mode: {ocr_accuracy_mode}, using default 'speed' (flm)")
-            ocr_provider = "flm"
-        
-        logger.info(f"[OCR] OCR accuracy mode: {ocr_accuracy_mode}, selected provider: {ocr_provider}")
-        
-        ocr_processor = OcrVisionProcessor(ocr_provider=ocr_provider)
-        logger.info(f"[OCR] OcrVisionProcessor created with provider override: {ocr_processor._ocr_provider_override}")
-        result = ocr_processor.process_images(images, ocr_mode=ocr_mode)
+
+        logger.info(f"[OCR] [3/4] Downloaded {len(images)} images, acquiring OCR resource...")
+
+        # OCR 처리 (process_images 내에서 리소스 획득 → on_resource_acquired 호출 → OCR 수행)
+        result = ocr_processor.process_images(
+            images,
+            ocr_mode=ocr_mode,
+            on_resource_acquired=on_resource_acquired,
+        )
         
         logger.info(f"[OCR] [4/4] OCR completed: {len(result['ocr_text'])} chars extracted")
         

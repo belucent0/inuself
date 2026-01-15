@@ -89,10 +89,10 @@ async def _process_job(
 ) -> None:
     """ASR 작업 처리 함수."""
     logger.info(f"[Worker] [1/5] Starting job: file_id={file_id}, file={original_filename}")
-    
-    # Redis Stream: 작업 시작 알림
-    publish_asr_started(file_id)
-    
+
+    # Note: "started" 이벤트는 ASR 리소스 획득 후 pipeline에서 발행
+    # (UI에 정확한 처리 상태 표시를 위해)
+
     # 파일 다운로드
     logger.info(f"[Worker] [2/5] Downloading file: {storage_key}")
     
@@ -111,7 +111,12 @@ async def _process_job(
         # Lazy import: torchaudio DLL 로드 오류 방지
         from worker.pipelines.asr.pipeline import PipelineResult, run_asr_diarization_pipeline
         from functools import partial
-        
+
+        # ASR 리소스 획득 후 "started" 이벤트 발행 콜백
+        def on_asr_resource_acquired():
+            publish_asr_started(file_id)
+            logger.info(f"[Worker] ASR resource acquired, published 'started' event for file_id={file_id}")
+
         pipeline_func = partial(
             run_asr_diarization_pipeline,
             temp_path,
@@ -123,6 +128,7 @@ async def _process_job(
             max_speakers=max_speakers,
             file_id=file_id,
             accuracy_mode=accuracy_mode,
+            on_asr_resource_acquired=on_asr_resource_acquired,
         )
         
         loop = asyncio.get_running_loop()

@@ -1,10 +1,9 @@
 """ASR Celery 태스크.
 
-락 없이 Celery의 concurrency=1과 autoretry에 의존합니다.
-- 순차 처리: worker_pool="solo", concurrency=1
+LiteLLM 중앙집중 리소스 관리를 사용합니다.
+- 리소스 획득/해제는 litellm_audio_client.py에서 자동 처리
 - 실패 시 자동 재시도: autoretry_for, retry_backoff
-- 중복 enqueue 방지: Backend의 task_queue_adapter에서 처리
-- FAILED 상태: 마지막 재시도 실패 시 Redis Stream으로 발행 (백엔드에서 DB 업데이트)
+- FAILED 상태: 마지막 재시도 실패 시 Redis Stream으로 발행
 """
 from worker.celery_app import celery_app
 from worker.logging_config import logger

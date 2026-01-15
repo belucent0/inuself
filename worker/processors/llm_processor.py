@@ -45,13 +45,10 @@ def process_llm_job(*, file_id: int, text_to_summarize: str) -> None:
 
 async def _process_job(*, file_id: int, text_to_summarize: str) -> None:
     """LLM 요약 작업 처리 함수."""
-    # Redis Stream: 작업 시작 알림
-    publish_llm_started(file_id)
     
-    # 빈 텍스트 체크
     if not text_to_summarize or not text_to_summarize.strip():
         logger.warning("[LLM] Text to summarize is empty, skipping: file_id={}", file_id)
-        # 빈 텍스트도 완료로 처리 (백엔드에서 처리하도록)
+        publish_llm_started(file_id)
         result_data = {
             "file_id": file_id,
             "title": "",
@@ -61,32 +58,35 @@ async def _process_job(*, file_id: int, text_to_summarize: str) -> None:
         }
         result_s3_key = f"results/llm/{file_id}/{uuid4().hex}.json"
         upload_json(result_data, key=result_s3_key)
-        
+
         publish_llm_completed(file_id, result_s3_key=result_s3_key)
         return
     
     try:
         logger.info("[LLM] Starting LLM summarization...")
-        
-        # worker 모듈의 summarizer 사용
-        from worker.pipelines.llm.summarizer import summarize_transcription, sanitize_summary_output
-        
-        # LLM 요약 수행
-        title, summary_md = summarize_transcription(text_to_summarize)
+
+        from worker.pipelines.llm.summarizer import summarize_text, extract_title, sanitize_summary_output
+
+        def on_resource_acquired():
+            publish_llm_started(file_id)
+            logger.info(f"[LLM] Resource acquired, published 'started' event for file_id={file_id}")
+
+        # Step 1: 요약 생성
+        summary_md = summarize_text(text_to_summarize, on_resource_acquired=on_resource_acquired)
         summary_md = sanitize_summary_output(summary_md, text_to_summarize)
+        logger.info(f"[LLM] Summarization completed: summary_length={len(summary_md)}")
         
-        logger.info(f"[LLM] Summarization completed: title={title[:50]}..., summary_length={len(summary_md)}")
+        # Step 2: 요약 기반으로 제목 추출
+        logger.info("[LLM] Extracting title from summary...")
+        title = extract_title(summary_md, text_to_summarize)
+        logger.info(f"[LLM] Title extracted: {title[:50]}...")
         
     except Exception as exc:
         logger.error(f"[LLM] Summarization failed: {exc}")
         logger.exception("LLM summarization failed for file_id={}", file_id)
         
-        # Redis Stream: 실패 알림
         publish_llm_failed(file_id, error=str(exc))
         raise
-    
-    # 결과를 S3에 JSON으로 저장
-    logger.info("[LLM] Saving results to S3...")
     
     result_data = {
         "file_id": file_id,
@@ -100,7 +100,6 @@ async def _process_job(*, file_id: int, text_to_summarize: str) -> None:
     
     logger.info(f"[LLM] Results saved to S3: {result_s3_key}")
     
-    # Redis Stream: 완료 알림
     publish_llm_completed(file_id, result_s3_key=result_s3_key)
     
     logger.info("[LLM] OK LLM processing completed, result published to stream")
