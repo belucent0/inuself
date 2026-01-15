@@ -16,6 +16,7 @@ uploads/
 tmp/
 
 # Virtual Environment
+litellm_env/
 rocm_env/
 venv/
 env/
