@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
 from ..core.logging import logger
-from ..core.storage import delete_file, upload_fileobj, get_public_media_url
+from ..core.storage import delete_file, upload_fileobj, get_public_media_url, delete_files_by_prefix
 from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
 from ..schemas.content import ContentDetail, ContentListItem, ContentListResponse, UploadResponse
@@ -207,11 +207,25 @@ class ContentService:
             if celery_cancelled:
                 logger.info("Cancelled %s Celery tasks for deleted contents", celery_cancelled)
 
+        # object_key 기반 파일 삭제
         for object_key in object_keys:
             try:
                 await loop.run_in_executor(None, delete_file, object_key)
             except Exception as exc:
                 logger.warning("Failed to delete file from storage: %s, error: %s", object_key, exc)
+
+        # 임시 파일 삭제 (temp/ocr/{content_id}/, temp/asr/{content_id}/ 등)
+        for content_id in content_ids:
+            try:
+                # OCR 임시 이미지
+                ocr_prefix = f"temp/ocr/{content_id}/"
+                await loop.run_in_executor(None, delete_files_by_prefix, ocr_prefix)
+
+                # ASR 임시 파일
+                asr_prefix = f"temp/asr/{content_id}/"
+                await loop.run_in_executor(None, delete_files_by_prefix, asr_prefix)
+            except Exception as exc:
+                logger.warning("Failed to delete temp files for content_id=%s: error=%s", content_id, exc)
 
     async def retry_processing(
         self, 

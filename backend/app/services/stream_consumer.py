@@ -384,7 +384,7 @@ class StreamConsumer:
                 await session.commit()
                 
                 logger.info(f"OCR completed: file_id={file_id}, pages={page_count}")
-                
+
                 # 클라이언트에 이벤트 발행
                 publish_file_progress(
                     file_id=file_id,
@@ -394,13 +394,7 @@ class StreamConsumer:
                     message="문서 인식 완료, 요약 대기 중...",
                     metadata={"page_count": page_count},
                 )
-                
-                # 임시 이미지 삭제
-                try:
-                    await self._delete_temp_ocr_images(file_id)
-                except Exception as e:
-                    logger.warning(f"Failed to delete temp OCR images: file_id={file_id}, error={e}")
-                
+
                 # LLM 요약 큐잉
                 if ocr_text:
                     task_queue = get_task_queue()
@@ -428,18 +422,14 @@ class StreamConsumer:
                     progress=0.0,
                     message=f"문서 인식 실패: {error}",
                 )
-                
-                # 실패해도 임시 이미지 삭제 (최종 실패이므로)
+
+                # 임시 이미지 삭제 (실패 시)
                 try:
                     await self._delete_temp_ocr_images(file_id)
                 except Exception as e:
                     logger.warning(f"Failed to delete temp OCR images: file_id={file_id}, error={e}")
 
-    async def _delete_temp_ocr_images(self, file_id: int) -> None:
-        """OCR 임시 이미지를 삭제합니다."""
-        prefix = f"temp/ocr/{file_id}/"
-        delete_files_by_prefix(prefix)
-        logger.info(f"Deleted temp OCR images: prefix={prefix}")
+
 
 
 # 싱글톤 인스턴스

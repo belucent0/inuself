@@ -102,8 +102,8 @@ async def websocket_file_progress_global(
             "message": "Global File Progress Channel",
         })
 
-        # 채팅/요약용 모델 준비 (Llama) - 온디맨드 시작
-        asyncio.create_task(_send_provider_control("start", "llama"))
+        # 채팅/요약용 모델은 실제 요청 시에만 시작 (VRAM 절약)
+        # asyncio.create_task(_send_provider_control("start", "llama"))
 
         while True:
             data = await websocket.receive_text()

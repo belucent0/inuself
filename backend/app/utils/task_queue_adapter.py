@@ -111,7 +111,7 @@ class CeleryAdapter(TaskQueueAdapter):
                     "file_id": file_id,
                     "text_to_summarize": text_to_summarize,
                 },
-                queue="llm",
+                queue="llm_summary",
             )
             logger.info("[TaskQueue] LLM job enqueued: file_id=%s, job_id=%s", file_id, result.id)
             return result.id
@@ -134,7 +134,7 @@ class CeleryAdapter(TaskQueueAdapter):
                 "ocr_mode": ocr_mode,
                 "ocr_accuracy_mode": ocr_accuracy_mode,
             },
-            queue="ocr",
+            queue="ocr_tasks",
         )
         return result.id
     

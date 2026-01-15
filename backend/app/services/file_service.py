@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
 from ..core.logging import logger
-from ..core.storage import delete_file, upload_fileobj, get_public_media_url, wait_for_file, wait_for_files, download_file
+from ..core.storage import delete_file, upload_fileobj, get_public_media_url, wait_for_file, wait_for_files, download_file, delete_files_by_prefix
 from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
@@ -375,11 +375,25 @@ class FileService:
             if celery_cancelled:
                 logger.info("Cancelled %s Celery tasks for deleted files", celery_cancelled)
 
+        # object_key 기반 파일 삭제
         for object_key in object_keys:
             try:
                 await loop.run_in_executor(None, delete_file, object_key)
             except Exception as exc:
                 logger.warning("Failed to delete file from storage: %s, error: %s", object_key, exc)
+
+        # 임시 파일 삭제 (temp/ocr/{file_id}/, temp/asr/{file_id}/ 등)
+        for file_id in file_ids:
+            try:
+                # OCR 임시 이미지
+                ocr_prefix = f"temp/ocr/{file_id}/"
+                await loop.run_in_executor(None, delete_files_by_prefix, ocr_prefix)
+
+                # ASR 임시 파일
+                asr_prefix = f"temp/asr/{file_id}/"
+                await loop.run_in_executor(None, delete_files_by_prefix, asr_prefix)
+            except Exception as exc:
+                logger.warning("Failed to delete temp files for file_id=%s: error=%s", file_id, exc)
 
     def _determine_content_type(self, filename: str | None, content_type: str | None, ocr_mode: str = "document") -> ContentType:
         """파일명과 content_type으로 파일 타입 결정."""
