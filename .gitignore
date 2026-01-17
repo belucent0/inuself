@@ -110,3 +110,7 @@ CLAUDE.md
 SKILLS.md
 README.md
 infra/provider_manager/_legacy/
+# Test/Debug files
+test_*.py
+debug_*.py
+backups/
