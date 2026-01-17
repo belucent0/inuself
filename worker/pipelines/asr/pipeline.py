@@ -1,11 +1,12 @@
 """ASR + 화자분리 메인 파이프라인.
 
-Architecture V6: Worker → LiteLLM Proxy → Audio Gateway
-LiteLLM이 Prometheus + GPU 세마포어로 최적 Provider를 자동 선택합니다.
-GPU/ROCm 의존성 없음 - 모든 AI 추론은 Host의 GPU 서버에서 실행.
+Architecture V7.0: Worker → Redis Stream → Stream Worker (Host)
+- 병렬 처리: ASR + 화자분리 동시 실행 (Redis Stream으로 Docker Desktop 크래시 해결)
+- Stream Worker가 GPU/NPU 서버 직접 호출 (localhost)
+- GPU/ROCm 의존성 없음 - 모든 AI 추론은 Host의 GPU 서버에서 실행
 """
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,19 +25,6 @@ from .litellm_audio_client import (
     ASRProvider,
     DiarizationAnnotationWrapper,
 )
-
-
-# worker 패키지에서 distributed_lock 가져오기
-try:
-    from worker.distributed_lock import acquire_lock
-except ImportError:
-    # distributed_lock을 import할 수 없는 경우 (테스트 환경 등)
-    # 락 없이 진행하도록 더미 함수 제공
-    from contextlib import contextmanager
-    @contextmanager
-    def acquire_lock(lock_key: str, timeout: float = 3600.0, blocking_timeout: float = 0.0):
-        print(f"[Pipeline] Lock not available, proceeding without lock: {lock_key}")
-        yield True
 
 
 @dataclass
@@ -99,9 +87,9 @@ def run_asr_diarization_pipeline(
     })
 
     try:
-        # Case 4: 화자분리와 ASR(전체 파일) 병렬 처리
+        # V7.0: ASR + 화자분리 병렬 처리 (Redis Stream으로 Docker Desktop 크래시 해결)
         if processing_mode == "case4":
-            return _run_case4_parallel_full_asr(
+            return _run_case4_parallel_processing(
                 audio_duration=audio_duration,
                 audio_file_path=wav_path,  # WAV 파일 경로 전달
                 logs=logs,
@@ -119,99 +107,107 @@ def run_asr_diarization_pipeline(
             print(f"[Pipeline] Cleaned up temp WAV file")
 
 
-def _run_case4_parallel_full_asr(
+def _run_case4_parallel_processing(
     audio_duration: float,
     audio_file_path: Path,
     logs: list[dict[str, Any]],
     min_speakers: int | None = None,
     max_speakers: int | None = None,
-    accuracy_mode: str = "speed",  # "speed" (FLM/NPU) or "accuracy" (whisper.cpp/GPU)
-    on_asr_resource_acquired: callable = None,  # ASR 리소스 획득 후 호출할 콜백
+    accuracy_mode: str = "speed",  # "speed" (whisper.cpp/GPU) or "accuracy" (insanely-fast/GPU)
+    on_asr_resource_acquired: callable = None,  # ASR 리소스 획득 후 호출할 콜백 (호환성 유지)
 ) -> PipelineResult:
     """
-    Case 4: 화자분리와 ASR 병렬 처리.
+    V7.0: ASR + 화자분리 병렬 처리.
 
-    Architecture V6: Worker → LiteLLM Proxy → Audio Gateway
-    - LiteLLM이 Prometheus + GPU 세마포어로 최적 Provider 선택
-    - ASR: LiteLLM → whisper.cpp/insanely-fast/FLM 자동 라우팅
-    - Diarization: LiteLLM → Diarization Server 라우팅
+    Architecture V7.0: Worker → Redis Stream → Stream Worker (Host)
+    - 병렬 처리로 처리 시간 단축
+    - Redis Stream으로 Docker Desktop 크래시 해결 (host.docker.internal HTTP 제거)
+    - Stream Worker가 GPU 서버에 localhost로 직접 접근
     """
     print(f"\n{'='*60}")
-    print(f"[Case 4] LiteLLM-based Processing (Architecture V6)")
-    print(f"[Case 4] accuracy_mode={accuracy_mode}")
+    print(f"[Pipeline] Parallel Processing (Architecture V7.0)")
+    print(f"[Pipeline] accuracy_mode={accuracy_mode}")
+    print(f"[Pipeline] Running: ASR + Diarization simultaneously")
     print(f"{'='*60}")
 
     case_start = time.time()
 
-    # ============================================================
-    # Architecture V6: LiteLLM Proxy 호출
-    # - LiteLLM이 Prometheus + GPU 세마포어로 Provider 선택
-    # - GPU 바쁨 → 자동 Fallback (NPU 또는 대기)
-    # ============================================================
-    print(f"\n[Step 1] Starting LiteLLM-based parallel processing...")
-    print(f"  - ASR: LiteLLM Proxy (Prometheus routing, accuracy_mode={accuracy_mode})")
-    print(f"  - Diarization: LiteLLM Proxy → Diarization Server")
-
     # 화자분리 실패 또는 0 세그먼트 시 사용할 fallback 플래그
     diarization_fallback_used = False
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        # 화자분리 API 호출 (LiteLLM → Diarization Server)
-        diarization_future = executor.submit(
-            call_litellm_diarization,
-            audio_file_path=audio_file_path,
-            min_speakers=min_speakers,
-            max_speakers=max_speakers,
-            return_embeddings=False,
-        )
+    # 결과 저장용 변수
+    asr_result = None
+    asr_provider = None
+    model_load_time = 0.0
+    transcribe_time = 0.0
+    diarization = None
+    diarization_load_time = 0.0
+    diarization_time = 0.0
+    diarization_params = {}
 
-        # ASR API 호출 (LiteLLM 라우팅)
-        # accuracy_mode에 따라 LiteLLM이 NPU(FLM) 또는 GPU(Whisper) 선택
-        asr_future = executor.submit(
-            call_litellm_transcription,
+    # ============================================================
+    # 병렬 실행: ASR + Diarization 동시 실행
+    # ============================================================
+    def run_asr():
+        """ASR 작업 실행."""
+        return call_litellm_transcription(
             audio_file_path=audio_file_path,
             accuracy_mode=accuracy_mode,
             language="ko",
             on_resource_acquired=on_asr_resource_acquired,
         )
 
+    def run_diarization():
+        """Diarization 작업 실행."""
+        return call_litellm_diarization(
+            audio_file_path=audio_file_path,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            return_embeddings=False,
+        )
 
-        # 두 작업 모두 완료 대기
-        print(f"[Parallel] Waiting for both API calls to complete...")
+    print(f"\n[Parallel] Starting ASR and Diarization simultaneously...")
 
-        # Diarization 결과 처리 (실패 시 무시하고 진행)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        # 두 작업을 동시에 시작
+        asr_future = executor.submit(run_asr)
+        diarization_future = executor.submit(run_diarization)
+
+        # ASR 결과 대기 (필수)
+        try:
+            asr_result, model_load_time, transcribe_time, asr_provider = asr_future.result()
+            print(f"[Parallel] ASR completed: {len(asr_result.get('segments', []))} segments")
+            print(f"[Parallel] ASR Provider: {asr_provider.value}")
+        except Exception as e:
+            print(f"[Pipeline] Error: ASR failed: {e}")
+            raise
+
+        # Diarization 결과 대기 (실패해도 계속 진행)
         try:
             diarization, diarization_load_time, diarization_time, embeddings_dict, pipeline, diarization_params = diarization_future.result()
-
-            # 세그먼트 수 확인 - 0개면 fallback 사용
             diarization_segment_count = len(list(diarization.itertracks(yield_label=True)))
             if diarization_segment_count == 0:
                 print(f"[Pipeline] Warning: Diarization returned 0 segments. Using fallback: SPEAKER_00")
                 diarization_fallback_used = True
+            else:
+                print(f"[Parallel] Diarization completed: {diarization_segment_count} segments")
         except Exception as e:
-            print(f"[Pipeline] Warning: Diarization API failed: {e}")
+            print(f"[Pipeline] Warning: Diarization failed: {e}")
             print(f"[Pipeline] Proceeding with ASR only (fallback: SPEAKER_00)")
-            diarization = DiarizationAnnotationWrapper([]) # 빈 결과
+            diarization = DiarizationAnnotationWrapper([])
             diarization_load_time = 0.0
             diarization_time = 0.0
-            embeddings_dict = {}
-            pipeline = None
             diarization_params = {}
             diarization_fallback_used = True
-
-        # ASR 결과는 필수 (에러 시 전파)
-        asr_result, model_load_time, transcribe_time, asr_provider = asr_future.result()
-
-    print(f"[Step 2] API calls completed (Provider: {asr_provider.value})")
 
     execution_time = time.time() - case_start
 
     # ASR 엔진 결정 (Provider 기반)
     asr_engine = asr_provider.value
 
-    print(f"\n[Case 4] All tasks completed in {execution_time:.2f} seconds")
-    print(f"  - Diarization: {diarization_load_time + diarization_time:.2f}s")
+    print(f"\n[Pipeline] Parallel processing completed in {execution_time:.2f}s")
     print(f"  - ASR ({asr_engine}): {model_load_time + transcribe_time:.2f}s")
+    print(f"  - Diarization: {diarization_load_time + diarization_time:.2f}s")
 
     # API 응답에서 세그먼트 추출
     asr_segments = asr_result.get("segments", [])
@@ -285,7 +281,8 @@ def _run_case4_parallel_full_asr(
         "asr_time": model_load_time + transcribe_time,
         "accuracy_mode": accuracy_mode,
         "asr_engine": asr_provider.value,
-        "architecture": "v6_litellm_proxy",
+        "architecture": "v7.0_parallel",
+        "processing_mode": "parallel",
         "speaker_stats": speaker_stats,
         "diarization_params": diarization_params,
         "diarization_fallback": diarization_fallback_used,

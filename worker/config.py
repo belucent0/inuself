@@ -92,7 +92,7 @@ class WorkerSettings(BaseSettings):
     llm_context_length: int = 15000
     llm_temperature: float = 0.4
     llm_top_p: float = 0.9
-    llm_max_tokens: int = 1024
+    llm_max_tokens: int = 3072  # V6.6: JSON 응답 + 상세 요약을 위해 증가
 
     # ========================================
     # On-Demand LLM 서버 설정 (OCR 정밀모드용)
