@@ -106,3 +106,7 @@ nul
 tmp*
 
 .claude/*
+CLAUDE.md
+SKILLS.md
+README.md
+infra/provider_manager/_legacy/
