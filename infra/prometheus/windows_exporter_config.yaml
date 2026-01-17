@@ -25,3 +25,11 @@ collector:
           - name: "Total Committed"
             metric: windows_gpu_total_committed_bytes
             type: gauge
+      - name: npu_engine
+        object: "NPU"
+        instances: ["*"]
+        type: formatted
+        counters:
+          - name: "Utilization Percentage"
+            metric: windows_npu_engine_utilization_percentage
+            type: gauge
