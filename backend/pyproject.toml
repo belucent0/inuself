@@ -25,7 +25,6 @@ alembic = "^1.13.1"
 pydantic = "^2.7.0"
 pydantic-settings = "^2.3.0"
 redis = "^5.0.4"
-rq = "^1.15.1"  # 기존 RQ (deprecated, 추후 제거 예정)
 celery = {extras = ["redis"], version = "^5.3.0"}
 python-multipart = "^0.0.9"
 tenacity = "^8.2.3"
@@ -39,28 +38,12 @@ prometheus-fastapi-instrumentator = "^7.0.0"  # Prometheus 메트릭 수집
 yt-dlp = "^2025.12.8"  # YouTube 다운로드
 
 # ========================================
-# 오디오 처리 공통 의존성 (API/워커 공통)
+# V6.5: 오디오 처리는 Worker에서만 수행
+# librosa, soundfile은 Worker pyproject.toml에만 필요
 # ========================================
-librosa = "^0.10.0"
-soundfile = ">=0.13.1"  # pyannote.audio 4.x requires >=0.13.1
 
-# ========================================
-# 워커별 선택적 의존성 (무거운 것들)
-# optional = true로 설정하여 선택적 설치
-# ========================================
-torch = {version = "*", optional = true}  # ASR 워커용 (기존 설치된 ROCm 버전 사용)
-"pyannote.audio" = {version = "4.0.3", optional = true}  # ASR 워커용 (community-1 모델 필수)
+# V6.5: torch/pyannote는 Worker에서만 사용 (Backend는 LiteLLM Proxy 호출)
 yt-dlp-ejs = "^0.3.2"
-
-[tool.poetry.extras]
-# 워커별 extras 그룹
-# ASR 워커: poetry install --extras asr_worker
-asr_worker = ["torch", "pyannote.audio"]
-# LLM 워커: poetry install --extras llm_worker
-# llama-server를 서브프로세스로 관리하므로 추가 패키지 불필요
-llm_worker = []
-# 전체 워커 (하위 호환성): poetry install --extras gpu_worker  
-gpu_worker = ["torch", "pyannote.audio"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

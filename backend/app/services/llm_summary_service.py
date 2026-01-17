@@ -1,13 +1,16 @@
-"""LLM 요약 서비스.
+"""LLM 요약 서비스 - V6.6 간소화 버전.
 
-백엔드에서 LiteLLM 프록시를 직접 호출하여 LLM 요약을 수행합니다.
-LiteLLM이 GPU/NPU 자원 상태에 따라 자동으로 라우팅합니다.
+효율적인 프롬프트로 제목, 핵심 요약, 키워드, 목차를 추출합니다.
+- 단일 프롬프트 (JSON 응답)
+- 토큰 사용량 최적화
 """
 from __future__ import annotations
 
 import json
 import re
 import time
+import asyncio
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,182 +23,297 @@ from ..repositories.document_repository import DocumentRepository
 from .litellm_client import request_litellm_completion, LiteLLMClientError
 
 
-DEFAULT_SUMMARY_PROMPT = """당신은 회의록을 요약하는 전문가입니다. 주어진 전사 내용을 분석하여 핵심만 추출한 요약을 생성하세요.
+# ============================================
+# 간소화된 프롬프트 (V6.6)
+# ============================================
 
-⚠️ 중요: 절대 전사 내용을 그대로 반환하지 마세요. 반드시 요약만 생성하세요.
+SUMMARY_SYSTEM_PROMPT = """당신은 전문 콘텐츠 요약 전문가입니다.
+- 모든 출력은 반드시 한글로 작성
+- JSON 형식으로만 응답
+- 지시사항이나 프롬프트는 절대 포함하지 않음
+- HTML 태그 사용 금지"""
 
-1. (필수) title: 회의의 핵심 주제를 담은 제목을 생성하세요. 제목은 반드시 한글로 작성하세요.
+SUMMARY_PROMPT_TEMPLATE = """다음 전사 내용을 분석하여 JSON 형식으로 요약하세요.
 
-2. summary: 전사 내용을 요약하여 마크다운 형식으로 작성하세요.
-   - 모든 내용은 반드시 한글로 작성하세요
-   - `## 요약` 제목으로 시작하세요
-   - 핵심 내용만 불릿 포인트(-)로 간결하게 제공하세요
-   - `## 세부 사항` 섹션에 중요한 결정 사항이나 액션 아이템을 번호(1., 2., ...)로 나열하세요
-
----
-
-다음 JSON 형식으로만 응답하세요:
-
+## 출력 형식 (JSON)
+```json
 {{
-    "title": "회의 제목",
-    "summary": "## 요약\\n\\n- 핵심 내용 1\\n- 핵심 내용 2\\n\\n## 세부 사항\\n\\n1. 결정 사항 1"
+  "title": "핵심 주제를 반영한 간결한 제목 (30자 이내)",
+  "toc": [
+    "1. 첫 번째 주요 주제",
+    "2. 두 번째 주요 주제",
+    "3. 세 번째 주요 주제"
+  ],
+  "summary": "## 핵심 요약\\n- 가장 중요한 내용 1\\n- 가장 중요한 내용 2\\n\\n## 주요 내용\\n### 1. 첫 번째 주제\\n- 세부 내용",
+  "keywords": ["키워드1", "키워드2", "키워드3", "키워드4", "키워드5"]
 }}
+```
 
-전사 내용:
+## 작성 지침
+1. **title**: 콘텐츠의 핵심 주제를 반영한 한글 제목
+2. **toc**: 내용의 주요 섹션을 목차 형태로 3-5개 나열
+3. **summary**: 마크다운 형식의 요약 (핵심 요약 + 주요 내용)
+4. **keywords**: 핵심 키워드 5-10개
+
+## 전사 내용:
 {transcript}
-"""
+
+## 응답 (JSON만 출력):"""
+
+MERGE_PROMPT_TEMPLATE = """여러 부분으로 나뉜 요약을 통합하세요.
+
+## 부분별 요약:
+{summaries}
+
+## 출력 형식 (JSON)
+```json
+{{
+  "title": "통합된 핵심 제목",
+  "toc": ["1. 주제1", "2. 주제2", "3. 주제3"],
+  "summary": "## 핵심 요약\\n- 통합 요약 내용",
+  "keywords": ["키워드1", "키워드2", "키워드3"]
+}}
+```
+
+## 응답 (JSON만 출력):"""
 
 
-def sanitize_summary_output(summary_md: str, original_text: str) -> str:
-    """요약 결과를 정리합니다."""
-    if not summary_md:
-        return ""
-    
-    # 프롬프트/지시사항 제거
-    lines = summary_md.split('\n')
-    cleaned_lines = []
-    
-    for line in lines:
-        line_stripped = line.strip()
-        
-        # 프롬프트 제거 패턴
-        if any(pattern in line_stripped for pattern in [
-            "당신은",
-            "요약하십시오",
-            "마크다운 형식으로",
-            "프롬프트는 절대 포함하지",
-            "## 지시사항",
-            "## 프롬프트"
-        ]):
-            continue
-            
-        if line_stripped:
-            cleaned_lines.append(line)
-    
-    return '\n'.join(cleaned_lines)
+def _split_text_into_chunks(text: str, max_chars: int = 25000, overlap_chars: int = 1000) -> list[str]:
+    """텍스트를 청크로 분할."""
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    start = 0
+
+    while start < len(text):
+        end = start + max_chars
+
+        if end < len(text):
+            # 문장 경계에서 분할
+            for sep in ['. ', '.\n', '! ', '? ', '\n\n']:
+                last_sep = text.rfind(sep, start + int(max_chars * 0.7), end)
+                if last_sep > start:
+                    end = last_sep + len(sep)
+                    break
+
+        chunks.append(text[start:end])
+        start = end - overlap_chars
+        if start < 0:
+            start = 0
+
+    return chunks
 
 
-def _parse_json_response(raw_response: str, transcript_text: str) -> tuple[str, str]:
-    """LLM 응답에서 JSON을 파싱하여 title과 summary를 추출합니다."""
-    # ```json ... ``` 블록 찾기
-    json_match = re.search(r'```json\s*(\{.*?\})\s*```', raw_response, re.DOTALL)
+def _parse_json_response(response: str) -> dict[str, Any]:
+    """LLM 응답에서 JSON 파싱."""
+    # JSON 블록 추출 시도
+    json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
     if json_match:
         json_str = json_match.group(1)
     else:
-        # ``` 없이 JSON만 있는 경우
-        start_idx = raw_response.find('{')
+        # 직접 JSON 파싱 시도
+        json_str = response.strip()
+        start_idx = json_str.find('{')
         if start_idx >= 0:
             # 중괄호 균형 맞추기
             brace_count = 0
             end_idx = start_idx
-            for i in range(start_idx, len(raw_response)):
-                if raw_response[i] == '{':
+            for i in range(start_idx, len(json_str)):
+                if json_str[i] == '{':
                     brace_count += 1
-                elif raw_response[i] == '}':
+                elif json_str[i] == '}':
                     brace_count -= 1
                     if brace_count == 0:
                         end_idx = i
                         break
-            
-            if end_idx > start_idx:
-                json_str = raw_response[start_idx:end_idx + 1]
-            else:
-                # JSON 파싱 실패
-                return _extract_title_fallback(raw_response, transcript_text), raw_response
-        else:
-            return _extract_title_fallback(raw_response, transcript_text), raw_response
-    
+            json_str = json_str[start_idx:end_idx + 1]
+
     try:
-        data = json.loads(json_str)
-        title = str(data.get("title", "")).strip()
-        summary_md = str(data.get("summary", "")).strip()
-        
-        if not title:
-            title = _extract_title_fallback(summary_md or raw_response, transcript_text)
-        
-        if not summary_md:
-            summary_md = raw_response
-        
-        return title, summary_md
-        
-    except json.JSONDecodeError as e:
-        logger.warning("JSON parsing failed: %s", e)
-        return _extract_title_fallback(raw_response, transcript_text), raw_response
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        logger.warning("JSON parsing failed, extracting fields from text")
+        return _extract_fields_from_text(response)
 
 
-def _extract_title_fallback(summary_md: str, transcript_text: str) -> str:
-    """제목 추출 실패 시 대체 방법으로 제목 생성."""
-    # 요약의 첫 번째 헤더 추출
-    lines = summary_md.split("\n")
-    for line in lines:
-        line = line.strip()
-        if line.startswith("# "):
-            title = line[2:].strip()
-            if title and len(title) <= 100:
-                return title
-        elif line.startswith("## "):
-            title = line[3:].strip()
-            if title and len(title) <= 100:
-                return title
-    
-    # 전사 텍스트의 첫 문장 사용
-    first_sentence = transcript_text.split(".")[0].strip()
-    if first_sentence:
-        if len(first_sentence) > 100:
-            first_sentence = first_sentence[:97] + "..."
-        return first_sentence
-    
-    return "회의록"
+def _extract_fields_from_text(text: str) -> dict[str, Any]:
+    """텍스트에서 필드 추출 (JSON 파싱 실패 시 fallback)."""
+    result = {
+        "title": "",
+        "toc": [],
+        "summary": text,
+        "keywords": []
+    }
+
+    # 제목 추출
+    title_match = re.search(r'"title"\s*:\s*"([^"]+)"', text)
+    if title_match:
+        result["title"] = title_match.group(1)
+
+    # 키워드 추출
+    keywords_match = re.search(r'"keywords"\s*:\s*\[([^\]]+)\]', text)
+    if keywords_match:
+        keywords_str = keywords_match.group(1)
+        result["keywords"] = [k.strip().strip('"\'') for k in keywords_str.split(',')]
+
+    return result
+
+
+def _format_as_markdown(data: dict[str, Any]) -> str:
+    """JSON 데이터를 마크다운으로 변환."""
+    parts = []
+
+    # 제목 (마크다운 본문에는 포함하지 않음 - DB에 별도 저장)
+
+    # 목차
+    toc = data.get('toc', [])
+    if toc:
+        parts.append("## 목차")
+        for item in toc:
+            parts.append(f"- {item}")
+        parts.append("")
+
+    # 핵심 요약
+    summary = data.get('summary', '')
+    if summary:
+        if summary.startswith('#'):
+            parts.append(summary)
+        else:
+            parts.append("## 핵심 요약")
+            parts.append(summary)
+        parts.append("")
+
+    # 키워드
+    keywords = data.get('keywords', [])
+    if keywords:
+        parts.append("## 키워드")
+        parts.append(", ".join(keywords))
+        parts.append("")
+
+    return "\n".join(parts)
+
+
+def sanitize_summary_output(summary_md: str, original_text: str) -> str:
+    """요약 결과를 정리합니다 (HTML 제거 포함)."""
+    if not summary_md:
+        return ""
+
+    # HTML 태그 제거
+    summary_md = re.sub(r'<p[^>]*>', '', summary_md, flags=re.IGNORECASE)
+    summary_md = re.sub(r'</p>', '\n\n', summary_md, flags=re.IGNORECASE)
+    summary_md = re.sub(r'<li[^>]*>', '- ', summary_md, flags=re.IGNORECASE)
+    summary_md = re.sub(r'</li>', '\n', summary_md, flags=re.IGNORECASE)
+    summary_md = re.sub(r'</?[uo]l[^>]*>', '', summary_md, flags=re.IGNORECASE)
+    summary_md = re.sub(r'<br\s*/?>', '\n', summary_md, flags=re.IGNORECASE)
+    summary_md = re.sub(r'<[^>]+>', '', summary_md)
+
+    # 연속된 개행 정리
+    summary_md = re.sub(r'\n{3,}', '\n\n', summary_md)
+
+    return summary_md.strip()
 
 
 def summarize_transcription(text: str) -> tuple[str, str]:
     """전사 텍스트를 요약합니다.
-    
-    LiteLLM 프록시를 통해 GPU/NPU로 자동 라우팅됩니다.
-    
+
     Args:
-        text: 요약할 텍스트
-        
+        text: 요약할 전사 텍스트
+
     Returns:
-        (제목, 요약된 텍스트) 튜플
+        (title, summary_md) 튜플
     """
     settings = get_settings()
-    
     normalized = text.strip()
+
     if not normalized:
-        raise ValueError("Transcription text to summarize is empty.")
-    
-    # 텍스트가 너무 길면 앞부분만 사용 (청킹은 향후 구현)
-    max_chars = 30000  # 약 10000 토큰
-    if len(normalized) > max_chars:
-        logger.warning("Text too long (%d chars), truncating to %d chars", len(normalized), max_chars)
-        normalized = normalized[:max_chars]
-    
-    prompt = DEFAULT_SUMMARY_PROMPT.format(transcript=normalized)
+        raise ValueError("요약할 텍스트가 비어 있습니다.")
+
+    # 청크 분할
+    max_chunk_chars = 25000  # ~10000 토큰
+    chunks = _split_text_into_chunks(normalized, max_chars=max_chunk_chars)
+    logger.info(f"[Summarizer] Text split into {len(chunks)} chunks")
+
+    # 각 청크 요약
+    summaries = []
+    for i, chunk in enumerate(chunks, 1):
+        logger.info(f"[Summarizer] Processing chunk {i}/{len(chunks)}...")
+        try:
+            prompt = SUMMARY_PROMPT_TEMPLATE.format(transcript=chunk)
+            messages = [
+                {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ]
+            response = request_litellm_completion(settings=settings, messages=messages)
+            result = _parse_json_response(response)
+            summaries.append(result)
+            logger.info(f"Chunk {i}/{len(chunks)} summarized: title='{result.get('title', '')[:30]}...'")
+        except Exception as e:
+            logger.error(f"Chunk {i} failed: {e}")
+            continue
+
+    if not summaries:
+        raise RuntimeError("모든 청크 요약에 실패했습니다.")
+
+    # 통합
+    if len(summaries) == 1:
+        final = summaries[0]
+    else:
+        final = _merge_summaries(summaries, settings)
+
+    # 제목과 마크다운 반환
+    title = final.get('title', '요약')
+    if not title or len(title) < 2:
+        title = _extract_title_fallback(normalized)
+
+    summary_md = _format_as_markdown(final)
+    summary_md = sanitize_summary_output(summary_md, normalized)
+
+    logger.info(f"[Summarizer] Completed: title='{title}', summary_length={len(summary_md)}")
+    return title, summary_md
+
+
+def _merge_summaries(summaries: list[dict[str, Any]], settings) -> dict[str, Any]:
+    """여러 청크의 요약을 통합."""
+    # 부분 요약 텍스트 생성
+    parts = []
+    for i, s in enumerate(summaries, 1):
+        parts.append(f"=== 부분 {i} ===\n제목: {s.get('title', '')}\n요약:\n{s.get('summary', '')}")
+
+    summaries_text = "\n\n".join(parts)
+    prompt = MERGE_PROMPT_TEMPLATE.format(summaries=summaries_text)
+
     messages = [
-        {"role": "system", "content": settings.llm_system_prompt},
+        {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
     ]
-    
+
     try:
-        if settings.llm_provider == "litellm":
-            raw_response = request_litellm_completion(
-                settings=settings,
-                messages=messages,
-            )
-        else:
-            # 기존 provider 지원 (fallback)
-            logger.warning("Non-litellm provider '%s' not supported in backend, use litellm", settings.llm_provider)
-            raise ValueError(f"Backend only supports 'litellm' provider, got: {settings.llm_provider}")
-        
-        title, summary_md = _parse_json_response(raw_response, normalized)
-        summary_md = sanitize_summary_output(summary_md, normalized)
-        
-        return title, summary_md
-        
-    except LiteLLMClientError as exc:
-        logger.error("LLM summarization failed: %s", exc)
-        raise RuntimeError(f"LLM summarization failed: {exc}") from exc
+        response = request_litellm_completion(settings=settings, messages=messages)
+        result = _parse_json_response(response)
+
+        # 키워드 통합
+        all_keywords = set()
+        for s in summaries:
+            all_keywords.update(s.get('keywords', []))
+        if not result.get('keywords'):
+            result['keywords'] = list(all_keywords)[:10]
+
+        logger.info(f"Merged {len(summaries)} summaries into final result")
+        return result
+
+    except Exception as e:
+        logger.warning(f"Merge failed, using first chunk: {e}")
+        return summaries[0]
+
+
+def _extract_title_fallback(text: str) -> str:
+    """제목 추출 실패 시 대체 방법."""
+    first_sentence = text.split('.')[0].strip()
+    if first_sentence and len(first_sentence) > 5:
+        if len(first_sentence) > 50:
+            return first_sentence[:47] + "..."
+        return first_sentence
+    return "요약"
 
 
 class LlmSummaryService:
@@ -209,15 +327,10 @@ class LlmSummaryService:
         self.settings = get_settings()
 
     async def summarize(self, file_id: int) -> None:
-        """
-        LLM 요약 수행.
-        
-        file_id는 file 테이블의 id입니다.
-        """
+        """LLM 요약 수행."""
         file_obj = await self.file_repo.get_file(file_id)
         if not file_obj:
             logger.warning("[LLM] File not found, skipping summarization: file_id=%s", file_id)
-            # 존재하지 않는 파일은 실패로 마킹하고 로그를 남긴 뒤 종료
             await self.file_repo.add_llm_log(
                 file_id,
                 log={"event": "summarization_skipped", "reason": "file_not_found"},
@@ -226,24 +339,17 @@ class LlmSummaryService:
             await self.file_repo.update_file_status(file_id, FileStatus.SUMMARY_FAILED)
             await self.session.commit()
             return
-        
+
         await self._summarize_file(file_obj)
 
     async def _summarize_file(self, file_obj) -> None:
         """File을 사용한 요약."""
         file_id = file_obj.id
-        
-        # 이미 완료된 파일은 스킵
-        if file_obj.status == FileStatus.COMPLETED:
-            if file_obj.summary_md:
-                logger.info(
-                    "File %s already completed with summary (length=%d chars), skipping",
-                    file_id,
-                    len(file_obj.summary_md)
-                )
-                return
-        
-        # 텍스트 추출 (타입에 따라)
+
+        if file_obj.status == FileStatus.COMPLETED and file_obj.summary_md:
+             logger.info("File %s already completed with summary, skipping", file_id)
+             return
+
         text_to_summarize = ""
         if file_obj.content_type == ContentType.AUDIO:
             transcription = await self.transcription_repo.get_by_file_id(file_id)
@@ -254,14 +360,9 @@ class LlmSummaryService:
             document = await self.document_repo.get_by_file_id(file_id)
             if document:
                 text_to_summarize = document.ocr_text.strip()
-        
+
         if not text_to_summarize:
-            # 빈 텍스트인 경우 요약을 건너뛰고 완료 상태로 설정
-            logger.warning(
-                "Text to summarize is empty (no transcription or OCR text) for file_id=%s. "
-                "Skipping summarization and marking as completed.",
-                file_id
-            )
+            logger.warning("Text to summarize is empty for file_id=%s", file_id)
             await self.file_repo.add_llm_log(
                 file_id,
                 log={"event": "summarization_skipped", "reason": "empty_text"},
@@ -270,39 +371,35 @@ class LlmSummaryService:
             await self.file_repo.update_file_status(file_id, FileStatus.COMPLETED)
             await self.session.commit()
             return
-        
-        # 실제 LLM 처리 직전까지 SUMMARY_QUEUED 상태 유지
-        # 락 획득 및 서버 시작은 summarize_transcription 내부에서 처리됨
+
         logger.info("Starting LLM summarization for file_id={} (provider={})", file_id, self.settings.llm_provider)
-        
+
         start = time.perf_counter()
         try:
-            # 상태 변경: SUMMARY_QUEUED → SUMMARIZING (실제 LLM 호출 직전)
             await self.file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
             await self.file_repo.add_llm_log(
                 file_id,
                 log={"event": "summarizing_started", "previous_status": file_obj.status.value},
-                message="LLM summarization started (about to call LLM)",
+                message="LLM summarization started",
             )
             await self.session.commit()
-            logger.info("Status changed to SUMMARIZING for file_id={}", file_id)
-            
-            # 이제 실제 LLM 호출 (락 획득 및 서버 시작 포함)
-            title, summary_md = summarize_transcription(text_to_summarize)
-            summary_md = sanitize_summary_output(summary_md, text_to_summarize)
+
+            # 동기 함수인 summarize_transcription을 Executor에서 실행
+            loop = asyncio.get_running_loop()
+            title, summary_md = await loop.run_in_executor(
+                None,
+                summarize_transcription,
+                text_to_summarize
+            )
+
         except Exception as exc:
-            # DB 상태 업데이트는 llm_task.py에서 마지막 재시도 실패 시에만 수행
-            # 여기서는 예외만 로깅하고 다시 던짐
             logger.exception("LLM summarization failed for file_id={}", file_id)
             raise
-        
+
         elapsed = time.perf_counter() - start
-        
-        # 제목과 요약 저장
+
         await self.file_repo.update_title(file_id, title)
         await self.file_repo.update_summary_markdown(file_id, summary_md)
-        logger.info("Title and summary stored for file_id={}: title={}, summary_length={}", 
-                    file_id, title, len(summary_md))
         await self.file_repo.update_file_status(file_id, FileStatus.COMPLETED)
         await self.file_repo.add_llm_log(
             file_id,
@@ -311,5 +408,3 @@ class LlmSummaryService:
         )
         await self.session.commit()
         logger.info("LLM summary stored for file_id={} ({:.2f}s)", file_id, elapsed)
-
-

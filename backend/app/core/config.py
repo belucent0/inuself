@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     llm_context_length: int = 15000  # 컨텍스트 길이 (토큰 수) - 메모리 사용량 최적화를 위해 15000으로 제한
     llm_temperature: float = 0.4
     llm_top_p: float = 0.9
-    llm_max_tokens: int = 1024
+    llm_max_tokens: int = 3072  # V6.6: JSON 응답 + 상세 요약을 위해 증가
     llm_n_threads: int = 8
     
     # LLM API 서버 설정 (공통 - 모든 OpenAI 호환 API 사용, provider와 무관)
