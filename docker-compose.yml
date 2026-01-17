@@ -124,6 +124,7 @@ services:
     environment:
       API_BASE_URL: http://asr-backend:8000/api
       NEXT_PUBLIC_GRAFANA_DASHBOARD_URL: ${NEXT_PUBLIC_GRAFANA_DASHBOARD_URL:-}
+      NEXT_PUBLIC_FLOWER_URL: ${NEXT_PUBLIC_FLOWER_URL:-}
     depends_on:
       backend:
         condition: service_healthy
@@ -234,6 +235,19 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  flower:
+    image: mher/flower:2.0
+    container_name: asr-flower
+    command: celery --broker=redis://asr-redis:6379/0 flower --port=5555 --url_prefix=flower --read_only=true
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://asr-redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   redis-data:
