@@ -28,7 +28,7 @@ from worker.logging_config import logger
 # V7.0: LiteLLM Proxy를 통한 OCR 요청
 REDIS_STREAM_ENABLED = os.getenv("REDIS_STREAM_ENABLED", "false").lower() == "true"
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
-LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "sk-litellm-master")
+LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
 OCR_REQUEST_TIMEOUT = 300.0  # 5분
 
 

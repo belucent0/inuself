@@ -31,9 +31,9 @@ class WorkerSettings(BaseSettings):
     # ========================================
     s3_endpoint: str = "http://localhost:9000"
     s3_region: str = "us-east-1"
-    s3_access_key: str = "torchdev"
-    s3_secret_key: str = "torchdev-secret"
-    s3_bucket: str = "asr-media"
+    s3_access_key: str = Field("", validation_alias="S3_ACCESS_KEY")
+    s3_secret_key: str = Field("", validation_alias="S3_SECRET_KEY")
+    s3_bucket: str = Field("asr-media", validation_alias="S3_BUCKET_NAME")
     s3_prefix: str = "uploads"
 
     # ========================================
@@ -68,7 +68,7 @@ class WorkerSettings(BaseSettings):
         validation_alias="LITELLM_BASE_URL"
     )
     litellm_api_key: str = Field(
-        "sk-litellm-master", 
+        "",
         validation_alias="LITELLM_API_KEY"
     )
     litellm_model: str = Field(

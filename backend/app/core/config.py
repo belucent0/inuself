@@ -45,9 +45,9 @@ class Settings(BaseSettings):
     upload_dir: Path = Path("data/uploads")
     s3_endpoint: str = "http://localhost:9000"
     s3_region: str = "us-east-1"
-    s3_access_key: str = "torchdev"
-    s3_secret_key: str = "torchdev-secret"
-    s3_bucket: str = "asr-media"
+    s3_access_key: str = Field("", validation_alias="S3_ACCESS_KEY")
+    s3_secret_key: str = Field("", validation_alias="S3_SECRET_KEY")
+    s3_bucket: str = Field("asr-media", validation_alias="S3_BUCKET_NAME")
     s3_prefix: str = "uploads"
     
     # 외부 접근용 미디어 URL (nginx 프록시 경로)
@@ -74,7 +74,7 @@ class Settings(BaseSettings):
         validation_alias="LITELLM_BASE_URL"
     )
     litellm_api_key: str = Field(
-        "sk-litellm-master", 
+        "",
         validation_alias="LITELLM_API_KEY"
     )
     litellm_model: str = Field(
@@ -152,8 +152,8 @@ class Settings(BaseSettings):
         return ""
 
     # 관리자 인증 설정
-    admin_username: str = "admin"
-    admin_password: str = "admin123"
+    admin_username: str = Field("admin", validation_alias="ADMIN_USERNAME")
+    admin_password: str = Field("", validation_alias="ADMIN_PASSWORD")
 
     # CORS 설정
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://asr.timblo.io,http://asr.timblo.io:3000"

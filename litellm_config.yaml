@@ -54,6 +54,6 @@ router_settings:
     InternalServerErrorRetries: 10
 
 general_settings:
-  master_key: "sk-litellm-master"
+  master_key: "os.environ/LITELLM_API_KEY"
   background_health_checks: False
   health_check_interval: 86400

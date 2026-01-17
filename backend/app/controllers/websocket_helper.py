@@ -21,7 +21,7 @@ def get_litellm_base_url() -> str:
 
 def get_litellm_api_key() -> str:
     """LiteLLM API 키 반환."""
-    return os.getenv("LITELLM_API_KEY", "sk-litellm-master")
+    return os.getenv("LITELLM_API_KEY", "")
 
 
 @lru_cache(maxsize=1)

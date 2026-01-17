@@ -6,8 +6,8 @@ services:
     command: server /data --console-address ":9001"
     restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: torchdev
-      MINIO_ROOT_PASSWORD: torchdev-secret
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-torchdev}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-changeme}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 10s
@@ -40,16 +40,16 @@ services:
     image: postgres:18.1
     container_name: asr-postgres
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: pass
-      POSTGRES_DB: asr
+      POSTGRES_USER: ${POSTGRES_USER:-asr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-asr}
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U user -d asr" ]
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-asr} -d $${POSTGRES_DB:-asr}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -93,17 +93,17 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       - TASK_QUEUE_TYPE=celery
-      - DATABASE_URL=postgresql+asyncpg://user:pass@asr-postgres:5432/asr
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
       - REDIS_URL=redis://asr-redis:6379/0
       - S3_ENDPOINT=http://asr-minio:9000
-      - S3_ACCESS_KEY=torchdev
-      - S3_SECRET_KEY=torchdev-secret
-      - S3_BUCKET_NAME=asr-media
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-asr-media}
       # LiteLLM 프록시 설정
       - LLM_PROVIDER=litellm
       - LITELLM_BASE_URL=http://litellm:4000
-      - LITELLM_API_KEY=sk-litellm-master
-      - LITELLM_MODEL=qwen3-4b
+      - LITELLM_API_KEY=${LITELLM_API_KEY}
+      - LITELLM_MODEL=${LITELLM_MODEL:-qwen3-4b}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
@@ -175,12 +175,12 @@ services:
       - ./infra/litellm:/app/infra/litellm:ro  # V6.6: GPU Stream Client
     environment:
       - TASK_QUEUE_TYPE=celery
-      - DATABASE_URL=postgresql+asyncpg://user:pass@asr-postgres:5432/asr
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
       - REDIS_URL=redis://asr-redis:6379/0
       - S3_ENDPOINT=http://asr-minio:9000
-      - S3_ACCESS_KEY=torchdev
-      - S3_SECRET_KEY=torchdev-secret
-      - S3_BUCKET_NAME=asr-media
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-asr-media}
       # Architecture V7.0: Redis Stream을 통해 Host의 Stream Worker로 요청
       # Worker → Redis Stream → Stream Worker (Host) → GPU/NPU 서버
       # host.docker.internal HTTP 통신 제거 (Docker Desktop 크래시 방지)
@@ -189,8 +189,8 @@ services:
       - PROMETHEUS_URL=http://asr-prometheus:9090
       # LiteLLM 프록시 설정 (LLM 요약용)
       - LITELLM_BASE_URL=http://litellm:4000
-      - LITELLM_API_KEY=sk-litellm-master
-      - LITELLM_MODEL=qwen3-4b
+      - LITELLM_API_KEY=${LITELLM_API_KEY}
+      - LITELLM_MODEL=${LITELLM_MODEL:-qwen3-4b}
     depends_on:
       redis:
         condition: service_healthy
@@ -230,7 +230,7 @@ services:
       - redis
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "python", "-c", "import urllib.request; req = urllib.request.Request('http://localhost:4000/health'); req.add_header('Authorization', 'Bearer sk-litellm-master'); response = urllib.request.urlopen(req); assert response.getcode() == 200" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:4000/health/liveliness" ]
       interval: 30s
       timeout: 10s
       retries: 3
