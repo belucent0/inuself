@@ -1,6 +1,24 @@
 """LiteLLM Custom Handler - Prometheus 기반 GPU/NPU 라우팅.
 
-사용량이 낮은 Provider를 선택하여 요청을 전달합니다. (진짜 스트리밍 지원)
+Architecture V6.6: Redis Stream 기반 메시징 아키텍처
+
+주요 변경 (V6.6):
+- Docker → Host HTTP 통신 제거 (Docker Desktop 크래시 방지)
+- Redis Stream을 통한 GPU 작업 요청/응답
+- Provider Manager가 Host에서 실행되어 localhost로 GPU 서버 접근
+
+ASR 라우팅:
+- 신속모드: whisper-cpp (GPU, 8001) - whisper v3 turbo
+- 정확모드: insanely-fast (GPU, 8002) - whisper large-v3
+- 스트리밍: flm-server (NPU, 11434)
+
+LLM 라우팅:
+- 1순위: flm-server (NPU, 11434) - qwen3vl-it:4b
+- 2순위: llama-server (GPU, 8080) - Router mode, 동적 모델 로드
+
+OCR 라우팅:
+- 신속모드: flm-server (NPU, 11434) - qwen3vl-it:4b
+- 정확모드: llama-server (GPU, 8080) - Qwen3-VL-8B 동적 로드
 """
 import os
 import json
@@ -18,6 +36,9 @@ import litellm
 from litellm import CustomLLM
 from litellm.types.utils import GenericStreamingChunk, ModelResponse
 
+# V6.6: Redis Stream GPU 클라이언트
+from custom.gpu_stream_client import AsyncGPUStreamClient, get_async_gpu_stream_client
+
 # Monkeypatch removed to avoid Enum validation error
 # if not hasattr(litellm, "provider_list"):
 #     litellm.provider_list = []
@@ -30,19 +51,29 @@ logger = logging.getLogger(__name__)
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://asr-prometheus:9090")
 REDIS_URL = os.getenv("REDIS_URL", "redis://asr-redis:6379/0")
 
+# Architecture V6.3: Provider Manager for On-Demand NPU control
+PROVIDER_MANAGER_URL = os.getenv("PROVIDER_MANAGER_URL", "http://host.docker.internal:9999")
+
+# Service Classification (V6.4 Simplified)
+# GPU Services: Always-On - No start/stop control needed
+GPU_SERVICES = {"llama", "whisper-cpp", "insanely-fast", "diarization-server"}
+# NPU Services: On-Demand - Single FLM server for ASR + OCR
+NPU_SERVICES = {"flm"}  # Single unified FLM server
+
 
 # 기본값은 호스트 Docker 내부 주소 (LiteLLM 컨테이너 -> 호스트)
-GPU_API_BASE = os.getenv("GPU_API_BASE", "http://host.docker.internal:8080")
-NPU_API_BASE = os.getenv("NPU_API_BASE", "http://host.docker.internal:11434")  # ASR 기본
-NPU_LLM_API_BASE = os.getenv("NPU_LLM_API_BASE", "http://host.docker.internal:11435")  # LLM (flm-llm-server)
+GPU_API_BASE = os.getenv("GPU_API_BASE", "http://host.docker.internal:8080")  # LLM
+NPU_API_BASE = os.getenv("NPU_API_BASE", "http://host.docker.internal:11434")  # Unified FLM (ASR + OCR)
 
-# 장치 ID
-GPU_DEVICE_ID = os.getenv("GPU_DEVICE_ID", "0x000142B6")
-NPU_DEVICE_ID = os.getenv("NPU_DEVICE_ID", "0x000160E6")
+# 장치 ID (동적 조회로 대체됨 - 아래 함수 참조)
+# GPU_DEVICE_ID = os.getenv("GPU_DEVICE_ID", "0x000142B6")
+# NPU_DEVICE_ID = os.getenv("NPU_DEVICE_ID", "0x000160E6")
 
-# Chat 모델명 (llama-server 멀티모델: 파일명 사용)
-GPU_MODEL = os.getenv("GPU_MODEL", "Qwen3-4B-Instruct-2507-Q4_K_S.gguf")
-NPU_MODEL = os.getenv("NPU_MODEL", "qwen3-it:4b")
+GPU_ENGTYPE = "Compute"  # GPU 사용량 조회 시 사용할 엔진 타입
+
+# Chat/LLM 모델명 (V6.5)
+GPU_MODEL = os.getenv("GPU_MODEL", "Qwen3-4B-Instruct-2507-Q4_K_S.gguf")  # llama-server Router mode
+NPU_MODEL = os.getenv("NPU_MODEL", "qwen3vl-it:4b")  # FLM unified (LLM + OCR)
 
 # Audio 설정
 GPU_AUDIO_API_BASE = os.getenv("GPU_AUDIO_API_BASE", "http://host.docker.internal:8001")
@@ -56,18 +87,18 @@ GPU_INSANELY_FAST_API_BASE = os.getenv("GPU_INSANELY_FAST_API_BASE", "http://hos
 BUSY_THRESHOLD = 70  # 70% 이상이면 "바쁨"
 
 # Health check 설정
+# V6.6: host.docker.internal HTTP 호출이 Docker Desktop 크래시를 유발
+# Health check 비활성화하고 Redis Stream 응답으로 health 판단
 HEALTH_CHECK_TIMEOUT = float(os.getenv("HEALTH_CHECK_TIMEOUT", "3.0"))  # 서버 응답 대기 시간
-HEALTH_CHECK_ENABLED = os.getenv("HEALTH_CHECK_ENABLED", "true").lower() == "true"
+HEALTH_CHECK_ENABLED = os.getenv("HEALTH_CHECK_ENABLED", "false").lower() == "true"  # V6.6: 기본값 false
 
-# GPU OCR Vision 설정
-GPU_OCR_API_BASE = os.getenv("GPU_OCR_API_BASE", "http://host.docker.internal:8081")
+# V6.4: NPU OCR uses same FLM server as ASR (unified)
+NPU_OCR_API_BASE = NPU_API_BASE  # Same port 11434
 
-# Provider별 Health Check URL 매핑
+# Provider별 Health Check URL 매핑 (V6.4 Simplified)
 PROVIDER_HEALTH_URLS = {
     "llama": f"{GPU_API_BASE}/health",
-    "llama-ocr": f"{GPU_OCR_API_BASE}/health",  # GPU Vision OCR (Qwen3-VL-8B)
-    "flm": f"{NPU_API_BASE}/v1/models",  # FLM ASR (11434)
-    "flm-llm": f"{NPU_LLM_API_BASE}/v1/models",  # FLM LLM (11435)
+    "flm": f"{NPU_API_BASE}/v1/models",  # Unified FLM (ASR + OCR on 11434)
     "whisper-cpp": f"{GPU_WHISPER_CPP_API_BASE}",  # whisper.cpp 루트는 health 역할
     "insanely-fast": f"{GPU_INSANELY_FAST_API_BASE}/health",
     "diarization-server": "http://host.docker.internal:8003/health",
@@ -86,11 +117,14 @@ except Exception as e:
     redis_client_async = None
 
 
-def query_prometheus_sync(device_id: str) -> float:
-    """Prometheus에서 5초 평균 사용량 조회 (동기)."""
-    # 쿼리를 한 줄로 작성. sum(avg_over_time(...[5s])) 형태로 수정
-    query = f'sum(avg_over_time(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{device_id}.*engtype_Compute.*"}}[5s]))'
-    
+def get_gpu_device_ids_sync() -> list[str]:
+    """Prometheus에서 GPU device ID 목록을 동적으로 조회.
+
+    Returns:
+        GPU device ID 목록 (예: ["0x0001392E", "0x000155F4"])
+    """
+    import re
+    query = 'windows_gpu_engine_utilization_percentage'
     try:
         with httpx.Client(timeout=5.0) as client:
             response = client.get(
@@ -99,24 +133,306 @@ def query_prometheus_sync(device_id: str) -> float:
             )
             response.raise_for_status()
             data = response.json()
-            
+
             if data["status"] == "success" and data["data"]["result"]:
-                # result는 벡터일 수 있음. 값이 없으면 0
-                if not data["data"]["result"]:
-                    return 0.0
+                device_ids = []
+                for result in data["data"]["result"]:
+                    metric = result["metric"]
+                    exported_instance = metric.get("exported_instance", "")
+                    # exported_instance: "pid_10440_luid_0x00000000_0x0001392E_phys_0_eng_0_engtype_3D"
+                    # luid는 두 번째 hex: 0x0001392E
+                    match = re.search(r'luid_0x[0-9A-Fa-f]+_0x([0-9A-Fa-f]+)', exported_instance)
+                    if match:
+                        luid = '0x' + match.group(1).lower()
+                        if luid not in device_ids:
+                            device_ids.append(luid)
+                            logger.debug(f"[Prometheus] Found GPU device: {luid}")
+                return device_ids
+            return []
+    except Exception as e:
+        logger.warning(f"[Prometheus] Failed to get GPU device IDs: {e}")
+        return []
+
+
+def get_npu_device_ids_sync() -> list[str]:
+    """Prometheus에서 NPU device ID 목록을 동적으로 조회.
+
+    NPU는 AMD NPU exporter (port 9183)에서 수집되거나,
+    windows_exporter의 GPU Engine counter에 포함될 수 있습니다.
+
+    Returns:
+        NPU device ID 목록
+    """
+    # 1. AMD NPU exporter 메트릭 확인
+    query_npu = 'count by (luid) (npu_total_gops)'
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(
+                f"{PROMETHEUS_URL}/api/v1/query",
+                params={"query": query_npu}
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data["status"] == "success" and data["data"]["result"]:
+                device_ids = []
+                for result in data["data"]["result"]:
+                    metric = result["metric"]
+                    exported_instance = metric.get("exported_instance", "")
+                    luid = exported_instance.split("luid_")[1].split("_")[0] if "luid_" in exported_instance else None
+                    if luid and luid not in device_ids:
+                        device_ids.append(luid)
+                        logger.debug(f"[Prometheus] Found NPU device (AMD exporter): 0x{luid}")
+                if device_ids:
+                    return device_ids
+    except Exception as e:
+        logger.debug(f"[Prometheus] AMD NPU exporter query failed: {e}")
+
+    # 2. windows_exporter GPU Engine에서 NPU 확인 (일부 NPU가 GPU counter에 나타남)
+    query_gpu = 'count by (luid) (windows_gpu_engine_utilization_percentage)'
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(
+                f"{PROMETHEUS_URL}/api/v1/query",
+                params={"query": query_gpu}
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data["status"] == "success" and data["data"]["result"]:
+                # GPU device 목록에서 NPU가 포함된 것 필터링
+                gpu_device_ids = []
+                for result in data["data"]["result"]:
+                    metric = result["metric"]
+                    exported_instance = metric.get("exported_instance", "")
+                    luid = exported_instance.split("luid_")[1].split("_")[0] if "luid_" in exported_instance else None
+                    if luid and luid not in gpu_device_ids:
+                        gpu_device_ids.append(luid)
+
+                # NPU device ID가 GPU 목록에 있으면 반환 (GPU counter로 수집되는 경우)
+                npu_luid = os.getenv("NPU_DEVICE_ID", "0x000160E6").lower().replace("0x", "")
+                for gid in gpu_device_ids:
+                    if gid.lower() == npu_luid:
+                        logger.debug(f"[Prometheus] NPU found in GPU metrics: 0x{gid}")
+                        return [gid]
+    except Exception as e:
+        logger.debug(f"[Prometheus] GPU metrics query for NPU failed: {e}")
+
+    return []
+
+
+def query_single_device_sync(device_id: str, engine_filter: str = "non_compute") -> float:
+    """Query Prometheus for GPU/NPU utilization.
+
+    Prometheus Metrics Reference (Grafana Dashboard aligned):
+    - GPU:  windows_gpu_engine_utilization_percentage{engtype=~"3D|Video"}
+           GPU 3D/Video 엔진 사용률 (Windows 작업 관리자 GPU 사용률과 일치)
+           Note: Copy 엔진은 제외 (VRAM 관리용으로 실제 GPU 부하 아님)
+
+    - NPU:  windows_gpu_engine_utilization_percentage{engtype="Compute"}
+           NPU Compute 엔진 사용률 (max로 단일 엔진 최대값 사용)
+           Note: 여러 Compute 엔진이 있어 sum하면 200%+ 나올 수 있음
+
+    Args:
+        device_id: Device ID (e.g., "0x0001392E") - now unused, kept for compatibility
+        engine_filter: "non_compute" for GPU (3D/Video), "compute" for NPU
+
+    Returns:
+        Utilization percentage (0-100)
+    """
+    if engine_filter == "non_compute":
+        # GPU: sum(3D + Video) - Windows 작업 관리자 GPU 사용률과 일치
+        query = 'sum(windows_gpu_engine_utilization_percentage{exported_instance=~".*engtype_(3D|Video).*"})'
+    else:
+        # NPU: max(Compute) - 여러 엔진 중 가장 높은 사용률
+        query = 'max(windows_gpu_engine_utilization_percentage{exported_instance=~".*engtype_Compute.*"})'
+
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(
+                f"{PROMETHEUS_URL}/api/v1/query",
+                params={"query": query}
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data["status"] == "success" and data["data"]["result"]:
                 value = float(data["data"]["result"][0]["value"][1])
-                logger.debug(f"[Prometheus] {device_id}: {value:.1f}%")
+                logger.debug(f"[Prometheus] {engine_filter}: {value:.1f}%")
                 return value
-            logger.debug(f"[Prometheus] {device_id}: no data, returning 0")
             return 0.0
     except Exception as e:
-        logger.warning(f"[Prometheus] Query failed for {device_id}: {e}")
+        logger.debug(f"[Prometheus] Query failed: {e}")
         return 0.0
 
 
-async def query_prometheus_async(device_id: str) -> float:
-    """Prometheus에서 5초 평균 사용량 조회 (비동기)."""
-    query = f'sum(avg_over_time(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{device_id}.*engtype_Compute.*"}}[5s]))'
+def query_prometheus_sync(device_type: str = "gpu") -> float:
+    """Prometheus에서 GPU/NPU 사용량을 동적으로 조회.
+
+    Prometheus Metrics Reference:
+    - GPU:  sum(windows_gpu_engine_utilization_percentage{engtype=~"3D|Video"})
+           Windows 작업 관리자 GPU 사용률과 일치 (sum, 3D+Video only)
+    - NPU:  max(windows_gpu_engine_utilization_percentage{engtype="Compute"})
+           여러 Compute 엔진 중 가장 높은 사용률 (max)
+
+    Args:
+        device_type: "gpu" 또는 "npu"
+
+    Returns:
+        0-100 사이의 사용량百分比
+    """
+    if device_type == "gpu":
+        engine_filter = "non_compute"
+    elif device_type == "npu":
+        engine_filter = "compute"
+    else:
+        return 0.0
+
+    return query_single_device_sync("", engine_filter)
+
+
+async def query_memory_async(device_type: str = "gpu") -> dict:
+    """Prometheus에서 GPU/NPU 메모리 사용량을 조회 (비동기).
+
+    Prometheus Metrics Reference:
+    - GPU: windows_gpu_dedicated_memory_usage_bytes
+           windows_gpu_shared_memory_usage_bytes
+    - NPU: windows_gpu_shared_memory_usage_bytes{engtype=Compute}
+           windows_gpu_total_committed_bytes{engtype=Compute}
+
+    Args:
+        device_type: "gpu" 또는 "npu"
+
+    Returns:
+        {"dedicated": bytes, "shared": bytes, "total": bytes, "percent": float}
+    """
+    if device_type == "gpu":
+        query_parts = [
+            'sum(windows_gpu_dedicated_memory_usage_bytes)',
+            'sum(windows_gpu_shared_memory_usage_bytes)',
+        ]
+    elif device_type == "npu":
+        query_parts = [
+            'sum(windows_gpu_shared_memory_usage_bytes{exported_instance=~".*engtype_Compute.*"})',
+            'sum(windows_gpu_total_committed_bytes{exported_instance=~".*engtype_Compute.*"})',
+        ]
+    else:
+        return {"dedicated": 0, "shared": 0, "total": 0, "percent": 0.0}
+
+    result = {"dedicated": 0, "shared": 0, "total": 0, "percent": 0.0}
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for i, query in enumerate(query_parts):
+                response = await client.get(
+                    f"{PROMETHEUS_URL}/api/v1/query",
+                    params={"query": query}
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                if data["status"] == "success" and data["data"]["result"]:
+                    value = float(data["data"]["result"][0]["value"][1])
+                    if i == 0:
+                        result["dedicated"] = value
+                    else:
+                        result["shared"] = value
+
+            result["total"] = result["dedicated"] + result["shared"]
+            logger.debug(f"[Prometheus] Memory ({device_type}): dedicated={result['dedicated']/1e9:.1f}GB, shared={result['shared']/1e9:.1f}GB, total={result['total']/1e9:.1f}GB")
+
+    except Exception as e:
+        logger.debug(f"[Prometheus] Memory query failed for {device_type}: {e}")
+
+    return result
+
+
+def query_memory_sync(device_type: str = "gpu") -> dict:
+    """Prometheus에서 GPU/NPU 메모리 사용량을 조회.
+
+    Prometheus Metrics Reference:
+    - GPU: windows_gpu_dedicated_memory_usage_bytes
+           windows_gpu_shared_memory_usage_bytes
+           (GPU device들의 메모리 합산)
+    - NPU: windows_gpu_shared_memory_usage_bytes
+           windows_gpu_total_committed_bytes
+           (NPU device들의 메모리)
+
+    Args:
+        device_type: "gpu" 또는 "npu"
+
+    Returns:
+        {"dedicated": bytes, "shared": bytes, "total": bytes, "percent": float}
+    """
+    if device_type == "gpu":
+        query_parts = [
+            'sum(windows_gpu_dedicated_memory_usage_bytes)',
+            'sum(windows_gpu_shared_memory_usage_bytes)',
+        ]
+    elif device_type == "npu":
+        query_parts = [
+            'sum(windows_gpu_shared_memory_usage_bytes{exported_instance=~".*engtype_Compute.*"})',
+            'sum(windows_gpu_total_committed_bytes{exported_instance=~".*engtype_Compute.*"})',
+        ]
+    else:
+        return {"dedicated": 0, "shared": 0, "total": 0, "percent": 0.0}
+
+    result = {"dedicated": 0, "shared": 0, "total": 0, "percent": 0.0}
+
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            # dedicated/shared memory
+            for i, query in enumerate(query_parts):
+                response = client.get(
+                    f"{PROMETHEUS_URL}/api/v1/query",
+                    params={"query": query}
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                if data["status"] == "success" and data["data"]["result"]:
+                    value = float(data["data"]["result"][0]["value"][1])
+                    if i == 0:
+                        result["dedicated"] = value
+                    else:
+                        result["shared"] = value
+
+            result["total"] = result["dedicated"] + result["shared"]
+            logger.debug(f"[Prometheus] Memory ({device_type}): dedicated={result['dedicated']/1e9:.1f}GB, shared={result['shared']/1e9:.1f}GB, total={result['total']/1e9:.1f}GB")
+
+    except Exception as e:
+        logger.debug(f"[Prometheus] Memory query failed for {device_type}: {e}")
+
+    return result
+
+
+def format_bytes(b: float) -> str:
+    """바이트를 읽기 쉬운 단위로 변환."""
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if b < 1024.0:
+            return f"{b:.1f}{unit}"
+        b /= 1024.0
+    return f"{b:.1f}PB"
+
+
+async def query_single_device_async(device_id: str, engine_filter: str = "non_compute") -> float:
+    """Query Prometheus for GPU/NPU utilization (async).
+
+    Prometheus Metrics Reference:
+    - GPU:  windows_gpu_engine_utilization_percentage{engtype=~"3D|Video"}
+    - NPU:  windows_gpu_engine_utilization_percentage{engtype="Compute"}
+
+    Args:
+        device_id: Device ID (e.g., "0x0001392E")
+        engine_filter: "non_compute" for GPU (3D/Video), "compute" for NPU
+
+    Returns:
+        Utilization percentage (0-100)
+    """
+    if engine_filter == "non_compute":
+        query = 'sum(windows_gpu_engine_utilization_percentage{exported_instance=~".*engtype_(3D|Video).*"})'
+    else:
+        query = 'max(windows_gpu_engine_utilization_percentage{exported_instance=~".*engtype_Compute.*"})'
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -128,15 +444,35 @@ async def query_prometheus_async(device_id: str) -> float:
             data = response.json()
 
             if data["status"] == "success" and data["data"]["result"]:
-                if not data["data"]["result"]:
-                    return 0.0
                 value = float(data["data"]["result"][0]["value"][1])
-                logger.debug(f"[Prometheus] {device_id}: {value:.1f}%")
+                logger.debug(f"[Prometheus] Device {device_id} ({engine_filter}): {value:.1f}%")
                 return value
             return 0.0
     except Exception as e:
-        logger.warning(f"[Prometheus] Query failed for {device_id}: {e}")
+        logger.debug(f"[Prometheus] Query failed for {device_id}: {e}")
         return 0.0
+
+
+async def query_prometheus_async(device_type: str = "gpu") -> float:
+    """Prometheus에서 GPU/NPU 사용량을 동적으로 조회 (비동기)."""
+    device_ids = get_gpu_device_ids_sync()
+    if not device_ids:
+        return 0.0
+
+    if device_type == "gpu":
+        engine_filter = "non_compute"
+    elif device_type == "npu":
+        engine_filter = "compute"
+    else:
+        return 0.0
+
+    total_usage = 0.0
+    for device_id in device_ids:
+        usage = await query_single_device_async(device_id, engine_filter)
+        total_usage += usage
+
+    logger.debug(f"[Prometheus] {device_type.upper()}: {total_usage:.1f}% (sum of {len(device_ids)} devices)")
+    return total_usage
 
 
 def check_provider_health_sync(provider: str) -> bool:
@@ -149,12 +485,12 @@ def check_provider_health_sync(provider: str) -> bool:
         서버가 응답하면 True, 그렇지 않으면 False
     """
     if not HEALTH_CHECK_ENABLED:
-        return True  # Health check 비활성화 시 항상 True
+        return True
 
     health_url = PROVIDER_HEALTH_URLS.get(provider)
     if not health_url:
         logger.warning(f"[HealthCheck] No health URL for provider: {provider}")
-        return True  # URL 없으면 체크 건너뜀
+        return True
 
     try:
         with httpx.Client(timeout=HEALTH_CHECK_TIMEOUT) as client:
@@ -177,12 +513,12 @@ async def check_provider_health_async(provider: str) -> bool:
         서버가 응답하면 True, 그렇지 않으면 False
     """
     if not HEALTH_CHECK_ENABLED:
-        return True  # Health check 비활성화 시 항상 True
+        return True
 
     health_url = PROVIDER_HEALTH_URLS.get(provider)
     if not health_url:
         logger.warning(f"[HealthCheck] No health URL for provider: {provider}")
-        return True  # URL 없으면 체크 건너뜀
+        return True
 
     try:
         async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
@@ -193,6 +529,92 @@ async def check_provider_health_async(provider: str) -> bool:
     except Exception as e:
         logger.debug(f"[HealthCheck] {provider}: unreachable ({e})")
         return False
+
+
+def check_flm_model_ready_sync(api_base: str, model: str, timeout: float = 10.0) -> bool:
+    """FLM 서버 모델 로딩 완료 확인 (dry-run completion, 동기).
+
+    FLM 서버는 /v1/models가 200을 반환해도 모델 로딩이 완료되지 않을 수 있음.
+    간단한 completion 요청으로 실제 처리 가능 여부 확인.
+
+    Args:
+        api_base: FLM 서버 URL (예: http://host.docker.internal:11435)
+        model: 모델 이름 (예: qwen3-it:4b)
+        timeout: 요청 타임아웃 (초)
+
+    Returns:
+        모델이 실제로 요청 처리 가능하면 True
+    """
+    url = f"{api_base}/v1/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "what is 1+1"}],
+        "max_tokens": 10,
+        "stream": False,
+    }
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, json=payload)
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("choices"):
+                    logger.debug(f"[CustomRouter] FLM model ready (dry-run success)")
+                    return True
+    except httpx.ReadTimeout:
+        logger.debug(f"[CustomRouter] FLM dry-run timeout, model may still be loading")
+    except Exception as e:
+        logger.debug(f"[CustomRouter] FLM dry-run failed: {e}")
+
+    return False
+
+
+def check_flm_health_with_model_sync(provider: str) -> bool:
+    """FLM Provider의 health + model readiness 확인 (동기).
+
+    V6.5: 통합 FLM 서버 (11434) - ASR + OCR + LLM 통합
+
+    Args:
+        provider: 'flm' (통합 서버 11434)
+
+    Returns:
+        모델이 실제로 요청 처리 가능하면 True
+    """
+    if provider != "flm":
+        return False
+
+    api_base = NPU_API_BASE
+    model = NPU_MODEL  # qwen3vl-it:4b
+
+    if not check_provider_health_sync(provider):
+        return False
+
+    # V6.5: 통합 FLM 서버는 /v1/models 응답만으로 OK (dry-run 불필요)
+    return True
+
+
+async def check_flm_health_with_model_async(provider: str) -> bool:
+    """FLM Provider의 health + model readiness 확인 (비동기).
+
+    V6.5: 통합 FLM 서버 (11434) - ASR + OCR + LLM 통합
+
+    Args:
+        provider: 'flm' (통합 서버 11434)
+
+    Returns:
+        모델이 실제로 요청 처리 가능하면 True
+    """
+    if provider != "flm":
+        return False
+
+    api_base = NPU_API_BASE
+    model = NPU_MODEL  # qwen3vl-it:4b
+
+    if not await check_provider_health_async(provider):
+        return False
+
+    # V6.5: 통합 FLM 서버는 /v1/models 응답만으로 OK (dry-run 불필요)
+    return True
 
 
 def is_gpu_busy_sync() -> tuple[bool, str]:
@@ -234,26 +656,53 @@ async def is_gpu_busy_async() -> tuple[bool, str]:
 
 
 async def send_provider_control_signal(provider: str, action: str = "start"):
-    """Provider Manager에게 제어 신호 전송 (비동기).
+    """Host Agent에게 서비스 제어 요청 전송 (비동기, V6.3).
+
+    Architecture V6.3:
+    - GPU 서버: Always-On, 제어 신호 불필요 (no-op)
+    - NPU 서버: On-Demand, Host Agent HTTP API로 제어
 
     Args:
-        provider: 'flm', 'llama', 'whisper-cpp', 'insanely-fast', 'diarization-server'
-        action: 'start' or 'touch' (touch = 활동 타임스탬프 갱신, idle timeout 리셋)
+        provider: 서비스 이름 (예: 'flm-llm-server' 또는 'flm-llm')
+        action: 'start' or 'stop' (touch는 더 이상 필요 없음 - Servy가 health check로 관리)
     """
-    if not redis_client_async:
-        logger.warning("[CustomRouter] Redis not available, skipping provider control signal")
+    # GPU 서버는 Always-On → 제어 신호 불필요
+    if provider in GPU_SERVICES:
+        logger.debug(f"[CustomRouter] GPU service '{provider}' is Always-On, skipping control signal")
+        return
+
+    # NPU 서비스 이름 정규화 (flm-llm → flm-llm-server)
+    service_name = provider
+    if provider in NPU_SERVICES:
+        service_name = f"{provider}-server"
+
+    # On-Demand: Host Agent HTTP API 호출
+    if action == "start":
+        url = f"{PROVIDER_MANAGER_URL}/start/{service_name}"
+    elif action == "stop":
+        url = f"{PROVIDER_MANAGER_URL}/stop/{service_name}"
+    else:
+        # touch는 V6.3에서 불필요 (Servy가 health check로 관리)
+        logger.debug(f"[CustomRouter] Action '{action}' not supported in V6.3")
         return
 
     try:
-        message = {"action": action, "provider": provider}
-        await redis_client_async.publish("provider.control", json.dumps(message))
-        logger.debug(f"[CustomRouter] Sent provider signal: {provider} -> {action}")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url)
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"[CustomRouter] Provider Manager: {service_name} -> {result.get('status', 'ok')}")
+            else:
+                logger.warning(f"[CustomRouter] Provider Manager error: {response.status_code} - {response.text}")
     except Exception as e:
-        logger.warning(f"[CustomRouter] Failed to send provider signal: {e}")
+        logger.warning(f"[CustomRouter] Provider Manager request failed: {e}")
 
 
 async def increment_active_count(provider: str):
-    """Provider 활성 요청 카운트 증가 (비동기)."""
+    """Provider 활성 요청 카운트 증가 (비동기).
+
+    V6.3 Note: 모니터링 용도로만 사용. Servy가 서비스 관리를 담당.
+    """
     if not redis_client_async:
         return
     try:
@@ -261,11 +710,14 @@ async def increment_active_count(provider: str):
         await redis_client_async.incr(key)
         logger.debug(f"[CustomRouter] INCR {key}")
     except Exception as e:
-        logger.warning(f"[CustomRouter] Failed to increment active count: {e}")
+        logger.debug(f"[CustomRouter] Active count tracking skipped: {e}")
 
 
 async def decrement_active_count(provider: str):
-    """Provider 활성 요청 카운트 감소 (비동기)."""
+    """Provider 활성 요청 카운트 감소 (비동기).
+
+    V6.3 Note: 모니터링 용도로만 사용. Servy가 서비스 관리를 담당.
+    """
     if not redis_client_async:
         return
     try:
@@ -276,7 +728,56 @@ async def decrement_active_count(provider: str):
             await redis_client_async.set(key, 0)
         logger.debug(f"[CustomRouter] DECR {key} -> {max(0, new_val)}")
     except Exception as e:
-        logger.warning(f"[CustomRouter] Failed to decrement active count: {e}")
+        logger.debug(f"[CustomRouter] Active count tracking skipped: {e}")
+
+
+async def unload_llama_models():
+    """llama-server에서 로드된 모델을 언로드하여 GPU 메모리 확보.
+
+    ASR/Diarization 작업 전에 호출하여 GPU 메모리 충돌 방지.
+    llama-server가 Router mode로 실행 중일 때만 동작.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # 1. 로드된 모델 목록 조회
+            resp = await client.get(f"{GPU_API_BASE}/models")
+            if resp.status_code != 200:
+                logger.debug(f"[CustomRouter] llama-server /models returned {resp.status_code}, skipping unload")
+                return
+
+            models_data = resp.json()
+            models = models_data.get("data", [])
+
+            if not models:
+                logger.debug("[CustomRouter] No models loaded in llama-server")
+                return
+
+            # 2. 각 모델 언로드
+            unloaded = []
+            for model in models:
+                model_id = model.get("id", "")
+                if not model_id:
+                    continue
+
+                try:
+                    unload_resp = await client.post(
+                        f"{GPU_API_BASE}/models/unload",
+                        json={"model": model_id}
+                    )
+                    if unload_resp.status_code == 200:
+                        unloaded.append(model_id)
+                    else:
+                        logger.debug(f"[CustomRouter] Failed to unload {model_id}: {unload_resp.status_code}")
+                except Exception as e:
+                    logger.debug(f"[CustomRouter] Error unloading {model_id}: {e}")
+
+            if unloaded:
+                logger.info(f"[CustomRouter] Unloaded llama-server models for GPU memory: {unloaded}")
+
+    except httpx.ConnectError:
+        logger.debug("[CustomRouter] llama-server not running, skipping model unload")
+    except Exception as e:
+        logger.debug(f"[CustomRouter] Model unload skipped: {e}")
 
 
 async def select_provider_async(
@@ -301,13 +802,14 @@ async def select_provider_async(
     4. 선택된 Provider unhealthy → start 신호 + 대기 (max 15초)
     5. timeout → fallback Provider 시도 (동일 로직)
     """
-    # Provider 설정 헬퍼
+    # Provider 설정 헬퍼 (V6.5: 통합 FLM 서버)
     def get_provider_config(provider: str, task: str) -> tuple[str, str, str, str]:
         """(api_base, model, provider_key, signal_provider)"""
         if provider == "npu":
+            # V6.5: 모든 NPU 작업은 통합 FLM 서버 (11434) 사용
             if task == "audio":
-                return NPU_AUDIO_API_BASE, NPU_AUDIO_MODEL, "npu-audio", "flm"
-            return NPU_LLM_API_BASE, NPU_MODEL, "npu", "flm-llm"  # LLM은 11435 포트
+                return NPU_API_BASE, NPU_AUDIO_MODEL, "npu-audio", "flm"
+            return NPU_API_BASE, NPU_MODEL, "npu", "flm"  # LLM + OCR 통합
         else:  # gpu
             if task == "audio":
                 return GPU_WHISPER_CPP_API_BASE, GPU_AUDIO_MODEL, "gpu-audio", "whisper-cpp"
@@ -324,10 +826,10 @@ async def select_provider_async(
     elif force_provider == "npu":
         logger.info(f"[CustomRouter] Forced: NPU (task_type={task_type})")
         if not skip_signal:
-            await send_provider_control_signal("flm-llm", "start")
+            await send_provider_control_signal("flm", "start")
         if task_type == "audio":
-            return NPU_AUDIO_API_BASE, NPU_AUDIO_MODEL, "npu-audio"
-        return NPU_LLM_API_BASE, NPU_MODEL, "npu"  # LLM은 11435 포트
+            return NPU_API_BASE, NPU_AUDIO_MODEL, "npu-audio"
+        return NPU_API_BASE, NPU_MODEL, "npu"  # V6.5: 통합 FLM (11434)
 
     # 1. Redis 세마포어 체크 (즉시 반응)
     # 1-1. NPU 세마포어 체크 → GPU로 강제
@@ -353,14 +855,18 @@ async def select_provider_async(
         return api_base, model, key
 
     # 2. Prometheus 메트릭 + Health Check
-    gpu_avg = await query_prometheus_async(GPU_DEVICE_ID)
-    npu_avg = await query_prometheus_async(NPU_DEVICE_ID)
-    # Chat task는 flm-llm (11435), Audio task는 flm (11434) 사용
-    npu_health_provider = "flm-llm" if task_type == "chat" else "flm"
-    npu_healthy = await check_provider_health_async(npu_health_provider)
+    gpu_avg = await query_prometheus_async("gpu")
+    npu_avg = await query_prometheus_async("npu")
+    # V6.5: 통합 FLM 서버 사용
+    npu_health_provider = "flm"
+    npu_healthy = await check_flm_health_with_model_async(npu_health_provider)
     gpu_healthy = await check_provider_health_async("llama")
 
-    logger.info(f"[CustomRouter] Usage - GPU: {gpu_avg:.1f}%, NPU: {npu_avg:.1f}% | Health - NPU({npu_health_provider}): {npu_healthy}, GPU: {gpu_healthy}")
+    # 메모리 사용량 조회
+    gpu_mem = await query_memory_async("gpu")
+    npu_mem = await query_memory_async("npu")
+
+    logger.info(f"[CustomRouter] Usage - GPU: {gpu_avg:.1f}% ({format_bytes(gpu_mem['total'])}), NPU: {npu_avg:.1f}% ({format_bytes(npu_mem['total'])}) | Health - NPU({npu_health_provider}): {npu_healthy}, GPU: {gpu_healthy}")
 
     # 3. 사용률 기반 우선 Provider 결정 (NPU 우선)
     if npu_avg < BUSY_THRESHOLD:
@@ -377,6 +883,10 @@ async def select_provider_async(
     primary_api, primary_model, primary_key, primary_signal = get_provider_config(primary, task_type)
     primary_healthy = npu_healthy if primary == "npu" else gpu_healthy
 
+    # 4. Primary Provider 시도
+    primary_api, primary_model, primary_key, primary_signal = get_provider_config(primary, task_type)
+    primary_healthy = npu_healthy if primary == "npu" else gpu_healthy
+
     if primary_healthy:
         # 이미 ready → 바로 사용
         logger.info(f"[CustomRouter] Selected: {primary.upper()} (already healthy)")
@@ -384,28 +894,41 @@ async def select_provider_async(
             await send_provider_control_signal(primary_signal, "start")
         return primary_api, primary_model, primary_key
 
-    # Primary unhealthy → start 신호 + 대기 (max 15초)
-    logger.info(f"[CustomRouter] {primary.upper()} unhealthy, sending start signal...")
-    await send_provider_control_signal(primary_signal, "start")
+    # Primary Unhealthy Case
+    # Check Fallback Health for Fast Failover
+    fallback_api, fallback_model, fallback_key, fallback_signal = get_provider_config(fallback, task_type)
+    fallback_healthy = gpu_healthy if fallback == "gpu" else npu_healthy
+
+    if fallback_healthy:
+        logger.warning(f"[CustomRouter] {primary.upper()} unhealthy but {fallback.upper()} is healthy. Fast Failover!")
+        
+        # [Background] Heal Primary (Send start signal)
+        logger.info(f"[CustomRouter] Healing {primary.upper()} in background...")
+        if not skip_signal:
+            await send_provider_control_signal(primary_signal, "start")
+
+        # [Immediate Action] Use Fallback
+        logger.info(f"[CustomRouter] Selected: {fallback.upper()} (Fast Failover)")
+        if not skip_signal:
+            await send_provider_control_signal(fallback_signal, "start")
+        return fallback_api, fallback_model, fallback_key
+
+    # Both Unhealthy Case -> Try to start Primary with wait
+    logger.info(f"[CustomRouter] Both providers unhealthy. Trying to start {primary.upper()}...")
+    if not skip_signal:
+        await send_provider_control_signal(primary_signal, "start")
 
     if await wait_for_server_ready_async(primary_api, max_wait=15.0, interval=1.0):
         logger.info(f"[CustomRouter] Selected: {primary.upper()} (started successfully)")
         return primary_api, primary_model, primary_key
 
-    # 5. Fallback Provider 시도
+    # 5. Fallback Provider 시도 (Primary Start 실패 시)
     logger.warning(f"[CustomRouter] {primary.upper()} failed to start, trying {fallback.upper()}...")
-    fallback_api, fallback_model, fallback_key, fallback_signal = get_provider_config(fallback, task_type)
-    fallback_healthy = gpu_healthy if fallback == "gpu" else npu_healthy
-
-    if fallback_healthy:
-        logger.info(f"[CustomRouter] Selected: {fallback.upper()} (already healthy)")
-        if not skip_signal:
-            await send_provider_control_signal(fallback_signal, "start")
-        return fallback_api, fallback_model, fallback_key
-
-    # Fallback도 unhealthy → start 신호 + 대기 (max 15초)
+    
+    # Fallback도 unhealthy (위에서 확인함) → start 신호 + 대기
     logger.info(f"[CustomRouter] {fallback.upper()} unhealthy, sending start signal...")
-    await send_provider_control_signal(fallback_signal, "start")
+    if not skip_signal:
+        await send_provider_control_signal(fallback_signal, "start")
 
     if await wait_for_server_ready_async(fallback_api, max_wait=15.0, interval=1.0):
         logger.info(f"[CustomRouter] Selected: {fallback.upper()} (started successfully)")
@@ -417,17 +940,42 @@ async def select_provider_async(
 
 
 def send_provider_control_signal_sync(provider: str, action: str = "start"):
-    """Provider Manager에게 제어 신호 전송 (동기)."""
-    if not redis_client_sync:
-        logger.warning("[CustomRouter] Redis not available, skipping provider control signal")
+    """Host Agent에게 서비스 제어 요청 전송 (동기, V6.3).
+
+    Architecture V6.3:
+    - GPU 서버: Always-On, 제어 신호 불필요 (no-op)
+    - NPU 서버: On-Demand, Host Agent HTTP API로 제어
+    """
+    # GPU 서버는 Always-On → 제어 신호 불필요
+    if provider in GPU_SERVICES:
+        logger.debug(f"[CustomRouter] GPU service '{provider}' is Always-On, skipping control signal")
+        return
+
+    # NPU 서비스 이름 정규화 (flm-llm → flm-llm-server)
+    service_name = provider
+    if provider in NPU_SERVICES:
+        service_name = f"{provider}-server"
+
+    # On-Demand: Host Agent HTTP API 호출
+    if action == "start":
+        url = f"{PROVIDER_MANAGER_URL}/start/{service_name}"
+    elif action == "stop":
+        url = f"{PROVIDER_MANAGER_URL}/stop/{service_name}"
+    else:
+        # touch는 V6.3에서 불필요 (Servy가 health check로 관리)
+        logger.debug(f"[CustomRouter] Action '{action}' not supported in V6.3")
         return
 
     try:
-        message = {"action": action, "provider": provider}
-        redis_client_sync.publish("provider.control", json.dumps(message))
-        logger.debug(f"[CustomRouter] Sent provider signal (sync): {provider} -> {action}")
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(url)
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"[CustomRouter] Provider Manager: {service_name} -> {result.get('status', 'ok')}")
+            else:
+                logger.warning(f"[CustomRouter] Provider Manager error: {response.status_code} - {response.text}")
     except Exception as e:
-        logger.warning(f"[CustomRouter] Failed to send provider signal: {e}")
+        logger.warning(f"[CustomRouter] Provider Manager request failed: {e}")
 
 
 def wait_for_server_ready_sync(api_base: str, max_wait: float = 60.0, interval: float = 1.0) -> bool:
@@ -441,9 +989,12 @@ def wait_for_server_ready_sync(api_base: str, max_wait: float = 60.0, interval: 
     Returns:
         서버 준비 완료 여부
     """
+    # FLM 서버 여부 판별
+    is_flm_server = ":11434" in api_base  # V6.5: 통합 FLM 서버만
+
     # Health endpoint 결정
-    if ":11434" in api_base or ":11435" in api_base or ":11436" in api_base:
-        # FLM 서버 (ASR:11434, LLM:11435, OCR:11436): /v1/models 엔드포인트로 체크
+    if is_flm_server:
+        # FLM 서버: /v1/models로 기본 체크
         health_url = f"{api_base}/v1/models"
     elif ":8080" in api_base:
         # llama-server: /health 엔드포인트
@@ -453,6 +1004,7 @@ def wait_for_server_ready_sync(api_base: str, max_wait: float = 60.0, interval: 
 
     start_time = time.time()
     attempt = 0
+    health_passed = False
 
     while (time.time() - start_time) < max_wait:
         attempt += 1
@@ -460,9 +1012,19 @@ def wait_for_server_ready_sync(api_base: str, max_wait: float = 60.0, interval: 
             with httpx.Client(timeout=5.0) as client:
                 response = client.get(health_url)
                 if response.status_code == 200:
-                    elapsed = time.time() - start_time
-                    logger.info(f"[CustomRouter] Server ready at {api_base} after {elapsed:.1f}s (attempt {attempt})")
-                    return True
+                    if not health_passed:
+                        elapsed = time.time() - start_time
+                        logger.info(f"[CustomRouter] Server responding at {api_base} after {elapsed:.1f}s (attempt {attempt})")
+                        health_passed = True
+
+                    # V6.5: 통합 FLM 서버는 /v1/models 응답만으로 OK
+                    if is_flm_server:
+                        elapsed = time.time() - start_time
+                        logger.info(f"[CustomRouter] FLM server ready at {api_base} after {elapsed:.1f}s")
+                        return True
+                    else:
+                        # 비-FLM 서버는 health check만으로 OK
+                        return True
         except Exception as e:
             if attempt == 1:
                 logger.info(f"[CustomRouter] Waiting for server at {api_base}...")
@@ -471,6 +1033,46 @@ def wait_for_server_ready_sync(api_base: str, max_wait: float = 60.0, interval: 
         time.sleep(interval)
 
     logger.warning(f"[CustomRouter] Server at {api_base} not ready after {max_wait}s")
+    return False
+
+
+async def check_flm_model_ready_async(api_base: str, model: str, timeout: float = 10.0) -> bool:
+    """FLM 서버 모델 로딩 완료 확인 (dry-run completion).
+
+    FLM 서버는 /v1/models가 200을 반환해도 모델 로딩이 완료되지 않을 수 있음.
+    간단한 completion 요청으로 실제 처리 가능 여부 확인.
+
+    Args:
+        api_base: FLM 서버 URL (예: http://host.docker.internal:11435)
+        model: 모델 이름 (예: qwen3-it:4b)
+        timeout: 요청 타임아웃 (초)
+
+    Returns:
+        모델이 실제로 요청 처리 가능하면 True
+    """
+    url = f"{api_base}/v1/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "what is 1+1"}],
+        "max_tokens": 10,
+        "stream": False,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code == 200:
+                result = response.json()
+                # 응답에 choices가 있으면 모델 로딩 완료
+                if result.get("choices"):
+                    logger.debug(f"[CustomRouter] FLM model ready (dry-run success)")
+                    return True
+    except httpx.ReadTimeout:
+        # 타임아웃은 모델이 아직 로딩 중일 수 있음
+        logger.debug(f"[CustomRouter] FLM dry-run timeout, model may still be loading")
+    except Exception as e:
+        logger.debug(f"[CustomRouter] FLM dry-run failed: {e}")
+
     return False
 
 
@@ -487,9 +1089,12 @@ async def wait_for_server_ready_async(api_base: str, max_wait: float = 60.0, int
     """
     import asyncio
 
+    # FLM 서버 여부 판별
+    is_flm_server = ":11434" in api_base  # V6.5: 통합 FLM 서버만
+
     # Health endpoint 결정
-    if ":11434" in api_base or ":11435" in api_base or ":11436" in api_base:
-        # FLM 서버 (ASR:11434, LLM:11435, OCR:11436): /v1/models 엔드포인트로 체크
+    if is_flm_server:
+        # FLM 서버: /v1/models로 기본 체크
         health_url = f"{api_base}/v1/models"
     elif ":8080" in api_base:
         # llama-server: /health 엔드포인트
@@ -499,6 +1104,7 @@ async def wait_for_server_ready_async(api_base: str, max_wait: float = 60.0, int
 
     start_time = time.time()
     attempt = 0
+    health_passed = False
 
     while (time.time() - start_time) < max_wait:
         attempt += 1
@@ -506,9 +1112,19 @@ async def wait_for_server_ready_async(api_base: str, max_wait: float = 60.0, int
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(health_url)
                 if response.status_code == 200:
-                    elapsed = time.time() - start_time
-                    logger.info(f"[CustomRouter] Server ready at {api_base} after {elapsed:.1f}s (attempt {attempt})")
-                    return True
+                    if not health_passed:
+                        elapsed = time.time() - start_time
+                        logger.info(f"[CustomRouter] Server responding at {api_base} after {elapsed:.1f}s (attempt {attempt})")
+                        health_passed = True
+
+                    # V6.5: 통합 FLM 서버는 /v1/models 응답만으로 OK
+                    if is_flm_server:
+                        elapsed = time.time() - start_time
+                        logger.info(f"[CustomRouter] FLM server ready at {api_base} after {elapsed:.1f}s")
+                        return True
+                    else:
+                        # 비-FLM 서버는 health check만으로 OK
+                        return True
         except Exception as e:
             if attempt == 1:
                 logger.info(f"[CustomRouter] Waiting for server at {api_base}...")
@@ -521,7 +1137,10 @@ async def wait_for_server_ready_async(api_base: str, max_wait: float = 60.0, int
 
 
 def increment_active_count_sync(provider: str):
-    """Provider 활성 요청 카운트 증가 (동기)."""
+    """Provider 활성 요청 카운트 증가 (동기).
+
+    V6.3 Note: 모니터링 용도로만 사용. Servy가 서비스 관리를 담당.
+    """
     if not redis_client_sync:
         return
     try:
@@ -529,11 +1148,14 @@ def increment_active_count_sync(provider: str):
         redis_client_sync.incr(key)
         logger.debug(f"[CustomRouter] INCR {key}")
     except Exception as e:
-        logger.warning(f"[CustomRouter] Failed to increment active count: {e}")
+        logger.debug(f"[CustomRouter] Active count tracking skipped: {e}")
 
 
 def decrement_active_count_sync(provider: str):
-    """Provider 활성 요청 카운트 감소 (동기)."""
+    """Provider 활성 요청 카운트 감소 (동기).
+
+    V6.3 Note: 모니터링 용도로만 사용. Servy가 서비스 관리를 담당.
+    """
     if not redis_client_sync:
         return
     try:
@@ -543,7 +1165,7 @@ def decrement_active_count_sync(provider: str):
             redis_client_sync.set(key, 0)
         logger.debug(f"[CustomRouter] DECR {key} -> {max(0, new_val)}")
     except Exception as e:
-        logger.warning(f"[CustomRouter] Failed to decrement active count: {e}")
+        logger.debug(f"[CustomRouter] Active count tracking skipped: {e}")
 
 
 def select_provider_sync(
@@ -560,13 +1182,14 @@ def select_provider_sync(
     4. 선택된 Provider unhealthy → start 신호 + 대기 (max 15초)
     5. timeout → fallback Provider 시도 (동일 로직)
     """
-    # Provider 설정 헬퍼
+    # Provider 설정 헬퍼 (V6.5: 통합 FLM 서버)
     def get_provider_config(provider: str, task: str) -> tuple[str, str, str, str]:
         """(api_base, model, provider_key, signal_provider)"""
         if provider == "npu":
+            # V6.5: 모든 NPU 작업은 통합 FLM 서버 (11434) 사용
             if task == "audio":
-                return NPU_AUDIO_API_BASE, NPU_AUDIO_MODEL, "npu-audio", "flm"
-            return NPU_LLM_API_BASE, NPU_MODEL, "npu", "flm-llm"  # LLM은 11435 포트
+                return NPU_API_BASE, NPU_AUDIO_MODEL, "npu-audio", "flm"
+            return NPU_API_BASE, NPU_MODEL, "npu", "flm"  # LLM + OCR 통합
         else:  # gpu
             if task == "audio":
                 return GPU_WHISPER_CPP_API_BASE, GPU_AUDIO_MODEL, "gpu-audio", "whisper-cpp"
@@ -583,10 +1206,10 @@ def select_provider_sync(
     elif force_provider == "npu":
         logger.info(f"[CustomRouter] Forced: NPU (task_type={task_type})")
         if not skip_signal:
-            send_provider_control_signal_sync("flm-llm", "start")
+            send_provider_control_signal_sync("flm", "start")
         if task_type == "audio":
-            return NPU_AUDIO_API_BASE, NPU_AUDIO_MODEL, "npu-audio"
-        return NPU_LLM_API_BASE, NPU_MODEL, "npu"  # LLM은 11435 포트
+            return NPU_API_BASE, NPU_AUDIO_MODEL, "npu-audio"
+        return NPU_API_BASE, NPU_MODEL, "npu"  # V6.5: 통합 FLM (11434)
 
     # 1. Redis 세마포어 체크 (즉시 반응)
     # 1-1. NPU 세마포어 체크 → GPU로 강제
@@ -612,14 +1235,18 @@ def select_provider_sync(
         return api_base, model, key
 
     # 2. Prometheus 메트릭 + Health Check
-    gpu_avg = query_prometheus_sync(GPU_DEVICE_ID)
-    npu_avg = query_prometheus_sync(NPU_DEVICE_ID)
-    # Chat task는 flm-llm (11435), Audio task는 flm (11434) 사용
-    npu_health_provider = "flm-llm" if task_type == "chat" else "flm"
-    npu_healthy = check_provider_health_sync(npu_health_provider)
+    gpu_avg = query_prometheus_sync("gpu")
+    npu_avg = query_prometheus_sync("npu")
+    # V6.5: 통합 FLM 서버 사용
+    npu_health_provider = "flm"
+    npu_healthy = check_flm_health_with_model_sync(npu_health_provider)
     gpu_healthy = check_provider_health_sync("llama")
 
-    logger.info(f"[CustomRouter] Usage - GPU: {gpu_avg:.1f}%, NPU: {npu_avg:.1f}% | Health - NPU({npu_health_provider}): {npu_healthy}, GPU: {gpu_healthy}")
+    # 메모리 사용량 조회
+    gpu_mem = query_memory_sync("gpu")
+    npu_mem = query_memory_sync("npu")
+
+    logger.info(f"[CustomRouter] Usage - GPU: {gpu_avg:.1f}% ({format_bytes(gpu_mem['total'])}), NPU: {npu_avg:.1f}% ({format_bytes(npu_mem['total'])}) | Health - NPU({npu_health_provider}): {npu_healthy}, GPU: {gpu_healthy}")
 
     # 3. 사용률 기반 우선 Provider 결정 (NPU 우선)
     if npu_avg < BUSY_THRESHOLD:
@@ -636,6 +1263,10 @@ def select_provider_sync(
     primary_api, primary_model, primary_key, primary_signal = get_provider_config(primary, task_type)
     primary_healthy = npu_healthy if primary == "npu" else gpu_healthy
 
+    # 4. Primary Provider 시도
+    primary_api, primary_model, primary_key, primary_signal = get_provider_config(primary, task_type)
+    primary_healthy = npu_healthy if primary == "npu" else gpu_healthy
+
     if primary_healthy:
         # 이미 ready → 바로 사용
         logger.info(f"[CustomRouter] Selected: {primary.upper()} (already healthy)")
@@ -643,28 +1274,41 @@ def select_provider_sync(
             send_provider_control_signal_sync(primary_signal, "start")
         return primary_api, primary_model, primary_key
 
-    # Primary unhealthy → start 신호 + 대기 (max 15초)
-    logger.info(f"[CustomRouter] {primary.upper()} unhealthy, sending start signal...")
-    send_provider_control_signal_sync(primary_signal, "start")
+    # Primary Unhealthy Case
+    # Check Fallback Health for Fast Failover
+    fallback_api, fallback_model, fallback_key, fallback_signal = get_provider_config(fallback, task_type)
+    fallback_healthy = gpu_healthy if fallback == "gpu" else npu_healthy
+
+    if fallback_healthy:
+        logger.warning(f"[CustomRouter] {primary.upper()} unhealthy but {fallback.upper()} is healthy. Fast Failover!")
+        
+        # [Background] Heal Primary (Send start signal)
+        logger.info(f"[CustomRouter] Healing {primary.upper()} in background...")
+        if not skip_signal:
+            send_provider_control_signal_sync(primary_signal, "start")
+
+        # [Immediate Action] Use Fallback
+        logger.info(f"[CustomRouter] Selected: {fallback.upper()} (Fast Failover)")
+        if not skip_signal:
+            send_provider_control_signal_sync(fallback_signal, "start")
+        return fallback_api, fallback_model, fallback_key
+
+    # Both Unhealthy Case -> Try to start Primary with wait
+    logger.info(f"[CustomRouter] Both providers unhealthy. Trying to start {primary.upper()}...")
+    if not skip_signal:
+        send_provider_control_signal_sync(primary_signal, "start")
 
     if wait_for_server_ready_sync(primary_api, max_wait=15.0, interval=1.0):
         logger.info(f"[CustomRouter] Selected: {primary.upper()} (started successfully)")
         return primary_api, primary_model, primary_key
 
-    # 5. Fallback Provider 시도
+    # 5. Fallback Provider 시도 (Primary Start 실패 시)
     logger.warning(f"[CustomRouter] {primary.upper()} failed to start, trying {fallback.upper()}...")
-    fallback_api, fallback_model, fallback_key, fallback_signal = get_provider_config(fallback, task_type)
-    fallback_healthy = gpu_healthy if fallback == "gpu" else npu_healthy
-
-    if fallback_healthy:
-        logger.info(f"[CustomRouter] Selected: {fallback.upper()} (already healthy)")
-        if not skip_signal:
-            send_provider_control_signal_sync(fallback_signal, "start")
-        return fallback_api, fallback_model, fallback_key
-
-    # Fallback도 unhealthy → start 신호 + 대기 (max 15초)
+    
+    # Fallback도 unhealthy (위에서 확인함) → start 신호 + 대기
     logger.info(f"[CustomRouter] {fallback.upper()} unhealthy, sending start signal...")
-    send_provider_control_signal_sync(fallback_signal, "start")
+    if not skip_signal:
+        send_provider_control_signal_sync(fallback_signal, "start")
 
     if wait_for_server_ready_sync(fallback_api, max_wait=15.0, interval=1.0):
         logger.info(f"[CustomRouter] Selected: {fallback.upper()} (started successfully)")
@@ -680,334 +1324,529 @@ class PrometheusRouter(CustomLLM):
     """Prometheus 메트릭 기반 GPU/NPU 라우터."""
     streaming = True
     
+    def _is_vision_request(self, messages: list) -> tuple[bool, Optional[str], Optional[str]]:
+        """메시지에 이미지가 포함되어 있는지 확인.
+
+        Returns:
+            (is_vision, image_base64, text_prompt)
+        """
+        for msg in messages:
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                image_base64 = None
+                text_prompt = ""
+                for item in content:
+                    if item.get("type") == "image_url":
+                        image_url = item.get("image_url", {}).get("url", "")
+                        if image_url.startswith("data:image"):
+                            # data:image/jpeg;base64,... 형식
+                            image_base64 = image_url.split(",", 1)[1] if "," in image_url else None
+                    elif item.get("type") == "text":
+                        text_prompt = item.get("text", "")
+                if image_base64:
+                    return True, image_base64, text_prompt
+        return False, None, None
+
     def completion(self, *args, **kwargs) -> ModelResponse:
-        """동기 completion (Non-streaming)."""
+        """동기 completion (Non-streaming) - V7.0 Redis Stream 기반.
+
+        Architecture V7.0:
+        - HTTP 직접 통신 대신 Redis Stream을 통해 Stream Worker로 요청
+        - Vision/OCR 요청 감지 및 처리
+        - Docker Desktop 크래시 방지
+        """
+        from custom.gpu_stream_client import get_gpu_stream_client
+        import base64
+
         messages = kwargs.get("messages", [])
-        
+        requested_model = kwargs.get("model", "")
+
         litellm_params = kwargs.get("litellm_params", {})
         optional_params = kwargs.get("optional_params", {})
         stream = kwargs.get("stream", False) or litellm_params.get("stream") or optional_params.get("stream")
-        
-        logger.info(f"[PrometheusRouter] completion called. stream={stream}")
+
+        logger.info(f"[PrometheusRouter V7.0] completion called. model={requested_model}, stream={stream}")
         if stream:
-             logger.warning("[PrometheusRouter] stream=True detected in completion. LiteLLM should have called astreaming.")
+            logger.warning("[PrometheusRouter V7.0] stream=True detected in completion. LiteLLM should have called astreaming.")
 
-        # On-Demand: Provider 선택 및 시작 (Signal은 내부에서 skip하고 직접 제어할 수도 있지만, sync는 select 내부에서 처리)
-        # 하지만 종료를 위해 provider 이름을 알아야 하므로 반환값 사용
-        api_base, model, provider_key = select_provider_sync(task_type="chat")
+        # V7.0: OCR 요청 감지 (모델명이 ocr-로 시작하거나 vision 요청)
+        is_ocr_model = requested_model.startswith("ocr-")
+        is_vision, image_base64, text_prompt = self._is_vision_request(messages)
 
-        # NOTE: select_provider_sync calls start signal. We need to map provider_key to signal name if different.
-        # provider_key: 'npu', 'gpu', 'npu-audio', 'gpu-audio'
+        if is_ocr_model or is_vision:
+            logger.info(f"[PrometheusRouter V7.0] OCR/Vision request detected: model={requested_model}")
+
+            # accuracy_mode 추출 (extra_body에서)
+            extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
+            accuracy_mode = extra_body.get("accuracy_mode", "speed")
+
+            # OCR 모델 결정
+            if accuracy_mode == "speed":
+                ocr_model = "qwen3vl-it:4b"  # FLM NPU
+                target_provider = "flm"
+            else:
+                ocr_model = "qwen3-vl-8b"  # GPU llama-ocr-server
+                target_provider = "llama-ocr"
+
+            increment_active_count_sync(target_provider)
+
+            try:
+                gpu_client = get_gpu_stream_client()
+
+                if image_base64:
+                    # V7.0: Redis Stream을 통한 OCR 요청
+                    result = gpu_client.request_ocr(
+                        image_base64=image_base64,
+                        model=ocr_model,
+                        prompt=text_prompt or "Extract all text from this image.",
+                        accuracy_mode=accuracy_mode,
+                        timeout=300.0,
+                    )
+
+                    # OCR 결과를 OpenAI 응답 형식으로 변환
+                    ocr_text = result.get("text", "")
+                    if not ocr_text and "choices" in result:
+                        # LLM 응답 형식인 경우
+                        ocr_text = result["choices"][0].get("message", {}).get("content", "")
+
+                    return ModelResponse(
+                        id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
+                        created=result.get("created", int(time.time())),
+                        model=ocr_model,
+                        object="chat.completion",
+                        choices=[
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": ocr_text,
+                                },
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+                    )
+                else:
+                    raise ValueError("No image data provided for OCR request")
+            except Exception as e:
+                logger.error(f"[PrometheusRouter V7.0] OCR completion failed: {e}")
+                raise
+            finally:
+                decrement_active_count_sync(target_provider)
+
+        # 일반 LLM 요청
+        # Provider 선택 (신호 없이 - Redis Stream이 처리)
+        api_base, model, provider_key = select_provider_sync(task_type="chat", skip_signal=True)
         target_provider = "flm" if "npu" in provider_key else "llama"
 
-        logger.info(f"[PrometheusRouter] Routing to {target_provider} ({api_base})")
+        logger.info(f"[PrometheusRouter V7.0] Routing to {target_provider} via Redis Stream")
 
-        # 서버 준비 대기 (최대 60초)
-        if not wait_for_server_ready_sync(api_base, max_wait=60.0):
-            logger.warning(f"[PrometheusRouter] Server not ready, proceeding anyway...")
-
-        # On-Demand: 활성 요청 카운트 증가
+        # 활성 요청 카운트 증가
         increment_active_count_sync(target_provider)
 
-        url = f"{api_base}/v1/chat/completions"
-        payload = {"model": model, "messages": messages, "stream": False}
-
         try:
-            with httpx.Client(timeout=120.0) as client:
-                response = client.post(url, json=payload)
-                response.raise_for_status()
-                result = response.json()
+            # Redis Stream을 통한 LLM 요청 (동기)
+            gpu_client = get_gpu_stream_client()
+            result = gpu_client.request_llm_completion(
+                messages=messages,
+                model=model,
+                max_tokens=optional_params.get("max_tokens", 4096),
+                temperature=optional_params.get("temperature", 0.7),
+                timeout=120.0,
+            )
 
-                return ModelResponse(
-                    id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
-                    created=result.get("created", int(time.time())),
-                    model=result.get("model", model),
-                    object="chat.completion",
-                    choices=[
-                        {
-                            "index": 0,
-                            "message": {
-                                "role": "assistant",
-                                "content": result["choices"][0]["message"]["content"],
-                            },
-                            "finish_reason": result["choices"][0].get("finish_reason", "stop"),
-                        }
-                    ],
-                    usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
-                )
+            return ModelResponse(
+                id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
+                created=result.get("created", int(time.time())),
+                model=result.get("model", model),
+                object="chat.completion",
+                choices=[
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": result["choices"][0]["message"]["content"],
+                        },
+                        "finish_reason": result["choices"][0].get("finish_reason", "stop"),
+                    }
+                ],
+                usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+            )
+        except Exception as e:
+            logger.error(f"[PrometheusRouter V7.0] LLM completion failed: {e}")
+            raise
         finally:
-            # On-Demand: 활성 요청 카운트 감소 + touch (idle timeout 리셋)
             decrement_active_count_sync(target_provider)
-            send_provider_control_signal_sync(target_provider, "touch")
 
     async def acompletion(self, *args, **kwargs) -> ModelResponse:
-        """비동기 completion (Non-streaming)."""
-        # ... logic mainly same as completion but async ...
-        # For simplicity calling self.completion (sync) but this breaks async pattern for On-Demand.
-        # Should implement true async On-Demand here if possible, but fallback to completion is safe for now.
-        return self.completion(*args, **kwargs)
-    
+        """비동기 completion (Non-streaming) - V7.0 Redis Stream 기반."""
+        import base64
+
+        messages = kwargs.get("messages", [])
+        requested_model = kwargs.get("model", "")
+        optional_params = kwargs.get("optional_params", {})
+
+        logger.info(f"[PrometheusRouter V7.0] acompletion called. model={requested_model}")
+
+        # V7.0: OCR 요청 감지 (모델명이 ocr-로 시작하거나 vision 요청)
+        is_ocr_model = requested_model.startswith("ocr-")
+        is_vision, image_base64, text_prompt = self._is_vision_request(messages)
+
+        if is_ocr_model or is_vision:
+            logger.info(f"[PrometheusRouter V7.0] OCR/Vision request detected (async): model={requested_model}")
+
+            # accuracy_mode 추출 (extra_body에서)
+            extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
+            accuracy_mode = extra_body.get("accuracy_mode", "speed")
+
+            # OCR 모델 결정
+            if accuracy_mode == "speed":
+                ocr_model = "qwen3vl-it:4b"  # FLM NPU
+                target_provider = "flm"
+            else:
+                ocr_model = "qwen3-vl-8b"  # GPU llama-ocr-server
+                target_provider = "llama-ocr"
+
+            await increment_active_count(target_provider)
+
+            try:
+                gpu_client = get_async_gpu_stream_client()
+
+                if image_base64:
+                    # V7.0: Redis Stream을 통한 OCR 요청 (비동기)
+                    image_data = base64.b64decode(image_base64)
+                    result = await gpu_client.request_ocr(
+                        image_data=image_data,
+                        model=ocr_model,
+                        prompt=text_prompt or "Extract all text from this image.",
+                        accuracy_mode=accuracy_mode,
+                        timeout=300.0,
+                    )
+
+                    # OCR 결과를 OpenAI 응답 형식으로 변환
+                    ocr_text = result.get("text", "")
+                    if not ocr_text and "choices" in result:
+                        # LLM 응답 형식인 경우
+                        ocr_text = result["choices"][0].get("message", {}).get("content", "")
+
+                    return ModelResponse(
+                        id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
+                        created=result.get("created", int(time.time())),
+                        model=ocr_model,
+                        object="chat.completion",
+                        choices=[
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": ocr_text,
+                                },
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+                    )
+                else:
+                    raise ValueError("No image data provided for OCR request")
+            except Exception as e:
+                logger.error(f"[PrometheusRouter V7.0] OCR acompletion failed: {e}")
+                raise
+            finally:
+                await decrement_active_count(target_provider)
+
+        # 일반 LLM 요청
+        # Provider 선택 (신호 없이 - Redis Stream이 처리)
+        api_base, model, provider_key = await select_provider_async(task_type="chat", skip_signal=True)
+        target_provider = "flm" if "npu" in provider_key else "llama"
+
+        logger.info(f"[PrometheusRouter V7.0] Routing to {target_provider} via Redis Stream")
+
+        # 활성 요청 카운트 증가
+        await increment_active_count(target_provider)
+
+        try:
+            # Redis Stream을 통한 LLM 요청 (비동기)
+            gpu_client = get_async_gpu_stream_client()
+            result = await gpu_client.request_llm_completion(
+                messages=messages,
+                model=model,
+                max_tokens=optional_params.get("max_tokens", 4096),
+                temperature=optional_params.get("temperature", 0.7),
+                timeout=120.0,
+            )
+
+            return ModelResponse(
+                id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
+                created=result.get("created", int(time.time())),
+                model=result.get("model", model),
+                object="chat.completion",
+                choices=[
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": result["choices"][0]["message"]["content"],
+                        },
+                        "finish_reason": result["choices"][0].get("finish_reason", "stop"),
+                    }
+                ],
+                usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+            )
+        except Exception as e:
+            logger.error(f"[PrometheusRouter V7.0] acompletion failed: {e}")
+            raise
+        finally:
+            await decrement_active_count(target_provider)
+
     async def astreaming(self, *args, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
-        """비동기 스트리밍 (Real Streaming)."""
+        """비동기 스트리밍 - V6.6 Redis Stream 기반 (시뮬레이션 스트리밍).
+
+        Architecture V6.6:
+        - Redis Stream은 실시간 스트리밍을 지원하지 않음
+        - 전체 응답을 받은 후 청크로 나누어 yield (시뮬레이션 스트리밍)
+        - Docker Desktop 크래시 방지가 우선
+        """
         start_ts = time.time()
-        
+
         # model parameter extraction for logging
         model = kwargs.get("model", "")
         if not model:
             litellm_params = kwargs.get("litellm_params", {})
             model = litellm_params.get("model", "unknown")
-            
+
         litellm_params = kwargs.get("litellm_params", {})
         metadata = litellm_params.get("metadata", {}) or {}
         trace_id = metadata.get("trace_id", "unknown")
-            
+        optional_params = kwargs.get("optional_params", {})
+
         def get_log_prefix():
             return f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}][{trace_id}]"
 
-        logger.info(f"{get_log_prefix()} [PrometheusRouter] Request START: {model}")
-        
+        logger.info(f"{get_log_prefix()} [PrometheusRouter V6.6] Streaming Request START: {model}")
+
         messages = kwargs.get("messages", [])
-        
-        # On-Demand Start
-        api_base, selected_model, provider_key = await select_provider_async(task_type="chat")
+
+        # Provider 선택 (신호 없이 - Redis Stream이 처리)
+        api_base, selected_model, provider_key = await select_provider_async(task_type="chat", skip_signal=True)
         target_provider = "flm" if "npu" in provider_key else "llama"
 
-        # Provider selection time
         selection_latency = time.time() - start_ts
-        logger.debug(f"{get_log_prefix()} [PrometheusRouter] Provider selected: {target_provider} (Latency: {selection_latency:.3f}s)")
+        logger.debug(f"{get_log_prefix()} [PrometheusRouter V6.6] Provider: {target_provider} (Latency: {selection_latency:.3f}s)")
 
-        # 서버 준비 대기 (최대 60초)
-        if not await wait_for_server_ready_async(api_base, max_wait=60.0):
-            logger.warning(f"{get_log_prefix()} [PrometheusRouter] Server not ready, proceeding anyway...")
-
-        # On-Demand: 활성 요청 카운트 증가
         await increment_active_count(target_provider)
 
-        url = f"{api_base}/v1/chat/completions"
-        payload = {"model": selected_model, "messages": messages, "stream": True}
-
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                try:
-                    async with client.stream("POST", url, json=payload) as response:
-                        response.raise_for_status()
+            # Redis Stream을 통한 LLM 요청 (비동기, Non-streaming)
+            gpu_client = get_async_gpu_stream_client()
+            result = await gpu_client.request_llm_completion(
+                messages=messages,
+                model=selected_model,
+                max_tokens=optional_params.get("max_tokens", 4096),
+                temperature=optional_params.get("temperature", 0.7),
+                timeout=120.0,
+            )
 
-                        ttfb_latency = time.time() - start_ts
-                        logger.info(f"{get_log_prefix()} [PrometheusRouter] Response START (TTFB): {ttfb_latency:.3f}s")
+            ttfb_latency = time.time() - start_ts
+            logger.info(f"{get_log_prefix()} [PrometheusRouter V6.6] Response received (TTFB: {ttfb_latency:.3f}s)")
 
-                        async for line in response.aiter_lines():
-                            if line.startswith("data: "):
-                                data_str = line[6:]
-                                if data_str.strip() == "[DONE]":
-                                    break
-                                try:
-                                    data = json.loads(data_str)
-                                    choice = data["choices"][0]
-                                    delta = choice.get("delta", {})
-                                    content = delta.get("content", "")
+            # 응답 텍스트를 청크로 나누어 yield (시뮬레이션 스트리밍)
+            content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-                                    yield GenericStreamingChunk(
-                                        text=content,
-                                        is_finished=choice.get("finish_reason") is not None,
-                                        finish_reason=choice.get("finish_reason"),
-                                        usage=None,
-                                    )
-                                except Exception as e:
-                                    logger.error(f"{get_log_prefix()} Streaming parse error: {e}")
+            # 문장 단위로 나누거나, 일정 길이로 나눔
+            chunk_size = 50  # 50자씩 나눔
+            chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
 
-                    total_duration = time.time() - start_ts
-                    logger.info(f"{get_log_prefix()} [PrometheusRouter] Request END: {model} (Total: {total_duration:.3f}s)")
+            for i, chunk in enumerate(chunks):
+                is_last = (i == len(chunks) - 1)
+                yield GenericStreamingChunk(
+                    text=chunk,
+                    is_finished=is_last,
+                    finish_reason="stop" if is_last else None,
+                    usage=result.get("usage") if is_last else None,
+                )
+                # 스트리밍 느낌을 위해 약간의 딜레이 (선택적)
+                # await asyncio.sleep(0.01)
 
-                except Exception as e:
-                    total_duration = time.time() - start_ts
-                    logger.error(f"{get_log_prefix()} [PrometheusRouter] Request FAILED: {model} (Total: {total_duration:.3f}s, Error: {e})")
-                    raise e
+            total_duration = time.time() - start_ts
+            logger.info(f"{get_log_prefix()} [PrometheusRouter V6.6] Request END: {model} (Total: {total_duration:.3f}s)")
+
+        except Exception as e:
+            total_duration = time.time() - start_ts
+            logger.error(f"{get_log_prefix()} [PrometheusRouter V6.6] Request FAILED: {model} (Total: {total_duration:.3f}s, Error: {e})")
+            raise
         finally:
-            # On-Demand: 활성 요청 카운트 감소 + touch (idle timeout 리셋)
             await decrement_active_count(target_provider)
-            await send_provider_control_signal(target_provider, "touch")
 
     async def transcription(self, *args, **kwargs) -> ModelResponse:
-        """Audio Transcription."""
+        """Audio Transcription - V6.6 Redis Stream 기반.
+
+        Architecture V6.6:
+        - HTTP 직접 통신 대신 Redis Stream을 통해 Provider Manager로 요청
+        - Provider Manager가 Host에서 localhost로 GPU 서버 접근
+        - Docker Desktop 크래시 방지
+        """
+        from pathlib import Path
+        import tempfile
+
         # Prepare multipart/form-data
         files = kwargs.get("files", {})
         data = kwargs.get("data", {})
         requested_model = data.get("model", "")
 
-        # 0. Diarization 라우팅 (model="pyannote")
-        if requested_model.endswith("pyannote"):
-            import httpx
-            logger.info(f"[PrometheusRouter] Routing to Diarization Server: model={requested_model}")
+        # GPU Stream Client 가져오기
+        gpu_client = get_async_gpu_stream_client()
 
-            # Diarization Server 시작 신호 전송 + 활성 카운트 증가
-            await send_provider_control_signal("diarization-server", "start")
-            await increment_active_count("diarization-server")
+        # 파일 데이터 추출 및 임시 파일로 저장
+        file_tuple = files.get("file")
+        if not file_tuple:
+            raise ValueError("No audio file provided")
 
-            diarization_url = f"http://host.docker.internal:8003/v1/audio/diarization"
-
-            try:
-                # 파일 포인터 되감기
-                file.seek(0)
-
-                # 타임아웃 넉넉하게
-                async with httpx.AsyncClient(timeout=1800.0) as client:
-                    # 프로세스 시작 대기 (간단히 sleep)
-                    await asyncio.sleep(2.0)
-
-                    logger.info(f"[PrometheusRouter] Routing to diarization server ({diarization_url})")
-                    try:
-                        response = await client.post(
-                            diarization_url,
-                            files={"file": (file.name, file, "audio/wav")},
-                            data={"model": requested_model, **kwargs}
-                        )
-                        response.raise_for_status()
-                        return response.json()
-                    except httpx.HTTPStatusError as e:
-                        logger.error(f"[PrometheusRouter] HTTP Error from diarization server: {e.response.status_code} - {e.response.text}")
-                        raise
-                    except Exception as e:
-                        logger.error(f"[PrometheusRouter] Diarization Server Connection/Request Error: {str(e)}")
-                        raise
-            except Exception as e:
-                logger.error(f"[PrometheusRouter] Diarization Server Error: {e}")
-                raise e
-            finally:
-                # On-Demand: 활성 카운트 감소 + touch (idle timeout 리셋)
-                await decrement_active_count("diarization-server")
-                await send_provider_control_signal("diarization-server", "touch")
-
-        # 모드 판별
-        is_accuracy_mode = requested_model in ("whisper-large-v3", "whisper", "openai/whisper-large-v3")
-        is_turbo_mode = requested_model in ("whisper-turbo", "whisper-large-v3-turbo", "turbo", "openai/whisper-turbo")
-        is_speed_mode = requested_model in ("flm-audio", "flm", "openai/flm-audio")
-
-        # 1. 라우팅 대상 및 Provider 결정
-        target_api_base = ""
-        target_model = ""
-        target_signal_provider = ""
-        force_provider = None
-
-        if is_accuracy_mode:
-            force_provider = "gpu"
-            target_api_base = GPU_INSANELY_FAST_API_BASE
-            target_model = "whisper-large-v3"
-            target_signal_provider = "insanely-fast"
-            logger.info(f"[PrometheusRouter] Model '{requested_model}' -> GPU Accuracy (Insanely-Fast:8002)")
-        
-        elif is_turbo_mode:
-            force_provider = "gpu"
-            target_api_base = GPU_WHISPER_CPP_API_BASE
-            target_model = "whisper-turbo"
-            target_signal_provider = "whisper-cpp"
-            logger.info(f"[PrometheusRouter] Model '{requested_model}' -> GPU Speed (Whisper.cpp:8001)")
-            
-        elif is_speed_mode:
-            force_provider = "npu"
-            target_api_base = NPU_AUDIO_API_BASE
-            target_model = "flm-audio"
-            target_signal_provider = "flm"
-            logger.info(f"[PrometheusRouter] Model '{requested_model}' -> NPU Speed (FLM:11434)")
-            
+        # file_tuple: (filename, file_object, content_type) 또는 file object
+        if isinstance(file_tuple, tuple):
+            filename, file_obj, _ = file_tuple
         else:
-            force_provider = "gpu"
-            target_api_base = GPU_INSANELY_FAST_API_BASE
-            target_model = "whisper-large-v3"
-            target_signal_provider = "insanely-fast"
-            logger.info(f"[PrometheusRouter] Model '{requested_model}' -> Default: GPU Accuracy (Insanely-Fast:8002)")
+            file_obj = file_tuple
+            filename = getattr(file_obj, 'name', 'audio.wav')
 
-        # 2. Provider 선택 (신호 생략)
-        await select_provider_async(
-            task_type="audio",
-            force_provider=force_provider,
-            skip_signal=True 
-        )
+        # 임시 파일로 저장 (Redis Stream은 파일 경로 필요)
+        temp_dir = Path(tempfile.gettempdir())
+        temp_file = temp_dir / f"litellm_audio_{uuid.uuid4().hex[:8]}.wav"
 
-        # 3. 명시적 시작 신호 전송 + 활성 카운트 증가
-        await send_provider_control_signal(target_signal_provider, "start")
-        await increment_active_count(target_signal_provider)
-        logger.info(f"[PrometheusRouter] Transcription Target: {target_signal_provider} | URL: {target_api_base}")
-
-        # API 호출
         try:
-            url = f"{target_api_base}/v1/audio/transcriptions"
-            data["model"] = target_model # 실제 백엔드가 기대하는 모델명으로 변경
+            if hasattr(file_obj, 'read'):
+                file_obj.seek(0)
+                content = file_obj.read()
+                temp_file.write_bytes(content)
+            else:
+                temp_file.write_bytes(file_obj)
 
-            if "file" in data: del data["file"]
+            # 0. Diarization 라우팅 (model="pyannote")
+            if requested_model.endswith("pyannote"):
+                logger.info(f"[PrometheusRouter V6.6] Routing to Diarization via Redis Stream: model={requested_model}")
+
+                # 활성 카운트 증가 (모니터링용)
+                await increment_active_count("diarization-server")
+
+                try:
+                    # Redis Stream을 통한 Diarization 요청
+                    min_speakers = data.get("min_speakers")
+                    max_speakers = data.get("max_speakers")
+
+                    result = await gpu_client.request_diarization(
+                        audio_file_path=temp_file,
+                        min_speakers=int(min_speakers) if min_speakers else None,
+                        max_speakers=int(max_speakers) if max_speakers else None,
+                        timeout=1800.0,
+                    )
+
+                    logger.info(f"[PrometheusRouter V6.6] Diarization completed via Redis Stream")
+                    return result
+                except Exception as e:
+                    logger.error(f"[PrometheusRouter V6.6] Diarization Error: {e}")
+                    raise e
+                finally:
+                    await decrement_active_count("diarization-server")
+
+            # 모드 판별
+            is_accuracy_mode = requested_model in ("whisper-large-v3", "whisper", "openai/whisper-large-v3")
+            is_turbo_mode = requested_model in ("whisper-turbo", "whisper-large-v3-turbo", "turbo", "openai/whisper-turbo")
+            is_speed_mode = requested_model in ("flm-audio", "flm", "openai/flm-audio")
+
+            # 1. 라우팅 대상 모델 결정
+            if is_accuracy_mode:
+                target_model = "whisper-large-v3"
+                target_provider = "insanely-fast"
+                logger.info(f"[PrometheusRouter V6.6] Model '{requested_model}' -> GPU Accuracy (Insanely-Fast)")
+            elif is_turbo_mode:
+                target_model = "whisper-turbo"
+                target_provider = "whisper-cpp"
+                logger.info(f"[PrometheusRouter V6.6] Model '{requested_model}' -> GPU Speed (Whisper.cpp)")
+            elif is_speed_mode:
+                target_model = "flm-audio"
+                target_provider = "flm"
+                logger.info(f"[PrometheusRouter V6.6] Model '{requested_model}' -> NPU Speed (FLM)")
+            else:
+                target_model = "whisper-large-v3"
+                target_provider = "insanely-fast"
+                logger.info(f"[PrometheusRouter V6.6] Model '{requested_model}' -> Default: GPU Accuracy")
+
+            # 활성 카운트 증가
+            await increment_active_count(target_provider)
 
             try:
-                # 대기 시간 증가 (모델 로딩 시간 고려)
-                async with httpx.AsyncClient(timeout=1800.0) as client:
-                     # 1차 시도 전 잠시 대기 (프로세스 런치 시간) - 하지만 start 신호 후 즉시라 위험할 수 있음. 
-                     # Provider Manager가 프로세스가 뜰 때까지(포트 리슨) 기다려주진 않으므로, 여기서 sleep이나 retry가 필요할 수 있음.
-                     # 일단은 httpx의 ConnectError 시 재시도 로직이 필요할 수 있음.
-                     # 여기서는 간단히 2초 대기
-                    await asyncio.sleep(2.0)
-                    
-                    logger.info(f"[PrometheusRouter] Posting to {url}")
-                    try:
-                        response = await client.post(url, data=data, files=files)
-                        response.raise_for_status()
-                        result = response.json()
-                    except httpx.HTTPStatusError as e:
-                         logger.error(f"[PrometheusRouter] HTTP Error from {target_signal_provider}: {e.response.status_code} - {e.response.text}")
-                         raise e
-                    except Exception as e:
-                         logger.error(f"[PrometheusRouter] Connection Error to {target_signal_provider}: {e}")
-                         raise e
+                # Redis Stream을 통한 Transcription 요청
+                language = data.get("language", "ko")
+
+                logger.info(f"[PrometheusRouter V6.6] Sending transcription via Redis Stream: model={target_model}")
+                result = await gpu_client.request_transcription(
+                    audio_file_path=temp_file,
+                    model=target_model,
+                    language=language,
+                    timeout=1800.0,
+                )
+
+                logger.info(f"[PrometheusRouter V6.6] Transcription completed")
+
+                return ModelResponse(
+                    id=result.get("id", f"transcribe-{uuid.uuid4()}"),
+                    created=int(time.time()),
+                    model=target_model,
+                    object="text",
+                    choices=[
+                        {
+                            "text": result.get("text", ""),
+                            "segments": result.get("segments", []),
+                            "language": result.get("language", ""),
+                        }
+                    ],
+                )
+
             except Exception as e:
-                # 4. Fallback 로직 (Speed 모드에서 NPU 실패 시 -> GPU Whisper.cpp)
+                # Fallback 로직 (Speed 모드에서 NPU 실패 시 -> GPU Whisper.cpp)
                 if is_speed_mode:
-                    logger.warning(f"[PrometheusRouter] NPU failed: {e}. Trying Fallback...")
-                    # FLM 활성 카운트 감소 + touch (30초 후 자동 종료)
+                    logger.warning(f"[PrometheusRouter V6.6] NPU failed: {e}. Trying Fallback to whisper-cpp...")
                     await decrement_active_count("flm")
-                    await send_provider_control_signal("flm", "touch")
 
-                    # Fallback Target
-                    fallback_provider = "whisper-cpp"
-                    fallback_api_base = GPU_WHISPER_CPP_API_BASE
-                    data["model"] = "whisper-turbo"
-
-                    logger.info(f"[PrometheusRouter] Fallback to {fallback_provider}")
-                    await send_provider_control_signal(fallback_provider, "start")
-                    await increment_active_count(fallback_provider)
-                    # Fallback provider로 교체
-                    target_signal_provider = fallback_provider
-
-                    await asyncio.sleep(2.0) # Wait for startup
+                    target_provider = "whisper-cpp"
+                    await increment_active_count(target_provider)
 
                     try:
-                        async with httpx.AsyncClient(timeout=1800.0) as client:
-                            for f_key, f_val in files.items():
-                                 if hasattr(f_val, 'seek'): f_val.seek(0)
+                        result = await gpu_client.request_transcription(
+                            audio_file_path=temp_file,
+                            model="whisper-turbo",
+                            language=data.get("language", "ko"),
+                            timeout=1800.0,
+                        )
 
-                            response = await client.post(f"{fallback_api_base}/v1/audio/transcriptions", data=data, files=files)
-                            response.raise_for_status()
-                            result = response.json()
+                        return ModelResponse(
+                            id=result.get("id", f"transcribe-{uuid.uuid4()}"),
+                            created=int(time.time()),
+                            model="whisper-turbo",
+                            object="text",
+                            choices=[
+                                {
+                                    "text": result.get("text", ""),
+                                    "segments": result.get("segments", []),
+                                    "language": result.get("language", ""),
+                                }
+                            ],
+                        )
                     except Exception as fallback_error:
-                         logger.error(f"[PrometheusRouter] Fallback failed: {fallback_error}")
-                         raise fallback_error
+                        logger.error(f"[PrometheusRouter V6.6] Fallback failed: {fallback_error}")
+                        raise fallback_error
                 else:
-                    logger.error(f"[PrometheusRouter] Transcription failed: {e}")
+                    logger.error(f"[PrometheusRouter V6.6] Transcription failed: {e}")
                     raise e
+            finally:
+                await decrement_active_count(target_provider)
 
-            return ModelResponse(
-                id=result.get("id", f"transcribe-{uuid.uuid4()}"),
-                created=int(time.time()),
-                model=target_model,
-                object="text",
-                choices=[
-                    {
-                        "text": result.get("text", ""),
-                        "segments": result.get("segments", []),
-                        "language": result.get("language", ""),
-                    }
-                ],
-            )
         finally:
-            # On-Demand: 활성 카운트 감소 + touch (idle timeout 리셋)
-            await decrement_active_count(target_signal_provider)
-            await send_provider_control_signal(target_signal_provider, "touch")
+            # 임시 파일 정리
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception:
+                    pass
 
 # LiteLLM에 등록할 핸들러 인스턴스
 prometheus_router = PrometheusRouter()

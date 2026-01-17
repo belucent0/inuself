@@ -2,6 +2,13 @@ import sys
 import os
 import logging
 
+# --- Python path 설정 (litellm import 전에 해야 함) ---
+# LiteLLM이 config에서 custom_handler를 찾을 수 있도록
+_base_dir = os.path.dirname(os.path.abspath(__file__))
+if _base_dir not in sys.path:
+    sys.path.insert(0, _base_dir)
+print(f"Added {_base_dir} to sys.path", flush=True)
+
 # --- DATABASE_URL 제거 (LiteLLM Prisma 에러 방지) ---
 # LiteLLM은 DATABASE_URL이 존재하면 Prisma DB 연결을 시도함
 # 이 프로젝트에서는 LiteLLM DB 기능을 사용하지 않으므로 제거
