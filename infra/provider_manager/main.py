@@ -17,6 +17,8 @@ Usage:
 """
 
 import sys
+import os
+import atexit
 from pathlib import Path
 
 # 패키지 경로 추가 (상대 임포트 지원)
@@ -28,6 +30,7 @@ import signal
 import asyncio
 import logging
 import argparse
+import psutil
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
@@ -35,10 +38,84 @@ from fastapi import FastAPI
 
 from core.config import settings
 from core.manager import ProviderManager
+from core.telemetry import setup_telemetry
 from api.routes import providers_router, groups_router, health_router, jobs_router
 from api.routes.providers import set_service
 from services.stream_processor import StreamProcessor
 from services.provider_service import ProviderService
+from services.idle_manager import IdleTimeoutManager
+
+# ==========================================
+# Singleton Lock (PID file based)
+# ==========================================
+PID_FILE = settings.log_dir / "provider-manager.pid"
+_singleton_lock_fd = None
+
+
+def _is_process_running(pid: int, expected_cmdline: str = "main.py") -> bool:
+    """PID가 실제로 Provider Manager 프로세스인지 확인."""
+    try:
+        proc = psutil.Process(pid)
+        cmdline = " ".join(proc.cmdline())
+        # main.py 또는 provider_manager가 cmdline에 포함되어 있는지 확인
+        return expected_cmdline in cmdline or "provider_manager" in cmdline
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return False
+
+
+def acquire_singleton_lock() -> bool:
+    """
+    싱글톤 락 획득 (PID 파일 기반, Windows/Linux 호환).
+
+    Returns:
+        True if lock acquired, sys.exit(1) if another instance is running.
+    """
+    global _singleton_lock_fd
+
+    settings.log_dir.mkdir(exist_ok=True)
+
+    # 기존 PID 파일 확인
+    if PID_FILE.exists():
+        try:
+            old_pid = int(PID_FILE.read_text().strip())
+            if _is_process_running(old_pid):
+                print(f"ERROR: Another Provider Manager instance is already running (PID: {old_pid})")
+                print(f"       If this is incorrect, delete {PID_FILE} and retry.")
+                sys.exit(1)
+            else:
+                # 오래된 PID 파일 - 프로세스가 비정상 종료된 경우
+                print(f"WARNING: Stale PID file found (PID: {old_pid} not running). Removing...")
+                PID_FILE.unlink()
+        except (ValueError, FileNotFoundError):
+            # 잘못된 PID 파일 형식
+            PID_FILE.unlink(missing_ok=True)
+
+    # 새 PID 파일 생성
+    current_pid = os.getpid()
+    PID_FILE.write_text(str(current_pid))
+
+    # 종료 시 PID 파일 삭제
+    def cleanup_pid_file():
+        try:
+            if PID_FILE.exists():
+                PID_FILE.unlink()
+        except Exception:
+            pass
+
+    atexit.register(cleanup_pid_file)
+
+    print(f"Provider Manager started (PID: {current_pid})")
+    return True
+
+
+def release_singleton_lock():
+    """싱글톤 락 해제."""
+    try:
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+    except Exception:
+        pass
+
 
 # ==========================================
 # Logging Setup
@@ -60,10 +137,16 @@ logging.basicConfig(
 logger = logging.getLogger("ProviderManager")
 
 # ==========================================
+# OpenTelemetry 초기화
+# ==========================================
+setup_telemetry(service_name="provider-manager")
+
+# ==========================================
 # Global Instances
 # ==========================================
 provider_manager: ProviderManager = None
 stream_processor: StreamProcessor = None
+idle_manager: IdleTimeoutManager = None
 _running_combined: bool = False  # combined 모드 플래그
 
 
@@ -163,7 +246,7 @@ async def run_combined(api_port: int = 9998):
     import httpx
     import redis.asyncio as redis_async
 
-    global provider_manager, stream_processor, _running_combined
+    global provider_manager, stream_processor, idle_manager, _running_combined
 
     # combined 모드 플래그 설정 (lifespan에서 중복 초기화 방지)
     _running_combined = True
@@ -175,12 +258,23 @@ async def run_combined(api_port: int = 9998):
     logger.info("Starting all provider processes...")
     await provider_manager.start_all_providers()
 
-    # Stream Processor 초기화 (프로바이더 공유)
-    stream_processor = StreamProcessor(provider_manager)
+    # IdleTimeoutManager 초기화 (On-Demand 프로바이더 자동 언로드)
+    idle_manager = IdleTimeoutManager(
+        provider_manager,
+        idle_timeout=settings.idle_timeout,
+        check_interval=settings.idle_check_interval,
+    )
+    await idle_manager.start()
+    logger.info(f"IdleTimeoutManager initialized (timeout={settings.idle_timeout}s)")
+
+    # Stream Processor 초기화 (프로바이더 공유, idle_manager 연동)
+    stream_processor = StreamProcessor(provider_manager, idle_manager)
 
     # Signal handler
     def signal_handler(sig, frame):
         logger.info("Shutdown signal received...")
+        if idle_manager:
+            idle_manager.stop()
         stream_processor.shutdown()
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -206,6 +300,22 @@ async def run_combined(api_port: int = 9998):
     provider_service = ProviderService(provider_manager, stream_processor.job_tracker)
     set_service(provider_service)
     logger.info("ProviderService initialized")
+
+    # Redis가 준비될 때까지 대기 (BusyLoadingError 처리)
+    max_retries = 30
+    for attempt in range(max_retries):
+        try:
+            await stream_processor.redis.ping()
+            logger.info("Redis connection ready")
+            break
+        except Exception as e:
+            if "loading" in str(e).lower() or "LOADING" in str(e):
+                logger.warning(f"Redis is loading dataset, waiting... (attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(1)
+            else:
+                raise
+    else:
+        raise RuntimeError("Redis failed to become ready after maximum retries")
 
     # GPU 작업 Consumer Group 생성
     try:
@@ -253,7 +363,8 @@ async def run_combined(api_port: int = 9998):
                 for stream_name, stream_messages in messages:
                     for message_id, message_data in stream_messages:
                         if stream_name == settings.request_stream:
-                            await stream_processor.process_message(message_id, message_data)
+                            # GPU 작업은 병렬 처리 (Background Task)
+                            asyncio.create_task(stream_processor.process_message(message_id, message_data))
                         elif stream_name == settings.control_request_stream:
                             await stream_processor.process_control_message(message_id, message_data)
 
@@ -320,18 +431,27 @@ Examples:
     parser.add_argument("--stream-only", action="store_true", help="Stream 처리만 실행")
     parser.add_argument("--host", default="0.0.0.0", help="API 서버 호스트 (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=9998, help="API 서버 포트 (default: 9998)")
+    parser.add_argument("--no-singleton", action="store_true", help="싱글톤 체크 비활성화 (개발용)")
 
     args = parser.parse_args()
 
-    if args.api_only:
-        run_api_server(host=args.host, port=args.port)
-    elif args.stream_only:
-        run_stream_only()
-    else:
-        # 기본: Stream + API 동시 실행
-        if sys.platform == 'win32':
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        asyncio.run(run_combined(api_port=args.port))
+    # 싱글톤 락 획득 (다른 인스턴스가 실행 중이면 종료)
+    if not args.no_singleton:
+        acquire_singleton_lock()
+
+    try:
+        if args.api_only:
+            run_api_server(host=args.host, port=args.port)
+        elif args.stream_only:
+            run_stream_only()
+        else:
+            # 기본: Stream + API 동시 실행
+            if sys.platform == 'win32':
+                asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            asyncio.run(run_combined(api_port=args.port))
+    finally:
+        # 종료 시 락 해제
+        release_singleton_lock()
 
 
 if __name__ == "__main__":

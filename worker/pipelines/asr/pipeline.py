@@ -1,10 +1,11 @@
 """ASR + 화자분리 메인 파이프라인.
 
-Architecture V7.0: Worker → Redis Stream → Stream Worker (Host)
+Architecture V7.0: Worker → Redis Stream → Provider Manager (Host)
 - 병렬 처리: ASR + 화자분리 동시 실행 (Redis Stream으로 Docker Desktop 크래시 해결)
-- Stream Worker가 GPU/NPU 서버 직접 호출 (localhost)
+- Provider Manager가 GPU/NPU 서버 직접 호출 (localhost)
 - GPU/ROCm 의존성 없음 - 모든 AI 추론은 Host의 GPU 서버에서 실행
 """
+import contextvars
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -15,7 +16,7 @@ import librosa
 import soundfile as sf
 import tempfile
 
-from .diarization_utils import merge_segments_with_speakers
+from .diarization_utils import merge_segments_with_speakers, merge_by_diarization_segments
 
 # Architecture V6: Worker → LiteLLM → Audio Gateway
 # LiteLLM이 Prometheus + GPU 세마포어로 최적 Provider 선택
@@ -119,10 +120,10 @@ def _run_case4_parallel_processing(
     """
     V7.0: ASR + 화자분리 병렬 처리.
 
-    Architecture V7.0: Worker → Redis Stream → Stream Worker (Host)
+    Architecture V7.0: Worker → Redis Stream → Provider Manager (Host)
     - 병렬 처리로 처리 시간 단축
     - Redis Stream으로 Docker Desktop 크래시 해결 (host.docker.internal HTTP 제거)
-    - Stream Worker가 GPU 서버에 localhost로 직접 접근
+    - Provider Manager가 GPU 서버에 localhost로 직접 접근
     """
     print(f"\n{'='*60}")
     print(f"[Pipeline] Parallel Processing (Architecture V7.0)")
@@ -147,7 +148,13 @@ def _run_case4_parallel_processing(
 
     # ============================================================
     # 병렬 실행: ASR + Diarization 동시 실행
+    # OpenTelemetry context를 명시적으로 복사하여 스레드에 전파
     # ============================================================
+
+    # 각 스레드마다 별도의 context 복사본 (동일한 context를 두 스레드에서 동시에 run() 불가)
+    asr_ctx = contextvars.copy_context()
+    diarization_ctx = contextvars.copy_context()
+
     def run_asr():
         """ASR 작업 실행."""
         return call_litellm_transcription(
@@ -169,9 +176,9 @@ def _run_case4_parallel_processing(
     print(f"\n[Parallel] Starting ASR and Diarization simultaneously...")
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        # 두 작업을 동시에 시작
-        asr_future = executor.submit(run_asr)
-        diarization_future = executor.submit(run_diarization)
+        # 두 작업을 동시에 시작 (각 스레드마다 별도 context 복사본 사용)
+        asr_future = executor.submit(asr_ctx.run, run_asr)
+        diarization_future = executor.submit(diarization_ctx.run, run_diarization)
 
         # ASR 결과 대기 (필수)
         try:
@@ -225,12 +232,60 @@ def _run_case4_parallel_processing(
             "text": full_text,
         })
 
-    # 화자 정보 병합
+    # 화자 정보 병합 (V1: ASR 세그먼트 기준)
     print(f"\n[Merging] Combining ASR and diarization results...")
     merged_segments = merge_segments_with_speakers(
         asr_segments,
         diarization,
     )
+
+    # ============================================================
+    # Whisper 환각(Hallucination) 필터링
+    # - 화자분리에서 음성이 없다고 판단한 구간 (UNKNOWN + overlap_ratio=0)
+    # - 오디오 길이를 초과하는 세그먼트
+    # - 화자분리 마지막 end를 초과하는 세그먼트 (V1.1 추가)
+    # ============================================================
+
+    # 화자분리의 마지막 음성 종료 시점 계산
+    last_diarization_end = 0.0
+    for turn, _, _ in diarization.itertracks(yield_label=True):
+        if turn.end > last_diarization_end:
+            last_diarization_end = turn.end
+    print(f"[Hallucination] Last diarization end: {last_diarization_end:.2f}s, Audio duration: {audio_duration:.2f}s")
+
+    pre_filter_count = len(merged_segments)
+    filtered_segments = []
+    hallucination_count = 0
+
+    for seg in merged_segments:
+        seg_start = seg.get("start", 0)
+        seg_end = seg.get("end", 0)
+
+        # 1. 오디오 길이 초과 세그먼트 필터링 (1초 여유)
+        if seg_end > audio_duration + 1.0:
+            hallucination_count += 1
+            print(f"[Hallucination] Filtered (beyond audio): {seg_start:.2f}s ~ {seg_end:.2f}s")
+            continue
+
+        # 2. 화자분리 마지막 end를 초과하는 세그먼트 필터링 (V1.1 추가)
+        #    - ASR 세그먼트 시작이 화자분리 범위를 완전히 벗어난 경우
+        if seg_start > last_diarization_end + 1.0:
+            hallucination_count += 1
+            print(f"[Hallucination] Filtered (beyond diarization): {seg_start:.2f}s ~ {seg_end:.2f}s - '{seg.get('text', '')[:50]}...'")
+            continue
+
+        # 3. 화자분리에서 음성 없음 + overlap_ratio=0 → 환각으로 간주
+        if seg.get("speaker") == "UNKNOWN" and seg.get("overlap_ratio", 0) == 0:
+            hallucination_count += 1
+            print(f"[Hallucination] Filtered (no speaker match): {seg_start:.2f}s ~ {seg_end:.2f}s - '{seg.get('text', '')[:50]}...'")
+            continue
+
+        filtered_segments.append(seg)
+
+    if hallucination_count > 0:
+        print(f"[Hallucination] Filtered {hallucination_count} segments ({pre_filter_count} → {len(filtered_segments)})")
+
+    merged_segments = filtered_segments
 
     # Fallback: 화자분리 실패/0 세그먼트 시 모든 ASR 세그먼트를 SPEAKER_00으로 할당
     if diarization_fallback_used:
@@ -267,9 +322,14 @@ def _run_case4_parallel_processing(
             "speaker": speaker,
         })
     
-    # 최종 transcription 구성
+    # 최종 transcription 구성 (환각 필터링 후 텍스트 재빌드)
+    final_text = " ".join(
+        seg.get("text", "").strip()
+        for seg in merged_segments
+        if seg.get("text", "").strip()
+    )
     transcription = {
-        "text": asr_result["text"],
+        "text": final_text,
         "language": asr_result.get("language", "ko"),
         "segments": merged_segments,
     }
@@ -282,10 +342,12 @@ def _run_case4_parallel_processing(
         "accuracy_mode": accuracy_mode,
         "asr_engine": asr_provider.value,
         "architecture": "v7.0_parallel",
+        "merge_logic": "v1.1_asr_based",  # V1.1: ASR 기준 + 화자분리 범위 필터링
         "processing_mode": "parallel",
         "speaker_stats": speaker_stats,
         "diarization_params": diarization_params,
         "diarization_fallback": diarization_fallback_used,
+        "hallucination_filtered": hallucination_count,
     })
     
     return PipelineResult(

@@ -59,6 +59,7 @@ services:
     container_name: asr-nginx
     ports:
       - "80:80"
+      - "127.0.0.1:8080:8080" # 내부 Grafana 관리용 (로컬에서만 접근)
       # - "443:443"
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -104,6 +105,12 @@ services:
       - LITELLM_BASE_URL=http://litellm:4000
       - LITELLM_API_KEY=${LITELLM_API_KEY}
       - LITELLM_MODEL=${LITELLM_MODEL:-qwen3-4b}
+      # OpenTelemetry 분산 추적
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_SERVICE_NAME=asr-backend
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_LOGS_EXPORTER=none
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
@@ -160,7 +167,31 @@ services:
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
+      - jaeger
     restart: unless-stopped
+
+  # Jaeger - 분산 추적 (OpenTelemetry 백엔드)
+  # Jaeger 2.x는 YAML 설정 파일 사용 (환경변수 미지원)
+  jaeger:
+    image: jaegertracing/jaeger:2.14.1
+    container_name: asr-jaeger
+    command: [ "--config", "/etc/jaeger/config.yaml" ]
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4317:4317" # OTLP gRPC (traces)
+      - "4318:4318" # OTLP HTTP (traces)
+      - "9411:9411" # Zipkin compatible
+      - "13133:13133" # Health check
+    volumes:
+      - ./infra/jaeger/config.yaml:/etc/jaeger/config.yaml:ro
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:13133/status" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
   worker:
     build:
       context: .
@@ -173,7 +204,7 @@ services:
       - ./backend/data:/app/data
       - ./backend/app:/app/app:ro
       - ./worker:/app/worker
-      - ./infra/litellm:/app/infra/litellm:ro  # V6.6: GPU Stream Client
+      - ./infra/litellm:/app/infra/litellm:ro # V6.6: GPU Stream Client
     environment:
       - TASK_QUEUE_TYPE=celery
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
@@ -182,8 +213,8 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME:-asr-media}
-      # Architecture V7.0: Redis Stream을 통해 Host의 Stream Worker로 요청
-      # Worker → Redis Stream → Stream Worker (Host) → GPU/NPU 서버
+      # Architecture V7.0: Redis Stream을 통해 Host의 Provider Manager로 요청
+      # Worker → Redis Stream → Provider Manager (Host) → GPU/NPU 서버
       # host.docker.internal HTTP 통신 제거 (Docker Desktop 크래시 방지)
       - REDIS_STREAM_ENABLED=true
       # Prometheus for metrics (optional)
@@ -192,10 +223,18 @@ services:
       - LITELLM_BASE_URL=http://litellm:4000
       - LITELLM_API_KEY=${LITELLM_API_KEY}
       - LITELLM_MODEL=${LITELLM_MODEL:-qwen3-4b}
+      # OpenTelemetry 분산 추적
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_SERVICE_NAME=asr-worker
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_LOGS_EXPORTER=none
     depends_on:
       redis:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      jaeger:
         condition: service_healthy
     restart: unless-stopped
 
@@ -219,16 +258,23 @@ services:
       - LITELLM_CONFIG_PATH=/app/custom/litellm_config.yaml
       # LiteLLM은 DB 사용 안 함 (Prisma 에러 방지)
       - DATABASE_URL=
-      # Architecture V7.0: Redis Stream을 통해 Host의 Stream Worker로 요청
+      # Architecture V7.0: Redis Stream을 통해 Host의 Provider Manager로 요청
       # host.docker.internal HTTP 통신 제거 (Docker Desktop 크래시 방지)
       - REDIS_STREAM_ENABLED=true
       # Background health checks 비활성화
       - DISABLE_SPEND_LOGS=true
       - BACKGROUND_HEALTH_CHECKS=false
       - HEALTH_CHECK_INTERVAL=86400
+      # OpenTelemetry 분산 추적
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_SERVICE_NAME=asr-litellm
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_LOGS_EXPORTER=none
     depends_on:
       - prometheus
       - redis
+      - jaeger
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:4000/health/liveliness" ]

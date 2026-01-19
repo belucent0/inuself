@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     health_check_timeout: float = 10.0  # 헬스체크 타임아웃 (초)
     max_recovery_attempts: int = 3  # 최대 복구 시도 횟수
     recovery_cooldown: int = 300  # 복구 실패 후 대기 시간 (초, 5분)
+    consecutive_failure_threshold: int = 3  # 연속 실패 임계값 (이 횟수 이상 연속 실패 시 recovery 시작)
+
+    # Idle Timeout (On-Demand 프로바이더 자동 언로드)
+    idle_timeout: float = 60.0  # idle timeout 시간 (초, 기본값 60초)
+    idle_check_interval: float = 10.0  # idle 체크 주기 (초)
 
     # Redis Keys for Status Sharing
     status_hash_key: str = "providers:status"  # 현재 상태 (Hash)
