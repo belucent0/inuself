@@ -3,6 +3,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 from ..core.config import get_settings
+from ..core.telemetry import inject_trace_context, get_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,11 @@ class CeleryAdapter(TaskQueueAdapter):
         max_speakers: int | None = None,
         accuracy_mode: str = "speed",
     ) -> str:
+        # Trace context 주입 (분산 추적)
+        headers = {}
+        inject_trace_context(headers)
+        trace_id = get_trace_id()
+
         # send_task로 새 worker의 태스크 이름 직접 호출
         result = self.celery.send_task(
             "worker.tasks.asr_task.process_asr_task",
@@ -100,11 +106,18 @@ class CeleryAdapter(TaskQueueAdapter):
                 "accuracy_mode": accuracy_mode,
             },
             queue="asr",
+            headers=headers,
         )
+        logger.debug(f"[TaskQueue] ASR job enqueued with trace_id={trace_id}")
         return result.id
     
     def enqueue_llm_job(self, file_id: int, text_to_summarize: str) -> str:
         try:
+            # Trace context 주입 (분산 추적)
+            headers = {}
+            inject_trace_context(headers)
+            trace_id = get_trace_id()
+
             result = self.celery.send_task(
                 "worker.tasks.llm_task.process_llm_task",
                 kwargs={
@@ -112,8 +125,9 @@ class CeleryAdapter(TaskQueueAdapter):
                     "text_to_summarize": text_to_summarize,
                 },
                 queue="llm_summary",
+                headers=headers,
             )
-            logger.info("[TaskQueue] LLM job enqueued: file_id=%s, job_id=%s", file_id, result.id)
+            logger.info("[TaskQueue] LLM job enqueued: file_id=%s, job_id=%s, trace_id=%s", file_id, result.id, trace_id)
             return result.id
         except Exception as exc:
             logger.error("[TaskQueue] Failed to enqueue LLM job: file_id=%s, error=%s", file_id, exc)
@@ -126,6 +140,11 @@ class CeleryAdapter(TaskQueueAdapter):
         ocr_mode: str = "document",
         ocr_accuracy_mode: str = "speed",
     ) -> str:
+        # Trace context 주입 (분산 추적)
+        headers = {}
+        inject_trace_context(headers)
+        trace_id = get_trace_id()
+
         result = self.celery.send_task(
             "worker.tasks.ocr_task.process_ocr_task",
             kwargs={
@@ -135,7 +154,9 @@ class CeleryAdapter(TaskQueueAdapter):
                 "ocr_accuracy_mode": ocr_accuracy_mode,
             },
             queue="ocr_tasks",
+            headers=headers,
         )
+        logger.debug(f"[TaskQueue] OCR job enqueued with trace_id={trace_id}")
         return result.id
     
     def get_job_status(self, job_id: str) -> str:

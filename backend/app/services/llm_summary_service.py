@@ -137,11 +137,15 @@ def _parse_json_response(response: str) -> dict[str, Any]:
 
 
 def _extract_fields_from_text(text: str) -> dict[str, Any]:
-    """텍스트에서 필드 추출 (JSON 파싱 실패 시 fallback)."""
+    """텍스트에서 필드 추출 (JSON 파싱 실패 시 fallback).
+
+    주의: raw text를 그대로 summary로 사용하지 않음.
+    각 필드를 regex로 추출하고, summary 필드가 없으면 에러 발생.
+    """
     result = {
         "title": "",
         "toc": [],
-        "summary": text,
+        "summary": "",
         "keywords": []
     }
 
@@ -150,11 +154,31 @@ def _extract_fields_from_text(text: str) -> dict[str, Any]:
     if title_match:
         result["title"] = title_match.group(1)
 
+    # summary 필드 추출 (핵심!)
+    summary_match = re.search(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL)
+    if summary_match:
+        summary_text = summary_match.group(1)
+        summary_text = summary_text.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
+        result["summary"] = summary_text
+    else:
+        # summary 필드가 없는 경우, 텍스트가 JSON이 아닌 순수 응답인지 확인
+        if not text.strip().startswith('{') and len(text.strip()) > 50:
+            result["summary"] = text.strip()
+        else:
+            raise ValueError(f"LLM 응답에서 summary 필드를 추출할 수 없습니다: {text[:200]}...")
+
     # 키워드 추출
     keywords_match = re.search(r'"keywords"\s*:\s*\[([^\]]+)\]', text)
     if keywords_match:
         keywords_str = keywords_match.group(1)
         result["keywords"] = [k.strip().strip('"\'') for k in keywords_str.split(',')]
+
+    # toc 추출
+    toc_match = re.search(r'"toc"\s*:\s*\[((?:[^\[\]]|\[(?:[^\[\]])*\])*)\]', text)
+    if toc_match:
+        toc_str = toc_match.group(1)
+        toc_items = re.findall(r'"([^"]+)"', toc_str)
+        result["toc"] = toc_items
 
     return result
 

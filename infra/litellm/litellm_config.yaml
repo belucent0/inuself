@@ -26,7 +26,7 @@ model_list:
 
   # OCR Vision Models - V7.0: prometheus-router를 통해 Redis Stream으로 라우팅
   # custom_handler.py가 OCR 요청을 감지하고 Redis Stream을 통해
-  # Stream Worker (Host) → GPU/NPU 서버로 전달합니다.
+  # Provider Manager (Host) → GPU/NPU 서버로 전달합니다.
   - model_name: "ocr-speed"
     litellm_params:
       model: "prometheus-router/ocr-speed"
