@@ -56,6 +56,16 @@ sqlalchemy = "^2.0.29"
 asyncpg = "^0.29.0"
 psycopg2-binary = "^2.9.9"
 
+# ========================================
+# OpenTelemetry 분산 추적
+# ========================================
+opentelemetry-api = "^1.27.0"
+opentelemetry-sdk = "^1.27.0"
+opentelemetry-exporter-otlp = "^1.27.0"
+opentelemetry-instrumentation-celery = ">=0.48b0"
+opentelemetry-instrumentation-redis = ">=0.48b0"
+opentelemetry-instrumentation-httpx = ">=0.48b0"
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
 pytest-asyncio = "^0.23.6"

@@ -15,7 +15,7 @@ from worker.logging_config import logger
     retry_backoff=True,
     retry_backoff_max=300,
     retry_jitter=True,
-    queue="ocr",
+    queue="ocr_tasks",  # Backend task_queue_adapter와 일치
 )
 def process_ocr_task(
     self,

@@ -15,7 +15,7 @@ from worker.logging_config import logger
     retry_backoff=True,
     retry_backoff_max=300,
     retry_jitter=True,
-    queue="llm",
+    queue="llm_summary",  # Backend task_queue_adapter와 일치
 )
 def process_llm_task(self, file_id: int, text_to_summarize: str):
     """LLM 요약 작업 처리 Celery 태스크.
@@ -46,6 +46,7 @@ def process_llm_task(self, file_id: int, text_to_summarize: str):
             "context", "token", "overflow",
             "400 bad request", "failed to load model", "gpu", "vram", "memory",
             "failed to initialize", "allocation failed", "outofdevicememory",
+            "summary 필드를 추출", "json parsing failed", "invalid response format",  # JSON 파싱 실패
         ]
         
         is_last_retry = self.request.retries >= self.max_retries

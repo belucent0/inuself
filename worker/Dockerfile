@@ -15,7 +15,10 @@ RUN pip install --no-cache-dir poetry
 RUN poetry config virtualenvs.create false
 
 # 의존성 설치
-COPY worker/pyproject.toml worker/poetry.lock ./
+COPY worker/pyproject.toml worker/poetry.lock* ./
+# poetry.lock이 pyproject.toml과 불일치할 수 있으므로 자동 갱신
+# --no-update 실패 시 전체 lock 실행 (새 패키지 버전 반영)
+RUN poetry lock --no-update || poetry lock
 RUN poetry install --no-interaction --no-ansi --without dev
 
 # 소스 코드 복사 (Host의 worker 디렉토리 전체가 Context로 들어옴)
