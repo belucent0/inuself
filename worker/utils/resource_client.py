@@ -1,7 +1,16 @@
 """LiteLLM Resource Management Client.
 
+Architecture V6.5: Simplified Single-Server Architecture
+
 Worker에서 LiteLLM의 /resource/acquire, /resource/release 엔드포인트를 호출합니다.
 중앙집중 방식으로 리소스 경합을 방지합니다.
+
+V6.5 라우팅:
+- ASR 신속모드: whisper-cpp (GPU, 8001)
+- ASR 정확모드: insanely-fast (GPU, 8002)
+- LLM/OCR 신속모드: flm-server (NPU, 11434) - qwen3vl-it:4b
+- LLM/OCR 정확모드: llama-server (GPU, 8080) - Router mode
+- Diarization: pyannote (GPU, 8003)
 """
 import os
 import httpx
@@ -231,11 +240,8 @@ BUSY_THRESHOLD = 70  # 70% 이상이면 "바쁨"
 
 def _query_prometheus_sync(device_id: str) -> float:
     """Prometheus에서 1분 평균 사용량 조회 (동기)."""
-    query = f'''
-    avg_over_time(
-      sum(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{device_id}.*engtype_Compute.*"}})
-    [1m])
-    '''
+    # 쿼리를 한 줄로 작성해야 URL 인코딩 시 파싱 오류 방지
+    query = f'avg_over_time(sum(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{device_id}.*engtype_Compute.*"}})[1m])'
     try:
         with httpx.Client(timeout=5.0) as client:
             response = client.get(
@@ -256,6 +262,8 @@ def _query_prometheus_sync(device_id: str) -> float:
 def select_resource_type_dynamic(task_type: str, accuracy_mode: str = "speed") -> str:
     """
     Prometheus 기반 동적 리소스 타입 선택.
+
+    V6.5: 단일 FLM 서버로 OCR/LLM 통합, 메모리 문제 해결
 
     NPU 우선 방식:
     1. NPU 사용량 < 70%: NPU 사용
@@ -278,6 +286,9 @@ def select_resource_type_dynamic(task_type: str, accuracy_mode: str = "speed") -
     if task_type == "diarization":
         logger.info("[Resource] Diarization -> GPU (forced)")
         return "gpu"
+
+    # V6.5: OCR 신속모드는 NPU 사용 가능 (통합 FLM 서버로 메모리 문제 해결)
+    # (이전 버전에서는 OCR을 GPU로 강제했지만, V6.5에서는 불필요)
 
     # Prometheus 조회
     try:

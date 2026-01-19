@@ -637,7 +637,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(windows_gpu_dedicated_memory_usage_bytes)",
+          "expr": "label_join(windows_gpu_dedicated_memory_usage_bytes, \"luid\", \"_\", \"exported_instance\") * on(luid) group_left() (max by (luid) (windows_gpu_engine_utilization_percentage{exported_instance=~\".*engtype_(3D|Video).*\"} * 0 + 1))",
           "legendFormat": "GPU Dedicated Memory",
           "refId": "A"
         },
@@ -646,7 +646,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(windows_gpu_shared_memory_usage_bytes)",
+          "expr": "label_join(windows_gpu_shared_memory_usage_bytes, \"luid\", \"_\", \"exported_instance\") * on(luid) group_left() (max by (luid) (windows_gpu_engine_utilization_percentage{exported_instance=~\".*engtype_(3D|Video).*\"} * 0 + 1))",
           "legendFormat": "GPU Shared Memory",
           "refId": "B"
         }
@@ -833,7 +833,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "windows_gpu_shared_memory_usage_bytes{exported_instance=~\".*0x000160E6.*\"}",
+          "expr": "label_join(windows_gpu_shared_memory_usage_bytes, \"luid\", \"_\", \"exported_instance\") * on(luid) group_left() (max by (luid) (windows_gpu_engine_utilization_percentage{exported_instance=~\".*engtype_Compute.*\"} * 0 + 1))",
           "legendFormat": "NPU Shared Memory",
           "refId": "A"
         },
@@ -842,7 +842,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "windows_gpu_total_committed_bytes{exported_instance=~\".*0x000160E6.*\"}",
+          "expr": "label_join(windows_gpu_total_committed_bytes, \"luid\", \"_\", \"exported_instance\") * on(luid) group_left() (max by (luid) (windows_gpu_engine_utilization_percentage{exported_instance=~\".*engtype_Compute.*\"} * 0 + 1))",
           "legendFormat": "NPU Total Committed",
           "refId": "B"
         }

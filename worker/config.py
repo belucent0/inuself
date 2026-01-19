@@ -31,9 +31,9 @@ class WorkerSettings(BaseSettings):
     # ========================================
     s3_endpoint: str = "http://localhost:9000"
     s3_region: str = "us-east-1"
-    s3_access_key: str = "torchdev"
-    s3_secret_key: str = "torchdev-secret"
-    s3_bucket: str = "asr-media"
+    s3_access_key: str = Field("", validation_alias="S3_ACCESS_KEY")
+    s3_secret_key: str = Field("", validation_alias="S3_SECRET_KEY")
+    s3_bucket: str = Field("asr-media", validation_alias="S3_BUCKET_NAME")
     s3_prefix: str = "uploads"
 
     # ========================================
@@ -68,7 +68,7 @@ class WorkerSettings(BaseSettings):
         validation_alias="LITELLM_BASE_URL"
     )
     litellm_api_key: str = Field(
-        "sk-litellm-master", 
+        "",
         validation_alias="LITELLM_API_KEY"
     )
     litellm_model: str = Field(
@@ -92,7 +92,7 @@ class WorkerSettings(BaseSettings):
     llm_context_length: int = 15000
     llm_temperature: float = 0.4
     llm_top_p: float = 0.9
-    llm_max_tokens: int = 1024
+    llm_max_tokens: int = 3072  # V6.6: JSON 응답 + 상세 요약을 위해 증가
 
     # ========================================
     # On-Demand LLM 서버 설정 (OCR 정밀모드용)

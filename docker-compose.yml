@@ -6,8 +6,8 @@ services:
     command: server /data --console-address ":9001"
     restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: torchdev
-      MINIO_ROOT_PASSWORD: torchdev-secret
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-torchdev}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-changeme}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 10s
@@ -40,16 +40,16 @@ services:
     image: postgres:18.1
     container_name: asr-postgres
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: pass
-      POSTGRES_DB: asr
+      POSTGRES_USER: ${POSTGRES_USER:-asr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-asr}
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U user -d asr" ]
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-asr} -d $${POSTGRES_DB:-asr}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -93,17 +93,17 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       - TASK_QUEUE_TYPE=celery
-      - DATABASE_URL=postgresql+asyncpg://user:pass@asr-postgres:5432/asr
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
       - REDIS_URL=redis://asr-redis:6379/0
       - S3_ENDPOINT=http://asr-minio:9000
-      - S3_ACCESS_KEY=torchdev
-      - S3_SECRET_KEY=torchdev-secret
-      - S3_BUCKET_NAME=asr-media
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-asr-media}
       # LiteLLM 프록시 설정
       - LLM_PROVIDER=litellm
       - LITELLM_BASE_URL=http://litellm:4000
-      - LITELLM_API_KEY=sk-litellm-master
-      - LITELLM_MODEL=qwen3-4b
+      - LITELLM_API_KEY=${LITELLM_API_KEY}
+      - LITELLM_MODEL=${LITELLM_MODEL:-qwen3-4b}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
@@ -124,6 +124,7 @@ services:
     environment:
       API_BASE_URL: http://asr-backend:8000/api
       NEXT_PUBLIC_GRAFANA_DASHBOARD_URL: ${NEXT_PUBLIC_GRAFANA_DASHBOARD_URL:-}
+      NEXT_PUBLIC_FLOWER_URL: ${NEXT_PUBLIC_FLOWER_URL:-}
     depends_on:
       backend:
         condition: service_healthy
@@ -172,40 +173,31 @@ services:
       - ./backend/data:/app/data
       - ./backend/app:/app/app:ro
       - ./worker:/app/worker
+      - ./infra/litellm:/app/infra/litellm:ro  # V6.6: GPU Stream Client
     environment:
       - TASK_QUEUE_TYPE=celery
-      - DATABASE_URL=postgresql+asyncpg://user:pass@asr-postgres:5432/asr
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
       - REDIS_URL=redis://asr-redis:6379/0
       - S3_ENDPOINT=http://asr-minio:9000
-      - S3_ACCESS_KEY=torchdev
-      - S3_SECRET_KEY=torchdev-secret
-      - S3_BUCKET_NAME=asr-media
-      # Architecture V5: Audio Gateway 직접 호출 (LiteLLM audio transcription은 custom provider 미지원)
-      - WHISPER_CPP_URL=http://host.docker.internal:8001
-      - INSANELY_FAST_URL=http://host.docker.internal:8002
-      - DIARIZATION_URL=http://host.docker.internal:8003
-      # FLM NPU 서버 3개 (호스트에서 실행)
-      - FLM_ASR_URL=http://host.docker.internal:11434   # ASR (whisper-v3:turbo)
-      - FLM_LLM_URL=http://host.docker.internal:11435   # LLM (qwen3-it:4b)
-      - FLM_OCR_URL=http://host.docker.internal:11436   # OCR Vision (qwen3vl-it:4b)
-      - FLM_BASE_URL=http://host.docker.internal:11436  # 기본값: OCR
-      # Prometheus for dynamic routing (speed mode: NPU vs GPU)
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-asr-media}
+      # Architecture V7.0: Redis Stream을 통해 Host의 Stream Worker로 요청
+      # Worker → Redis Stream → Stream Worker (Host) → GPU/NPU 서버
+      # host.docker.internal HTTP 통신 제거 (Docker Desktop 크래시 방지)
+      - REDIS_STREAM_ENABLED=true
+      # Prometheus for metrics (optional)
       - PROMETHEUS_URL=http://asr-prometheus:9090
-      - GPU_DEVICE_ID=0x000142B6
-      - NPU_DEVICE_ID=0x000160E6
-      - BUSY_THRESHOLD=70
       # LiteLLM 프록시 설정 (LLM 요약용)
       - LITELLM_BASE_URL=http://litellm:4000
-      - LITELLM_API_KEY=sk-litellm-master
-      - LITELLM_MODEL=qwen3-4b
+      - LITELLM_API_KEY=${LITELLM_API_KEY}
+      - LITELLM_MODEL=${LITELLM_MODEL:-qwen3-4b}
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   litellm:
     build:
@@ -216,35 +208,46 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      - ./litellm_config.yaml:/app/config.yaml:ro
+      # config.yaml은 이미지에 포함됨 (볼륨 마운트 제거 - Windows 동기화 문제 방지)
       - ./infra/litellm:/app/custom:ro
-      - ./infra/litellm/custom_handler.py:/app/custom/custom_handler.py:ro
     env_file:
       - .env
     environment:
       # Docker 전용 오버라이드 (호스트와 다른 설정)
       - PROMETHEUS_URL=http://asr-prometheus:9090
       - REDIS_URL=redis://asr-redis:6379/0
-      - LITELLM_CONFIG_PATH=/app/config.yaml
+      - LITELLM_CONFIG_PATH=/app/custom/litellm_config.yaml
       # LiteLLM은 DB 사용 안 함 (Prisma 에러 방지)
       - DATABASE_URL=
-      - WHISPER_API_BASE=http://host.docker.internal:8001/v1
-      - INSANELY_FAST_API_BASE=http://host.docker.internal:8002/v1
+      # Architecture V7.0: Redis Stream을 통해 Host의 Stream Worker로 요청
+      # host.docker.internal HTTP 통신 제거 (Docker Desktop 크래시 방지)
+      - REDIS_STREAM_ENABLED=true
       # Background health checks 비활성화
       - DISABLE_SPEND_LOGS=true
       - BACKGROUND_HEALTH_CHECKS=false
       - HEALTH_CHECK_INTERVAL=86400
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       - prometheus
       - redis
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "python", "-c", "import urllib.request; req = urllib.request.Request('http://localhost:4000/health'); req.add_header('Authorization', 'Bearer sk-litellm-master'); response = urllib.request.urlopen(req); assert response.getcode() == 200" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:4000/health/liveliness" ]
       interval: 30s
       timeout: 10s
       retries: 3
+
+  flower:
+    image: mher/flower:2.0
+    container_name: asr-flower
+    command: celery --broker=redis://asr-redis:6379/0 flower --port=5555 --url_prefix=flower --read_only=true
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://asr-redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   redis-data:

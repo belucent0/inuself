@@ -63,6 +63,9 @@ class StreamConsumer:
         
         redis = await self._get_redis()
         
+        # 시작 시 처리되지 않은(Pending) 메시지 확인 및 복구
+        await self._claim_pending_messages()
+        
         while self._running:
             try:
                 # 새 메시지 읽기 (5초 블록)
@@ -96,6 +99,37 @@ class StreamConsumer:
         
         logger.info("StreamConsumer stopped")
 
+    async def _claim_pending_messages(self) -> None:
+        """처리되지 않은(Pending) 메시지를 가져와서 처리합니다 (Recovery)."""
+        redis = await self._get_redis()
+        
+        try:
+            # 1. 자신의 Pending 메시지 확인 (재시작 시)
+            # '0'은 history의 처음부터 끝까지 모든 pending 메시지를 의미
+            pending_messages = await redis.xreadgroup(
+                groupname=CONSUMER_GROUP,
+                consumername=self.consumer_name,
+                streams={RESULT_STREAM: "0"}, 
+                count=100
+            )
+            
+            if pending_messages:
+                logger.info(f"[Recovery] Found pending messages for {self.consumer_name}")
+                for stream_name, entries in pending_messages:
+                    for entry_id, data in entries:
+                        logger.info(f"[Recovery] Reprocessing pending message: {entry_id}")
+                        try:
+                            await self._handle_message(entry_id, data)
+                            await redis.xack(RESULT_STREAM, CONSUMER_GROUP, entry_id)
+                            logger.info(f"[Recovery] Successfully recovered message: {entry_id}")
+                        except Exception as e:
+                            logger.error(f"[Recovery] Failed to recover message {entry_id}: {e}")
+            else:
+                logger.info(f"[Recovery] No pending messages for {self.consumer_name}")
+                
+        except Exception as e:
+            logger.error(f"[Recovery] Error claiming pending messages: {e}")
+
     async def stop(self) -> None:
         """Stream Consumer를 중지합니다."""
         self._running = False
@@ -112,7 +146,16 @@ class StreamConsumer:
         event = message.get("event")
         file_id = message.get("file_id")
         
-        logger.info(f"Handling message: type={msg_type}, event={event}, file_id={file_id}")
+        if not message:
+            logger.warning(f"Received empty data in message: {entry_id}")
+            return
+
+        msg_type = message.get("type")
+        event = message.get("event")
+        file_id = message.get("file_id")
+        
+        logger.info(f"[StreamConsumer] Handling message {entry_id}: type={msg_type}, event={event}, file_id={file_id}")
+        logger.debug(f"[StreamConsumer] Message payload: {message}")
         
         if msg_type == "asr":
             await self._handle_asr_result(message)

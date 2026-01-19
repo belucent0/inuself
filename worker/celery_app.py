@@ -54,11 +54,8 @@ celery_app.conf.update(
     task_create_missing_queues=True,
 
     # Celery Beat 스케줄
+    # V6.5: cleanup-stale-resources 제거됨 (리소스 게이트 제거)
     beat_schedule={
-        "cleanup-stale-resources": {
-            "task": "worker.tasks.cleanup_task.cleanup_stale_resources",
-            "schedule": 300.0,  # 5분마다
-        },
         "cleanup-old-temp-files": {
             "task": "worker.tasks.cleanup_task.cleanup_old_temp_files",
             "schedule": 3600.0,  # 1시간마다
@@ -101,82 +98,22 @@ def configure_worker_logging(**kwargs):
         handler.setFormatter(_log_formatter)
 
 
-def _force_release_resource(task_id: str) -> None:
-    """특정 task_id가 점유한 리소스 락을 강제 해제합니다."""
-    import httpx
-    import json
-
-    settings = get_settings()
-    litellm_url = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
-
-    # 모든 리소스 타입/테스크 타입 조합 확인
-    combinations = [
-        ("gpu", "asr"),
-        ("gpu", "ocr"),
-        ("gpu", "llm"),
-        ("gpu", "diarization"),
-        ("npu", "asr"),
-        ("npu", "ocr"),
-        ("npu", "llm"),
-    ]
-
-    for resource_type, task_type in combinations:
-        gate_key = f"resource:gate:{resource_type}:{task_type}"
-
-        try:
-            # 해당 task_id가 락을 가지고 있는지 확인
-            response = httpx.get(
-                f"{litellm_url}/resource/status",
-                timeout=5.0
-            )
-            response.raise_for_status()
-            status_data = response.json()
-
-            # gate_key 상태 확인
-            key_status = status_data.get("status", {}).get(f"{resource_type}-{task_type}", {})
-            if key_status.get("locked"):
-                lock_data = key_status.get("data", "")
-                if isinstance(lock_data, str):
-                    try:
-                        lock_info = json.loads(lock_data)
-                        if lock_info.get("task_id") == task_id:
-                            # 이 task가 소유한 락 발견 - 강제 해제
-                            force_response = httpx.post(
-                                f"{litellm_url}/resource/force-release",
-                                json={
-                                    "resource_type": resource_type,
-                                    "task_type": task_type,
-                                },
-                                timeout=5.0
-                            )
-                            force_response.raise_for_status()
-                            result = force_response.json()
-                            logging.info(
-                                f"[Resource Cleanup] Force released lock for task {task_id}: "
-                                f"{resource_type}/{task_type} (was owner: {result.get('previous_owner')})"
-                            )
-                    except json.JSONDecodeError:
-                        pass
-        except Exception as e:
-            # force-release 실패 시 로그만 남기고 계속 진행
-            logging.warning(f"[Resource Cleanup] Failed to check/release {gate_key}: {e}")
-
+# V6.5: 리소스 게이트 제거됨 - LiteLLM Custom Handler가 직접 라우팅 및 메모리 관리
+# 태스크 실패/취소 시 로깅만 수행
 
 @task_failure.connect
-def cleanup_on_task_failure(sender, task_id, exception, traceback, **kwargs):
-    """Task 실패 시 리소스 정리."""
+def log_task_failure(sender, task_id, exception, traceback, **kwargs):
+    """Task 실패 시 로깅."""
     task_name = sender.name
-    logging.warning(
-        f"[Resource Cleanup] Task failed: {task_name} (task_id={task_id}), cleaning up resources..."
+    logging.error(
+        f"[Task Failed] {task_name} (task_id={task_id}): {exception}"
     )
-    _force_release_resource(task_id)
 
 
 @task_revoked.connect
-def cleanup_on_task_revoked(sender, task_id, reason, signum, terminated, **kwargs):
-    """Task 강제 종료 시 리소스 정리."""
+def log_task_revoked(sender, task_id, reason, signum, terminated, **kwargs):
+    """Task 강제 종료 시 로깅."""
     task_name = sender.name
     logging.warning(
-        f"[Resource Cleanup] Task revoked: {task_name} (task_id={task_id}), cleaning up resources..."
+        f"[Task Revoked] {task_name} (task_id={task_id}), reason={reason}, terminated={terminated}"
     )
-    _force_release_resource(task_id)

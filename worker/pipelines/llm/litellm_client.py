@@ -85,7 +85,15 @@ def request_litellm_completion(
             if not stream:
                 content = response.choices[0].message.content
                 finish_reason = response.choices[0].finish_reason
-                
+
+                # 토큰 한계로 잘린 경우 경고
+                if finish_reason == "length" and content:
+                    logger.warning(
+                        "LiteLLM response truncated (finish_reason='length'): "
+                        "content_length=%d, consider increasing max_tokens",
+                        len(content)
+                    )
+
                 if not content:
                     # reasoning 필드 확인 (일부 모델)
                     reasoning = getattr(response.choices[0].message, 'reasoning', None)
