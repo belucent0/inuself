@@ -32,6 +32,7 @@ import psutil
 import redis.asyncio as aioredis
 
 from core.config import settings
+from core.log_rotator import create_process_output_handler, ProcessOutputHandler
 
 
 # ==========================================
@@ -55,6 +56,7 @@ class ProviderState:
     last_check: Optional[datetime] = None
     last_status_change: Optional[datetime] = None
     recovery_attempts: int = 0
+    consecutive_failures: int = 0  # 연속 헬스체크 실패 횟수
     cooldown_until: Optional[datetime] = None
     error_message: Optional[str] = None
     active_jobs: int = 0
@@ -172,21 +174,24 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
             cmd=["flm", "serve", "--asr", "1", "--port", "11434"],
             port=11434,
             health="/v1/models",
-            estimated_ram=1.5  # whisper-v3:turbo 실측 ~1.2GB
+            estimated_ram=1.5,  # whisper-v3:turbo 실측 ~1.2GB
+            enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "flm-llm": ProviderConfig(
             name="flm-llm",
             cmd=["flm", "serve", "lfm2:2.6b", "--port", "11435"],
             port=11435,
             health="/v1/models",
-            estimated_ram=0.5  # lfm2:2.6b 실측 ~0.3GB
+            estimated_ram=0.5,  # lfm2:2.6b 실측 ~0.3GB
+            enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "flm-ocr": ProviderConfig(
             name="flm-ocr",
             cmd=["flm", "serve", "qwen3vl-it:4b", "--port", "11436"],
             port=11436,
             health="/v1/models",
-            estimated_ram=2.0  # qwen3vl-it:4b 실측 ~1.7GB
+            estimated_ram=2.0,  # qwen3vl-it:4b 실측 ~1.7GB
+            enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         # GPU LLM/OCR 서버들 (llama.cpp)
         "llama-server": ProviderConfig(
@@ -198,7 +203,8 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
             ],
             port=int(LLM_SERVER_PORT),
             health="/health",
-            estimated_ram=_estimate_ram_from_model([LLM_SERVER_PATH, "-m", LLM_MODEL]) or 3.0
+            estimated_ram=_estimate_ram_from_model([LLM_SERVER_PATH, "-m", LLM_MODEL]) or 3.0,
+            enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "llama-ocr-server": ProviderConfig(
             name="llama-ocr-server",
@@ -210,7 +216,8 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
             ],
             port=int(OCR_SERVER_PORT),
             health="/health",
-            estimated_ram=_estimate_ram_from_model([LLM_SERVER_PATH, "-m", OCR_SERVER_MODEL]) or 9.0
+            estimated_ram=_estimate_ram_from_model([LLM_SERVER_PATH, "-m", OCR_SERVER_MODEL]) or 9.0,
+            enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         # GPU ASR 서버들 (Python)
         "whisper-server": ProviderConfig(
@@ -218,21 +225,24 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
             cmd=[ROCM_PYTHON, "-u", str(SCRIPTS_DIR / "whisper_cpp_server.py")],
             port=8001,
             health="/health",
-            estimated_ram=2.0
+            estimated_ram=2.0,
+            enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "insanely-fast-server": ProviderConfig(
             name="insanely-fast-server",
             cmd=[ROCM_PYTHON, "-u", str(SCRIPTS_DIR / "insanely_fast_server.py")],
             port=8002,
             health="/health",
-            estimated_ram=4.0
+            estimated_ram=4.0,
+            enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "diarization-server": ProviderConfig(
             name="diarization-server",
             cmd=[ROCM_PYTHON, "-u", str(SCRIPTS_DIR / "diarization_server.py")],
             port=8003,
             health="/health",
-            estimated_ram=2.0
+            estimated_ram=2.0,
+            enabled=False,  # On-Demand: 요청 시에만 로드
         ),
     }
 
@@ -319,6 +329,12 @@ class ProviderManager:
         for group in self.groups.values():
             for provider in group.providers:
                 self.provider_states[provider.name] = ProviderState()
+
+        # Recovery 락 (프로바이더별 동시 recovery 방지)
+        self._recovery_locks: Dict[str, asyncio.Lock] = {}
+        for group in self.groups.values():
+            for provider in group.providers:
+                self._recovery_locks[provider.name] = asyncio.Lock()
 
         # 헬스 모니터링 태스크
         self._monitor_task: Optional[asyncio.Task] = None
@@ -412,6 +428,7 @@ class ProviderManager:
                 "last_check": state.last_check.isoformat() if state.last_check else "",
                 "last_status_change": state.last_status_change.isoformat() if state.last_status_change else "",
                 "recovery_attempts": state.recovery_attempts,
+                "consecutive_failures": state.consecutive_failures,
                 "cooldown_until": state.cooldown_until.isoformat() if state.cooldown_until else "",
                 "error_message": state.error_message or "",
                 "active_jobs": state.active_jobs,
@@ -510,7 +527,23 @@ class ProviderManager:
             return False
 
     async def _recover_provider(self, provider: ProviderConfig) -> bool:
-        """프로바이더 복구 시도."""
+        """프로바이더 복구 시도 (락 적용)."""
+        # Recovery 락 획득 시도 (동시 recovery 방지)
+        lock = self._recovery_locks.get(provider.name)
+        if lock is None:
+            # 동적으로 추가된 프로바이더를 위한 락 생성
+            lock = asyncio.Lock()
+            self._recovery_locks[provider.name] = lock
+
+        if lock.locked():
+            logger.debug(f"{provider.name} recovery already in progress, skipping")
+            return False
+
+        async with lock:
+            return await self._do_recover_provider(provider)
+
+    async def _do_recover_provider(self, provider: ProviderConfig) -> bool:
+        """프로바이더 복구 실제 로직 (락 내부에서 실행)."""
         state = self.provider_states[provider.name]
 
         # 쿨다운 체크
@@ -557,8 +590,8 @@ class ProviderManager:
         await self._kill_process_on_port(provider.port)
         await asyncio.sleep(2)
 
-        # 재시작
-        success = await self.start_provider(provider)
+        # 재시작 (On-Demand 프로바이더도 복구되도록 force=True)
+        success = await self.start_provider(provider, force=True)
 
         if success:
             state.recovery_attempts = 0  # 성공 시 카운터 리셋
@@ -623,8 +656,12 @@ class ProviderManager:
                         continue
 
                     for provider in group.providers:
+                        # On-Demand (enabled=False) 프로바이더도 로드되어 있으면 헬스 체크 필요
                         if not provider.enabled:
-                            continue
+                            state = self.provider_states.get(provider.name)
+                            # 상태가 DOWN/COOLDOWN이면 (로드되지 않음) 스킵
+                            if not state or state.status in (ProviderStatus.DOWN, ProviderStatus.COOLDOWN):
+                                continue
 
                         state = self.provider_states[provider.name]
 
@@ -661,6 +698,13 @@ class ProviderManager:
                         is_healthy = await self._check_provider_health(provider)
 
                         if is_healthy:
+                            # 성공 시 연속 실패 카운터 리셋
+                            if state.consecutive_failures > 0:
+                                logger.info(
+                                    f"{provider.name} recovered after "
+                                    f"{state.consecutive_failures} consecutive failures"
+                                )
+                                state.consecutive_failures = 0
                             if state.status != ProviderStatus.UP:
                                 state.recovery_attempts = 0
                                 await self._update_state(provider.name, ProviderStatus.UP)
@@ -668,16 +712,47 @@ class ProviderManager:
                                 state.last_check = datetime.now()
                                 await self._publish_status(provider.name, state)
                         else:
+                            # 연속 실패 카운터 증가
+                            state.consecutive_failures += 1
+
+                            # 임계값 미만이면 경고만 로깅하고 recovery 스킵
+                            if state.consecutive_failures < settings.consecutive_failure_threshold:
+                                logger.warning(
+                                    f"{provider.name} health check failed "
+                                    f"({state.consecutive_failures}/{settings.consecutive_failure_threshold}), "
+                                    f"waiting for more failures before recovery"
+                                )
+                                continue  # recovery 스킵, 다음 프로바이더로
+
+                            # 임계값 도달 시 recovery 시작 (단, 작업 처리 중이면 스킵)
+
+                            # active_jobs > 0이면 recovery 스킵 (요청 처리 중이라 health check 실패한 것)
+                            if state.active_jobs > 0:
+                                logger.warning(
+                                    f"{provider.name} has {state.active_jobs} active jobs, "
+                                    f"skipping recovery (health check failed due to high load)"
+                                )
+                                state.consecutive_failures = 0  # 카운터 리셋
+                                continue
+
+                            logger.warning(
+                                f"{provider.name} reached failure threshold "
+                                f"({state.consecutive_failures} consecutive failures), starting recovery"
+                            )
+
                             if state.status == ProviderStatus.UP:
                                 await self._update_state(
                                     provider.name,
                                     ProviderStatus.DOWN,
-                                    "Health check failed"
+                                    f"Health check failed {state.consecutive_failures} times"
                                 )
 
                             # 자동 복구 시도 (항상 시도하되 _recover_provider 내부에서 쿨다운/최대시도 관리)
                             # 초기 시작 실패 등으로 self.processes에 없어도 enabled면 복구 시도
                             await self._recover_provider(provider)
+
+                            # recovery 시도 후 연속 실패 카운터 리셋 (recovery 성공 여부와 관계없이)
+                            state.consecutive_failures = 0
 
             except Exception as e:
                 logger.error(f"Health monitor error: {e}")
@@ -996,24 +1071,33 @@ class ProviderManager:
     # Start Operations
     # ==========================================
 
-    async def start_provider(self, provider: ProviderConfig) -> bool:
-        """단일 프로바이더 시작."""
-        if not provider.enabled:
+    async def start_provider(self, provider: ProviderConfig, force: bool = False) -> bool:
+        """단일 프로바이더 시작.
+
+        Args:
+            provider: 프로바이더 설정
+            force: True면 enabled=False여도 강제 시작 (On-Demand 로드용)
+        """
+        if not provider.enabled and not force:
             logger.info(f"Skipping disabled provider: {provider.name}")
             return True
+
+        # 이미 실행 중인 경우 중복 시작 방지
+        if provider.name in self.processes:
+            proc = self.processes[provider.name]
+            if proc.poll() is None:  # 프로세스가 아직 실행 중
+                logger.info(f"Provider {provider.name} is already running (PID: {proc.pid}), skipping start")
+                return True
+            else:
+                # 프로세스가 종료되었으면 목록에서 제거
+                logger.warning(f"Provider {provider.name} process terminated (exit code: {proc.returncode}), removing from list")
+                del self.processes[provider.name]
+                self._save_pids()
 
         # 상태 업데이트: STARTING
         await self._update_state(provider.name, ProviderStatus.STARTING)
 
         logger.info(f"Starting provider: {provider.name} (port {provider.port})...")
-
-        log_file = LOG_DIR / f"{provider.name}.log"
-        try:
-            log_handle = open(log_file, "w", encoding="utf-8")
-        except Exception as e:
-            logger.error(f"Failed to open log file for {provider.name}: {e}")
-            await self._update_state(provider.name, ProviderStatus.DOWN, f"Log file error: {e}")
-            return False
 
         try:
             # Windows: CREATE_NO_WINDOW로 콘솔 창 숨김, CREATE_NEW_PROCESS_GROUP으로 시그널 분리
@@ -1024,27 +1108,39 @@ class ProviderManager:
             # 환경 변수 설정 (Unbuffered 출력 강제 + .env 주입)
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
-            
+
             # .env 파일의 환경변수 로드 및 주입
             loaded_env = _load_env_vars()
             env.update(loaded_env)
 
+            # stdout=PIPE로 출력을 받아 ProcessOutputHandler로 처리
+            # (로그 로테이션 + FLM 스팸 필터링 적용)
             proc = subprocess.Popen(
                 provider.cmd,
                 stdin=subprocess.DEVNULL,  # stdin 블록 방지 (CREATE_NO_WINDOW에서 중요)
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,  # stderr도 파일로 리다이렉션
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # stderr도 stdout으로 합침
                 cwd=str(PROJECT_ROOT),
                 env=env,
                 creationflags=creationflags
             )
             self.processes[provider.name] = proc
-            self.log_handles[provider.name] = log_handle  # 로그 핸들 저장
+
+            # 로그 로테이션 핸들러 생성 및 시작 (50MB, 3개 백업, FLM 스팸 필터링)
+            output_handler = create_process_output_handler(
+                process=proc,
+                provider_name=provider.name,
+                log_dir=LOG_DIR,
+                max_mb=50,
+                backup_count=3,
+            )
+            output_handler.start()
+            self.log_handles[provider.name] = output_handler  # ProcessOutputHandler 저장
+
             logger.info(f"Started {provider.name} (PID: {proc.pid})")
             self._save_pids()  # PID 파일 즉시 저장
         except Exception as e:
             logger.error(f"Failed to start {provider.name}: {e}")
-            log_handle.close()
             await self._update_state(provider.name, ProviderStatus.DOWN, f"Process start error: {e}")
             return False
 
@@ -1068,10 +1164,10 @@ class ProviderManager:
                 self._save_pids()  # PID 파일 업데이트
             else:
                 logger.warning(f"{provider.name} was not in processes list!")
-            # 로그 핸들 닫기
+            # 로그 핸들러 중지
             if provider.name in self.log_handles:
                 try:
-                    self.log_handles[provider.name].close()
+                    self.log_handles[provider.name].stop()
                 except Exception:
                     pass
                 del self.log_handles[provider.name]
@@ -1160,10 +1256,10 @@ class ProviderManager:
             proc.wait(timeout=10)
             logger.info(f"{name} stopped gracefully")
             del self.processes[name]
-            # 로그 핸들 닫기
+            # 로그 핸들러 중지
             if name in self.log_handles:
                 try:
-                    self.log_handles[name].close()
+                    self.log_handles[name].stop()
                 except Exception:
                     pass
                 del self.log_handles[name]
@@ -1176,10 +1272,10 @@ class ProviderManager:
             proc.kill()
             proc.wait()
             del self.processes[name]
-            # 로그 핸들 닫기
+            # 로그 핸들러 중지
             if name in self.log_handles:
                 try:
-                    self.log_handles[name].close()
+                    self.log_handles[name].stop()
                 except Exception:
                     pass
                 del self.log_handles[name]
@@ -1314,8 +1410,8 @@ class ProviderManager:
         for group in self.groups.values():
             for provider in group.providers:
                 if provider.name == provider_name:
-                    logger.info(f"Loading provider: {provider_name}")
-                    return await self.start_provider(provider)
+                    logger.info(f"Loading provider: {provider_name} (On-Demand)")
+                    return await self.start_provider(provider, force=True)
 
         logger.warning(f"Provider not found: {provider_name}")
         return False
