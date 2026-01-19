@@ -2,6 +2,22 @@
 import os
 import logging
 
+# ==========================================
+# OpenTelemetry 초기화 (다른 import 전에 실행)
+# HTTPX instrumentor가 모든 httpx 호출에 적용되도록 함
+# ==========================================
+def _early_telemetry_init():
+    """모듈 로드 시점에 telemetry 초기화 (instrumentor 사전 적용)."""
+    try:
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        HTTPXClientInstrumentor().instrument()
+        logging.getLogger(__name__).info("[Telemetry] HTTPX instrumented (early init)")
+    except Exception as e:
+        logging.getLogger(__name__).debug(f"[Telemetry] Early HTTPX instrument failed: {e}")
+
+# 다른 모듈 import 전에 httpx instrumentor 적용
+_early_telemetry_init()
+
 from celery import Celery
 from celery.signals import (
     worker_process_init,
@@ -44,11 +60,11 @@ celery_app.conf.update(
     result_expires=3600,  # 결과 1시간 보관
     task_acks_late=True,  # 작업 완료 후 ack
     task_reject_on_worker_lost=True,  # 워커 죽으면 작업 재시도
-    # 큐 라우팅 설정
+    # 큐 라우팅 설정 (Backend task_queue_adapter와 일치)
     task_routes={
         "worker.tasks.asr_task.process_asr_task": {"queue": "asr"},
-        "worker.tasks.llm_task.process_llm_task": {"queue": "llm"},
-        "worker.tasks.ocr_task.process_ocr_task": {"queue": "ocr"},
+        "worker.tasks.llm_task.process_llm_task": {"queue": "llm_summary"},
+        "worker.tasks.ocr_task.process_ocr_task": {"queue": "ocr_tasks"},
     },
     task_default_queue="asr",
     task_create_missing_queues=True,
@@ -87,15 +103,22 @@ def setup_task_logger_format(logger, *args, **kwargs):
 def configure_worker_logging(**kwargs):
     """워커 프로세스가 시작될 때 모든 로거의 포맷을 일관되게 설정."""
     from .logging_config import _log_formatter
-    
+
     for name in logging.Logger.manager.loggerDict:
         logger = logging.getLogger(name)
         for handler in logger.handlers:
             handler.setFormatter(_log_formatter)
-    
+
     root_logger = logging.getLogger()
     for handler in root_logger.handlers:
         handler.setFormatter(_log_formatter)
+
+
+@worker_process_init.connect
+def configure_worker_telemetry(**kwargs):
+    """워커 프로세스가 시작될 때 OpenTelemetry 초기화."""
+    from .telemetry import setup_worker_telemetry
+    setup_worker_telemetry(service_name="asr-worker")
 
 
 # V6.5: 리소스 게이트 제거됨 - LiteLLM Custom Handler가 직접 라우팅 및 메모리 관리
@@ -111,9 +134,11 @@ def log_task_failure(sender, task_id, exception, traceback, **kwargs):
 
 
 @task_revoked.connect
-def log_task_revoked(sender, task_id, reason, signum, terminated, **kwargs):
+def log_task_revoked(sender, request=None, terminated=None, signum=None, expired=None, **kwargs):
     """Task 강제 종료 시 로깅."""
-    task_name = sender.name
+    task_name = sender.name if sender else "unknown"
+    task_id = request.id if request else kwargs.get("task_id", "unknown")
+    reason = "terminated" if terminated else ("expired" if expired else "unknown")
     logging.warning(
         f"[Task Revoked] {task_name} (task_id={task_id}), reason={reason}, terminated={terminated}"
     )

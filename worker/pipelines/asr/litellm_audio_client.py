@@ -20,6 +20,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "infra" / "litellm"))
 from gpu_stream_client import GPUStreamClient, get_gpu_stream_client
 
 from worker.logging_config import logger
+from worker.telemetry import get_trace_id
 
 
 class ASRProvider(Enum):
@@ -84,7 +85,9 @@ def call_litellm_transcription(
     else:
         model = "whisper-turbo"     # → whisper.cpp (GPU Speed)
 
-    logger.info(f"[GPUStream] Requesting transcription: model={model}, accuracy_mode={accuracy_mode}")
+    # OpenTelemetry trace 확인
+    current_trace_id = get_trace_id()
+    logger.info(f"[GPUStream] Requesting transcription: model={model}, accuracy_mode={accuracy_mode}, trace_id={current_trace_id}")
 
     # V7.2: ASR 요청 직전에 "started" 콜백 호출 (상태를 PROCESSING으로 업데이트)
     if on_resource_acquired:
@@ -156,7 +159,9 @@ def call_litellm_diarization(
     """
     start_time = time.time()
 
-    logger.info(f"[GPUStream] Requesting diarization: min_speakers={min_speakers}, max_speakers={max_speakers}")
+    # OpenTelemetry trace 확인
+    current_trace_id = get_trace_id()
+    logger.info(f"[GPUStream] Requesting diarization: min_speakers={min_speakers}, max_speakers={max_speakers}, trace_id={current_trace_id}")
 
     # Redis Stream 클라이언트 사용
     gpu_client = get_gpu_stream_client()

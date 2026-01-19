@@ -39,6 +39,27 @@ from litellm.types.utils import GenericStreamingChunk, ModelResponse
 # V6.6: Redis Stream GPU 클라이언트
 from custom.gpu_stream_client import AsyncGPUStreamClient, get_async_gpu_stream_client
 
+# V7.3: OpenTelemetry 분산 추적
+try:
+    from custom.telemetry import (
+        trace_provider_call,
+        trace_routing_decision,
+        get_tracer,
+        get_trace_id,
+        ProviderAttributes,
+    )
+    TELEMETRY_ENABLED = True
+except ImportError:
+    TELEMETRY_ENABLED = False
+    def trace_provider_call(*args, **kwargs):
+        from contextlib import nullcontext
+        return nullcontext()
+    def trace_routing_decision(*args, **kwargs):
+        from contextlib import nullcontext
+        return nullcontext()
+    def get_tracer(name): return None
+    def get_trace_id(): return None
+
 # Monkeypatch removed to avoid Enum validation error
 # if not hasattr(litellm, "provider_list"):
 #     litellm.provider_list = []
@@ -65,11 +86,13 @@ NPU_SERVICES = {"flm"}  # Single unified FLM server
 GPU_API_BASE = os.getenv("GPU_API_BASE", "http://host.docker.internal:8080")  # LLM
 NPU_API_BASE = os.getenv("NPU_API_BASE", "http://host.docker.internal:11434")  # Unified FLM (ASR + OCR)
 
-# 장치 ID (동적 조회로 대체됨 - 아래 함수 참조)
-# GPU_DEVICE_ID = os.getenv("GPU_DEVICE_ID", "0x000142B6")
-# NPU_DEVICE_ID = os.getenv("NPU_DEVICE_ID", "0x000160E6")
+# 장치 ID - 동적 감지 사용 (LUID는 리부팅 시 변경될 수 있음)
+# 디바이스 특성 기반 감지: NVIDIA GPU(3D만), AMD iGPU(3D+Video+Compute 혼합), AMD NPU(Compute만)
+# get_gpu_device_ids_sync(), get_npu_device_ids_sync() 함수에서 동적으로 LUID를 감지함
 
-GPU_ENGTYPE = "Compute"  # GPU 사용량 조회 시 사용할 엔진 타입
+# 캠시된 디바이스 ID (성능 최적화 - Prometheus 쿼리 최소화)
+_cached_gpu_device_id: str | None = None
+_cached_npu_device_id: str | None = None
 
 # Chat/LLM 모델명 (V6.5)
 GPU_MODEL = os.getenv("GPU_MODEL", "Qwen3-4B-Instruct-2507-Q4_K_S.gguf")  # llama-server Router mode
@@ -118,12 +141,18 @@ except Exception as e:
 
 
 def get_gpu_device_ids_sync() -> list[str]:
-    """Prometheus에서 GPU device ID 목록을 동적으로 조회.
+    """Prometheus에서 GPU device ID를 동적으로 조회.
+
+    디바이스 특성 기반 감지:
+    - AMD iGPU: 3D + Video + Compute 혼합 (Video 엔진 있음)
+    - AMD NPU: Compute 엔진만 보유 (Video 엔진 없음)
 
     Returns:
-        GPU device ID 목록 (예: ["0x0001392E", "0x000155F4"])
+        GPU device ID 목록 (Video 엔진이 있는 디바이스)
     """
     import re
+    from collections import defaultdict
+
     query = 'windows_gpu_engine_utilization_percentage'
     try:
         with httpx.Client(timeout=5.0) as client:
@@ -135,19 +164,45 @@ def get_gpu_device_ids_sync() -> list[str]:
             data = response.json()
 
             if data["status"] == "success" and data["data"]["result"]:
-                device_ids = []
+                # LUID별 엔진 타입 수집
+                luid_engines: dict[str, set[str]] = defaultdict(set)
+
                 for result in data["data"]["result"]:
                     metric = result["metric"]
                     exported_instance = metric.get("exported_instance", "")
-                    # exported_instance: "pid_10440_luid_0x00000000_0x0001392E_phys_0_eng_0_engtype_3D"
-                    # luid는 두 번째 hex: 0x0001392E
-                    match = re.search(r'luid_0x[0-9A-Fa-f]+_0x([0-9A-Fa-f]+)', exported_instance)
-                    if match:
-                        luid = '0x' + match.group(1).lower()
-                        if luid not in device_ids:
-                            device_ids.append(luid)
-                            logger.debug(f"[Prometheus] Found GPU device: {luid}")
-                return device_ids
+
+                    # LUID 추출
+                    luid_match = re.search(r'luid_0x[0-9A-Fa-f]+_0x([0-9A-Fa-f]+)', exported_instance)
+                    if not luid_match:
+                        continue
+                    luid = '0x' + luid_match.group(1).lower()
+
+                    # 엔진 타입 추출
+                    engtype_match = re.search(r'engtype_([A-Za-z0-9_ ]+)', exported_instance)
+                    if engtype_match:
+                        engtype = engtype_match.group(1).strip()
+                        luid_engines[luid].add(engtype)
+
+                # GPU 판별: Video 엔진이 있는 디바이스 (AMD iGPU)
+                gpus = []
+                for luid, engines in luid_engines.items():
+                    has_video = any('Video' in e for e in engines)
+
+                    # AMD iGPU: Video 엔진이 있음 (실제 GPU는 Video 인코딩/디코딩 지원)
+                    if has_video:
+                        gpus.append(luid)
+                        logger.debug(f"[Prometheus] Found GPU (Video engine): {luid} (engines: {engines})")
+
+                if gpus:
+                    return gpus
+
+                # Fallback: 3D 엔진이 있는 모든 디바이스
+                fallback_gpus = [luid for luid, engines in luid_engines.items()
+                                 if any('3D' in e for e in engines)]
+                if fallback_gpus:
+                    logger.warning(f"[Prometheus] No GPU with Video engine, using fallback: {fallback_gpus}")
+                return fallback_gpus
+
             return []
     except Exception as e:
         logger.warning(f"[Prometheus] Failed to get GPU device IDs: {e}")
@@ -155,15 +210,20 @@ def get_gpu_device_ids_sync() -> list[str]:
 
 
 def get_npu_device_ids_sync() -> list[str]:
-    """Prometheus에서 NPU device ID 목록을 동적으로 조회.
+    """Prometheus에서 Intel NPU device ID를 동적으로 조회.
 
-    NPU는 AMD NPU exporter (port 9183)에서 수집되거나,
-    windows_exporter의 GPU Engine counter에 포함될 수 있습니다.
+    디바이스 특성 기반 감지:
+    - Intel NPU: Compute 엔진만 보유 (3D/Video 엔진 없음)
+    - Intel iGPU: 3D + Video + Compute 혼합
+    - NVIDIA GPU: 3D 엔진만 보유
 
     Returns:
-        NPU device ID 목록
+        Intel NPU device ID 목록 (예: ["0x000153C1"])
     """
-    # 1. AMD NPU exporter 메트릭 확인
+    import re
+    from collections import defaultdict
+
+    # 1. AMD NPU exporter 메트릭 확인 (별도 exporter가 있는 경우)
     query_npu = 'count by (luid) (npu_total_gops)'
     try:
         with httpx.Client(timeout=5.0) as client:
@@ -188,33 +248,52 @@ def get_npu_device_ids_sync() -> list[str]:
     except Exception as e:
         logger.debug(f"[Prometheus] AMD NPU exporter query failed: {e}")
 
-    # 2. windows_exporter GPU Engine에서 NPU 확인 (일부 NPU가 GPU counter에 나타남)
-    query_gpu = 'count by (luid) (windows_gpu_engine_utilization_percentage)'
+    # 2. windows_exporter에서 Intel NPU 동적 감지 (Compute 엔진만 있는 디바이스)
+    query = 'windows_gpu_engine_utilization_percentage'
     try:
         with httpx.Client(timeout=5.0) as client:
             response = client.get(
                 f"{PROMETHEUS_URL}/api/v1/query",
-                params={"query": query_gpu}
+                params={"query": query}
             )
             response.raise_for_status()
             data = response.json()
 
             if data["status"] == "success" and data["data"]["result"]:
-                # GPU device 목록에서 NPU가 포함된 것 필터링
-                gpu_device_ids = []
+                # LUID별 엔진 타입 수집
+                luid_engines: dict[str, set[str]] = defaultdict(set)
+
                 for result in data["data"]["result"]:
                     metric = result["metric"]
                     exported_instance = metric.get("exported_instance", "")
-                    luid = exported_instance.split("luid_")[1].split("_")[0] if "luid_" in exported_instance else None
-                    if luid and luid not in gpu_device_ids:
-                        gpu_device_ids.append(luid)
 
-                # NPU device ID가 GPU 목록에 있으면 반환 (GPU counter로 수집되는 경우)
-                npu_luid = os.getenv("NPU_DEVICE_ID", "0x000160E6").lower().replace("0x", "")
-                for gid in gpu_device_ids:
-                    if gid.lower() == npu_luid:
-                        logger.debug(f"[Prometheus] NPU found in GPU metrics: 0x{gid}")
-                        return [gid]
+                    # LUID 추출
+                    luid_match = re.search(r'luid_0x[0-9A-Fa-f]+_0x([0-9A-Fa-f]+)', exported_instance)
+                    if not luid_match:
+                        continue
+                    luid = '0x' + luid_match.group(1).lower()
+
+                    # 엔진 타입 추출
+                    engtype_match = re.search(r'engtype_([A-Za-z0-9_ ]+)', exported_instance)
+                    if engtype_match:
+                        engtype = engtype_match.group(1).strip()
+                        luid_engines[luid].add(engtype)
+
+                # Intel NPU 판별: Compute 엔진만 있고 3D/Video 엔진이 없음
+                intel_npus = []
+                for luid, engines in luid_engines.items():
+                    has_3d = any('3D' in e for e in engines)
+                    has_video = any('Video' in e for e in engines)
+                    has_compute = any('Compute' in e for e in engines)
+
+                    # Intel NPU: Compute 엔진이 있고, 3D/Video 엔진이 없음
+                    if has_compute and not has_3d and not has_video:
+                        intel_npus.append(luid)
+                        logger.debug(f"[Prometheus] Found Intel NPU: {luid} (engines: {engines})")
+
+                if intel_npus:
+                    return intel_npus
+
     except Exception as e:
         logger.debug(f"[Prometheus] GPU metrics query for NPU failed: {e}")
 
@@ -224,28 +303,37 @@ def get_npu_device_ids_sync() -> list[str]:
 def query_single_device_sync(device_id: str, engine_filter: str = "non_compute") -> float:
     """Query Prometheus for GPU/NPU utilization.
 
-    Prometheus Metrics Reference (Grafana Dashboard aligned):
-    - GPU:  windows_gpu_engine_utilization_percentage{engtype=~"3D|Video"}
-           GPU 3D/Video 엔진 사용률 (Windows 작업 관리자 GPU 사용률과 일치)
-           Note: Copy 엔진은 제외 (VRAM 관리용으로 실제 GPU 부하 아님)
-
-    - NPU:  windows_gpu_engine_utilization_percentage{engtype="Compute"}
-           NPU Compute 엔진 사용률 (max로 단일 엔진 최대값 사용)
-           Note: 여러 Compute 엔진이 있어 sum하면 200%+ 나올 수 있음
+    디바이스 특성 기반 동적 감지:
+    - GPU: get_gpu_device_ids_sync()로 감지된 NVIDIA GPU LUID 사용
+    - NPU: get_npu_device_ids_sync()로 감지된 AMD NPU LUID 사용
 
     Args:
-        device_id: Device ID (e.g., "0x0001392E") - now unused, kept for compatibility
-        engine_filter: "non_compute" for GPU (3D/Video), "compute" for NPU
+        device_id: Unused, kept for compatibility
+        engine_filter: "non_compute" for GPU (3D), "compute" for NPU
 
     Returns:
         Utilization percentage (0-100)
     """
+    global _cached_gpu_device_id, _cached_npu_device_id
+
     if engine_filter == "non_compute":
-        # GPU: sum(3D + Video) - Windows 작업 관리자 GPU 사용률과 일치
-        query = 'sum(windows_gpu_engine_utilization_percentage{exported_instance=~".*engtype_(3D|Video).*"})'
+        # GPU: 동적으로 감지된 NVIDIA GPU LUID 사용
+        if _cached_gpu_device_id is None:
+            gpu_ids = get_gpu_device_ids_sync()
+            _cached_gpu_device_id = gpu_ids[0] if gpu_ids else ""
+            logger.info(f"[Prometheus] Cached GPU device ID: {_cached_gpu_device_id}")
+        if not _cached_gpu_device_id:
+            return 0.0
+        query = f'sum(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{_cached_gpu_device_id}.*engtype_3D.*"}})'
     else:
-        # NPU: max(Compute) - 여러 엔진 중 가장 높은 사용률
-        query = 'max(windows_gpu_engine_utilization_percentage{exported_instance=~".*engtype_Compute.*"})'
+        # NPU: 동적으로 감지된 AMD NPU LUID 사용
+        if _cached_npu_device_id is None:
+            npu_ids = get_npu_device_ids_sync()
+            _cached_npu_device_id = npu_ids[0] if npu_ids else ""
+            logger.info(f"[Prometheus] Cached NPU device ID: {_cached_npu_device_id}")
+        if not _cached_npu_device_id:
+            return 0.0
+        query = f'sum(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{_cached_npu_device_id}.*engtype_Compute.*"}})'
 
     try:
         with httpx.Client(timeout=5.0) as client:
@@ -418,21 +506,37 @@ def format_bytes(b: float) -> str:
 async def query_single_device_async(device_id: str, engine_filter: str = "non_compute") -> float:
     """Query Prometheus for GPU/NPU utilization (async).
 
-    Prometheus Metrics Reference:
-    - GPU:  windows_gpu_engine_utilization_percentage{engtype=~"3D|Video"}
-    - NPU:  windows_gpu_engine_utilization_percentage{engtype="Compute"}
+    디바이스 특성 기반 동적 감지:
+    - GPU: get_gpu_device_ids_sync()로 감지된 NVIDIA GPU LUID 사용
+    - NPU: get_npu_device_ids_sync()로 감지된 AMD NPU LUID 사용
 
     Args:
-        device_id: Device ID (e.g., "0x0001392E")
-        engine_filter: "non_compute" for GPU (3D/Video), "compute" for NPU
+        device_id: Unused, kept for compatibility
+        engine_filter: "non_compute" for GPU (3D), "compute" for NPU
 
     Returns:
         Utilization percentage (0-100)
     """
+    global _cached_gpu_device_id, _cached_npu_device_id
+
     if engine_filter == "non_compute":
-        query = 'sum(windows_gpu_engine_utilization_percentage{exported_instance=~".*engtype_(3D|Video).*"})'
+        # GPU: 동적으로 감지된 NVIDIA GPU LUID 사용
+        if _cached_gpu_device_id is None:
+            gpu_ids = get_gpu_device_ids_sync()
+            _cached_gpu_device_id = gpu_ids[0] if gpu_ids else ""
+            logger.info(f"[Prometheus] Cached GPU device ID: {_cached_gpu_device_id}")
+        if not _cached_gpu_device_id:
+            return 0.0
+        query = f'sum(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{_cached_gpu_device_id}.*engtype_3D.*"}})'
     else:
-        query = 'max(windows_gpu_engine_utilization_percentage{exported_instance=~".*engtype_Compute.*"})'
+        # NPU: 동적으로 감지된 AMD NPU LUID 사용
+        if _cached_npu_device_id is None:
+            npu_ids = get_npu_device_ids_sync()
+            _cached_npu_device_id = npu_ids[0] if npu_ids else ""
+            logger.info(f"[Prometheus] Cached NPU device ID: {_cached_npu_device_id}")
+        if not _cached_npu_device_id:
+            return 0.0
+        query = f'sum(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{_cached_npu_device_id}.*engtype_Compute.*"}})'
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1351,7 +1455,7 @@ class PrometheusRouter(CustomLLM):
         """동기 completion (Non-streaming) - V7.0 Redis Stream 기반.
 
         Architecture V7.0:
-        - HTTP 직접 통신 대신 Redis Stream을 통해 Stream Worker로 요청
+        - HTTP 직접 통신 대신 Redis Stream을 통해 Provider Manager로 요청
         - Vision/OCR 요청 감지 및 처리
         - Docker Desktop 크래시 방지
         """
@@ -1370,11 +1474,13 @@ class PrometheusRouter(CustomLLM):
             logger.warning("[PrometheusRouter V7.0] stream=True detected in completion. LiteLLM should have called astreaming.")
 
         # V7.0: OCR 요청 감지 (모델명이 ocr-로 시작하거나 vision 요청)
-        is_ocr_model = requested_model.startswith("ocr-")
+        # 라우터 prefix 제거 (예: "prometheus-router/ocr-speed" -> "ocr-speed")
+        model_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
+        is_ocr_model = model_name.startswith("ocr-")
         is_vision, image_base64, text_prompt = self._is_vision_request(messages)
 
         if is_ocr_model or is_vision:
-            logger.info(f"[PrometheusRouter V7.0] OCR/Vision request detected: model={requested_model}")
+            logger.info(f"[PrometheusRouter V7.0] OCR/Vision request detected: model={requested_model} (extracted: {model_name})")
 
             # accuracy_mode 추출 (extra_body에서)
             extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
@@ -1395,6 +1501,11 @@ class PrometheusRouter(CustomLLM):
 
                 if image_base64:
                     # V7.0: Redis Stream을 통한 OCR 요청
+                    # V7.3: trace_id 로깅 추가
+                    trace_id = get_trace_id() if TELEMETRY_ENABLED else None
+                    if trace_id:
+                        logger.info(f"[PrometheusRouter V7.3] OCR request trace_id={trace_id}")
+
                     result = gpu_client.request_ocr(
                         image_base64=image_base64,
                         model=ocr_model,
@@ -1489,11 +1600,13 @@ class PrometheusRouter(CustomLLM):
         logger.info(f"[PrometheusRouter V7.0] acompletion called. model={requested_model}")
 
         # V7.0: OCR 요청 감지 (모델명이 ocr-로 시작하거나 vision 요청)
-        is_ocr_model = requested_model.startswith("ocr-")
+        # 라우터 prefix 제거 (예: "prometheus-router/ocr-speed" -> "ocr-speed")
+        model_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
+        is_ocr_model = model_name.startswith("ocr-")
         is_vision, image_base64, text_prompt = self._is_vision_request(messages)
 
         if is_ocr_model or is_vision:
-            logger.info(f"[PrometheusRouter V7.0] OCR/Vision request detected (async): model={requested_model}")
+            logger.info(f"[PrometheusRouter V7.0] OCR/Vision request detected (async): model={requested_model} (extracted: {model_name})")
 
             # accuracy_mode 추출 (extra_body에서)
             extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
@@ -1572,7 +1685,7 @@ class PrometheusRouter(CustomLLM):
                 model=model,
                 max_tokens=optional_params.get("max_tokens", 4096),
                 temperature=optional_params.get("temperature", 0.7),
-                timeout=120.0,
+                timeout=600.0,
             )
 
             return ModelResponse(
@@ -1747,10 +1860,11 @@ class PrometheusRouter(CustomLLM):
                 finally:
                     await decrement_active_count("diarization-server")
 
-            # 모드 판별
-            is_accuracy_mode = requested_model in ("whisper-large-v3", "whisper", "openai/whisper-large-v3")
-            is_turbo_mode = requested_model in ("whisper-turbo", "whisper-large-v3-turbo", "turbo", "openai/whisper-turbo")
-            is_speed_mode = requested_model in ("flm-audio", "flm", "openai/flm-audio")
+            # 모드 판별 (라우터 prefix 제거)
+            model_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
+            is_accuracy_mode = model_name in ("whisper-large-v3", "whisper", "openai/whisper-large-v3")
+            is_turbo_mode = model_name in ("whisper-turbo", "whisper-large-v3-turbo", "turbo", "openai/whisper-turbo")
+            is_speed_mode = model_name in ("flm-audio", "flm", "openai/flm-audio")
 
             # 1. 라우팅 대상 모델 결정
             if is_accuracy_mode:

@@ -26,8 +26,20 @@ import redis.asyncio as redis_async
 
 from core.config import settings
 from core.manager import ProviderManager
+from core.telemetry import (
+    trace_gpu_operation,
+    record_operation_result,
+    trace_provider_load,
+    trace_http_request,
+    trace_response_publish,
+)
 from services.job_tracker import JobTracker, JobStatus
 from services.provider_service import ProviderService
+
+# TYPE_CHECKING으로 순환 임포트 방지
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from services.idle_manager import IdleTimeoutManager
 
 logger = logging.getLogger("StreamProcessor")
 
@@ -36,9 +48,11 @@ class StreamProcessor:
     """Redis Stream 기반 GPU 작업 처리 + Control API.
 
     V7.3: ProviderManager 통합으로 모든 프로바이더 프로세스 직접 관리.
+    V7.4: IdleTimeoutManager 연동으로 On-Demand 프로바이더 자동 언로드.
     - GPU 작업 스트림 (stream:gpu:*) 처리
     - Control API 스트림 (stream:provider:*) 처리
     - 작업 추적 (JobTracker)
+    - Idle timeout 관리 (On-Demand 프로바이더 자동 언로드)
     """
 
     # Task type -> Provider 매핑
@@ -49,11 +63,16 @@ class StreamProcessor:
         "ocr": "llama-ocr-server",  # 기본값, 모델에 따라 변경
     }
 
-    def __init__(self, provider_manager: ProviderManager = None):
+    def __init__(
+        self,
+        provider_manager: ProviderManager = None,
+        idle_manager: "IdleTimeoutManager" = None,
+    ):
         self.redis: Optional[redis_async.Redis] = None
         self.is_running = True
         self.http_client: Optional[httpx.AsyncClient] = None
         self.provider_manager = provider_manager or ProviderManager()
+        self.idle_manager = idle_manager  # On-Demand 프로바이더 자동 언로드용
         self.job_tracker: Optional[JobTracker] = None
         self._service: Optional[ProviderService] = None
 
@@ -314,6 +333,9 @@ class StreamProcessor:
                 return "llama-server"
             elif "flm" in model or "npu" in model.lower():
                 return "flm-llm"
+            # handle_llm_completion()과 동일한 로직: qwen, gemma 등 + ":" → NPU
+            elif any(p in model.lower() for p in ["qwen", "gemma", "deepseek", "phi", "lfm"]) and ":" in model:
+                return "flm-llm"
             return "llama-server"
 
         elif task_type == "ocr":
@@ -324,6 +346,60 @@ class StreamProcessor:
 
         return self.TASK_PROVIDER_MAP.get(task_type, "unknown")
 
+    async def _ensure_provider_ready(self, provider_name: str, timeout: float = 120.0) -> bool:
+        """On-Demand 프로바이더가 준비될 때까지 대기 (필요시 자동 로드).
+
+        Args:
+            provider_name: 프로바이더 이름 (e.g., "insanely-fast-server")
+            timeout: 최대 대기 시간 (초)
+
+        Returns:
+            준비 완료 여부
+        """
+        from core.manager import ProviderStatus
+
+        state = self.provider_manager.provider_states.get(provider_name)
+        if not state:
+            logger.warning(f"Provider {provider_name} not found in states")
+            return False
+
+        # 이미 UP 상태면 바로 반환
+        if state.status == ProviderStatus.UP:
+            return True
+
+        # On-Demand 로딩 span으로 감싸기
+        with trace_provider_load(provider_name, on_demand=True) as span:
+            # DOWN/COOLDOWN 상태면 로드 시도
+            if state.status in (ProviderStatus.DOWN, ProviderStatus.COOLDOWN):
+                logger.info(f"[On-Demand] Loading {provider_name}...")
+                success = await self.provider_manager.load_provider(provider_name)
+                if not success:
+                    logger.error(f"[On-Demand] Failed to load {provider_name}")
+                    if span:
+                        span.set_attribute("load.success", False)
+                        span.set_attribute("load.error", "Failed to start provider")
+                    return False
+
+            # STARTING 상태면 UP 될 때까지 대기
+            import asyncio
+            start_time = asyncio.get_event_loop().time()
+            while asyncio.get_event_loop().time() - start_time < timeout:
+                state = self.provider_manager.provider_states.get(provider_name)
+                if state and state.status == ProviderStatus.UP:
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    logger.info(f"[On-Demand] {provider_name} is ready")
+                    if span:
+                        span.set_attribute("load.success", True)
+                        span.set_attribute("load.elapsed_ms", elapsed * 1000)
+                    return True
+                await asyncio.sleep(1)
+
+            if span:
+                span.set_attribute("load.success", False)
+                span.set_attribute("load.error", f"Timeout after {timeout}s")
+            logger.error(f"[On-Demand] {provider_name} failed to become ready within {timeout}s")
+            return False
+
     async def handle_diarization(self, request_id: str, data: dict):
         """Diarization 작업 처리."""
         file_content_b64 = data.get("file_content")
@@ -331,6 +407,11 @@ class StreamProcessor:
         max_speakers = data.get("max_speakers")
 
         logger.info(f"[{request_id}] Starting diarization...")
+
+        # On-Demand: diarization-server가 준비될 때까지 대기
+        if not await self._ensure_provider_ready("diarization-server"):
+            await self.publish_error(request_id, "Diarization server failed to start")
+            return
 
         try:
             url = f"{settings.diarization_url}/v1/audio/diarization"
@@ -343,19 +424,31 @@ class StreamProcessor:
             if max_speakers:
                 form_data["max_speakers"] = str(max_speakers)
 
-            response = await self.http_client.post(url, files=files, data=form_data)
-            response.raise_for_status()
-            result = response.json()
+            # HTTP 요청 span
+            with trace_http_request("diarization-server", url, model="pyannote") as span:
+                response = await self.http_client.post(url, files=files, data=form_data)
+                response.raise_for_status()
+                result = response.json()
+
+                if span:
+                    span.set_attribute("http.status_code", response.status_code)
+                    span.set_attribute("response.segments_count", len(result.get('segments', [])))
 
             logger.info(f"[{request_id}] Diarization completed: {len(result.get('segments', []))} segments")
-            await self.publish_response(request_id, result)
+
+            # 응답 발행 span
+            with trace_response_publish(request_id, success=True):
+                await self.publish_response(request_id, result)
 
         except httpx.TimeoutException:
-            await self.publish_error(request_id, f"Diarization timeout")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"Diarization timeout")
         except httpx.HTTPStatusError as e:
-            await self.publish_error(request_id, f"Diarization HTTP error: {e.response.status_code}")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"Diarization HTTP error: {e.response.status_code}")
         except Exception as e:
-            await self.publish_error(request_id, f"Diarization failed: {str(e)}")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"Diarization failed: {str(e)}")
 
     async def handle_transcription(self, request_id: str, data: dict):
         """ASR Transcription 작업 처리."""
@@ -365,17 +458,36 @@ class StreamProcessor:
 
         logger.info(f"[{request_id}] Starting transcription (model={model})...")
 
+        # On-Demand: 모델에 따라 해당 서버 준비
+        if model in ("whisper-large-v3", "whisper", "openai/whisper-large-v3"):
+            if not await self._ensure_provider_ready("insanely-fast-server"):
+                await self.publish_error(request_id, "Insanely-fast server failed to start")
+                return
+        elif model in ("flm-audio", "flm", "openai/flm-audio"):
+            # FLM ASR (NPU)
+            if not await self._ensure_provider_ready("flm-asr"):
+                await self.publish_error(request_id, "FLM ASR server failed to start")
+                return
+        else:
+            # whisper-turbo (기본값) -> whisper-server 필요
+            if not await self._ensure_provider_ready("whisper-server"):
+                await self.publish_error(request_id, "Whisper server failed to start")
+                return
+
         try:
-            # 모델에 따라 URL 선택
+            # 모델에 따라 URL 및 프로바이더 선택
             if model in ("whisper-large-v3", "whisper", "openai/whisper-large-v3"):
                 url = f"{settings.insanely_fast_url}/v1/audio/transcriptions"
                 actual_model = "whisper-large-v3"
+                provider_name = "insanely-fast-server"
             elif model in ("flm-audio", "flm", "openai/flm-audio"):
                 url = f"{settings.flm_asr_url}/v1/audio/transcriptions"
                 actual_model = "flm-audio"
+                provider_name = "flm-asr"
             else:
                 url = f"{settings.whisper_cpp_url}/v1/audio/transcriptions"
                 actual_model = "whisper-turbo"
+                provider_name = "whisper-server"
 
             file_bytes = base64.b64decode(file_content_b64)
 
@@ -384,19 +496,30 @@ class StreamProcessor:
             if language:
                 form_data["language"] = language
 
-            response = await self.http_client.post(url, files=files, data=form_data)
-            response.raise_for_status()
-            result = response.json()
+            # HTTP 요청 span
+            with trace_http_request(provider_name, url, model=actual_model) as span:
+                response = await self.http_client.post(url, files=files, data=form_data)
+                response.raise_for_status()
+                result = response.json()
+
+                if span:
+                    span.set_attribute("http.status_code", response.status_code)
 
             logger.info(f"[{request_id}] Transcription completed")
-            await self.publish_response(request_id, result)
+
+            # 응답 발행 span
+            with trace_response_publish(request_id, success=True):
+                await self.publish_response(request_id, result)
 
         except httpx.TimeoutException:
-            await self.publish_error(request_id, f"Transcription timeout")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"Transcription timeout")
         except httpx.HTTPStatusError as e:
-            await self.publish_error(request_id, f"Transcription HTTP error: {e.response.status_code}")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"Transcription HTTP error: {e.response.status_code}")
         except Exception as e:
-            await self.publish_error(request_id, f"Transcription failed: {str(e)}")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"Transcription failed: {str(e)}")
 
     async def handle_llm_completion(self, request_id: str, data: dict):
         """LLM Completion 작업 처리."""
@@ -409,26 +532,38 @@ class StreamProcessor:
 
         logger.info(f"[{request_id}] Starting LLM completion (model={model}, target={target_server})...")
 
-        try:
-            # 서버 선택
+        # 서버 선택 로직 (On-Demand 로드 전에 결정)
+        use_npu = False
+        if target_server in ("flm", "npu"):
+            use_npu = True
+        elif target_server in ("llama", "gpu"):
             use_npu = False
-            if target_server in ("flm", "npu"):
-                use_npu = True
-            elif target_server in ("llama", "gpu"):
-                use_npu = False
-            elif "flm" in model or "npu" in model.lower():
-                use_npu = True
-            elif any(p in model.lower() for p in ["qwen", "gemma", "deepseek", "phi", "lfm"]) and ":" in model:
-                use_npu = True
+        elif "flm" in model or "npu" in model.lower():
+            use_npu = True
+        elif any(p in model.lower() for p in ["qwen", "gemma", "deepseek", "phi", "lfm"]) and ":" in model:
+            use_npu = True
 
+        # On-Demand: 필요한 서버가 준비될 때까지 대기
+        if use_npu:
+            if not await self._ensure_provider_ready("flm-llm"):
+                await self.publish_error(request_id, "FLM LLM server failed to start")
+                return
+        else:
+            if not await self._ensure_provider_ready("llama-server"):
+                await self.publish_error(request_id, "Llama server failed to start")
+                return
+
+        try:
             if use_npu:
                 logger.info(f"[{request_id}] Using FLM LLM server (NPU)...")
                 url = f"{settings.flm_llm_url}/v1/chat/completions"
                 actual_model = "lfm2:2.6b"
+                provider_name = "flm-llm"
             else:
                 logger.info(f"[{request_id}] Using llama-server (GPU)...")
                 url = f"{settings.llama_server_url}/v1/chat/completions"
                 actual_model = model
+                provider_name = "llama-server"
 
             payload = {
                 "model": actual_model,
@@ -438,19 +573,35 @@ class StreamProcessor:
                 "stream": False,
             }
 
-            response = await self.http_client.post(url, json=payload)
-            response.raise_for_status()
-            result = response.json()
+            # HTTP 요청 span
+            with trace_http_request(provider_name, url, model=actual_model, device="npu" if use_npu else "gpu") as span:
+                response = await self.http_client.post(url, json=payload)
+                response.raise_for_status()
+                result = response.json()
+
+                if span:
+                    span.set_attribute("http.status_code", response.status_code)
+                    # 토큰 사용량 기록 (있는 경우)
+                    usage = result.get("usage", {})
+                    if usage:
+                        span.set_attribute("llm.prompt_tokens", usage.get("prompt_tokens", 0))
+                        span.set_attribute("llm.completion_tokens", usage.get("completion_tokens", 0))
 
             logger.info(f"[{request_id}] LLM completion completed")
-            await self.publish_response(request_id, result)
+
+            # 응답 발행 span
+            with trace_response_publish(request_id, success=True):
+                await self.publish_response(request_id, result)
 
         except httpx.TimeoutException:
-            await self.publish_error(request_id, f"LLM completion timeout")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"LLM completion timeout")
         except httpx.HTTPStatusError as e:
-            await self.publish_error(request_id, f"LLM HTTP error: {e.response.status_code}")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"LLM HTTP error: {e.response.status_code}")
         except Exception as e:
-            await self.publish_error(request_id, f"LLM completion failed: {str(e)}")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"LLM completion failed: {str(e)}")
 
     async def handle_ocr(self, request_id: str, data: dict):
         """OCR Vision 작업 처리."""
@@ -461,17 +612,29 @@ class StreamProcessor:
 
         logger.info(f"[{request_id}] Starting OCR (model={model}, mode={accuracy_mode})...")
 
-        try:
-            use_npu = accuracy_mode == "speed"
+        use_npu = accuracy_mode == "speed"
 
+        # On-Demand: 필요한 서버가 준비될 때까지 대기
+        if use_npu:
+            if not await self._ensure_provider_ready("flm-ocr"):
+                await self.publish_error(request_id, "FLM OCR server failed to start")
+                return
+        else:
+            if not await self._ensure_provider_ready("llama-ocr-server"):
+                await self.publish_error(request_id, "Llama OCR server failed to start")
+                return
+
+        try:
             if use_npu:
                 logger.info(f"[{request_id}] Using FLM OCR server (NPU)...")
                 url = f"{settings.flm_ocr_url}/v1/chat/completions"
                 ocr_model = "qwen3vl-it:4b"
+                provider_name = "flm-ocr"
             else:
                 logger.info(f"[{request_id}] Using llama-ocr-server (GPU)...")
                 url = f"{settings.llama_ocr_server_url}/v1/chat/completions"
                 ocr_model = model if model != "qwen3vl-4b" else "qwen3-vl"
+                provider_name = "llama-ocr-server"
 
             payload = {
                 "model": ocr_model,
@@ -491,9 +654,14 @@ class StreamProcessor:
                 "temperature": 0.1,
             }
 
-            response = await self.http_client.post(url, json=payload)
-            response.raise_for_status()
-            result = response.json()
+            # HTTP 요청 span
+            with trace_http_request(provider_name, url, model=ocr_model, device="npu" if use_npu else "gpu") as span:
+                response = await self.http_client.post(url, json=payload)
+                response.raise_for_status()
+                result = response.json()
+
+                if span:
+                    span.set_attribute("http.status_code", response.status_code)
 
             ocr_text = ""
             if "choices" in result and len(result["choices"]) > 0:
@@ -501,15 +669,23 @@ class StreamProcessor:
 
             logger.info(f"[{request_id}] OCR completed ({len(ocr_text)} chars)")
             result["text"] = ocr_text
-            await self.publish_response(request_id, result)
+
+            # 응답 발행 span
+            with trace_response_publish(request_id, success=True) as span:
+                if span:
+                    span.set_attribute("ocr.text_length", len(ocr_text))
+                await self.publish_response(request_id, result)
 
         except httpx.TimeoutException:
-            await self.publish_error(request_id, f"OCR timeout")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"OCR timeout")
         except httpx.HTTPStatusError as e:
-            await self.publish_error(request_id, f"OCR HTTP error: {e.response.status_code}")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"OCR HTTP error: {e.response.status_code}")
         except Exception as e:
             logger.exception(f"[{request_id}] OCR failed")
-            await self.publish_error(request_id, f"OCR failed: {str(e)}")
+            with trace_response_publish(request_id, success=False):
+                await self.publish_error(request_id, f"OCR failed: {str(e)}")
 
     async def handle_health_check(self, request_id: str, data: dict):
         """Health check 작업 처리."""
@@ -549,16 +725,34 @@ class StreamProcessor:
     # ==========================================
 
     async def process_message(self, message_id: str, data: dict):
-        """GPU 작업 메시지 처리 (JobTracker 통합)."""
+        """GPU 작업 메시지 처리 (JobTracker + OpenTelemetry 통합)."""
         request_id = data.get("request_id", str(uuid.uuid4()))
         task_type = data.get("type")
-        trace_id = data.get("trace_id")  # 클라이언트에서 전달된 TraceId
+        traceparent = data.get("traceparent")  # W3C Trace Context (Worker에서 주입)
+        trace_id = data.get("trace_id")  # 레거시 호환성
 
-        log_trace = f", trace_id={trace_id}" if trace_id else ""
+        log_trace = f", traceparent={traceparent[:50]}..." if traceparent else ""
         logger.info(f"Processing message: id={message_id}, type={task_type}, request_id={request_id}{log_trace}")
 
         # 프로바이더 결정
         provider = self._get_provider_for_task(task_type, data)
+
+        # 프로바이더 이름 매핑 (provider -> provider_name)
+        provider_name_map = {
+            "whisper-cpp": "whisper-server",
+            "insanely-fast": "insanely-fast-server",
+            "diarization": "diarization-server",
+            "llama-server": "llama-server",
+            "llama-ocr-server": "llama-ocr-server",
+            "flm-asr": "flm-asr",
+            "flm-llm": "flm-llm",
+            "flm-ocr": "flm-ocr",
+        }
+        provider_name = provider_name_map.get(provider, provider)
+
+        # ProviderManager에 작업 등록 (active_jobs 증가)
+        if task_type != "health_check":
+            await self.provider_manager.register_job(provider_name, message_id)
 
         # 작업 시작 기록
         job = None
@@ -575,30 +769,50 @@ class StreamProcessor:
         success = True
         error_msg = None
 
-        try:
-            if task_type == "diarization":
-                await self.handle_diarization(request_id, data)
-            elif task_type == "transcription":
-                await self.handle_transcription(request_id, data)
-            elif task_type == "llm_completion":
-                await self.handle_llm_completion(request_id, data)
-            elif task_type == "ocr":
-                await self.handle_ocr(request_id, data)
-            elif task_type == "health_check":
-                await self.handle_health_check(request_id, data)
-            else:
-                await self.publish_error(request_id, f"Unknown task type: {task_type}")
+        # OpenTelemetry span 생성 (traceparent로 부모 trace에 연결)
+        with trace_gpu_operation(
+            operation_name=f"gpu.{task_type}" if task_type else "gpu.unknown",
+            traceparent=traceparent,
+            request_id=request_id,
+            task_type=task_type,
+            provider=provider,
+            model=data.get("model"),
+        ) as span:
+            try:
+                if task_type == "diarization":
+                    await self.handle_diarization(request_id, data)
+                elif task_type == "transcription":
+                    await self.handle_transcription(request_id, data)
+                elif task_type == "llm_completion":
+                    await self.handle_llm_completion(request_id, data)
+                elif task_type == "ocr":
+                    await self.handle_ocr(request_id, data)
+                elif task_type == "health_check":
+                    await self.handle_health_check(request_id, data)
+                else:
+                    await self.publish_error(request_id, f"Unknown task type: {task_type}")
+                    success = False
+                    error_msg = f"Unknown task type: {task_type}"
+
+                await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
+
+            except Exception as e:
+                logger.exception(f"Error processing message {message_id}: {e}")
+                await self.publish_error(request_id, str(e))
+                await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
                 success = False
-                error_msg = f"Unknown task type: {task_type}"
+                error_msg = str(e)
 
-            await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
+            # span에 결과 기록
+            record_operation_result(span, success=success, error=error_msg)
 
-        except Exception as e:
-            logger.exception(f"Error processing message {message_id}: {e}")
-            await self.publish_error(request_id, str(e))
-            await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
-            success = False
-            error_msg = str(e)
+        # ProviderManager에서 작업 해제 (active_jobs 감소)
+        if task_type != "health_check":
+            await self.provider_manager.complete_job(provider_name, message_id)
+
+            # Idle timeout 활동 기록 (On-Demand 프로바이더 자동 언로드용)
+            if self.idle_manager:
+                self.idle_manager.record_activity(provider_name)
 
         # 작업 완료 기록
         if job and self.job_tracker:
@@ -631,7 +845,8 @@ class StreamProcessor:
                         for message_id, message_data in stream_messages:
                             # 스트림에 따라 처리 분기
                             if stream_name == settings.request_stream:
-                                await self.process_message(message_id, message_data)
+                                # GPU 작업은 병렬 처리 (Background Task)
+                                asyncio.create_task(self.process_message(message_id, message_data))
                             elif stream_name == settings.control_request_stream:
                                 await self.process_control_message(message_id, message_data)
 

@@ -7,7 +7,10 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 # LiteLLM 및 의존성 설치
 # 충돌 방지를 위해 pip로 직접 설치
-RUN pip install --no-cache-dir "litellm[proxy]" redis prometheus_client
+RUN pip install --no-cache-dir "litellm[proxy]" redis prometheus_client \
+    opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp \
+    opentelemetry-instrumentation-httpx opentelemetry-instrumentation-redis \
+    opentelemetry-instrumentation-fastapi
 
 # Custom handler 및 스크립트 복사
 COPY . /app/custom/

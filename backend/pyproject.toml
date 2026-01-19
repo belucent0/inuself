@@ -38,6 +38,18 @@ prometheus-fastapi-instrumentator = "^7.0.0"  # Prometheus 메트릭 수집
 yt-dlp = "^2025.12.8"  # YouTube 다운로드
 
 # ========================================
+# OpenTelemetry 분산 추적
+# ========================================
+opentelemetry-api = "^1.27.0"
+opentelemetry-sdk = "^1.27.0"
+opentelemetry-exporter-otlp = "^1.27.0"
+opentelemetry-instrumentation-fastapi = ">=0.48b0"
+opentelemetry-instrumentation-redis = ">=0.48b0"
+opentelemetry-instrumentation-sqlalchemy = ">=0.48b0"
+opentelemetry-instrumentation-httpx = ">=0.48b0"
+opentelemetry-instrumentation-celery = ">=0.48b0"
+
+# ========================================
 # V6.5: 오디오 처리는 Worker에서만 수행
 # librosa, soundfile은 Worker pyproject.toml에만 필요
 # ========================================

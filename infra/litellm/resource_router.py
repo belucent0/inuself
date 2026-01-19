@@ -131,7 +131,7 @@ async def query_prometheus(device_type: str = "gpu") -> float:
         device_type: "gpu" 또는 "npu"
 
     Returns:
-        0-100 사이의 사용량百分比
+        0-100 사이의 사용량
     """
     device_ids = get_gpu_device_ids_sync()
     if not device_ids:

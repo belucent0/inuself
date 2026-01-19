@@ -85,6 +85,14 @@ except Exception as e:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("CustomProxyRunner")
 
+# Initialize OpenTelemetry - MOVED later to pass 'app' object
+# try:
+#     from custom.telemetry import setup_litellm_telemetry
+#     setup_litellm_telemetry(service_name="asr-litellm")
+#     logger.info("OpenTelemetry initialized for LiteLLM")
+# except Exception as e:
+#     logger.warning(f"OpenTelemetry initialization failed (tracing disabled): {e}")
+
 try:
     # Import custom handler
     # infra/litellm 디렉토리를 path에 추가
@@ -567,6 +575,15 @@ def register_resource_router():
         from litellm.proxy.proxy_server import app as litellm_app
         litellm_app.include_router(resource_router)
         logger.info("Resource Management Router registered at /resource/*")
+        
+        # Telemetry 초기화 (FastAPI app 객체 전달)
+        try:
+            from custom.telemetry import setup_litellm_telemetry
+            setup_litellm_telemetry(service_name="asr-litellm", app=litellm_app)
+            logger.info("OpenTelemetry initialized with FastAPI instrumentation")
+        except Exception as e:
+            logger.warning(f"OpenTelemetry initialization failed in register hook: {e}")
+            
     except Exception as e:
         logger.error(f"Failed to register Resource Router: {e}")
 

@@ -70,6 +70,7 @@ def process_transcription_job(
         logger.info(f"[Worker] OK Job completed: file_id={file_id}")
     except Exception as e:
         logger.error(f"[Worker] Job failed: file_id={file_id}, error={e}")
+        # 프로세서는 상태 변경 권한 없음 - Task 레벨에서 처리하도록 예외 전파
         raise
     finally:
         cleanup_worker_event_loop(loop)
@@ -143,8 +144,8 @@ async def _process_job(
         logger.error(f"[Worker] ERROR Error occurred: {exc}")
         logger.exception("Processing failed for file_id={}", file_id)
         
-        # Redis Stream: 실패 알림
-        publish_asr_failed(file_id, error=str(exc))
+        # Redis Stream: 실패 알림 제거 (Task 레벨로 이관)
+        # publish_asr_failed(file_id, error=str(exc))
         raise
     finally:
         try:

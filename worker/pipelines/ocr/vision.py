@@ -4,7 +4,7 @@
 이미지 전처리(PDF → 이미지 변환 등)는 백엔드에서 수행합니다.
 
 Architecture V7.0: Redis Stream 기반 OCR 요청
-- Worker (Docker) → Redis Stream → Stream Worker (Host) → GPU/NPU 서버
+- Worker (Docker) → Redis Stream → Provider Manager (Host) → GPU/NPU 서버
 - Docker → Host HTTP 통신 제거로 Docker Desktop 크래시 방지
 - 신속모드: FLM (NPU), 정확도 모드: llama-ocr-server (GPU)
 """
@@ -41,7 +41,7 @@ def _call_ocr_via_litellm(
 ) -> str:
     """V7.0: LiteLLM Proxy를 통해 OCR 요청.
 
-    Worker → LiteLLM → custom_handler → Redis Stream → Stream Worker → GPU/NPU
+    Worker → LiteLLM → custom_handler → Redis Stream → Provider Manager → GPU/NPU
 
     Args:
         image_base64: Base64 인코딩된 이미지
@@ -68,6 +68,16 @@ def _call_ocr_via_litellm(
         "Authorization": f"Bearer {LITELLM_API_KEY}",
         "Content-Type": "application/json",
     }
+    
+    # OpenTelemetry trace context 주입 (Worker→LiteLLM 연결)
+    try:
+        from worker.telemetry import inject_trace_context
+        logger.info(f"[Telemetry Debug] Headers before injection: {headers}")
+        inject_trace_context(headers)
+        logger.info(f"[Telemetry Debug] Headers after injection: {headers}")
+    except Exception as e:
+        logger.error(f"[Telemetry Debug] Failed to inject trace context: {e}")
+        pass  # telemetry 미초기화 시 무시
 
     payload = {
         "model": final_model,
@@ -331,7 +341,7 @@ class OcrVisionProcessor:
         logger.debug(f"[OCR Vision] _call_llm_api: ocr_provider_override={self._ocr_provider_override}, settings.ocr_provider={self.settings.ocr_provider}, current_ocr_provider={current_ocr_provider}")
 
         # V7.0: Redis Stream이 활성화되어 있으면 LiteLLM Proxy를 통해 OCR 요청
-        # Worker → LiteLLM → custom_handler → Redis Stream → Stream Worker → GPU/NPU
+        # Worker → LiteLLM → custom_handler → Redis Stream → Provider Manager → GPU/NPU
         if REDIS_STREAM_ENABLED and image_base64:
             logger.info(f"[OCR Vision] Using LiteLLM Proxy for OCR (provider={current_ocr_provider})")
             # accuracy_mode 결정: flm이면 speed, 아니면 accuracy

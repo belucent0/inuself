@@ -1,0 +1,377 @@
+"""OpenTelemetry 분산 추적 설정 (Worker용).
+
+Celery 태스크 추적 및 LiteLLM/GPU 호출 추적을 위한 모듈.
+
+사용법:
+    # celery_app.py에서 초기화
+    from worker.telemetry import setup_worker_telemetry
+    setup_worker_telemetry()
+
+    # 태스크에서 span 추가
+    from worker.telemetry import trace_celery_task, set_task_attributes
+
+    @celery_app.task(bind=True)
+    def my_task(self, file_id: int):
+        with trace_celery_task(self, file_id=file_id) as span:
+            span.set_attribute("custom", "value")
+            ...
+"""
+import os
+import functools
+import time
+from contextlib import contextmanager
+from typing import Any, Callable, Optional
+
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from opentelemetry.trace import Status, StatusCode, Span
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from opentelemetry.propagate import set_global_textmap, inject, extract
+
+from .logging_config import logger
+
+
+# 전역 설정
+_initialized = False
+_tracer_provider: Optional[TracerProvider] = None
+_propagator = TraceContextTextMapPropagator()
+
+
+def setup_worker_telemetry(service_name: str = None) -> None:
+    """Worker용 OpenTelemetry 초기화.
+
+    Args:
+        service_name: 서비스 이름 (환경변수로 오버라이드 가능)
+    """
+    global _initialized, _tracer_provider
+
+    if _initialized:
+        logger.debug("[Telemetry] Already initialized, skipping")
+        return
+
+    service = service_name or os.getenv("OTEL_SERVICE_NAME", "asr-worker")
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+
+    if not endpoint:
+        logger.warning("[Telemetry] OTEL_EXPORTER_OTLP_ENDPOINT not set, tracing disabled")
+        _initialized = True
+        return
+
+    try:
+        # Resource 생성
+        resource = Resource.create({
+            SERVICE_NAME: service,
+            "service.version": os.getenv("APP_VERSION", "1.0.0"),
+            "deployment.environment": os.getenv("ENVIRONMENT", "development"),
+        })
+
+        # TracerProvider 설정
+        _tracer_provider = TracerProvider(resource=resource)
+
+        # OTLP Exporter
+        exporter = OTLPSpanExporter(
+            endpoint=endpoint,
+            insecure=True,
+        )
+
+        processor = BatchSpanProcessor(exporter)
+        _tracer_provider.add_span_processor(processor)
+
+        trace.set_tracer_provider(_tracer_provider)
+        set_global_textmap(_propagator)
+
+        # Celery 자동 계측
+        _instrument_celery()
+
+        # 공통 라이브러리 계측
+        _instrument_common_libraries()
+
+        _initialized = True
+        logger.info(f"[Telemetry] Worker initialized: service={service}, endpoint={endpoint}")
+
+    except Exception as e:
+        logger.error(f"[Telemetry] Failed to initialize: {e}")
+        _initialized = True
+
+
+def _instrument_celery() -> None:
+    """Celery 자동 계측."""
+    try:
+        from opentelemetry.instrumentation.celery import CeleryInstrumentor
+        CeleryInstrumentor().instrument()
+        logger.info("[Telemetry] Celery instrumented")
+    except Exception as e:
+        logger.warning(f"[Telemetry] Failed to instrument Celery: {e}")
+
+
+def _instrument_common_libraries() -> None:
+    """공통 라이브러리 계측."""
+    # Redis
+    try:
+        from opentelemetry.instrumentation.redis import RedisInstrumentor
+        RedisInstrumentor().instrument()
+        logger.debug("[Telemetry] Redis instrumented")
+    except Exception:
+        pass
+
+    # HTTPX
+    try:
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        HTTPXClientInstrumentor().instrument()
+        logger.debug("[Telemetry] HTTPX instrumented")
+    except Exception:
+        pass
+
+
+def get_tracer(name: str = "asr-worker") -> trace.Tracer:
+    """Tracer 인스턴스 반환."""
+    return trace.get_tracer(name)
+
+
+def get_current_span() -> Optional[Span]:
+    """현재 활성 span 반환."""
+    return trace.get_current_span()
+
+
+def get_trace_id() -> Optional[str]:
+    """현재 trace_id 반환 (hex string)."""
+    span = get_current_span()
+    if span and span.get_span_context().is_valid:
+        return format(span.get_span_context().trace_id, '032x')
+    return None
+
+
+# ============================================
+# 병목 분석용 속성 키 (Backend와 동일)
+# ============================================
+
+class BottleneckAttributes:
+    """병목 분석을 위한 표준 속성 키."""
+
+    FILE_ID = "file.id"
+    CONTENT_TYPE = "content.type"
+    ORIGINAL_FILENAME = "file.name"
+    FILE_SIZE_BYTES = "file.size_bytes"
+
+    PIPELINE_STAGE = "pipeline.stage"
+    PROCESSING_MODE = "processing.mode"
+
+    PROVIDER_TYPE = "provider.type"
+    MODEL_NAME = "model.name"
+    QUEUE_NAME = "queue.name"
+    QUEUE_WAIT_MS = "queue.wait_ms"
+
+    CHUNK_INDEX = "chunk.index"
+    CHUNK_TOTAL = "chunk.total"
+    INPUT_DURATION_SEC = "input.duration_sec"
+    OUTPUT_LENGTH = "output.length"
+
+    # Worker 전용
+    CELERY_TASK_ID = "celery.task_id"
+    CELERY_RETRY_COUNT = "celery.retry_count"
+
+
+# ============================================
+# Celery Task 추적
+# ============================================
+
+@contextmanager
+def trace_celery_task(
+    task_instance,
+    file_id: int = None,
+    pipeline_stage: str = None,
+    **extra_attributes
+):
+    """Celery 태스크 내에서 상세 추적을 위한 컨텍스트 매니저.
+
+    자동 계측된 Celery span의 자식 span으로 생성됩니다.
+
+    사용 예:
+        @celery_app.task(bind=True)
+        def process_asr_task(self, file_id: int, ...):
+            with trace_celery_task(self, file_id=file_id, pipeline_stage="asr") as span:
+                # 처리 로직
+                span.set_attribute("model", "whisper-large-v3")
+                ...
+    """
+    tracer = get_tracer("celery-task")
+    task_name = task_instance.name if hasattr(task_instance, 'name') else 'unknown'
+    span_name = f"task.{task_name.split('.')[-1]}"
+
+    with tracer.start_as_current_span(span_name) as span:
+        # Celery 메타데이터
+        if hasattr(task_instance, 'request'):
+            span.set_attribute(BottleneckAttributes.CELERY_TASK_ID, task_instance.request.id or "")
+            span.set_attribute(BottleneckAttributes.CELERY_RETRY_COUNT, task_instance.request.retries or 0)
+
+        # 파이프라인 속성
+        if file_id is not None:
+            span.set_attribute(BottleneckAttributes.FILE_ID, file_id)
+        if pipeline_stage:
+            span.set_attribute(BottleneckAttributes.PIPELINE_STAGE, pipeline_stage)
+
+        # 추가 속성
+        for key, value in extra_attributes.items():
+            if value is not None:
+                span.set_attribute(key, value)
+
+        try:
+            yield span
+        except Exception as e:
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            raise
+
+
+# ============================================
+# LiteLLM/GPU 호출 추적
+# ============================================
+
+@contextmanager
+def trace_llm_call(
+    model: str,
+    provider_type: str = "gpu",
+    file_id: int = None,
+    **extra_attributes
+):
+    """LiteLLM API 호출 추적.
+
+    사용 예:
+        with trace_llm_call("whisper-large-v3", provider_type="gpu", file_id=123) as span:
+            response = litellm_client.transcription(...)
+            span.set_attribute("output.length", len(response.text))
+    """
+    tracer = get_tracer("llm-client")
+    span_name = f"llm.{model}"
+
+    with tracer.start_as_current_span(span_name) as span:
+        span.set_attribute(BottleneckAttributes.MODEL_NAME, model)
+        span.set_attribute(BottleneckAttributes.PROVIDER_TYPE, provider_type)
+
+        if file_id is not None:
+            span.set_attribute(BottleneckAttributes.FILE_ID, file_id)
+
+        start_time = time.time()
+
+        for key, value in extra_attributes.items():
+            if value is not None:
+                span.set_attribute(key, value)
+
+        try:
+            yield span
+        except Exception as e:
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            raise
+        finally:
+            elapsed_ms = (time.time() - start_time) * 1000
+            span.set_attribute("duration_ms", elapsed_ms)
+
+
+@contextmanager
+def trace_pipeline_operation(
+    operation_name: str,
+    file_id: int = None,
+    chunk_index: int = None,
+    chunk_total: int = None,
+    **extra_attributes
+):
+    """파이프라인 내 개별 작업 추적.
+
+    청크 단위 처리, 병합 등의 세부 작업 추적에 사용.
+
+    사용 예:
+        with trace_pipeline_operation("chunk_transcription", file_id=123, chunk_index=1, chunk_total=5):
+            result = transcribe_chunk(...)
+    """
+    tracer = get_tracer("pipeline")
+
+    with tracer.start_as_current_span(operation_name) as span:
+        if file_id is not None:
+            span.set_attribute(BottleneckAttributes.FILE_ID, file_id)
+        if chunk_index is not None:
+            span.set_attribute(BottleneckAttributes.CHUNK_INDEX, chunk_index)
+        if chunk_total is not None:
+            span.set_attribute(BottleneckAttributes.CHUNK_TOTAL, chunk_total)
+
+        for key, value in extra_attributes.items():
+            if value is not None:
+                span.set_attribute(key, value)
+
+        try:
+            yield span
+        except Exception as e:
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            raise
+
+
+# ============================================
+# Trace Context 전파
+# ============================================
+
+def inject_trace_context(carrier: dict) -> dict:
+    """현재 trace context를 carrier에 주입."""
+    inject(carrier)
+    return carrier
+
+
+def extract_trace_context(carrier: dict) -> trace.Context:
+    """carrier에서 trace context 추출."""
+    return extract(carrier)
+
+
+def trace_operation(operation_name: str = None, **default_attributes) -> Callable:
+    """함수 추적용 데코레이터.
+
+    사용 예:
+        @trace_operation("process_audio")
+        def process_audio(file_id: int, ...):
+            ...
+    """
+    def decorator(func: Callable) -> Callable:
+        name = operation_name or func.__name__
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            tracer = get_tracer(func.__module__)
+            with tracer.start_as_current_span(name) as span:
+                for key, value in default_attributes.items():
+                    span.set_attribute(key, value)
+
+                if 'file_id' in kwargs:
+                    span.set_attribute(BottleneckAttributes.FILE_ID, kwargs['file_id'])
+
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    span.set_status(Status(StatusCode.ERROR, str(e)))
+                    span.record_exception(e)
+                    raise
+
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            tracer = get_tracer(func.__module__)
+            with tracer.start_as_current_span(name) as span:
+                for key, value in default_attributes.items():
+                    span.set_attribute(key, value)
+
+                if 'file_id' in kwargs:
+                    span.set_attribute(BottleneckAttributes.FILE_ID, kwargs['file_id'])
+
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    span.set_status(Status(StatusCode.ERROR, str(e)))
+                    span.record_exception(e)
+                    raise
+
+        import asyncio
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return wrapper
+
+    return decorator

@@ -3,6 +3,10 @@
 Architecture V6.6: 메시징 기반 아키텍처
 - LiteLLM (Docker) -> Redis Stream -> Provider Manager (Host) -> GPU Servers
 - Docker → Host HTTP 통신 제거로 Docker Desktop 크래시 방지
+
+V6.7: OpenTelemetry 분산 추적 지원
+- Redis Stream 메시지에 traceparent 헤더 포함
+- Worker → Provider Manager 간 trace context 전파
 """
 
 import os
@@ -16,6 +20,16 @@ from typing import Optional, Any
 import logging
 
 logger = logging.getLogger(__name__)
+
+# OpenTelemetry trace context 주입 (선택적)
+try:
+    from opentelemetry.propagate import inject as otel_inject
+    from opentelemetry import trace as otel_trace
+    OTEL_AVAILABLE = True
+except ImportError:
+    OTEL_AVAILABLE = False
+    otel_inject = None
+    otel_trace = None
 
 import redis
 import redis.asyncio as redis_async
@@ -45,6 +59,21 @@ class GPUStreamClient:
     def _generate_request_id(self) -> str:
         """유니크 request_id 생성."""
         return f"{uuid.uuid4().hex[:16]}_{int(time.time() * 1000)}"
+
+    def _inject_trace_context(self, request_data: dict) -> dict:
+        """현재 trace context를 request_data에 주입."""
+        if OTEL_AVAILABLE and otel_inject:
+            # traceparent 헤더 주입
+            carrier = {}
+            otel_inject(carrier)
+            if "traceparent" in carrier:
+                request_data["traceparent"] = carrier["traceparent"]
+                logger.info(f"[GPUStream] Trace context injected: traceparent={carrier['traceparent']}")
+            else:
+                logger.warning("[GPUStream] No active trace context to inject")
+        else:
+            logger.warning(f"[GPUStream] OpenTelemetry not available (OTEL_AVAILABLE={OTEL_AVAILABLE})")
+        return request_data
 
     def _wait_for_response(self, request_id: str, timeout: float) -> dict:
         """Response Stream에서 결과 대기."""
@@ -116,6 +145,9 @@ class GPUStreamClient:
         if max_speakers is not None:
             request_data["max_speakers"] = str(max_speakers)
 
+        # Trace context 주입 (분산 추적)
+        self._inject_trace_context(request_data)
+
         logger.info(f"[GPUStream] Sending diarization request: request_id={request_id}")
 
         # Request Stream에 발행
@@ -160,6 +192,9 @@ class GPUStreamClient:
         if language:
             request_data["language"] = language
 
+        # Trace context 주입 (분산 추적)
+        self._inject_trace_context(request_data)
+
         logger.info(f"[GPUStream] Sending transcription request: request_id={request_id}, model={model}")
 
         self.redis_client.xadd(REQUEST_STREAM, request_data)
@@ -200,6 +235,9 @@ class GPUStreamClient:
             "timestamp": str(time.time()),
         }
 
+        # Trace context 주입 (분산 추적)
+        self._inject_trace_context(request_data)
+
         logger.info(f"[GPUStream] Sending LLM completion request: request_id={request_id}, model={model}")
 
         self.redis_client.xadd(REQUEST_STREAM, request_data)
@@ -239,6 +277,9 @@ class GPUStreamClient:
             "accuracy_mode": accuracy_mode,
             "timestamp": str(time.time()),
         }
+
+        # Trace context 주입 (분산 추적)
+        self._inject_trace_context(request_data)
 
         logger.info(f"[GPUStream] Sending OCR request: request_id={request_id}, model={model}, mode={accuracy_mode}")
 
@@ -301,6 +342,20 @@ class AsyncGPUStreamClient:
         """유니크 request_id 생성."""
         return f"{uuid.uuid4().hex[:16]}_{int(time.time() * 1000)}"
 
+    def _inject_trace_context(self, request_data: dict) -> dict:
+        """현재 trace context를 request_data에 주입."""
+        if OTEL_AVAILABLE and otel_inject:
+            carrier = {}
+            otel_inject(carrier)
+            if "traceparent" in carrier:
+                request_data["traceparent"] = carrier["traceparent"]
+                logger.info(f"[GPUStream/Async] Trace context injected: traceparent={carrier['traceparent']}")
+            else:
+                logger.warning("[GPUStream/Async] No active trace context to inject")
+        else:
+            logger.warning(f"[GPUStream/Async] OpenTelemetry not available (OTEL_AVAILABLE={OTEL_AVAILABLE})")
+        return request_data
+
     async def _wait_for_response(self, request_id: str, timeout: float) -> dict:
         """Response Stream에서 결과 대기 (비동기)."""
         redis_client = await self.get_redis()
@@ -362,6 +417,9 @@ class AsyncGPUStreamClient:
         if max_speakers is not None:
             request_data["max_speakers"] = str(max_speakers)
 
+        # Trace context 주입 (분산 추적)
+        self._inject_trace_context(request_data)
+
         logger.info(f"[GPUStream] Sending diarization request: request_id={request_id}")
 
         await redis_client.xadd(REQUEST_STREAM, request_data)
@@ -394,6 +452,9 @@ class AsyncGPUStreamClient:
         if language:
             request_data["language"] = language
 
+        # Trace context 주입 (분산 추적)
+        self._inject_trace_context(request_data)
+
         logger.info(f"[GPUStream] Sending transcription request: request_id={request_id}, model={model}")
 
         await redis_client.xadd(REQUEST_STREAM, request_data)
@@ -423,6 +484,9 @@ class AsyncGPUStreamClient:
             "temperature": str(temperature),
             "timestamp": str(time.time()),
         }
+
+        # Trace context 주입 (분산 추적)
+        self._inject_trace_context(request_data)
 
         logger.info(f"[GPUStream] Sending LLM completion request: request_id={request_id}, model={model}")
 
@@ -466,6 +530,9 @@ class AsyncGPUStreamClient:
             "accuracy_mode": accuracy_mode,
             "timestamp": str(time.time()),
         }
+
+        # Trace context 주입 (분산 추적)
+        self._inject_trace_context(request_data)
 
         logger.info(f"[GPUStream] Sending OCR request: request_id={request_id}, model={model}, mode={accuracy_mode}")
 

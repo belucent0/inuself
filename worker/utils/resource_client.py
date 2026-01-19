@@ -233,15 +233,103 @@ def select_resource_type(task_type: str, accuracy_mode: str = "speed") -> str:
 # Prometheus 기반 동적 리소스 선택
 # ============================================================
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
-GPU_DEVICE_ID = os.getenv("GPU_DEVICE_ID", "0x000142B6")
-NPU_DEVICE_ID = os.getenv("NPU_DEVICE_ID", "0x000160E6")
 BUSY_THRESHOLD = 70  # 70% 이상이면 "바쁨"
 
+# 캐시된 디바이스 ID (동적 감지 - LUID는 리부팅 시 변경될 수 있음)
+_cached_gpu_luid: str | None = None
+_cached_npu_luid: str | None = None
 
-def _query_prometheus_sync(device_id: str) -> float:
-    """Prometheus에서 1분 평균 사용량 조회 (동기)."""
-    # 쿼리를 한 줄로 작성해야 URL 인코딩 시 파싱 오류 방지
-    query = f'avg_over_time(sum(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{device_id}.*engtype_Compute.*"}})[1m])'
+
+def _detect_device_luids() -> tuple[str, str]:
+    """Prometheus에서 디바이스 LUID를 동적으로 감지.
+
+    디바이스 특성 기반 감지:
+    - NVIDIA GPU: 3D 엔진만 있고 Video 엔진이 없음
+    - AMD NPU: Compute 엔진만 있고 3D/Video 엔진이 없음
+    - AMD iGPU: 3D + Video + Compute 혼합
+
+    Returns:
+        (gpu_luid, npu_luid) 튜플
+    """
+    import re
+    from collections import defaultdict
+
+    gpu_luid = ""
+    npu_luid = ""
+
+    query = 'windows_gpu_engine_utilization_percentage'
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(
+                f"{PROMETHEUS_URL}/api/v1/query",
+                params={"query": query}
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data["status"] == "success" and data["data"]["result"]:
+                luid_engines: dict[str, set[str]] = defaultdict(set)
+
+                for result in data["data"]["result"]:
+                    metric = result["metric"]
+                    exported_instance = metric.get("exported_instance", "")
+
+                    luid_match = re.search(r'luid_0x[0-9A-Fa-f]+_0x([0-9A-Fa-f]+)', exported_instance)
+                    if not luid_match:
+                        continue
+                    luid = '0x' + luid_match.group(1).lower()
+
+                    engtype_match = re.search(r'engtype_([A-Za-z0-9_ ]+)', exported_instance)
+                    if engtype_match:
+                        luid_engines[luid].add(engtype_match.group(1).strip())
+
+                for luid, engines in luid_engines.items():
+                    has_video = any('Video' in e for e in engines)
+                    has_compute = any('Compute' in e for e in engines)
+                    has_3d = any('3D' in e for e in engines)
+
+                    # AMD iGPU: Video 엔진이 있음 (실제 GPU)
+                    if has_video and not gpu_luid:
+                        gpu_luid = luid
+                        logger.info("[Resource] Detected AMD iGPU: {}", gpu_luid)
+
+                    # AMD NPU: Compute만 있고 3D/Video 없음
+                    if has_compute and not has_3d and not has_video and not npu_luid:
+                        npu_luid = luid
+                        logger.info("[Resource] Detected AMD NPU: {}", npu_luid)
+
+    except Exception as e:
+        logger.warning("[Resource] Device detection failed: {}", e)
+
+    return gpu_luid, npu_luid
+
+
+def _query_prometheus_sync(device_type: str) -> float:
+    """Prometheus에서 1분 평균 사용량 조회 (동기).
+
+    Args:
+        device_type: "gpu" 또는 "npu"
+
+    Returns:
+        0-100 사이의 사용률
+    """
+    global _cached_gpu_luid, _cached_npu_luid
+
+    # 디바이스 LUID 캐싱
+    if _cached_gpu_luid is None or _cached_npu_luid is None:
+        _cached_gpu_luid, _cached_npu_luid = _detect_device_luids()
+
+    if device_type == "gpu":
+        if not _cached_gpu_luid:
+            return 0.0
+        # GPU: 3D 엔진 사용률
+        query = f'avg_over_time(sum(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{_cached_gpu_luid}.*engtype_3D.*"}})[1m])'
+    else:
+        if not _cached_npu_luid:
+            return 0.0
+        # NPU: Compute 엔진 사용률
+        query = f'avg_over_time(sum(windows_gpu_engine_utilization_percentage{{exported_instance=~".*{_cached_npu_luid}.*engtype_Compute.*"}})[1m])'
+
     try:
         with httpx.Client(timeout=5.0) as client:
             response = client.get(
@@ -292,8 +380,8 @@ def select_resource_type_dynamic(task_type: str, accuracy_mode: str = "speed") -
 
     # Prometheus 조회
     try:
-        npu_usage = _query_prometheus_sync(NPU_DEVICE_ID)
-        gpu_usage = _query_prometheus_sync(GPU_DEVICE_ID)
+        npu_usage = _query_prometheus_sync("npu")
+        gpu_usage = _query_prometheus_sync("gpu")
 
         logger.info(
             "[Resource] Usage (1m avg): NPU={:.1f}%, GPU={:.1f}%",
