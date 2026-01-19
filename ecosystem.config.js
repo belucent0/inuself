@@ -99,6 +99,10 @@ module.exports = {
         FLM_ASR_URL: 'http://localhost:11434',
         FLM_LLM_URL: 'http://localhost:11435',
         FLM_OCR_URL: 'http://localhost:11436',
+        // OpenTelemetry 분산 추적
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4317',
+        OTEL_SERVICE_NAME: 'provider-manager',
+        OTEL_TRACES_EXPORTER: 'otlp',
       },
       autorestart: true,
       max_restarts: 10,
@@ -106,6 +110,46 @@ module.exports = {
       restart_delay: 4000,
       watch: false,
       windowsHide: true,
+
+      // ========================================
+      // PM2 로그 로테이션 설정
+      // ========================================
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      error_file: 'logs/pm2-provider-manager-error.log',
+      out_file: 'logs/pm2-provider-manager-out.log',
+      merge_logs: true,
+      // 참고: 파일 크기 기반 로테이션은 pm2-logrotate 모듈 필요
+      // pm2 install pm2-logrotate
+      // pm2 set pm2-logrotate:max_size 50M
+      // pm2 set pm2-logrotate:retain 3
+    },
+
+    // ========================================
+    // NPU Exporter - GPU Compute 엔진을 NPU로 변환/라벨링
+    // Prometheus가 NPU 메트릭으로 스크래핑할 수 있도록 함
+    // ========================================
+    {
+      name: 'npu-exporter',
+      script: 'infra/npu-exporter/npu_exporter.py',
+      interpreter: ROCM_PYTHON,
+      cwd: __dirname,
+      env: {
+        PYTHONUNBUFFERED: '1',
+        PYTHONUTF8: '1',
+        NPU_EXPORTER_PORT: '9183',
+        NPU_SCRAPE_INTERVAL: '5',
+      },
+      autorestart: true,
+      max_restarts: 10,
+      min_uptime: '5s',
+      restart_delay: 2000,
+      watch: false,
+      windowsHide: true,
+
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      error_file: 'logs/pm2-npu-exporter-error.log',
+      out_file: 'logs/pm2-npu-exporter-out.log',
+      merge_logs: true,
     },
   ]
 };

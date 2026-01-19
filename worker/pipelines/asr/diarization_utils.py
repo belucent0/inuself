@@ -191,6 +191,116 @@ def compute_segment_confidence(
     }
 
 
+def merge_by_diarization_segments(
+    asr_segments: list[dict[str, Any]],
+    diarization_result: Any,
+    min_overlap_ratio: float = 0.3,
+) -> list[dict[str, Any]]:
+    """
+    화자분리 세그먼트 기준으로 ASR 텍스트 매칭 (V2 로직).
+
+    핵심 철학: 화자분리가 "음성 존재의 ground truth" 역할
+    - 화자분리가 음성 없다고 판단한 구간은 결과에 포함하지 않음
+    - Whisper 환각이 자연스럽게 필터링됨
+
+    Args:
+        asr_segments: ASR 결과 세그먼트 리스트 [{start, end, text}, ...]
+        diarization_result: DiarizationAnnotationWrapper 객체
+        min_overlap_ratio: ASR 세그먼트가 화자분리 구간에 포함되기 위한 최소 겹침 비율
+
+    Returns:
+        화자분리 기준으로 재구성된 세그먼트 리스트
+    """
+    logger.info(f"[MergeV2] ASR segments: {len(asr_segments)}")
+    logger.info(f"[MergeV2] Diarization type: {type(diarization_result).__name__}")
+
+    # 화자분리 세그먼트 추출 (겹침 분리 + 병합)
+    diarization_segments = extract_speaker_segments(
+        diarization_result,
+        include_metadata=True,
+        split_overlaps=True,
+        merge_overlaps=True,
+    )
+
+    if not diarization_segments:
+        logger.warning("[MergeV2] No diarization segments, returning ASR as-is with UNKNOWN speaker")
+        for seg in asr_segments:
+            seg["speaker"] = "UNKNOWN"
+            seg["overlap_ratio"] = 0.0
+        return asr_segments
+
+    logger.info(f"[MergeV2] Diarization segments: {len(diarization_segments)}")
+
+    # 화자분리의 마지막 음성 종료 시점 (환각 필터링 기준)
+    last_diarization_end = max(seg["end"] for seg in diarization_segments)
+    logger.info(f"[MergeV2] Last diarization end: {last_diarization_end:.2f}s")
+
+    results = []
+    used_asr_indices = set()  # 이미 사용된 ASR 세그먼트 추적
+
+    for diar_seg in diarization_segments:
+        diar_start = diar_seg["start"]
+        diar_end = diar_seg["end"]
+        speaker = diar_seg["speaker"]
+        diar_duration = diar_end - diar_start
+
+        # 이 화자분리 구간에 겹치는 ASR 세그먼트 찾기
+        matched_texts = []
+        total_overlap = 0.0
+
+        for idx, asr_seg in enumerate(asr_segments):
+            asr_start = asr_seg["start"]
+            asr_end = asr_seg["end"]
+            asr_duration = asr_end - asr_start
+
+            # 겹침 계산
+            overlap_start = max(diar_start, asr_start)
+            overlap_end = min(diar_end, asr_end)
+            overlap = max(0, overlap_end - overlap_start)
+
+            if overlap <= 0:
+                continue
+
+            # ASR 세그먼트 기준 겹침 비율
+            asr_overlap_ratio = overlap / asr_duration if asr_duration > 0 else 0
+
+            # 최소 겹침 비율 이상인 경우만 매칭
+            if asr_overlap_ratio >= min_overlap_ratio:
+                text = asr_seg.get("text", "").strip()
+                if text:
+                    matched_texts.append(text)
+                    total_overlap += overlap
+                    used_asr_indices.add(idx)
+
+        # 매칭된 텍스트가 있으면 결과에 추가
+        if matched_texts:
+            combined_text = " ".join(matched_texts)
+            overlap_ratio = total_overlap / diar_duration if diar_duration > 0 else 0
+
+            results.append({
+                "start": diar_start,
+                "end": diar_end,
+                "speaker": speaker,
+                "text": combined_text,
+                "overlap_ratio": min(1.0, overlap_ratio),
+                "duration": diar_duration,
+            })
+
+    # 사용되지 않은 ASR 세그먼트 로깅 (환각 또는 누락된 세그먼트)
+    unused_count = len(asr_segments) - len(used_asr_indices)
+    if unused_count > 0:
+        logger.info(f"[MergeV2] Filtered {unused_count} ASR segments (no diarization match)")
+        for idx, asr_seg in enumerate(asr_segments):
+            if idx not in used_asr_indices:
+                logger.debug(
+                    f"[MergeV2] Filtered: [{asr_seg['start']:.2f}s - {asr_seg['end']:.2f}s] "
+                    f"'{asr_seg.get('text', '')[:50]}...'"
+                )
+
+    logger.info(f"[MergeV2] Result segments: {len(results)}")
+    return results
+
+
 def merge_segments_with_speakers(
     asr_segments: list[dict[str, Any]],
     diarization_result: Any,
