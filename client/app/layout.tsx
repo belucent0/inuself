@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
-import { cn } from '@/lib/utils'
 import './globals.css'
 import { AppSidebar } from '@/components/app-sidebar'
 import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/components/ui/sidebar'
@@ -13,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { getPageTitle } from '@/lib/navigation'
 import { Toaster } from 'sonner'
+import { initTelemetry } from '@/lib/telemetry'
 
 // 클라이언트 환경변수에서 관리자 계정 정보 읽기
 const ADMIN_USERNAME = process.env.NEXT_PUBLIC_ADMIN_USERNAME || 'admin'
@@ -30,6 +30,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const isDetailPage = pathname?.startsWith('/contents/') && pathname !== '/contents'
 
   useEffect(() => {
+    // OpenTelemetry 초기화
+    initTelemetry()
+
     // localStorage에 인증 플래그가 있으면 통과
     const authFlag = localStorage.getItem('admin_auth')
     if (authFlag === 'true') {

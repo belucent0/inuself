@@ -3,8 +3,10 @@ FROM node:20-alpine AS base
 # 의존성 설치 단계
 FROM base AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json package-lock.json* ./
+# package-lock.json이 package.json과 불일치할 수 있으므로 npm install 사용
+# (npm ci는 정확한 일치 필요, npm install은 자동 동기화)
+RUN npm install --package-lock-only && npm ci
 
 # 빌드 단계
 FROM base AS builder
