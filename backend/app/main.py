@@ -12,6 +12,15 @@ from .core.logging import logger
 from .core.storage import check_storage_health
 from .controllers import content_controller
 
+# OpenTelemetry (optional - graceful fallback if not installed)
+try:
+    from .core.telemetry import setup_telemetry
+    TELEMETRY_AVAILABLE = True
+except ImportError:
+    TELEMETRY_AVAILABLE = False
+    def setup_telemetry(*args, **kwargs):
+        pass
+
 
 class HealthCheckLogFilter(logging.Filter):
     """헬스체크 요청 로그를 필터링하는 필터."""
@@ -100,11 +109,30 @@ async def lifespan(app: FastAPI):
     stream_consumer_task = asyncio.create_task(stream_consumer.start())
     logger.info("[Lifespan] StreamConsumer started")
 
+    # StateWatchdog 스케줄러 시작 (5분마다 실행)
+    # NOTE: auto_reconcile=False - 디버깅 중 자동 복구 비활성화
+    from .services.watchdog_scheduler import WatchdogScheduler
+    watchdog_scheduler = WatchdogScheduler(interval_minutes=5, auto_reconcile=False)
+    watchdog_scheduler_task = asyncio.create_task(watchdog_scheduler.start())
+    logger.info("[Lifespan] StateWatchdog scheduler started (interval: 5m)")
+
     # NOTE: 워커는 PM2로 별도 관리됩니다 (worker/celery_app.py 사용)
     logger.info("[Lifespan] Workers are managed externally via PM2")
-    
+
     yield
-    
+
+    # 종료 시: WatchdogScheduler 중지
+    try:
+        watchdog_scheduler.stop()
+        watchdog_scheduler_task.cancel()
+        try:
+            await watchdog_scheduler_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("[Lifespan] WatchdogScheduler stopped")
+    except Exception as exc:
+        logger.exception("[Lifespan] Error stopping WatchdogScheduler: {}", exc)
+
     # 종료 시: StreamConsumer 중지
     try:
         await stream_consumer.stop()
@@ -156,6 +184,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],  # 모든 헤더 허용
     )
 
+    # OpenTelemetry 분산 추적 초기화 (optional)
+    if TELEMETRY_AVAILABLE:
+        setup_telemetry(app, service_name="asr-backend")
+        logger.info("[FastAPI] OpenTelemetry tracing initialized")
+    else:
+        logger.warning("[FastAPI] OpenTelemetry not available - tracing disabled")
+
     storage_ok, storage_message = check_storage_health()
     if storage_ok:
         logger.info("[Storage] %s", storage_message)
@@ -170,6 +205,11 @@ def create_app() -> FastAPI:
     from .controllers import chat_controller
     app.include_router(chat_controller.router)
     logger.info("[FastAPI] Chat routes registered at /api/chat")
+
+    # 관리자 라우터 추가
+    from .controllers import admin_controller
+    app.include_router(admin_controller.router, prefix=settings.api_prefix)
+    logger.info("[FastAPI] Admin routes registered at /api/admin")
     
     # WebSocket 라우터 추가 (별도 경로, prefix 없음)
     from .controllers import websocket_controller
