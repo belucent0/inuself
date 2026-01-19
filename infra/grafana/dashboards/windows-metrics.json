@@ -510,7 +510,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(windows_gpu_engine_utilization_percentage{exported_instance=~\".*0x000142B6.*engtype_3D.*\"})",
+          "expr": "sum(windows_gpu_engine_utilization_percentage{exported_instance=~\".*${gpu_device}.*engtype_3D.*\"})",
           "legendFormat": "3D Engine",
           "refId": "A"
         },
@@ -519,7 +519,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(windows_gpu_engine_utilization_percentage{exported_instance=~\".*0x000142B6.*engtype_Compute.*\"})",
+          "expr": "sum(windows_gpu_engine_utilization_percentage{exported_instance=~\".*${gpu_device}.*engtype_Compute.*\"})",
           "legendFormat": "Compute Engine",
           "refId": "B"
         },
@@ -528,7 +528,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(windows_gpu_engine_utilization_percentage{exported_instance=~\".*0x000142B6.*engtype_Copy.*\"})",
+          "expr": "sum(windows_gpu_engine_utilization_percentage{exported_instance=~\".*${gpu_device}.*engtype_Copy.*\"})",
           "legendFormat": "Copy Engine",
           "refId": "C"
         },
@@ -537,7 +537,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(windows_gpu_engine_utilization_percentage{exported_instance=~\".*0x000142B6.*\"})",
+          "expr": "sum(windows_gpu_engine_utilization_percentage{exported_instance=~\".*${gpu_device}.*\"})",
           "legendFormat": "Total (All Engines)",
           "refId": "D"
         }
@@ -637,7 +637,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_join(windows_gpu_dedicated_memory_usage_bytes, \"luid\", \"_\", \"exported_instance\") * on(luid) group_left() (max by (luid) (windows_gpu_engine_utilization_percentage{exported_instance=~\".*engtype_(3D|Video).*\"} * 0 + 1))",
+          "expr": "windows_gpu_dedicated_memory_usage_bytes{exported_instance=~\".*${gpu_device}.*\"}",
           "legendFormat": "GPU Dedicated Memory",
           "refId": "A"
         },
@@ -646,7 +646,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_join(windows_gpu_shared_memory_usage_bytes, \"luid\", \"_\", \"exported_instance\") * on(luid) group_left() (max by (luid) (windows_gpu_engine_utilization_percentage{exported_instance=~\".*engtype_(3D|Video).*\"} * 0 + 1))",
+          "expr": "windows_gpu_shared_memory_usage_bytes{exported_instance=~\".*${gpu_device}.*\"}",
           "legendFormat": "GPU Shared Memory",
           "refId": "B"
         }
@@ -696,6 +696,7 @@
           },
           "mappings": [],
           "min": 0,
+          "max": 100,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -705,9 +706,7 @@
               }
             ]
           },
-          "unit": "percent",
-          "max": 100,
-          "min": 0
+          "unit": "percent"
         },
         "overrides": []
       },
@@ -741,7 +740,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(windows_gpu_engine_utilization_percentage{exported_instance=~\".*0x000160E6.*engtype_Compute.*\"})",
+          "expr": "sum(windows_gpu_engine_utilization_percentage{exported_instance=~\".*${npu_device}.*engtype_Compute\"})",
           "legendFormat": "NPU Compute %",
           "refId": "A"
         }
@@ -833,7 +832,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_join(windows_gpu_shared_memory_usage_bytes, \"luid\", \"_\", \"exported_instance\") * on(luid) group_left() (max by (luid) (windows_gpu_engine_utilization_percentage{exported_instance=~\".*engtype_Compute.*\"} * 0 + 1))",
+          "expr": "windows_gpu_shared_memory_usage_bytes{exported_instance=~\".*${npu_device}.*\"}",
           "legendFormat": "NPU Shared Memory",
           "refId": "A"
         },
@@ -842,7 +841,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "label_join(windows_gpu_total_committed_bytes, \"luid\", \"_\", \"exported_instance\") * on(luid) group_left() (max by (luid) (windows_gpu_engine_utilization_percentage{exported_instance=~\".*engtype_Compute.*\"} * 0 + 1))",
+          "expr": "windows_gpu_total_committed_bytes{exported_instance=~\".*${npu_device}.*\"}",
           "legendFormat": "NPU Total Committed",
           "refId": "B"
         }
@@ -854,9 +853,55 @@
   "refresh": "5s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["windows", "system"],
+  "tags": [
+    "windows",
+    "system"
+  ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "description": "AMD iGPU LUID (자동 감지 - Video 엔진 있는 디바이스)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "AMD GPU",
+        "multi": false,
+        "name": "gpu_device",
+        "options": [],
+        "query": "label_values(windows_gpu_engine_utilization_percentage{exported_instance=~\".*engtype_Video.*\"}, exported_instance)",
+        "queryType": "label_values",
+        "refresh": 1,
+        "regex": "/.*luid_0x[0-9A-Fa-f]+_(0x[0-9A-Fa-f]+)_.*/",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "description": "AMD NPU LUID (자동 감지 - Compute 엔진만 있는 디바이스)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "AMD NPU",
+        "multi": false,
+        "name": "npu_device",
+        "options": [],
+        "query": "label_values(windows_gpu_engine_utilization_percentage{exported_instance=~\".*engtype_Compute\"}, exported_instance)",
+        "queryType": "label_values",
+        "refresh": 1,
+        "regex": "/.*luid_0x[0-9A-Fa-f]+_(0x[0-9A-Fa-f]+)_.*/",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-15m",
