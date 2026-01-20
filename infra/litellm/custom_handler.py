@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 
 # 환경변수
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://asr-prometheus:9090")
-REDIS_URL = os.getenv("REDIS_URL", "redis://asr-redis:6379/0")
+REDIS_URL = os.getenv("REDIS_URL", "redis://asr-valkey:6379/0")
 
 # Architecture V6.3: Provider Manager for On-Demand NPU control
 PROVIDER_MANAGER_URL = os.getenv("PROVIDER_MANAGER_URL", "http://host.docker.internal:9999")
