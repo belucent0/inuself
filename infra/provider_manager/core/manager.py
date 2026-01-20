@@ -149,7 +149,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
 
     LLM_SERVER_PATH = env_vars.get("LLM_SERVER_PATH", "llama-server")
     LLM_MODEL = env_vars.get("LLM_MODEL", str(PROJECT_ROOT / "models" / "Qwen3-4B-Instruct-2507-Q4_K_S.gguf"))
-    LLM_SERVER_PORT = env_vars.get("LLM_SERVER_PORT", "8080")
+    LLM_SERVER_PORT = env_vars.get("LLM_SERVER_PORT", "8082")  # 8080은 Nginx와 충돌 가능성 있음
     LLM_CONTEXT_LENGTH = env_vars.get("LLM_CONTEXT_LENGTH", "15000")
     LLM_N_GPU_LAYERS = env_vars.get("LLM_N_GPU_LAYERS", "99")
     LLM_N_THREADS = env_vars.get("LLM_N_THREADS", "8")

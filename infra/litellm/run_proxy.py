@@ -243,7 +243,7 @@ def get_provider_info(resource_type: str, task_type: str, accuracy_mode: str = "
             else:
                 return "whisper-cpp", os.getenv("GPU_WHISPER_CPP_API_BASE", "http://host.docker.internal:8001")
         elif task_type == "llm":
-            return "llama", os.getenv("GPU_API_BASE", "http://host.docker.internal:8080")
+            return "llama", os.getenv("GPU_API_BASE", "http://host.docker.internal:8082")
         elif task_type == "diarization":
             return "diarization-server", "http://host.docker.internal:8003"
         elif task_type == "ocr":
