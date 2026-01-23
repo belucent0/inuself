@@ -39,7 +39,7 @@ REQUEST_STREAM = "stream:gpu:requests"
 RESPONSE_STREAM = "stream:gpu:responses"
 
 # Timeouts
-DEFAULT_TIMEOUT = 1800.0  # 30분
+DEFAULT_TIMEOUT = 7200.0  # 2시간 (3시간 음성 파일의 화자분리 대응)
 
 
 class GPUStreamClient:

@@ -30,6 +30,7 @@ import signal
 import asyncio
 import logging
 import argparse
+import time
 import psutil
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
@@ -239,6 +240,31 @@ def run_stream_only():
     asyncio.run(run_stream_processor())
 
 
+def _wait_for_port_available(port: int, timeout: float = 30.0) -> bool:
+    """포트가 사용 가능해질 때까지 대기.
+
+    Args:
+        port: 확인할 포트 번호
+        timeout: 최대 대기 시간 (초)
+
+    Returns:
+        True if port is available, False if timeout
+    """
+    import socket
+    import time
+
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('0.0.0.0', port))
+                return True
+        except OSError:
+            logger.info(f"Port {port} is in use, waiting...")
+            time.sleep(2)
+    return False
+
+
 async def run_combined(api_port: int = 9998):
     """API 서버 + Stream 처리 동시 실행."""
     import uvicorn
@@ -247,6 +273,11 @@ async def run_combined(api_port: int = 9998):
     import redis.asyncio as redis_async
 
     global provider_manager, stream_processor, idle_manager, _running_combined
+
+    # 포트 사용 가능 여부 확인 (재시작 시 이전 프로세스 종료 대기)
+    if not _wait_for_port_available(api_port):
+        logger.error(f"Port {api_port} is still in use after timeout. Exiting.")
+        sys.exit(1)
 
     # combined 모드 플래그 설정 (lifespan에서 중복 초기화 방지)
     _running_combined = True
@@ -345,6 +376,11 @@ async def run_combined(api_port: int = 9998):
     logger.info(f"  GPU Stream: {settings.request_stream}")
     logger.info(f"  Control Stream: {settings.control_request_stream}")
 
+    # Stale job cleanup 주기 (5분마다)
+    last_cleanup_time = time.time()
+    CLEANUP_INTERVAL = 300  # 5분
+    STALE_JOB_MAX_AGE = settings.default_timeout + 300  # timeout + 5분
+
     # Stream 처리 루프 (양쪽 스트림 동시 처리)
     while stream_processor.is_running:
         try:
@@ -367,6 +403,26 @@ async def run_combined(api_port: int = 9998):
                             asyncio.create_task(stream_processor.process_message(message_id, message_data))
                         elif stream_name == settings.control_request_stream:
                             await stream_processor.process_control_message(message_id, message_data)
+
+            # 주기적 stale job 정리 (5분마다)
+            current_time = time.time()
+            if current_time - last_cleanup_time >= CLEANUP_INTERVAL:
+                last_cleanup_time = current_time
+                try:
+                    if stream_processor.job_tracker:
+                        cleaned = await stream_processor.job_tracker.cleanup_stale_jobs(max_age=STALE_JOB_MAX_AGE)
+                        if cleaned > 0:
+                            logger.info(f"Cleaned up {cleaned} stale jobs (max_age={STALE_JOB_MAX_AGE}s)")
+                            # ProviderManager의 active_jobs도 동기화
+                            for name, state in provider_manager.provider_states.items():
+                                if state.active_jobs > 0:
+                                    # JobTracker에서 해당 프로바이더의 실제 활성 작업 수 확인
+                                    active = await stream_processor.job_tracker.get_provider_jobs(name)
+                                    if len(active) != state.active_jobs:
+                                        logger.warning(f"Syncing {name} active_jobs: {state.active_jobs} -> {len(active)}")
+                                        state.active_jobs = len(active)
+                except Exception as e:
+                    logger.warning(f"Stale job cleanup error: {e}")
 
         except asyncio.CancelledError:
             break

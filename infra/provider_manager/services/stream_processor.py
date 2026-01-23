@@ -63,6 +63,20 @@ class StreamProcessor:
         "ocr": "llama-ocr-server",  # 기본값, 모델에 따라 변경
     }
 
+    # Provider -> Device Group 매핑 (동시성 제한용)
+    PROVIDER_DEVICE_GROUP = {
+        # GPU 프로바이더
+        "diarization-server": "gpu",
+        "whisper-server": "gpu",
+        "insanely-fast-server": "gpu",
+        "llama-server": "gpu",
+        "llama-ocr-server": "gpu",
+        # NPU 프로바이더
+        "flm-asr": "npu",
+        "flm-llm": "npu",
+        "flm-ocr": "npu",
+    }
+
     def __init__(
         self,
         provider_manager: ProviderManager = None,
@@ -75,6 +89,14 @@ class StreamProcessor:
         self.idle_manager = idle_manager  # On-Demand 프로바이더 자동 언로드용
         self.job_tracker: Optional[JobTracker] = None
         self._service: Optional[ProviderService] = None
+
+        # Device Group별 세마포어 (동시 실행 제한)
+        # GPU/NPU가 각각 하나씩이므로 동일 device group 내에서는 순차 실행
+        self._device_semaphores: Dict[str, asyncio.Semaphore] = {
+            "gpu": asyncio.Semaphore(settings.gpu_max_concurrent),
+            "npu": asyncio.Semaphore(settings.npu_max_concurrent),
+        }
+        self._pending_jobs: Dict[str, int] = {"gpu": 0, "npu": 0}  # 대기 중인 작업 수 추적
 
     @property
     def service(self) -> ProviderService:
@@ -725,7 +747,7 @@ class StreamProcessor:
     # ==========================================
 
     async def process_message(self, message_id: str, data: dict):
-        """GPU 작업 메시지 처리 (JobTracker + OpenTelemetry 통합)."""
+        """GPU 작업 메시지 처리 (JobTracker + OpenTelemetry 통합 + Device Group 동시성 제한)."""
         request_id = data.get("request_id", str(uuid.uuid4()))
         task_type = data.get("type")
         traceparent = data.get("traceparent")  # W3C Trace Context (Worker에서 주입)
@@ -750,73 +772,95 @@ class StreamProcessor:
         }
         provider_name = provider_name_map.get(provider, provider)
 
-        # ProviderManager에 작업 등록 (active_jobs 증가)
-        if task_type != "health_check":
+        # Device Group 확인 (동시성 제한용)
+        device_group = self.PROVIDER_DEVICE_GROUP.get(provider_name)
+        semaphore = self._device_semaphores.get(device_group) if device_group else None
+
+        # health_check는 세마포어 없이 즉시 처리
+        if task_type == "health_check":
+            await self.handle_health_check(request_id, data)
+            await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
+            return
+
+        # 대기 중인 작업 수 추적 (로깅용)
+        if device_group:
+            self._pending_jobs[device_group] += 1
+            pending = self._pending_jobs[device_group]
+            if pending > 1:
+                logger.info(f"[Queue] {device_group.upper()} queue: {pending} jobs waiting (request_id={request_id})")
+
+        # Device Group 세마포어 획득 (동일 device group 내 순차 실행)
+        async with semaphore if semaphore else asyncio.Lock():
+            if device_group:
+                self._pending_jobs[device_group] -= 1
+                logger.info(f"[Queue] {device_group.upper()} semaphore acquired for {task_type} (request_id={request_id})")
+
+            # ProviderManager에 작업 등록 (active_jobs 증가)
             await self.provider_manager.register_job(provider_name, message_id)
 
-        # 작업 시작 기록
-        job = None
-        if self.job_tracker and task_type != "health_check":
-            job = await self.job_tracker.start_job(
-                job_id=message_id,
+            # 작업 시작 기록
+            job = None
+            if self.job_tracker:
+                job = await self.job_tracker.start_job(
+                    job_id=message_id,
+                    request_id=request_id,
+                    task_type=task_type,
+                    provider=provider,
+                    metadata={"model": data.get("model")},
+                    trace_id=trace_id,
+                )
+
+            success = True
+            error_msg = None
+
+            # OpenTelemetry span 생성 (traceparent로 부모 trace에 연결)
+            with trace_gpu_operation(
+                operation_name=f"gpu.{task_type}" if task_type else "gpu.unknown",
+                traceparent=traceparent,
                 request_id=request_id,
                 task_type=task_type,
                 provider=provider,
-                metadata={"model": data.get("model")},
-                trace_id=trace_id,
-            )
+                model=data.get("model"),
+            ) as span:
+                try:
+                    if task_type == "diarization":
+                        await self.handle_diarization(request_id, data)
+                    elif task_type == "transcription":
+                        await self.handle_transcription(request_id, data)
+                    elif task_type == "llm_completion":
+                        await self.handle_llm_completion(request_id, data)
+                    elif task_type == "ocr":
+                        await self.handle_ocr(request_id, data)
+                    else:
+                        await self.publish_error(request_id, f"Unknown task type: {task_type}")
+                        success = False
+                        error_msg = f"Unknown task type: {task_type}"
 
-        success = True
-        error_msg = None
+                    await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
 
-        # OpenTelemetry span 생성 (traceparent로 부모 trace에 연결)
-        with trace_gpu_operation(
-            operation_name=f"gpu.{task_type}" if task_type else "gpu.unknown",
-            traceparent=traceparent,
-            request_id=request_id,
-            task_type=task_type,
-            provider=provider,
-            model=data.get("model"),
-        ) as span:
-            try:
-                if task_type == "diarization":
-                    await self.handle_diarization(request_id, data)
-                elif task_type == "transcription":
-                    await self.handle_transcription(request_id, data)
-                elif task_type == "llm_completion":
-                    await self.handle_llm_completion(request_id, data)
-                elif task_type == "ocr":
-                    await self.handle_ocr(request_id, data)
-                elif task_type == "health_check":
-                    await self.handle_health_check(request_id, data)
-                else:
-                    await self.publish_error(request_id, f"Unknown task type: {task_type}")
+                except Exception as e:
+                    logger.exception(f"Error processing message {message_id}: {e}")
+                    await self.publish_error(request_id, str(e))
+                    await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
                     success = False
-                    error_msg = f"Unknown task type: {task_type}"
+                    error_msg = str(e)
 
-                await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
+                # span에 결과 기록
+                record_operation_result(span, success=success, error=error_msg)
 
-            except Exception as e:
-                logger.exception(f"Error processing message {message_id}: {e}")
-                await self.publish_error(request_id, str(e))
-                await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
-                success = False
-                error_msg = str(e)
-
-            # span에 결과 기록
-            record_operation_result(span, success=success, error=error_msg)
-
-        # ProviderManager에서 작업 해제 (active_jobs 감소)
-        if task_type != "health_check":
+            # ProviderManager에서 작업 해제 (active_jobs 감소)
             await self.provider_manager.complete_job(provider_name, message_id)
 
             # Idle timeout 활동 기록 (On-Demand 프로바이더 자동 언로드용)
             if self.idle_manager:
                 self.idle_manager.record_activity(provider_name)
 
-        # 작업 완료 기록
-        if job and self.job_tracker:
-            await self.job_tracker.complete_job(message_id, success=success, error=error_msg)
+            # 작업 완료 기록
+            if job and self.job_tracker:
+                await self.job_tracker.complete_job(message_id, success=success, error=error_msg)
+
+            if device_group:
+                logger.info(f"[Queue] {device_group.upper()} semaphore released for {task_type} (request_id={request_id})")
 
     async def run(self):
         """메인 루프 - GPU 작업 + Control API 스트림 동시 처리."""

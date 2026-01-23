@@ -13,7 +13,7 @@
  * - whisper-server: Port 8001 (speed mode ASR)
  * - insanely-fast-server: Port 8002 (accuracy mode ASR)
  * - diarization-server: Port 8003 (speaker diarization)
- * - llama-server: Port 8080 (LLM 요약)
+ * - llama-server: Port 8082 (LLM 요약)
  * - llama-ocr-server: Port 8081 (OCR Vision)
  *
  * NPU 서버 (on-demand):
@@ -62,7 +62,7 @@ module.exports = {
     {
       name: 'provider-manager',
       script: 'infra/provider_manager/main.py',
-      interpreter: ROCM_PYTHONW,  // pythonw.exe 사용 (stdin=DEVNULL로 자식 프로세스 문제 해결됨)
+      interpreter: ROCM_PYTHONW,  // pythonw.exe 사용 (콘솔 창 없음)
       cwd: __dirname,
       env: {
         PYTHONUNBUFFERED: '1',
@@ -82,9 +82,11 @@ module.exports = {
         OTEL_TRACES_EXPORTER: 'otlp',
       },
       autorestart: true,
-      max_restarts: 10,
-      min_uptime: '10s',
-      restart_delay: 4000,
+      max_restarts: 3,          // 최대 3번만 재시작 (crash loop 방지)
+      min_uptime: '30s',        // 30초 이상 실행되어야 안정으로 판단
+      restart_delay: 10000,     // 재시작 전 대기 (10초)
+      kill_timeout: 10000,      // 종료 대기 (10초) - 포트 해제 시간 확보
+      wait_ready: false,
       watch: false,
       windowsHide: true,
 
