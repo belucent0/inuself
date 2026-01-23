@@ -36,6 +36,7 @@ pillow = "^10.0.0"  # 이미지 처리 (OCR용)
 PyMuPDF = "^1.23.0"  # PDF를 이미지로 변환 (OCR용, 크로스 플랫폼, 의존성 없음)
 prometheus-fastapi-instrumentator = "^7.0.0"  # Prometheus 메트릭 수집
 yt-dlp = "^2025.12.8"  # YouTube 다운로드
+curl-cffi = ">=0.10.0,<0.14.0"  # yt-dlp impersonate 지원 (0.14는 아직 미지원)
 
 # ========================================
 # OpenTelemetry 분산 추적

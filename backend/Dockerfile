@@ -5,12 +5,18 @@ WORKDIR /app
 # 시스템 의존성 설치
 RUN apt-get update && apt-get install -y \
     curl \
+    unzip \
     gcc \
     g++ \
     libsndfile1 \
     ffmpeg \
     poppler-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# Deno 설치 (yt-dlp YouTube 다운로드에 필요, 2025.11.12 이후)
+RUN curl -fsSL https://deno.land/install.sh | sh
+ENV DENO_INSTALL="/root/.deno"
+ENV PATH="${DENO_INSTALL}/bin:${PATH}"
 
 # Poetry 설치
 RUN pip install --no-cache-dir poetry==1.7.1
