@@ -198,7 +198,7 @@ services:
       dockerfile: worker/Dockerfile
     image: asr-worker:1.0.0
     container_name: asr-worker-unified
-    command: celery -A worker.celery_app worker --loglevel=info -Q celery,asr,asr_tasks,llm_summary,ocr_tasks
+    command: celery -A worker.celery_app worker --loglevel=info -Q celery,asr,asr_tasks,llm_summary,ocr_tasks,search
     volumes:
       - ./.env:/app/.env:ro
       - ./backend/data:/app/data
@@ -294,6 +294,23 @@ services:
       valkey:
         condition: service_healthy
     restart: unless-stopped
+
+  # SearXNG - Deep Search용 메타 검색 엔진
+  searxng:
+    image: searxng/searxng:latest
+    container_name: asr-searxng
+    volumes:
+      - ./infra/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-changeme-generate-secret}
+    depends_on:
+      valkey:
+        condition: service_healthy
+    restart: unless-stopped
+    # 외부 노출 불필요 - 내부망에서만 Worker가 접근
+    # ports:
+    #   - "8888:8080"
 
 volumes:
   redis-data:

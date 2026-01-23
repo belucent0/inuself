@@ -206,6 +206,11 @@ def create_app() -> FastAPI:
     app.include_router(chat_controller.router)
     logger.info("[FastAPI] Chat routes registered at /api/chat")
 
+    # Deep Search 라우터 추가
+    from .controllers import search_controller
+    app.include_router(search_controller.router)
+    logger.info("[FastAPI] Search routes registered at /api/search")
+
     # 관리자 라우터 추가
     from .controllers import admin_controller
     app.include_router(admin_controller.router, prefix=settings.api_prefix)

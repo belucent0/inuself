@@ -1,0 +1,101 @@
+# SearXNG Configuration for torch-asr Deep Search
+# Docs: https://docs.searxng.org/admin/settings/settings.html
+
+use_default_settings: true
+
+general:
+  instance_name: "torch-search"
+  debug: false
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: false
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "ko-KR"
+  formats:
+    - html
+    - json
+
+server:
+  # Secret key - 환경변수로 오버라이드 권장
+  secret_key: "changeme-generate-with-openssl-rand-hex-32"
+  # 내부 사용이므로 rate limiting 비활성화
+  limiter: false
+  # 이미지 프록시 비활성화 (텍스트 검색만 사용)
+  image_proxy: false
+  # HTTP 프로토콜 (Docker 내부망)
+  method: "GET"
+
+ui:
+  # API 전용이므로 UI 최소화
+  static_use_hash: true
+  default_theme: simple
+  results_on_new_tab: false
+
+# 검색 엔진 설정
+engines:
+  # 주요 검색 엔진 활성화
+  - name: google
+    disabled: false
+    weight: 1.5
+
+  - name: duckduckgo
+    disabled: false
+    weight: 1.2
+
+  - name: bing
+    disabled: false
+    weight: 1.0
+
+  - name: brave
+    disabled: false
+    weight: 1.0
+
+  # Wikipedia - 정보성 쿼리
+  - name: wikipedia
+    disabled: false
+    weight: 0.8
+
+  # 기술 관련
+  - name: github
+    disabled: false
+    weight: 0.5
+
+  - name: stackoverflow
+    disabled: false
+    weight: 0.5
+
+  # YouTube - 동영상 검색
+  - name: youtube
+    disabled: false
+    weight: 1.0
+    shortcut: yt
+
+  # Invidious - YouTube 대체 (프라이버시)
+  - name: invidious
+    disabled: false
+    weight: 0.8
+
+  # Google Videos - 동영상 검색
+  - name: google videos
+    disabled: false
+    weight: 0.8
+
+# Outgoing 요청 설정
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 15.0
+  useragent_suffix: ""
+  pool_connections: 100
+  pool_maxsize: 20
+
+# 결과 설정
+result_proxy:
+  url: ""
+
+# Redis/Valkey 캐싱 (선택사항 - 우리 Valkey 사용)
+redis:
+  url: "redis://asr-valkey:6379/1"
