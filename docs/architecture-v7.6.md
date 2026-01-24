@@ -1,6 +1,6 @@
-# Architecture V7.5
+# Architecture V7.6
 
-> Redis -> Valkey 마이그레이션 + OpenTelemetry + 관측성 스택
+> Redis -> Valkey 마이그레이션 + OpenTelemetry + 관측성 스택 + NPU Thinking Model
 
 ## 버전 히스토리
 
@@ -10,7 +10,8 @@
 | V7.0 | Provider Manager 통합 프로세스 관리 |
 | V7.3 | Provider Manager 패키지 구조화 + Consumer Group 자동 복구 |
 | V7.4 | OpenTelemetry 분산 추적, StateWatchdog, IdleManager, audio_gateway 제거 |
-| **V7.5** | **Redis -> Valkey 마이그레이션 (라이선스/성능 이슈 대응)** |
+| V7.5 | Redis -> Valkey 마이그레이션 (라이선스/성능 이슈 대응) |
+| **V7.6** | **FLM Thinking Model 지원, Client AI 모드 UI 전면 개편** |
 
 ---
 
@@ -58,7 +59,7 @@
 │         ▼                  ▼                  ▼                                │
 │   ┌───────────┐     ┌───────────┐     ┌───────────┐                           │
 │   │ GPU (LLM) │     │ GPU (ASR) │     │ NPU (FLM) │                           │
-│   │ :8080-81  │     │ :8001-03  │     │ :11434-36 │                           │
+│   │ :8080-81  │     │ :8001-03  │     │ :11434-37 │                           │
 │   └───────────┘     └───────────┘     └───────────┘                           │
 │                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
@@ -196,6 +197,7 @@
 | **flm-asr** | 11434 | NPU ASR (whisper-v3:turbo) | Always-On | flm |
 | **flm-llm** | 11435 | NPU LLM (lfm2:2.6b) | Always-On | flm |
 | **flm-ocr** | 11436 | NPU OCR (qwen3vl-it:4b) | Always-On | flm |
+| **flm-llm-thinking** | 11437 | NPU LLM (lfm2.5-tk:1.2b) | On-Demand | flm |
 
 ---
 
@@ -283,6 +285,6 @@ Nginx → Backend (asr-backend)
 | 버전 | 상태 | 계획 |
 |------|------|------|
 | V7.4 | ✅ 완료 | OpenTelemetry 분산 추적, StateWatchdog, IdleManager, audio_gateway 제거 |
-| V7.5 | ✅ 완료 | **Redis -> Valkey 마이그레이션 (라이선스/성능 대응)** |
-| V7.6 | 예정 | 동적 Health Check 타임아웃, GPU 리소스 오케스트레이션 개선 |
+| V7.5 | ✅ 완료 | Redis -> Valkey 마이그레이션 (라이선스/성능 대응) |
+| V7.6 | ✅ 완료 | **FLM Thinking Model 지원, Client UI 전면 개편** |
 | V8.0 | 예정 | Temporal 워크플로우 엔진, 멀티 호스트 지원 |
