@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 
 # 환경변수
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://asr-prometheus:9090")
-REDIS_URL = os.getenv("REDIS_URL", "redis://asr-redis:6379/0")
+REDIS_URL = os.getenv("REDIS_URL", "redis://asr-valkey:6379/0")
 
 # Architecture V6.3: Provider Manager for On-Demand NPU control
 PROVIDER_MANAGER_URL = os.getenv("PROVIDER_MANAGER_URL", "http://host.docker.internal:9999")
@@ -1547,10 +1547,13 @@ class PrometheusRouter(CustomLLM):
 
         # 일반 LLM 요청
         # Provider 선택 (신호 없이 - Redis Stream이 처리)
-        api_base, model, provider_key = select_provider_sync(task_type="chat", skip_signal=True)
+        api_base, _, provider_key = select_provider_sync(task_type="chat", skip_signal=True)
         target_provider = "flm" if "npu" in provider_key else "llama"
 
-        logger.info(f"[PrometheusRouter V7.0] Routing to {target_provider} via Redis Stream")
+        # 요청된 모델명 사용 (라우터 prefix 제거)
+        requested_model_name = model_name  # 1478행에서 추출됨
+
+        logger.info(f"[PrometheusRouter V7.0] Routing to {target_provider} via Redis Stream, model={requested_model_name}")
 
         # 활성 요청 카운트 증가
         increment_active_count_sync(target_provider)
@@ -1560,16 +1563,17 @@ class PrometheusRouter(CustomLLM):
             gpu_client = get_gpu_stream_client()
             result = gpu_client.request_llm_completion(
                 messages=messages,
-                model=model,
+                model=requested_model_name,
                 max_tokens=optional_params.get("max_tokens", 4096),
                 temperature=optional_params.get("temperature", 0.7),
+                target_server=target_server,
                 timeout=120.0,
             )
 
             return ModelResponse(
                 id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
                 created=result.get("created", int(time.time())),
-                model=result.get("model", model),
+                model=result.get("model", requested_model_name),
                 object="chat.completion",
                 choices=[
                     {
@@ -1669,10 +1673,13 @@ class PrometheusRouter(CustomLLM):
 
         # 일반 LLM 요청
         # Provider 선택 (신호 없이 - Redis Stream이 처리)
-        api_base, model, provider_key = await select_provider_async(task_type="chat", skip_signal=True)
+        api_base, _, provider_key = await select_provider_async(task_type="chat", skip_signal=True)
         target_provider = "flm" if "npu" in provider_key else "llama"
 
-        logger.info(f"[PrometheusRouter V7.0] Routing to {target_provider} via Redis Stream")
+        # 요청된 모델명 사용 (라우터 prefix 제거)
+        requested_model_name = model_name  # 1607행에서 추출됨
+
+        logger.info(f"[PrometheusRouter V7.0] Routing to {target_provider} via Redis Stream, model={requested_model_name}")
 
         # 활성 요청 카운트 증가
         await increment_active_count(target_provider)
@@ -1682,16 +1689,17 @@ class PrometheusRouter(CustomLLM):
             gpu_client = get_async_gpu_stream_client()
             result = await gpu_client.request_llm_completion(
                 messages=messages,
-                model=model,
+                model=requested_model_name,
                 max_tokens=optional_params.get("max_tokens", 4096),
                 temperature=optional_params.get("temperature", 0.7),
+                target_server=target_provider,
                 timeout=600.0,
             )
 
             return ModelResponse(
                 id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
                 created=result.get("created", int(time.time())),
-                model=result.get("model", model),
+                model=result.get("model", requested_model_name),
                 object="chat.completion",
                 choices=[
                     {
@@ -1712,13 +1720,7 @@ class PrometheusRouter(CustomLLM):
             await decrement_active_count(target_provider)
 
     async def astreaming(self, *args, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
-        """비동기 스트리밍 - V6.6 Redis Stream 기반 (시뮬레이션 스트리밍).
-
-        Architecture V6.6:
-        - Redis Stream은 실시간 스트리밍을 지원하지 않음
-        - 전체 응답을 받은 후 청크로 나누어 yield (시뮬레이션 스트리밍)
-        - Docker Desktop 크래시 방지가 우선
-        """
+        """비동기 스트리밍 - V7.4 Redis Stream 기반 (실시간 스트리밍)."""
         start_ts = time.time()
 
         # model parameter extraction for logging
@@ -1735,57 +1737,67 @@ class PrometheusRouter(CustomLLM):
         def get_log_prefix():
             return f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}][{trace_id}]"
 
-        logger.info(f"{get_log_prefix()} [PrometheusRouter V6.6] Streaming Request START: {model}")
+        logger.info(f"{get_log_prefix()} [PrometheusRouter V7.4] Streaming Request START: {model}")
 
         messages = kwargs.get("messages", [])
 
         # Provider 선택 (신호 없이 - Redis Stream이 처리)
-        api_base, selected_model, provider_key = await select_provider_async(task_type="chat", skip_signal=True)
+        api_base, _, provider_key = await select_provider_async(task_type="chat", skip_signal=True)
         target_provider = "flm" if "npu" in provider_key else "llama"
 
+        # 요청된 모델명 사용 (라우터 prefix 제거)
+        requested_model_name = model.split("/")[-1] if "/" in model else model
+
         selection_latency = time.time() - start_ts
-        logger.debug(f"{get_log_prefix()} [PrometheusRouter V6.6] Provider: {target_provider} (Latency: {selection_latency:.3f}s)")
+        logger.debug(f"{get_log_prefix()} [PrometheusRouter V7.4] Provider: {target_provider}, model={requested_model_name} (Latency: {selection_latency:.3f}s)")
 
         await increment_active_count(target_provider)
 
         try:
-            # Redis Stream을 통한 LLM 요청 (비동기, Non-streaming)
+            # Redis Stream을 통한 LLM 요청 (비동기, Real-time streaming)
             gpu_client = get_async_gpu_stream_client()
-            result = await gpu_client.request_llm_completion(
+
+            stream_gen = gpu_client.request_llm_completion_stream(
                 messages=messages,
-                model=selected_model,
+                model=requested_model_name,
                 max_tokens=optional_params.get("max_tokens", 4096),
                 temperature=optional_params.get("temperature", 0.7),
-                timeout=120.0,
+                target_server=target_provider,
+                timeout=600.0,  # 추론 모드의 긴 TTFB 대응 (10분)
             )
 
-            ttfb_latency = time.time() - start_ts
-            logger.info(f"{get_log_prefix()} [PrometheusRouter V6.6] Response received (TTFB: {ttfb_latency:.3f}s)")
+            ttfb_received = False
+            
+            async for chunk_data in stream_gen:
+                if not ttfb_received:
+                    ttfb_latency = time.time() - start_ts
+                    logger.info(f"{get_log_prefix()} [PrometheusRouter V7.4] First chunk received (TTFB: {ttfb_latency:.3f}s)")
+                    ttfb_received = True
 
-            # 응답 텍스트를 청크로 나누어 yield (시뮬레이션 스트리밍)
-            content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-
-            # 문장 단위로 나누거나, 일정 길이로 나눔
-            chunk_size = 50  # 50자씩 나눔
-            chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
-
-            for i, chunk in enumerate(chunks):
-                is_last = (i == len(chunks) - 1)
-                yield GenericStreamingChunk(
-                    text=chunk,
-                    is_finished=is_last,
-                    finish_reason="stop" if is_last else None,
-                    usage=result.get("usage") if is_last else None,
-                )
-                # 스트리밍 느낌을 위해 약간의 딜레이 (선택적)
-                # await asyncio.sleep(0.01)
+                if "chunk" in chunk_data:
+                    yield GenericStreamingChunk(
+                        text=chunk_data["chunk"],
+                        is_finished=False,
+                        finish_reason=None,
+                        usage=None,
+                    )
+                
+                if "result" in chunk_data:
+                    # Final result (usage, finish_reason)
+                    result = chunk_data["result"]
+                    yield GenericStreamingChunk(
+                        text="",
+                        is_finished=True,
+                        finish_reason=result.get("choices", [{}])[0].get("finish_reason", "stop"),
+                        usage=result.get("usage"),
+                    )
 
             total_duration = time.time() - start_ts
-            logger.info(f"{get_log_prefix()} [PrometheusRouter V6.6] Request END: {model} (Total: {total_duration:.3f}s)")
+            logger.info(f"{get_log_prefix()} [PrometheusRouter V7.4] Request END: {model} (Total: {total_duration:.3f}s)")
 
         except Exception as e:
             total_duration = time.time() - start_ts
-            logger.error(f"{get_log_prefix()} [PrometheusRouter V6.6] Request FAILED: {model} (Total: {total_duration:.3f}s, Error: {e})")
+            logger.error(f"{get_log_prefix()} [PrometheusRouter V7.4] Request FAILED: {model} (Total: {total_duration:.3f}s, Error: {e})")
             raise
         finally:
             await decrement_active_count(target_provider)

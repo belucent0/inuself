@@ -48,10 +48,14 @@ class StreamConsumer:
         redis = await self._get_redis()
         try:
             await redis.xgroup_create(RESULT_STREAM, CONSUMER_GROUP, id="0", mkstream=True)
-            logger.info(f"Created consumer group: {CONSUMER_GROUP}")
+            logger.info(f"Created consumer group: stream={RESULT_STREAM}, group={CONSUMER_GROUP}")
         except Exception as e:
+            error_str = str(e).upper()
             # 이미 존재하는 경우 무시
-            if "BUSYGROUP" not in str(e):
+            if "BUSYGROUP" in error_str:
+                logger.debug(f"Consumer group already exists: {CONSUMER_GROUP}")
+            else:
+                logger.error(f"Failed to create consumer group: {e}")
                 raise
 
     async def start(self) -> None:
@@ -94,7 +98,16 @@ class StreamConsumer:
                 logger.info("StreamConsumer cancelled")
                 break
             except Exception as e:
-                logger.error(f"StreamConsumer error: {e}")
+                error_str = str(e).upper()
+                # NOGROUP 에러 시 컨슈머 그룹 재생성 시도
+                if "NOGROUP" in error_str:
+                    logger.warning(f"Consumer group not found, recreating: {e}")
+                    try:
+                        await self._ensure_consumer_group()
+                    except Exception as create_err:
+                        logger.error(f"Failed to recreate consumer group: {create_err}")
+                else:
+                    logger.error(f"StreamConsumer error: {e}")
                 await asyncio.sleep(1)
         
         logger.info("StreamConsumer stopped")

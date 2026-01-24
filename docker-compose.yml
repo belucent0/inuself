@@ -20,10 +20,10 @@ services:
     volumes:
       - minio-data:/data
 
-  redis:
-    image: redis:7.2-alpine
-    container_name: asr-redis
-    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
+  valkey:
+    image: valkey/valkey:9-alpine
+    container_name: asr-valkey
+    command: [ "valkey-server", "/usr/local/etc/redis/redis.conf" ]
     volumes:
       - redis-data:/data
       - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
@@ -31,7 +31,7 @@ services:
       - "6379:6379"
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: [ "CMD", "valkey-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -83,7 +83,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
       minio:
         condition: service_healthy
@@ -95,7 +95,7 @@ services:
     environment:
       - TASK_QUEUE_TYPE=celery
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
-      - REDIS_URL=redis://asr-redis:6379/0
+      - REDIS_URL=redis://asr-valkey:6379/0
       - S3_ENDPOINT=http://asr-minio:9000
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
@@ -111,6 +111,9 @@ services:
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
+      # FLM Model Configuration (Backend용 - 검색 요약)
+      - FLM_LLM_MODEL=${FLM_LLM_MODEL:-lfm2:2.6b}
+      - FLM_THINKING_MODEL=${FLM_THINKING_MODEL:-lfm2.5-tk:1.2b}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
@@ -198,7 +201,7 @@ services:
       dockerfile: worker/Dockerfile
     image: asr-worker:1.0.0
     container_name: asr-worker-unified
-    command: celery -A worker.celery_app worker --loglevel=info -Q celery,asr,asr_tasks,llm_summary,ocr_tasks
+    command: celery -A worker.celery_app worker --loglevel=info -Q celery,asr,asr_tasks,llm_summary,ocr_tasks,search
     volumes:
       - ./.env:/app/.env:ro
       - ./backend/data:/app/data
@@ -208,7 +211,7 @@ services:
     environment:
       - TASK_QUEUE_TYPE=celery
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
-      - REDIS_URL=redis://asr-redis:6379/0
+      - REDIS_URL=redis://asr-valkey:6379/0
       - S3_ENDPOINT=http://asr-minio:9000
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
@@ -229,8 +232,9 @@ services:
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
+      # Note: Worker는 FLM 모델 환경변수 사용 안 함 (Backend에서만 사용)
     depends_on:
-      redis:
+      valkey:
         condition: service_healthy
       postgres:
         condition: service_healthy
@@ -254,7 +258,7 @@ services:
     environment:
       # Docker 전용 오버라이드 (호스트와 다른 설정)
       - PROMETHEUS_URL=http://asr-prometheus:9090
-      - REDIS_URL=redis://asr-redis:6379/0
+      - REDIS_URL=redis://asr-valkey:6379/0
       - LITELLM_CONFIG_PATH=/app/custom/litellm_config.yaml
       # LiteLLM은 DB 사용 안 함 (Prisma 에러 방지)
       - DATABASE_URL=
@@ -273,7 +277,7 @@ services:
       - OTEL_LOGS_EXPORTER=none
     depends_on:
       - prometheus
-      - redis
+      - valkey
       - jaeger
     restart: unless-stopped
     healthcheck:
@@ -285,15 +289,32 @@ services:
   flower:
     image: mher/flower:2.0
     container_name: asr-flower
-    command: celery --broker=redis://asr-redis:6379/0 flower --port=5555 --url_prefix=flower --read_only=true
+    command: celery --broker=redis://asr-valkey:6379/0 flower --port=5555 --url_prefix=flower --read_only=true
     ports:
       - "5555:5555"
     environment:
-      - CELERY_BROKER_URL=redis://asr-redis:6379/0
+      - CELERY_BROKER_URL=redis://asr-valkey:6379/0
     depends_on:
-      redis:
+      valkey:
         condition: service_healthy
     restart: unless-stopped
+
+  # SearXNG - Deep Search용 메타 검색 엔진
+  searxng:
+    image: searxng/searxng:latest
+    container_name: asr-searxng
+    volumes:
+      - ./infra/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-changeme-generate-secret}
+    depends_on:
+      valkey:
+        condition: service_healthy
+    restart: unless-stopped
+    # 외부 노출 허용 (개발 환경: Host에서 접근 필요)
+    ports:
+      - "8888:8080"
 
 volumes:
   redis-data:

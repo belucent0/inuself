@@ -65,6 +65,7 @@ celery_app.conf.update(
         "worker.tasks.asr_task.process_asr_task": {"queue": "asr"},
         "worker.tasks.llm_task.process_llm_task": {"queue": "llm_summary"},
         "worker.tasks.ocr_task.process_ocr_task": {"queue": "ocr_tasks"},
+        "worker.tasks.search_task.process_search_task": {"queue": "search"},
     },
     task_default_queue="asr",
     task_create_missing_queues=True,

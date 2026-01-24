@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Optional
 
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import TracerProvider, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
@@ -32,6 +32,55 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from opentelemetry.propagate import set_global_textmap, inject, extract
 
 from .logging_config import logger
+
+
+# ============================================
+# 트레이싱 필터 설정 (노이즈 제거)
+# ============================================
+
+EXCLUDED_PATHS = frozenset({"/health", "/ready", "/metrics", "/healthz", "/liveliness"})
+EXCLUDED_REDIS_COMMANDS = frozenset({
+    "PING", "INFO", "CONFIG", "CLIENT", "CLUSTER",
+    "XREAD", "XREADGROUP",
+})
+
+
+class FilteringSpanProcessor(SpanProcessor):
+    """헬스체크 및 노이즈 span 필터링."""
+    
+    def __init__(self, next_processor: SpanProcessor):
+        self._next = next_processor
+    
+    def on_start(self, span, parent_context=None):
+        self._next.on_start(span, parent_context)
+    
+    def on_end(self, span):
+        if span.status.status_code == StatusCode.ERROR:
+            self._next.on_end(span)
+            return
+        
+        # span 이름에서도 경로 체크
+        span_name = span.name or ""
+        http_target = span.attributes.get("http.target", "")
+        http_url = span.attributes.get("http.url", "")
+        
+        for path in EXCLUDED_PATHS:
+            if path in span_name or path in http_target or path in http_url:
+                return
+        
+        db_statement = span.attributes.get("db.statement", "")
+        if db_statement:
+            cmd = db_statement.split()[0].upper() if db_statement.split() else ""
+            if cmd in EXCLUDED_REDIS_COMMANDS:
+                return
+        
+        self._next.on_end(span)
+    
+    def shutdown(self):
+        self._next.shutdown()
+    
+    def force_flush(self, timeout_millis=30000):
+        return self._next.force_flush(timeout_millis)
 
 
 # 전역 설정
@@ -77,8 +126,12 @@ def setup_worker_telemetry(service_name: str = None) -> None:
             insecure=True,
         )
 
-        processor = BatchSpanProcessor(exporter)
-        _tracer_provider.add_span_processor(processor)
+        # FilteringSpanProcessor로 노이즈 제거
+        batch_processor = BatchSpanProcessor(exporter)
+        filtering_processor = FilteringSpanProcessor(batch_processor)
+        _tracer_provider.add_span_processor(filtering_processor)
+        
+        logger.info("[Telemetry] Noise filtering enabled")
 
         trace.set_tracer_provider(_tracer_provider)
         set_global_textmap(_propagator)

@@ -63,6 +63,21 @@ class StreamProcessor:
         "ocr": "llama-ocr-server",  # 기본값, 모델에 따라 변경
     }
 
+    # Provider -> Device Group 매핑 (동시성 제한용)
+    PROVIDER_DEVICE_GROUP = {
+        # GPU 프로바이더
+        "diarization-server": "gpu",
+        "whisper-server": "gpu",
+        "insanely-fast-server": "gpu",
+        "llama-server": "gpu",
+        "llama-ocr-server": "gpu",
+        # NPU 프로바이더
+        "flm-asr": "npu",
+        "flm-llm": "npu",
+        "flm-llm-thinking": "npu",
+        "flm-ocr": "npu",
+    }
+
     def __init__(
         self,
         provider_manager: ProviderManager = None,
@@ -75,6 +90,14 @@ class StreamProcessor:
         self.idle_manager = idle_manager  # On-Demand 프로바이더 자동 언로드용
         self.job_tracker: Optional[JobTracker] = None
         self._service: Optional[ProviderService] = None
+
+        # Device Group별 세마포어 (동시 실행 제한)
+        # GPU/NPU가 각각 하나씩이므로 동일 device group 내에서는 순차 실행
+        self._device_semaphores: Dict[str, asyncio.Semaphore] = {
+            "gpu": asyncio.Semaphore(settings.gpu_max_concurrent),
+            "npu": asyncio.Semaphore(settings.npu_max_concurrent),
+        }
+        self._pending_jobs: Dict[str, int] = {"gpu": 0, "npu": 0}  # 대기 중인 작업 수 추적
 
     @property
     def service(self) -> ProviderService:
@@ -147,6 +170,18 @@ class StreamProcessor:
         }
         await self.redis.xadd(settings.response_stream, response)
         logger.info(f"Published response for request_id={request_id}")
+
+    async def publish_chunk(self, request_id: str, chunk: str, finish_reason: Optional[str] = None):
+        """스트리밍 청크를 Response Stream에 발행."""
+        response = {
+            "request_id": request_id,
+            "chunk": chunk,
+            "timestamp": time.time(),
+        }
+        if finish_reason:
+            response["finish_reason"] = finish_reason
+            
+        await self.redis.xadd(settings.response_stream, response)
 
     async def publish_error(self, request_id: str, error: str):
         """에러를 Response Stream에 발행."""
@@ -327,15 +362,17 @@ class StreamProcessor:
         elif task_type == "llm_completion":
             model = data.get("model", "")
             target_server = data.get("target_server", "auto")
+            # thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk 등)
+            is_thinking_model = model and "-tk" in model
             if target_server in ("flm", "npu"):
-                return "flm-llm"
+                return "flm-llm-thinking" if is_thinking_model else "flm-llm"
             elif target_server in ("llama", "gpu"):
                 return "llama-server"
             elif "flm" in model or "npu" in model.lower():
-                return "flm-llm"
+                return "flm-llm-thinking" if is_thinking_model else "flm-llm"
             # handle_llm_completion()과 동일한 로직: qwen, gemma 등 + ":" → NPU
             elif any(p in model.lower() for p in ["qwen", "gemma", "deepseek", "phi", "lfm"]) and ":" in model:
-                return "flm-llm"
+                return "flm-llm-thinking" if is_thinking_model else "flm-llm"
             return "llama-server"
 
         elif task_type == "ocr":
@@ -522,7 +559,7 @@ class StreamProcessor:
                 await self.publish_error(request_id, f"Transcription failed: {str(e)}")
 
     async def handle_llm_completion(self, request_id: str, data: dict):
-        """LLM Completion 작업 처리."""
+        """LLM Completion 작업 처리 (스트리밍 지원)."""
         messages_raw = data.get("messages", "[]")
         messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
         model = data.get("model", "qwen3-4b")
@@ -544,10 +581,18 @@ class StreamProcessor:
             use_npu = True
 
         # On-Demand: 필요한 서버가 준비될 때까지 대기
+        # thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk 등)
+        is_thinking_model = model and "-tk" in model
+
         if use_npu:
-            if not await self._ensure_provider_ready("flm-llm"):
-                await self.publish_error(request_id, "FLM LLM server failed to start")
-                return
+            if is_thinking_model:
+                if not await self._ensure_provider_ready("flm-llm-thinking"):
+                    await self.publish_error(request_id, "FLM LLM Thinking server failed to start")
+                    return
+            else:
+                if not await self._ensure_provider_ready("flm-llm"):
+                    await self.publish_error(request_id, "FLM LLM server failed to start")
+                    return
         else:
             if not await self._ensure_provider_ready("llama-server"):
                 await self.publish_error(request_id, "Llama server failed to start")
@@ -555,10 +600,17 @@ class StreamProcessor:
 
         try:
             if use_npu:
-                logger.info(f"[{request_id}] Using FLM LLM server (NPU)...")
-                url = f"{settings.flm_llm_url}/v1/chat/completions"
-                actual_model = "lfm2:2.6b"
-                provider_name = "flm-llm"
+                if is_thinking_model:
+                    logger.info(f"[{request_id}] Using FLM LLM Thinking server (NPU, model={model})...")
+                    url = f"{settings.flm_llm_thinking_url}/v1/chat/completions"
+                    actual_model = model
+                    provider_name = "flm-llm-thinking"
+                else:
+                    logger.info(f"[{request_id}] Using FLM LLM server (NPU)...")
+                    url = f"{settings.flm_llm_url}/v1/chat/completions"
+                    # Remove hardcoded model name, use requested model or default
+                    actual_model = model if model else "lfm2.5-it:1.2b"
+                    provider_name = "flm-llm"
             else:
                 logger.info(f"[{request_id}] Using llama-server (GPU)...")
                 url = f"{settings.llama_server_url}/v1/chat/completions"
@@ -570,24 +622,96 @@ class StreamProcessor:
                 "messages": messages,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
-                "stream": False,
+                "stream": True,  # 스트리밍 활성화
             }
 
             # HTTP 요청 span
+            full_content = ""
+            completion_tokens = 0
+            
             with trace_http_request(provider_name, url, model=actual_model, device="npu" if use_npu else "gpu") as span:
-                response = await self.http_client.post(url, json=payload)
-                response.raise_for_status()
-                result = response.json()
+                # 스트리밍 요청 (Read Timeout 무제한)
+                async with self.http_client.stream("POST", url, json=payload, timeout=None) as response:
+                    response.raise_for_status()
+                    
+                    if span:
+                        span.set_attribute("http.status_code", response.status_code)
 
-                if span:
-                    span.set_attribute("http.status_code", response.status_code)
-                    # 토큰 사용량 기록 (있는 경우)
-                    usage = result.get("usage", {})
-                    if usage:
-                        span.set_attribute("llm.prompt_tokens", usage.get("prompt_tokens", 0))
-                        span.set_attribute("llm.completion_tokens", usage.get("completion_tokens", 0))
+                    # SSE 파싱 및 청크 발행
+                    async for line in response.aiter_lines():
+                        if not line or not line.strip(): 
+                            continue
+                        
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str == "[DONE]":
+                                break
 
-            logger.info(f"[{request_id}] LLM completion completed")
+                            try:
+                                chunk_json = json.loads(data_str)
+                                choices = chunk_json.get("choices", [])
+                                if not choices:
+                                    continue
+
+                                delta = choices[0].get("delta") or {}
+                                if not isinstance(delta, dict):
+                                    delta = {}
+
+                                # FLM 추론 모델: reasoning_content (추론 과정) + content (최종 답변)
+                                reasoning_content = str(delta.get("reasoning_content") or "")
+                                content = str(delta.get("content") or "")
+
+                                # 추론 과정이 있으면 <think> 태그로 감싸서 전송
+                                if reasoning_content:
+                                    # 추론 시작 시 <think> 태그 추가
+                                    if full_content is None:
+                                        full_content = ""
+                                    if not full_content.startswith("<think>"):
+                                        full_content = "<think>"
+                                        await self.publish_chunk(request_id, "<think>")
+                                    full_content += reasoning_content
+                                    completion_tokens += 1
+                                    await self.publish_chunk(request_id, reasoning_content)
+
+                                # 최종 답변이 있으면 </think> 닫고 전송
+                                if content:
+                                    if full_content is None:
+                                        full_content = ""
+                                    # 추론 과정이 있었다면 </think> 닫기
+                                    if full_content.startswith("<think>") and "</think>" not in full_content:
+                                        full_content += "</think>\n\n"
+                                        await self.publish_chunk(request_id, "</think>\n\n")
+
+                                    # NPU (FLM) 서버가 Delta 대신 Full Text를 보내는 경우 처리 (안전하게)
+                                    try:
+                                        clean_content = full_content.replace("<think>", "").replace("</think>", "").strip()
+                                        if use_npu and content and clean_content and content.startswith(clean_content):
+                                            content = content[len(clean_content):]
+                                    except Exception:
+                                        pass
+
+                                    if content:
+                                        full_content += content
+                                        completion_tokens += 1
+                                        await self.publish_chunk(request_id, content)
+                                    
+                            except json.JSONDecodeError:
+                                continue
+                            except Exception as e:
+                                logger.warning(f"Error parsing chunk: {e}")
+
+            logger.info(f"[{request_id}] LLM completion completed ({len(full_content)} chars)")
+
+            # 최종 결과 발행 (호환성 및 완료 신호)
+            result = {
+                "choices": [{
+                    "message": {"content": full_content},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "completion_tokens": completion_tokens
+                }
+            }
 
             # 응답 발행 span
             with trace_response_publish(request_id, success=True):
@@ -597,8 +721,23 @@ class StreamProcessor:
             with trace_response_publish(request_id, success=False):
                 await self.publish_error(request_id, f"LLM completion timeout")
         except httpx.HTTPStatusError as e:
+            error_detail = ""
+            if e.response.status_code == 400:
+                # 400 에러 시 사용 가능한 모델 목록 조회 시도
+                try:
+                    # url: .../v1/chat/completions -> base: .../v1/models
+                    base_url = url.split("/v1/")[0]
+                    models_resp = await self.http_client.get(f"{base_url}/v1/models", timeout=5.0)
+                    if models_resp.status_code == 200:
+                        models_data = models_resp.json()
+                        available_models = [m.get('id') for m in models_data.get('data', [])]
+                        error_detail = f" (Available models: {', '.join(available_models)})"
+                        logger.error(f"[{request_id}] Invalid model requested. Available: {available_models}")
+                except Exception as debug_err:
+                    logger.warning(f"Failed to debug models: {debug_err}")
+
             with trace_response_publish(request_id, success=False):
-                await self.publish_error(request_id, f"LLM HTTP error: {e.response.status_code}")
+                await self.publish_error(request_id, f"LLM HTTP error: {e.response.status_code} - {e.response.text}{error_detail}")
         except Exception as e:
             with trace_response_publish(request_id, success=False):
                 await self.publish_error(request_id, f"LLM completion failed: {str(e)}")
@@ -700,6 +839,7 @@ class StreamProcessor:
             "llama-ocr": f"{settings.llama_ocr_server_url}/health",
             "flm-asr": f"{settings.flm_asr_url}/v1/models",
             "flm-llm": f"{settings.flm_llm_url}/v1/models",
+            "flm-llm-thinking": f"{settings.flm_llm_thinking_url}/v1/models",
             "flm-ocr": f"{settings.flm_ocr_url}/v1/models",
         }
 
@@ -725,7 +865,7 @@ class StreamProcessor:
     # ==========================================
 
     async def process_message(self, message_id: str, data: dict):
-        """GPU 작업 메시지 처리 (JobTracker + OpenTelemetry 통합)."""
+        """GPU 작업 메시지 처리 (JobTracker + OpenTelemetry 통합 + Device Group 동시성 제한)."""
         request_id = data.get("request_id", str(uuid.uuid4()))
         task_type = data.get("type")
         traceparent = data.get("traceparent")  # W3C Trace Context (Worker에서 주입)
@@ -746,77 +886,100 @@ class StreamProcessor:
             "llama-ocr-server": "llama-ocr-server",
             "flm-asr": "flm-asr",
             "flm-llm": "flm-llm",
+            "flm-llm-thinking": "flm-llm-thinking",
             "flm-ocr": "flm-ocr",
         }
         provider_name = provider_name_map.get(provider, provider)
 
-        # ProviderManager에 작업 등록 (active_jobs 증가)
-        if task_type != "health_check":
+        # Device Group 확인 (동시성 제한용)
+        device_group = self.PROVIDER_DEVICE_GROUP.get(provider_name)
+        semaphore = self._device_semaphores.get(device_group) if device_group else None
+
+        # health_check는 세마포어 없이 즉시 처리
+        if task_type == "health_check":
+            await self.handle_health_check(request_id, data)
+            await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
+            return
+
+        # 대기 중인 작업 수 추적 (로깅용)
+        if device_group:
+            self._pending_jobs[device_group] += 1
+            pending = self._pending_jobs[device_group]
+            if pending > 1:
+                logger.info(f"[Queue] {device_group.upper()} queue: {pending} jobs waiting (request_id={request_id})")
+
+        # Device Group 세마포어 획득 (동일 device group 내 순차 실행)
+        async with semaphore if semaphore else asyncio.Lock():
+            if device_group:
+                self._pending_jobs[device_group] -= 1
+                logger.info(f"[Queue] {device_group.upper()} semaphore acquired for {task_type} (request_id={request_id})")
+
+            # ProviderManager에 작업 등록 (active_jobs 증가)
             await self.provider_manager.register_job(provider_name, message_id)
 
-        # 작업 시작 기록
-        job = None
-        if self.job_tracker and task_type != "health_check":
-            job = await self.job_tracker.start_job(
-                job_id=message_id,
+            # 작업 시작 기록
+            job = None
+            if self.job_tracker:
+                job = await self.job_tracker.start_job(
+                    job_id=message_id,
+                    request_id=request_id,
+                    task_type=task_type,
+                    provider=provider,
+                    metadata={"model": data.get("model")},
+                    trace_id=trace_id,
+                )
+
+            success = True
+            error_msg = None
+
+            # OpenTelemetry span 생성 (traceparent로 부모 trace에 연결)
+            with trace_gpu_operation(
+                operation_name=f"gpu.{task_type}" if task_type else "gpu.unknown",
+                traceparent=traceparent,
                 request_id=request_id,
                 task_type=task_type,
                 provider=provider,
-                metadata={"model": data.get("model")},
-                trace_id=trace_id,
-            )
+                model=data.get("model"),
+            ) as span:
+                try:
+                    if task_type == "diarization":
+                        await self.handle_diarization(request_id, data)
+                    elif task_type == "transcription":
+                        await self.handle_transcription(request_id, data)
+                    elif task_type == "llm_completion":
+                        await self.handle_llm_completion(request_id, data)
+                    elif task_type == "ocr":
+                        await self.handle_ocr(request_id, data)
+                    else:
+                        await self.publish_error(request_id, f"Unknown task type: {task_type}")
+                        success = False
+                        error_msg = f"Unknown task type: {task_type}"
 
-        success = True
-        error_msg = None
+                    await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
 
-        # OpenTelemetry span 생성 (traceparent로 부모 trace에 연결)
-        with trace_gpu_operation(
-            operation_name=f"gpu.{task_type}" if task_type else "gpu.unknown",
-            traceparent=traceparent,
-            request_id=request_id,
-            task_type=task_type,
-            provider=provider,
-            model=data.get("model"),
-        ) as span:
-            try:
-                if task_type == "diarization":
-                    await self.handle_diarization(request_id, data)
-                elif task_type == "transcription":
-                    await self.handle_transcription(request_id, data)
-                elif task_type == "llm_completion":
-                    await self.handle_llm_completion(request_id, data)
-                elif task_type == "ocr":
-                    await self.handle_ocr(request_id, data)
-                elif task_type == "health_check":
-                    await self.handle_health_check(request_id, data)
-                else:
-                    await self.publish_error(request_id, f"Unknown task type: {task_type}")
+                except Exception as e:
+                    logger.exception(f"Error processing message {message_id}: {e}")
+                    await self.publish_error(request_id, str(e))
+                    await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
                     success = False
-                    error_msg = f"Unknown task type: {task_type}"
+                    error_msg = str(e)
 
-                await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
+                # span에 결과 기록
+                record_operation_result(span, success=success, error=error_msg)
 
-            except Exception as e:
-                logger.exception(f"Error processing message {message_id}: {e}")
-                await self.publish_error(request_id, str(e))
-                await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
-                success = False
-                error_msg = str(e)
-
-            # span에 결과 기록
-            record_operation_result(span, success=success, error=error_msg)
-
-        # ProviderManager에서 작업 해제 (active_jobs 감소)
-        if task_type != "health_check":
+            # ProviderManager에서 작업 해제 (active_jobs 감소)
             await self.provider_manager.complete_job(provider_name, message_id)
 
             # Idle timeout 활동 기록 (On-Demand 프로바이더 자동 언로드용)
             if self.idle_manager:
                 self.idle_manager.record_activity(provider_name)
 
-        # 작업 완료 기록
-        if job and self.job_tracker:
-            await self.job_tracker.complete_job(message_id, success=success, error=error_msg)
+            # 작업 완료 기록
+            if job and self.job_tracker:
+                await self.job_tracker.complete_job(message_id, success=success, error=error_msg)
+
+            if device_group:
+                logger.info(f"[Queue] {device_group.upper()} semaphore released for {task_type} (request_id={request_id})")
 
     async def run(self):
         """메인 루프 - GPU 작업 + Control API 스트림 동시 처리."""

@@ -12,6 +12,16 @@ import yt_dlp
 
 from ..core.logging import logger
 
+# curl_cffi 설치 여부 확인 (impersonate 기능에 필요)
+try:
+    import curl_cffi
+    from yt_dlp.networking.impersonate import ImpersonateTarget
+    CURL_CFFI_AVAILABLE = True
+except ImportError:
+    CURL_CFFI_AVAILABLE = False
+    ImpersonateTarget = None
+    logger.warning("[YouTube] curl_cffi not available - impersonate feature disabled")
+
 # 최대 영상 길이 (초) - 1시간
 MAX_DURATION_SECONDS = 3600
 
@@ -71,25 +81,54 @@ class YouTubeService:
                 return match.group(1)
         raise InvalidYouTubeURLError(f"Invalid YouTube URL: {url}")
 
+    def _get_base_opts(self) -> dict:
+        """
+        yt-dlp 기본 옵션 반환 (403/Empty File 에러 우회)
+
+        2025년 이후 YouTube 다운로드에 필요한 옵션:
+        - JavaScript 런타임 (Deno/Node.js)
+        - 브라우저 impersonate (curl_cffi)
+        - IPv4 강제
+        - User-Agent 설정
+        """
+        opts = {
+            # IPv4 강제 (일부 403 에러 우회)
+            'source_address': '0.0.0.0',
+            # User-Agent 설정
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+            },
+            # 재시도 설정
+            'retries': 5,
+            'fragment_retries': 5,
+        }
+
+        # 브라우저 impersonate (curl_cffi 필요)
+        if CURL_CFFI_AVAILABLE and ImpersonateTarget:
+            opts['impersonate'] = ImpersonateTarget('chrome', '131', 'macos', '14')
+            logger.debug("[YouTube] Browser impersonate enabled (chrome-131:macos-14)")
+
+        return opts
+
     def get_video_info(self, url: str) -> dict:
         """
         영상 정보 조회 (다운로드 없이)
-        
+
         Args:
             url: YouTube URL
-            
+
         Returns:
             dict: 영상 정보 (title, duration, video_id)
-            
+
         Raises:
             YouTubeDownloadError: 정보 조회 실패
         """
         ydl_opts = {
+            **self._get_base_opts(),
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
-            # Enable Node.js runtime for YouTube JS challenges (required since yt-dlp 2025.11.12)
-            'js_runtimes': {'node': {}},
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -145,16 +184,12 @@ class YouTubeService:
 
         # 영상+오디오 다운로드 (best format)
         ydl_opts = {
+            **self._get_base_opts(),
             'format': 'best[ext=mp4]/best',  # mp4 우선, 없으면 best
             'outtmpl': output_template,
             'quiet': False,
             'no_warnings': False,
-            # Enable Node.js runtime for YouTube JS challenges
-            'js_runtimes': {'node': {}},
             'merge_output_format': 'mp4',  # 합칠 때 mp4로
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
         }
 
         try:

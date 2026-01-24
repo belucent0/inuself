@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     # FLM NPU Server URLs
     flm_asr_url: str = "http://localhost:11434"
     flm_llm_url: str = "http://localhost:11435"
+    flm_llm_thinking_url: str = "http://localhost:11437"  # 추론 모델
     flm_ocr_url: str = "http://localhost:11436"
 
     # Server paths (from environment)
@@ -60,7 +61,7 @@ class Settings(BaseSettings):
     rocm_env_path: str = ""
 
     # Timeouts
-    default_timeout: float = 1800.0  # 30분
+    default_timeout: float = 7200.0  # 2시간 (3시간 음성 파일의 화자분리 대응)
 
     # Health Monitoring (Always-On Recovery)
     health_check_interval: int = 30  # 헬스체크 주기 (초)
@@ -72,6 +73,13 @@ class Settings(BaseSettings):
     # Idle Timeout (On-Demand 프로바이더 자동 언로드)
     idle_timeout: float = 60.0  # idle timeout 시간 (초, 기본값 60초)
     idle_check_interval: float = 10.0  # idle 체크 주기 (초)
+
+    # Concurrency Control (프로바이더 그룹별 동시 실행 제한)
+    # GPU 프로바이더: diarization, whisper-cpp, insanely-fast, llama-server, llama-ocr-server
+    # NPU 프로바이더: flm-asr, flm-llm, flm-ocr
+    # 메모리 대역폭 제한으로 최대 2채널 병렬 처리 (ASR + Diarization 동시 실행용)
+    gpu_max_concurrent: int = 2  # GPU 그룹 동시 작업 수 (같은 GPU 공유)
+    npu_max_concurrent: int = 1  # NPU 그룹 동시 작업 수 (같은 NPU 공유)
 
     # Redis Keys for Status Sharing
     status_hash_key: str = "providers:status"  # 현재 상태 (Hash)

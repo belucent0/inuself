@@ -110,9 +110,9 @@ async def lifespan(app: FastAPI):
     logger.info("[Lifespan] StreamConsumer started")
 
     # StateWatchdog 스케줄러 시작 (5분마다 실행)
-    # NOTE: auto_reconcile=False - 디버깅 중 자동 복구 비활성화
+    # auto_reconcile=True - stuck 상태 파일을 자동으로 FAILED 처리
     from .services.watchdog_scheduler import WatchdogScheduler
-    watchdog_scheduler = WatchdogScheduler(interval_minutes=5, auto_reconcile=False)
+    watchdog_scheduler = WatchdogScheduler(interval_minutes=5, auto_reconcile=True)
     watchdog_scheduler_task = asyncio.create_task(watchdog_scheduler.start())
     logger.info("[Lifespan] StateWatchdog scheduler started (interval: 5m)")
 
@@ -205,6 +205,11 @@ def create_app() -> FastAPI:
     from .controllers import chat_controller
     app.include_router(chat_controller.router)
     logger.info("[FastAPI] Chat routes registered at /api/chat")
+
+    # Deep Search 라우터 추가
+    from .controllers import search_controller
+    app.include_router(search_controller.router)
+    logger.info("[FastAPI] Search routes registered at /api/search")
 
     # 관리자 라우터 추가
     from .controllers import admin_controller

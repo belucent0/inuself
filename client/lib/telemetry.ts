@@ -63,12 +63,17 @@ async function initTelemetryAsync(): Promise<void> {
         registerInstrumentations({
             instrumentations: [
                 new FetchInstrumentation({
-                    // API 요청만 추적 (외부 리소스 제외)
+                    // API 요청만 추적 (외부 리소스 및 노이즈 제외)
                     ignoreUrls: [
                         /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf)$/,
                         // Next.js 내부 요청 제외
                         /\/next\//,
                         /\/_next\//,
+                        // 헬스체크 및 메트릭 제외
+                        /\/health/,
+                        /\/ready/,
+                        /\/metrics/,
+                        /\/healthz/,
                     ],
                     // traceparent 헤더 전파 - 모든 API 요청에 적용
                     propagateTraceHeaderCorsUrls: [

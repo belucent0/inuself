@@ -5,6 +5,50 @@ model_list:
       model: "prometheus-router/qwen3-4b"
       stream: true
 
+  # LFM 모델 (NPU) - 정적 정의로 모델명 유지
+  - model_name: "lfm2:2.6b"
+    litellm_params:
+      model: "prometheus-router/lfm2:2.6b"
+      stream: true
+
+  - model_name: "lfm2:1.2b"
+    litellm_params:
+      model: "prometheus-router/lfm2:1.2b"
+      stream: true
+
+  - model_name: "lfm2.5-it:1.2b"
+    litellm_params:
+      model: "prometheus-router/lfm2.5-it:1.2b"
+      stream: true
+
+  - model_name: "lfm2.5-tk:1.2b"
+    litellm_params:
+      model: "prometheus-router/lfm2.5-tk:1.2b"
+      stream: true
+
+  - model_name: "lfm2-trans:2.6b"
+    litellm_params:
+      model: "prometheus-router/lfm2-trans:2.6b"
+      stream: true
+
+  # Qwen 모델 (NPU)
+  - model_name: "qwen3-tk:4b"
+    litellm_params:
+      model: "prometheus-router/qwen3-tk:4b"
+      stream: true
+
+  - model_name: "qwen3-it:4b"
+    litellm_params:
+      model: "prometheus-router/qwen3-it:4b"
+      stream: true
+
+  - model_name: "qwen3vl-it:4b"
+    litellm_params:
+      model: "prometheus-router/qwen3vl-it:4b"
+      stream: true
+
+  # Audio Models - V6.6: prometheus-router를 통해 Redis Stream으로 라우팅
+
   # Audio Models - V6.6: prometheus-router를 통해 Redis Stream으로 라우팅
   # custom_handler.py의 transcription 메서드가 Redis Stream을 사용하여
   # Provider Manager (Host)로 요청을 전달합니다.

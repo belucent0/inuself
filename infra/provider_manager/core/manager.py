@@ -149,7 +149,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
 
     LLM_SERVER_PATH = env_vars.get("LLM_SERVER_PATH", "llama-server")
     LLM_MODEL = env_vars.get("LLM_MODEL", str(PROJECT_ROOT / "models" / "Qwen3-4B-Instruct-2507-Q4_K_S.gguf"))
-    LLM_SERVER_PORT = env_vars.get("LLM_SERVER_PORT", "8080")
+    LLM_SERVER_PORT = env_vars.get("LLM_SERVER_PORT", "8082")  # 8080은 Nginx와 충돌 가능성 있음
     LLM_CONTEXT_LENGTH = env_vars.get("LLM_CONTEXT_LENGTH", "15000")
     LLM_N_GPU_LAYERS = env_vars.get("LLM_N_GPU_LAYERS", "99")
     LLM_N_THREADS = env_vars.get("LLM_N_THREADS", "8")
@@ -183,6 +183,14 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
             port=11435,
             health="/v1/models",
             estimated_ram=0.5,  # lfm2:2.6b 실측 ~0.3GB
+            enabled=False,  # On-Demand: 요청 시에만 로드
+        ),
+        "flm-llm-thinking": ProviderConfig(
+            name="flm-llm-thinking",
+            cmd=["flm", "serve", "lfm2.5-tk:1.2b", "--port", "11437"],
+            port=11437,
+            health="/v1/models",
+            estimated_ram=1.0,  # lfm2.5-tk:1.2b ~0.8GB
             enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "flm-ocr": ProviderConfig(
@@ -254,7 +262,7 @@ def get_default_groups() -> List[ProviderGroup]:
     return [
         ProviderGroup(
             name="flm",
-            providers=[configs["flm-asr"], configs["flm-llm"], configs["flm-ocr"]],
+            providers=[configs["flm-asr"], configs["flm-llm"], configs["flm-llm-thinking"], configs["flm-ocr"]],
             order=1
         ),
         ProviderGroup(

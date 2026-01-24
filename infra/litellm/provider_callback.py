@@ -18,7 +18,7 @@ from litellm.integrations.custom_logger import CustomLogger
 logger = logging.getLogger(__name__)
 
 # Redis for Provider Manager communication
-REDIS_URL = os.getenv("REDIS_URL", "redis://asr-redis:6379/0")
+REDIS_URL = os.getenv("REDIS_URL", "redis://asr-valkey:6379/0")
 
 # Model → Provider 매핑
 MODEL_PROVIDER_MAP = {
