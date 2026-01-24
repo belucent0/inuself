@@ -1,4 +1,4 @@
-import { MessageSquare, FileText, Activity, Map, ListTodo, GitBranch } from "lucide-react"
+import { MessageSquare, FileText, Activity, Map, ListTodo, GitBranch, Sparkles } from "lucide-react"
 import { LucideIcon } from "lucide-react"
 
 export interface NavItem {
@@ -10,7 +10,7 @@ export interface NavItem {
 
 // 메뉴 구조 정의 (단일 소스)
 export const navigationItems: NavItem[] = [
-  { href: "/", label: "채팅", icon: MessageSquare, title: "채팅" },
+  { href: "/", label: "AI 모드", icon: Sparkles, title: "AI 모드" },
   { href: "/contents", label: "콘텐츠", icon: FileText, title: "콘텐츠" },
   { href: "/monitoring", label: "모니터링", icon: Activity, title: "시스템 모니터링" },
   { href: "/queue-monitoring", label: "큐 모니터링", icon: ListTodo, title: "큐 모니터링" },

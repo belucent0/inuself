@@ -2,11 +2,12 @@
 
 import * as React from "react"
 import { useState } from "react"
-import { Send, Paperclip, Globe, Youtube, MessageSquare } from "lucide-react"
+import { Send, Paperclip, Globe, Youtube, MessageSquare, Brain } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
+import { Switch } from "@/components/ui/switch"
 import { YouTubeLinkModal } from "./YouTubeLinkModal"
 import { uploadYouTubeContent } from "@/lib/api"
 
@@ -20,6 +21,9 @@ interface ChatPromptProps extends React.HTMLAttributes<HTMLDivElement> {
     onFileUpload?: () => void
     mode?: ChatMode
     onModeChange?: (mode: ChatMode) => void
+    messages?: any[]
+    isReasoning?: boolean
+    onReasoningChange?: (checked: boolean) => void
 }
 
 export function ChatPrompt({
@@ -31,6 +35,9 @@ export function ChatPrompt({
     onFileUpload,
     mode = 'chat',
     onModeChange,
+    messages = [],
+    isReasoning = false,
+    onReasoningChange,
     ...props
 }: ChatPromptProps) {
     const textareaRef = React.useRef<HTMLTextAreaElement>(null)
@@ -166,6 +173,37 @@ export function ChatPrompt({
                                 <TooltipContent>YouTube 링크로 콘텐츠 생성</TooltipContent>
                             </Tooltip>
                         </TooltipProvider>
+
+                        {/* 구분선 및 추론 모드 토글 */}
+                        <div className="mx-1 h-4 w-[1px] bg-border" />
+                        
+                        <TooltipProvider>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <div className="flex items-center gap-1.5 px-1">
+                                        <Switch 
+                                            checked={isReasoning}
+                                            onCheckedChange={onReasoningChange}
+                                            className="scale-75 data-[state=checked]:bg-purple-500"
+                                            id="reasoning-mode"
+                                        />
+                                        <label 
+                                            htmlFor="reasoning-mode"
+                                            className={cn(
+                                                "text-xs font-medium cursor-pointer flex items-center gap-1 select-none", 
+                                                isReasoning ? "text-purple-500" : "text-muted-foreground"
+                                            )}
+                                        >
+                                            <Brain className="h-3 w-3" />
+                                            추론
+                                        </label>
+                                    </div>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                    <p>추론(Reasoning) 모델을 사용하여 깊이 있는 답변을 생성합니다.</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -204,11 +242,13 @@ export function ChatPrompt({
                 </div>
             </div>
 
-            <div className="text-center mt-2 text-xs text-muted-foreground">
-                {mode === 'search'
-                    ? '웹 검색 결과를 바탕으로 출처가 명시된 답변을 제공합니다.'
-                    : 'AI는 실수를 할 수 있습니다. 중요한 정보는 확인해 주세요.'}
-            </div>
+            {messages.length === 0 && (
+                <div className="text-center mt-2 text-xs text-muted-foreground animate-in fade-in slide-in-from-bottom-2">
+                    {mode === 'search'
+                        ? '웹 검색 결과를 바탕으로 출처가 명시된 답변을 제공합니다.'
+                        : 'AI는 실수를 할 수 있습니다. 중요한 정보는 확인해 주세요.'}
+                </div>
+            )}
 
             <YouTubeLinkModal
                 open={youtubeModalOpen}
