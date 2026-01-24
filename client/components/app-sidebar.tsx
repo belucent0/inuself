@@ -157,13 +157,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                 const Icon = item.icon
                                 const isActive =
                                     pathname === item.href || pathname?.startsWith(item.href + "/")
+                                const isAIMode = item.label === "AI 모드"
 
                                 return (
                                     <SidebarMenuItem key={item.href}>
                                         <SidebarMenuButton asChild isActive={isActive}>
                                             <Link href={item.href}>
-                                                <Icon />
-                                                <span>{item.label}</span>
+                                                <Icon className={isAIMode ? "text-indigo-500" : ""} />
+                                                <span className={isAIMode ? "font-bold bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 bg-clip-text text-transparent" : ""}>
+                                                    {item.label}
+                                                </span>
                                             </Link>
                                         </SidebarMenuButton>
                                     </SidebarMenuItem>
