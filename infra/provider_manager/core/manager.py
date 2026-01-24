@@ -185,6 +185,14 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
             estimated_ram=0.5,  # lfm2:2.6b 실측 ~0.3GB
             enabled=False,  # On-Demand: 요청 시에만 로드
         ),
+        "flm-llm-thinking": ProviderConfig(
+            name="flm-llm-thinking",
+            cmd=["flm", "serve", "lfm2.5-tk:1.2b", "--port", "11437"],
+            port=11437,
+            health="/v1/models",
+            estimated_ram=1.0,  # lfm2.5-tk:1.2b ~0.8GB
+            enabled=False,  # On-Demand: 요청 시에만 로드
+        ),
         "flm-ocr": ProviderConfig(
             name="flm-ocr",
             cmd=["flm", "serve", "qwen3vl-it:4b", "--port", "11436"],
@@ -254,7 +262,7 @@ def get_default_groups() -> List[ProviderGroup]:
     return [
         ProviderGroup(
             name="flm",
-            providers=[configs["flm-asr"], configs["flm-llm"], configs["flm-ocr"]],
+            providers=[configs["flm-asr"], configs["flm-llm"], configs["flm-llm-thinking"], configs["flm-ocr"]],
             order=1
         ),
         ProviderGroup(
