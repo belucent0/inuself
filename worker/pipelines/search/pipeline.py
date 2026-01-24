@@ -21,25 +21,13 @@ from .client import (
     get_searxng_client,
 )
 
+# backend/app/prompts 에서 공유 프롬프트 import (docker-compose에서 app 마운트됨)
+from app.prompts.search import (
+    SEARCH_SYSTEM_PROMPT as SEARCH_SUMMARY_SYSTEM_PROMPT,
+    SEARCH_USER_TEMPLATE as SEARCH_SUMMARY_USER_TEMPLATE,
+)
+
 logger = logging.getLogger(__name__)
-
-
-# RAG 프롬프트 템플릿
-SEARCH_SUMMARY_SYSTEM_PROMPT = """당신은 웹 검색 결과를 바탕으로 질문에 답변하는 AI 어시스턴트입니다.
-
-규칙:
-1. 검색 결과에 있는 정보만 사용하여 답변하세요.
-2. 답변에 출처를 반드시 인용하세요. 형식: [1], [2] 등
-3. 검색 결과에 없는 정보는 "검색 결과에서 찾을 수 없습니다"라고 명시하세요.
-4. 답변은 명확하고 구조화되어야 합니다.
-5. 한국어로 답변하세요."""
-
-SEARCH_SUMMARY_USER_TEMPLATE = """질문: {query}
-
-검색 결과:
-{context}
-
-위 검색 결과를 바탕으로 질문에 답변하세요. 반드시 출처를 [1], [2] 형식으로 인용하세요."""
 
 
 @dataclass

@@ -16,61 +16,14 @@ from worker.config import get_settings
 from .litellm_client import LiteLLMClientError, request_litellm_completion
 from .llamacpp_client import LlamaServerClientError, request_chat_completion
 
+# backend/app/prompts 에서 공유 프롬프트 import (docker-compose에서 app 마운트됨)
+from app.prompts.summary import (
+    SUMMARY_SYSTEM_PROMPT,
+    SUMMARY_PROMPT_TEMPLATE,
+    MERGE_PROMPT_TEMPLATE,
+)
+
 logger = logging.getLogger(__name__)
-
-
-# ============================================
-# 간소화된 프롬프트 (V6.6)
-# ============================================
-
-SUMMARY_SYSTEM_PROMPT = """당신은 전문 콘텐츠 요약 전문가입니다.
-- 모든 출력은 반드시 한글로 작성
-- JSON 형식으로만 응답
-- 지시사항이나 프롬프트는 절대 포함하지 않음"""
-
-SUMMARY_PROMPT_TEMPLATE = """다음 전사 내용을 분석하여 JSON 형식으로 요약하세요.
-
-## 출력 형식 (JSON)
-```json
-{{
-  "title": "핵심 주제를 반영한 간결한 제목 (30자 이내)",
-  "toc": [
-    "1. 첫 번째 주요 주제",
-    "2. 두 번째 주요 주제",
-    "3. 세 번째 주요 주제"
-  ],
-  "summary": "## 핵심 요약\\n- 가장 중요한 내용 1\\n- 가장 중요한 내용 2\\n- 가장 중요한 내용 3\\n\\n## 주요 내용\\n### 1. 첫 번째 주제\\n- 세부 내용\\n\\n### 2. 두 번째 주제\\n- 세부 내용",
-  "keywords": ["키워드1", "키워드2", "키워드3", "키워드4", "키워드5"]
-}}
-```
-
-## 작성 지침
-1. **title**: 콘텐츠의 핵심 주제를 반영한 한글 제목
-2. **toc**: 내용의 주요 섹션을 목차 형태로 3-5개 나열
-3. **summary**: 마크다운 형식의 요약 (핵심 요약 + 주요 내용)
-4. **keywords**: 핵심 키워드 5-10개
-
-## 전사 내용:
-{transcript}
-
-## 응답 (JSON만 출력):"""
-
-MERGE_PROMPT_TEMPLATE = """여러 부분으로 나뉜 요약을 통합하세요.
-
-## 부분별 요약:
-{summaries}
-
-## 출력 형식 (JSON)
-```json
-{{
-  "title": "통합된 핵심 제목",
-  "toc": ["1. 주제1", "2. 주제2", "3. 주제3"],
-  "summary": "## 핵심 요약\\n- 통합 요약 내용",
-  "keywords": ["키워드1", "키워드2", "키워드3"]
-}}
-```
-
-## 응답 (JSON만 출력):"""
 
 
 def _split_text_into_chunks(text: str, max_chars: int = 25000, overlap_chars: int = 1000) -> list[str]:

@@ -1,24 +1,25 @@
 """Deep Search API 엔드포인트.
 
-SearXNG 검색 + LiteLLM 요약을 동기적으로 처리합니다.
-Phase 1: Backend에서 직접 처리 (Worker 거치지 않음)
+SearXNG 검색 + LiteLLM 요약을 스트리밍으로 처리합니다.
+SSE(Server-Sent Events)를 사용하여 검색 진행 상황과 결과를 실시간으로 전송합니다.
 """
 import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, AsyncGenerator
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
 from ..core.config import get_settings
 from ..core.logging import logger
+from ..prompts.search import SEARCH_SYSTEM_PROMPT, SEARCH_USER_TEMPLATE
 
 router = APIRouter(prefix="/api", tags=["search"])
 
@@ -43,17 +44,37 @@ def get_litellm_api_key() -> str:
     return os.getenv("LITELLM_API_KEY", "")
 
 
-def get_litellm_model() -> str:
-    return os.getenv("LITELLM_MODEL", "qwen3-4b")
+def get_litellm_model(reasoning_mode: bool = False) -> str:
+    """사용할 LLM 모델명 조회 (Env Only)."""
+    env_key = "FLM_THINKING_MODEL" if reasoning_mode else "FLM_LLM_MODEL"
+    model = os.getenv(env_key)
+    if not model:
+        # 안전한 기본값보다는 명확한 에러를 발생시켜 설정 누락을 알림
+        logger.warning(f"[Config] {env_key} is missing in .env")
+        return "lfm2:2.6b" if not reasoning_mode else "lfm2.5-tk:1.2b"
+    return model
 
 
 @lru_cache(maxsize=1)
 def get_async_openai_client() -> AsyncOpenAI:
-    """LiteLLM용 AsyncOpenAI 클라이언트."""
+    """LiteLLM용 AsyncOpenAI 클라이언트.
+
+    timeout 설정:
+    - connect: 연결 수립 30초
+    - read: 각 청크 읽기 600초 (추론 모드의 긴 TTFT 대응)
+    """
+    from httpx import Timeout
+
+    timeout = Timeout(
+        connect=30.0,      # 연결 수립
+        read=600.0,        # 각 청크 읽기 (TTFT 포함) - 추론 모드 대응
+        write=30.0,        # 쓰기
+        pool=30.0,         # 풀 연결 대기
+    )
     return AsyncOpenAI(
         base_url=get_litellm_base_url(),
         api_key=get_litellm_api_key(),
-        timeout=120.0,
+        timeout=timeout,
     )
 
 
@@ -74,6 +95,7 @@ class SearchRequest(BaseModel):
     categories: str = "general"
     language: str = "ko-KR"
     use_cache: bool = True
+    reasoning_mode: bool = False
 
 
 class SearchSource(BaseModel):
@@ -85,45 +107,13 @@ class SearchSource(BaseModel):
     engine: str
 
 
-class SearchResponse(BaseModel):
-    """검색 응답."""
-    query: str
-    summary: str
-    sources: list[SearchSource]
-    search_count: int
-    citations_used: list[int]
-    cached: bool = False
-    error: Optional[str] = None
-
-
-# ============================================================
-# RAG Prompt
-# ============================================================
-
-SEARCH_SYSTEM_PROMPT = """당신은 웹 검색 결과를 바탕으로 질문에 답변하는 AI 어시스턴트입니다.
-
-규칙:
-1. 검색 결과에 있는 정보만 사용하여 답변하세요.
-2. 답변에 출처를 반드시 인용하세요. 형식: [1], [2] 등
-3. 검색 결과에 없는 정보는 "검색 결과에서 찾을 수 없습니다"라고 명시하세요.
-4. 답변은 명확하고 구조화되어야 합니다.
-5. 한국어로 답변하세요."""
-
-SEARCH_USER_TEMPLATE = """질문: {query}
-
-검색 결과:
-{context}
-
-위 검색 결과를 바탕으로 질문에 답변하세요. 반드시 출처를 [1], [2] 형식으로 인용하세요."""
-
-
 # ============================================================
 # Helper Functions
 # ============================================================
 
-def _generate_cache_key(query: str, categories: str, language: str) -> str:
+def _generate_cache_key(query: str, categories: str, language: str, model: str) -> str:
     """캐시 키 생성."""
-    content = f"{query}:{categories}:{language}"
+    content = f"{query}:{categories}:{language}:{model}:v2"
     hash_val = hashlib.md5(content.encode()).hexdigest()[:16]
     return f"{SEARCH_CACHE_PREFIX}{hash_val}"
 
@@ -143,13 +133,6 @@ def _format_search_context(results: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _extract_citations(text: str) -> list[int]:
-    """텍스트에서 Citation 번호 추출."""
-    pattern = r"\[(\d+)\]"
-    matches = re.findall(pattern, text)
-    return sorted(set(int(m) for m in matches))
-
-
 # ============================================================
 # SearXNG Client
 # ============================================================
@@ -162,6 +145,9 @@ async def search_searxng(
     language: str = "ko-KR",
 ) -> list[dict]:
     """SearXNG 검색 수행."""
+    # 런타임에 URL 가져오기 (환경변수 로딩 순서 문제 방지)
+    base_url = os.getenv("SEARXNG_URL", "http://searxng:8080")
+    
     params = {
         "q": query.strip(),
         "format": "json",
@@ -169,11 +155,11 @@ async def search_searxng(
         "language": language,
     }
 
-    url = f"{SEARXNG_BASE_URL}/search"
+    url = f"{base_url}/search"
 
     logger.info(
-        "[Search] SearXNG request: query=%r, categories=%s",
-        query[:50], categories
+        "[Search] SearXNG request: url=%s, query=%r, categories=%s",
+        url, query[:50], categories
     )
 
     async with httpx.AsyncClient(timeout=SEARXNG_TIMEOUT) as client:
@@ -203,11 +189,14 @@ async def search_searxng(
 
 
 # ============================================================
-# LLM Summarization
+# LLM Streaming Logic
 # ============================================================
 
-async def summarize_with_llm(query: str, search_results: list[dict]) -> str:
-    """LiteLLM으로 검색 결과 요약."""
+async def stream_llm_summary(query: str, search_results: list[dict], reasoning_mode: bool = False) -> AsyncGenerator[str, None]:
+    """LiteLLM으로 검색 결과 요약 (스트리밍)."""
+    import time
+    start_time = time.time()
+
     context = _format_search_context(search_results)
 
     user_message = SEARCH_USER_TEMPLATE.format(
@@ -221,24 +210,34 @@ async def summarize_with_llm(query: str, search_results: list[dict]) -> str:
     ]
 
     client = get_async_openai_client()
-    model = get_litellm_model()
+    model = get_litellm_model(reasoning_mode)
 
-    logger.info("[Search] LLM request: model=%s, context_length=%d", model, len(context))
+    # 추론 모드는 <think> 과정이 길어서 더 많은 토큰 필요
+    max_tokens = 8192 if reasoning_mode else 2048
 
-    response = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.3,
-        max_tokens=2048,
-    )
+    logger.info("[Search] LLM streaming request: model=%s (reasoning=%s, max_tokens=%d)", model, reasoning_mode, max_tokens)
 
-    content = response.choices[0].message.content
-    if not content:
-        raise ValueError("LLM 응답이 비어있습니다")
+    try:
+        stream = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+    except Exception as e:
+        logger.error("[Search] LLM stream creation failed: %s", e)
+        raise
 
-    logger.info("[Search] LLM response: length=%d", len(content))
-
-    return content.strip()
+    first_token_received = False
+    async for chunk in stream:
+        content = chunk.choices[0].delta.content
+        if content:
+            if not first_token_received:
+                ttfb = time.time() - start_time
+                logger.info("[Search] First token received (TTFB: %.2fs, reasoning=%s)", ttfb, reasoning_mode)
+                first_token_received = True
+            yield content
 
 
 # ============================================================
@@ -249,17 +248,14 @@ def _detect_category(query: str, default: str = "general") -> str:
     """검색어에서 카테고리를 자동 감지합니다."""
     query_lower = query.lower()
 
-    # 동영상/유튜브 관련 키워드
     video_keywords = ["유튜브", "youtube", "영상", "동영상", "비디오", "video", "채널", "channel"]
     if any(kw in query_lower for kw in video_keywords):
         return "videos"
 
-    # 이미지 관련 키워드
     image_keywords = ["이미지", "사진", "그림", "image", "photo", "picture"]
     if any(kw in query_lower for kw in image_keywords):
         return "images"
 
-    # 뉴스 관련 키워드
     news_keywords = ["뉴스", "news", "기사", "속보", "breaking"]
     if any(kw in query_lower for kw in news_keywords):
         return "news"
@@ -267,117 +263,86 @@ def _detect_category(query: str, default: str = "general") -> str:
     return default
 
 
-@router.post("/search", response_model=SearchResponse)
+@router.post("/search")
 async def deep_search(request: SearchRequest):
-    """Deep Search API.
+    """Deep Search API (Streaming).
 
-    웹 검색 + LLM 요약을 수행하여 출처가 명시된 답변을 반환합니다.
+    SSE(Server-Sent Events) 프로토콜을 사용합니다:
+    - event: status -> 진행 상태 메시지
+    - event: sources -> 검색 결과 (JSON)
+    - event: token -> LLM 응답 토큰 (JSON String)
+    - event: done -> 완료 신호
     """
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="검색어가 비어있습니다")
 
-    # 카테고리 자동 감지 (요청에서 명시하지 않은 경우)
     categories = request.categories
     if categories == "general":
         categories = _detect_category(query, "general")
-        if categories != "general":
-            logger.info("[Search] Auto-detected category: %s", categories)
 
-    # 캐시 확인
-    cache_key = _generate_cache_key(query, categories, request.language)
-
-    if request.use_cache:
+    async def event_generator():
         try:
-            redis = await get_redis_client()
-            cached = await redis.get(cache_key)
-            if cached:
-                logger.info("[Search] Cache hit: query=%r", query[:30])
-                result = json.loads(cached)
-                result["cached"] = True
-                return SearchResponse(**result)
-        except Exception as e:
-            logger.warning("[Search] Cache read failed: %s", e)
-
-    logger.info("[Search] Starting: query=%r", query[:50])
-
-    try:
-        # 1. SearXNG 검색
-        search_results = await search_searxng(
-            query,
-            limit=request.max_results,
-            categories=categories,
-            language=request.language,
-        )
-
-        if not search_results:
-            return SearchResponse(
-                query=query,
-                summary="검색 결과가 없습니다. 다른 검색어를 시도해 보세요.",
-                sources=[],
-                search_count=0,
-                citations_used=[],
+            # 1. 검색 시작 알림
+            yield 'event: status\ndata: "웹 검색을 시작합니다..."\n\n'
+            
+            # 2. SearXNG 검색
+            search_results = await search_searxng(
+                query,
+                limit=request.max_results,
+                categories=categories,
+                language=request.language,
             )
 
-        # 2. LLM 요약
-        summary = await summarize_with_llm(query, search_results)
+            if not search_results:
+                yield 'event: status\ndata: "검색 결과가 없습니다."\n\n'
+                yield 'event: done\ndata: "[DONE]"\n\n'
+                return
 
-        # 3. Citation 추출
-        citations = _extract_citations(summary)
+            # 3. 소스 전송 (JSON)
+            sources_json = json.dumps(search_results, ensure_ascii=False)
+            yield f"event: sources\ndata: {sources_json}\n\n"
 
-        # 4. 결과 구성
-        result = {
-            "query": query,
-            "summary": summary,
-            "sources": search_results,
-            "search_count": len(search_results),
-            "citations_used": citations,
-            "cached": False,
-        }
+            # 4. 분석 시작 알림
+            yield f'event: status\ndata: "{len(search_results)}개의 문서를 분석하고 있습니다..."\n\n'
 
-        # 5. 캐시 저장
-        try:
-            redis = await get_redis_client()
-            await redis.setex(cache_key, SEARCH_CACHE_TTL, json.dumps(result, ensure_ascii=False))
-            logger.info("[Search] Cache stored: query=%r", query[:30])
+            # 5. LLM 스트리밍
+            async for token in stream_llm_summary(query, search_results, reasoning_mode=request.reasoning_mode):
+                # JSON으로 이스케이프하여 전송 (줄바꿈 등 안전 처리)
+                token_json = json.dumps(token, ensure_ascii=False)
+                yield f"event: token\ndata: {token_json}\n\n"
+
+            # 6. 완료
+            yield 'event: done\ndata: "[DONE]"\n\n'
+
         except Exception as e:
-            logger.warning("[Search] Cache write failed: %s", e)
+            logger.error(f"[Search] Streaming error: {e}")
+            error_msg = json.dumps(f"오류가 발생했습니다: {str(e)}", ensure_ascii=False)
+            yield f"event: error\ndata: {error_msg}\n\n"
 
-        logger.info(
-            "[Search] Completed: query=%r, sources=%d, citations=%s",
-            query[:30], len(search_results), citations
-        )
-
-        return SearchResponse(**result)
-
-    except httpx.TimeoutException as e:
-        logger.error("[Search] SearXNG timeout: %s", e)
-        raise HTTPException(status_code=504, detail="검색 요청 시간 초과")
-    except httpx.HTTPStatusError as e:
-        logger.error("[Search] SearXNG error: %s", e)
-        raise HTTPException(status_code=502, detail=f"검색 서비스 오류: {e.response.status_code}")
-    except Exception as e:
-        logger.error("[Search] Failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"검색 실패: {str(e)}")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Nginx 버퍼링 방지 (필수)
+        }
+    )
 
 
-@router.get("/search", response_model=SearchResponse)
+@router.get("/search")
 async def deep_search_get(
     q: str = Query(..., description="검색 쿼리"),
-    max_results: int = Query(10, ge=1, le=20, description="최대 결과 수"),
-    categories: str = Query("general", description="검색 카테고리"),
-    language: str = Query("ko-KR", description="검색 언어"),
-    use_cache: bool = Query(True, description="캐시 사용 여부"),
+    max_results: int = Query(10, ge=1, le=20),
+    categories: str = Query("general"),
+    language: str = Query("ko-KR"),
 ):
-    """Deep Search API (GET).
-
-    간단한 쿼리 스트링으로 검색할 수 있습니다.
-    """
+    """Deep Search API (GET Wrapper)."""
     request = SearchRequest(
         query=q,
         max_results=max_results,
         categories=categories,
         language=language,
-        use_cache=use_cache,
     )
     return await deep_search(request)
