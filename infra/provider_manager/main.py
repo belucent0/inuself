@@ -265,6 +265,47 @@ def _wait_for_port_available(port: int, timeout: float = 30.0) -> bool:
     return False
 
 
+def force_release_port(port: int):
+    """지정된 포트를 사용 중인 프로세스를 찾아 강제로 종료 (Self-Cleanup).
+
+    기존 Provider Manager 프로세스가 비정상 종료되어 포트를 점유하고 있을 때,
+    새 프로세스가 시작되기 전에 이를 정리하여 'Port in use' 에러를 방지함.
+    """
+    import psutil
+    current_pid = os.getpid()
+
+    try:
+        # 방법 1: psutil.net_connections() 사용 (더 신뢰성 있음)
+        for conn in psutil.net_connections(kind='inet'):
+            if conn.laddr.port == port and conn.status == 'LISTEN':
+                pid = conn.pid
+                if pid and pid != current_pid:
+                    try:
+                        proc = psutil.Process(pid)
+                        proc_name = proc.name().lower()
+                        # 안전장치: python/pythonw 프로세스만 종료
+                        if 'python' in proc_name:
+                            logger.warning(f"Port {port} is held by stale process {pid} ({proc_name}). Killing it...")
+                            # 먼저 자식 프로세스들 종료
+                            children = proc.children(recursive=True)
+                            for child in children:
+                                try:
+                                    child.kill()
+                                except psutil.NoSuchProcess:
+                                    pass
+                            # 부모 프로세스 종료
+                            proc.kill()
+                            proc.wait(timeout=5)
+                            logger.info(f"Stale process {pid} and {len(children)} children killed. Port {port} released.")
+                            time.sleep(1)  # 포트 해제 대기
+                            return True
+                    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                        logger.warning(f"Could not kill process {pid}: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to release port {port}: {e}")
+        return False
+
 async def run_combined(api_port: int = 9998):
     """API 서버 + Stream 처리 동시 실행."""
     import uvicorn
@@ -273,6 +314,9 @@ async def run_combined(api_port: int = 9998):
     import redis.asyncio as redis_async
 
     global provider_manager, stream_processor, idle_manager, _running_combined
+
+    # 포트 강제 정리 (좀비 프로세스 제거)
+    force_release_port(api_port)
 
     # 포트 사용 가능 여부 확인 (재시작 시 이전 프로세스 종료 대기)
     if not _wait_for_port_available(api_port):
@@ -301,6 +345,10 @@ async def run_combined(api_port: int = 9998):
     # Stream Processor 초기화 (프로바이더 공유, idle_manager 연동)
     stream_processor = StreamProcessor(provider_manager, idle_manager)
 
+    # Uvicorn 서버 설정
+    config = Config(app=app, host="0.0.0.0", port=api_port, log_level="info", loop="asyncio")
+    server = Server(config)
+
     # Signal handler
     def signal_handler(sig, frame):
         logger.info("Shutdown signal received...")
@@ -308,12 +356,34 @@ async def run_combined(api_port: int = 9998):
             idle_manager.stop()
         stream_processor.shutdown()
 
+        # 자식 프로세스(FLM, llama-server 등) 동기적 종료
+        if provider_manager:
+            logger.info("Stopping all provider processes...")
+            try:
+                # asyncio loop가 실행 중이면 run_until_complete 사용 불가
+                # 대신 동기적으로 프로세스 kill
+                for group in provider_manager.groups.values():
+                    for provider in group.providers:
+                        state = provider_manager.provider_states.get(provider.name)
+                        if state and state.process:
+                            try:
+                                state.process.terminate()
+                                state.process.wait(timeout=3)
+                            except Exception:
+                                try:
+                                    state.process.kill()
+                                except Exception:
+                                    pass
+                logger.info("All provider processes stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping providers: {e}")
+
+        # Uvicorn 서버 종료 신호
+        if server:
+            server.should_exit = True
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-
-    # Uvicorn 서버 설정
-    config = Config(app=app, host="0.0.0.0", port=api_port, log_level="info")
-    server = Server(config)
 
     # 병렬 실행
     api_task = asyncio.create_task(server.serve())
