@@ -111,6 +111,9 @@ services:
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
+      # FLM Model Configuration (Backend용 - 검색 요약)
+      - FLM_LLM_MODEL=${FLM_LLM_MODEL:-lfm2:2.6b}
+      - FLM_THINKING_MODEL=${FLM_THINKING_MODEL:-lfm2.5-tk:1.2b}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
@@ -229,6 +232,7 @@ services:
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
+      # Note: Worker는 FLM 모델 환경변수 사용 안 함 (Backend에서만 사용)
     depends_on:
       valkey:
         condition: service_healthy
@@ -308,9 +312,9 @@ services:
       valkey:
         condition: service_healthy
     restart: unless-stopped
-    # 외부 노출 불필요 - 내부망에서만 Worker가 접근
-    # ports:
-    #   - "8888:8080"
+    # 외부 노출 허용 (개발 환경: Host에서 접근 필요)
+    ports:
+      - "8888:8080"
 
 volumes:
   redis-data:

@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     # FLM NPU Server URLs
     flm_asr_url: str = "http://localhost:11434"
     flm_llm_url: str = "http://localhost:11435"
+    flm_llm_thinking_url: str = "http://localhost:11437"  # 추론 모델
     flm_ocr_url: str = "http://localhost:11436"
 
     # Server paths (from environment)

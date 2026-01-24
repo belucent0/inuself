@@ -16,7 +16,7 @@ import uuid
 import base64
 import asyncio
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, AsyncIterator
 import logging
 
 logger = logging.getLogger(__name__)
@@ -209,6 +209,7 @@ class GPUStreamClient:
         model: str = "qwen3-4b",
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        target_server: str = "auto",
         timeout: float = 300.0,
     ) -> dict:
         """LLM Completion 요청.
@@ -218,6 +219,7 @@ class GPUStreamClient:
             model: 모델 이름
             max_tokens: 최대 토큰 수
             temperature: 샘플링 온도
+            target_server: 타겟 서버 ("auto", "flm", "llama")
             timeout: 타임아웃 (초)
 
         Returns:
@@ -232,6 +234,7 @@ class GPUStreamClient:
             "model": model,
             "max_tokens": str(max_tokens),
             "temperature": str(temperature),
+            "target_server": target_server,
             "timestamp": str(time.time()),
         }
 
@@ -390,6 +393,88 @@ class AsyncGPUStreamClient:
 
         raise TimeoutError(f"No response received within {timeout}s for request_id={request_id}")
 
+    async def _wait_for_stream_response(self, request_id: str, timeout: float) -> AsyncIterator[dict]:
+        """Response Stream에서 결과 스트리밍 대기 (비동기).
+
+        Activity-based timeout: 청크가 들어올 때마다 타이머 리셋.
+        추론 모드에서 <think> 과정이 오래 걸려도 타임아웃 방지.
+        """
+        redis_client = await self.get_redis()
+        last_activity = time.time()  # 마지막 활동 시간 (activity-based timeout)
+        last_id = "0"
+
+        while time.time() - last_activity < timeout:
+            try:
+                # XREAD로 새 메시지 읽기 (1초 블로킹)
+                messages = await redis_client.xread(
+                    {RESPONSE_STREAM: last_id},
+                    count=50,
+                    block=1000,
+                )
+
+                if messages:
+                    for stream_name, stream_messages in messages:
+                        for message_id, message_data in stream_messages:
+                            last_id = message_id
+
+                            # 우리 request_id인지 확인
+                            if message_data.get("request_id") == request_id:
+                                last_activity = time.time()  # 활동 타이머 리셋
+
+                                if "error" in message_data:
+                                    raise Exception(message_data["error"])
+
+                                if "chunk" in message_data:
+                                    yield {"chunk": message_data["chunk"]}
+
+                                if "result" in message_data:
+                                    yield {"result": json.loads(message_data["result"])}
+                                    return
+
+                                if "finish_reason" in message_data:
+                                    return
+
+            except redis_async.ConnectionError as e:
+                logger.warning(f"Redis connection error, retrying: {e}")
+                await asyncio.sleep(1)
+                continue
+
+    async def request_llm_completion_stream(
+        self,
+        messages: list[dict],
+        model: str = "qwen3-4b",
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        target_server: str = "auto",
+        timeout: float = 300.0,
+    ) -> AsyncIterator[dict]:
+        """LLM Completion 요청 (스트리밍)."""
+        redis_client = await self.get_redis()
+        request_id = self._generate_request_id()
+
+        request_data = {
+            "request_id": request_id,
+            "type": "llm_completion",
+            "messages": json.dumps(messages),
+            "model": model,
+            "max_tokens": str(max_tokens),
+            "temperature": str(temperature),
+            "target_server": target_server,
+            "timestamp": str(time.time()),
+        }
+
+        # Trace context 주입 (분산 추적)
+        self._inject_trace_context(request_data)
+
+        logger.info(f"[GPUStream] Sending LLM completion stream request: request_id={request_id}, model={model}")
+
+        await redis_client.xadd(REQUEST_STREAM, request_data)
+        
+        async for chunk in self._wait_for_stream_response(request_id, timeout):
+            yield chunk
+            
+        logger.info(f"[GPUStream] LLM stream completion completed: request_id={request_id}")
+
     async def request_diarization(
         self,
         audio_file_path: Path,
@@ -469,6 +554,7 @@ class AsyncGPUStreamClient:
         model: str = "qwen3-4b",
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        target_server: str = "auto",
         timeout: float = 300.0,
     ) -> dict:
         """LLM Completion 요청 (비동기)."""
@@ -482,6 +568,7 @@ class AsyncGPUStreamClient:
             "model": model,
             "max_tokens": str(max_tokens),
             "temperature": str(temperature),
+            "target_server": target_server,
             "timestamp": str(time.time()),
         }
 

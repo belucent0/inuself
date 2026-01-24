@@ -74,6 +74,7 @@ class StreamProcessor:
         # NPU 프로바이더
         "flm-asr": "npu",
         "flm-llm": "npu",
+        "flm-llm-thinking": "npu",
         "flm-ocr": "npu",
     }
 
@@ -169,6 +170,18 @@ class StreamProcessor:
         }
         await self.redis.xadd(settings.response_stream, response)
         logger.info(f"Published response for request_id={request_id}")
+
+    async def publish_chunk(self, request_id: str, chunk: str, finish_reason: Optional[str] = None):
+        """스트리밍 청크를 Response Stream에 발행."""
+        response = {
+            "request_id": request_id,
+            "chunk": chunk,
+            "timestamp": time.time(),
+        }
+        if finish_reason:
+            response["finish_reason"] = finish_reason
+            
+        await self.redis.xadd(settings.response_stream, response)
 
     async def publish_error(self, request_id: str, error: str):
         """에러를 Response Stream에 발행."""
@@ -349,15 +362,17 @@ class StreamProcessor:
         elif task_type == "llm_completion":
             model = data.get("model", "")
             target_server = data.get("target_server", "auto")
+            # thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk 등)
+            is_thinking_model = model and "-tk" in model
             if target_server in ("flm", "npu"):
-                return "flm-llm"
+                return "flm-llm-thinking" if is_thinking_model else "flm-llm"
             elif target_server in ("llama", "gpu"):
                 return "llama-server"
             elif "flm" in model or "npu" in model.lower():
-                return "flm-llm"
+                return "flm-llm-thinking" if is_thinking_model else "flm-llm"
             # handle_llm_completion()과 동일한 로직: qwen, gemma 등 + ":" → NPU
             elif any(p in model.lower() for p in ["qwen", "gemma", "deepseek", "phi", "lfm"]) and ":" in model:
-                return "flm-llm"
+                return "flm-llm-thinking" if is_thinking_model else "flm-llm"
             return "llama-server"
 
         elif task_type == "ocr":
@@ -544,7 +559,7 @@ class StreamProcessor:
                 await self.publish_error(request_id, f"Transcription failed: {str(e)}")
 
     async def handle_llm_completion(self, request_id: str, data: dict):
-        """LLM Completion 작업 처리."""
+        """LLM Completion 작업 처리 (스트리밍 지원)."""
         messages_raw = data.get("messages", "[]")
         messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
         model = data.get("model", "qwen3-4b")
@@ -566,10 +581,18 @@ class StreamProcessor:
             use_npu = True
 
         # On-Demand: 필요한 서버가 준비될 때까지 대기
+        # thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk 등)
+        is_thinking_model = model and "-tk" in model
+
         if use_npu:
-            if not await self._ensure_provider_ready("flm-llm"):
-                await self.publish_error(request_id, "FLM LLM server failed to start")
-                return
+            if is_thinking_model:
+                if not await self._ensure_provider_ready("flm-llm-thinking"):
+                    await self.publish_error(request_id, "FLM LLM Thinking server failed to start")
+                    return
+            else:
+                if not await self._ensure_provider_ready("flm-llm"):
+                    await self.publish_error(request_id, "FLM LLM server failed to start")
+                    return
         else:
             if not await self._ensure_provider_ready("llama-server"):
                 await self.publish_error(request_id, "Llama server failed to start")
@@ -577,10 +600,17 @@ class StreamProcessor:
 
         try:
             if use_npu:
-                logger.info(f"[{request_id}] Using FLM LLM server (NPU)...")
-                url = f"{settings.flm_llm_url}/v1/chat/completions"
-                actual_model = "lfm2:2.6b"
-                provider_name = "flm-llm"
+                if is_thinking_model:
+                    logger.info(f"[{request_id}] Using FLM LLM Thinking server (NPU, model={model})...")
+                    url = f"{settings.flm_llm_thinking_url}/v1/chat/completions"
+                    actual_model = model
+                    provider_name = "flm-llm-thinking"
+                else:
+                    logger.info(f"[{request_id}] Using FLM LLM server (NPU)...")
+                    url = f"{settings.flm_llm_url}/v1/chat/completions"
+                    # Remove hardcoded model name, use requested model or default
+                    actual_model = model if model else "lfm2.5-it:1.2b"
+                    provider_name = "flm-llm"
             else:
                 logger.info(f"[{request_id}] Using llama-server (GPU)...")
                 url = f"{settings.llama_server_url}/v1/chat/completions"
@@ -592,24 +622,96 @@ class StreamProcessor:
                 "messages": messages,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
-                "stream": False,
+                "stream": True,  # 스트리밍 활성화
             }
 
             # HTTP 요청 span
+            full_content = ""
+            completion_tokens = 0
+            
             with trace_http_request(provider_name, url, model=actual_model, device="npu" if use_npu else "gpu") as span:
-                response = await self.http_client.post(url, json=payload)
-                response.raise_for_status()
-                result = response.json()
+                # 스트리밍 요청 (Read Timeout 무제한)
+                async with self.http_client.stream("POST", url, json=payload, timeout=None) as response:
+                    response.raise_for_status()
+                    
+                    if span:
+                        span.set_attribute("http.status_code", response.status_code)
 
-                if span:
-                    span.set_attribute("http.status_code", response.status_code)
-                    # 토큰 사용량 기록 (있는 경우)
-                    usage = result.get("usage", {})
-                    if usage:
-                        span.set_attribute("llm.prompt_tokens", usage.get("prompt_tokens", 0))
-                        span.set_attribute("llm.completion_tokens", usage.get("completion_tokens", 0))
+                    # SSE 파싱 및 청크 발행
+                    async for line in response.aiter_lines():
+                        if not line or not line.strip(): 
+                            continue
+                        
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str == "[DONE]":
+                                break
 
-            logger.info(f"[{request_id}] LLM completion completed")
+                            try:
+                                chunk_json = json.loads(data_str)
+                                choices = chunk_json.get("choices", [])
+                                if not choices:
+                                    continue
+
+                                delta = choices[0].get("delta") or {}
+                                if not isinstance(delta, dict):
+                                    delta = {}
+
+                                # FLM 추론 모델: reasoning_content (추론 과정) + content (최종 답변)
+                                reasoning_content = str(delta.get("reasoning_content") or "")
+                                content = str(delta.get("content") or "")
+
+                                # 추론 과정이 있으면 <think> 태그로 감싸서 전송
+                                if reasoning_content:
+                                    # 추론 시작 시 <think> 태그 추가
+                                    if full_content is None:
+                                        full_content = ""
+                                    if not full_content.startswith("<think>"):
+                                        full_content = "<think>"
+                                        await self.publish_chunk(request_id, "<think>")
+                                    full_content += reasoning_content
+                                    completion_tokens += 1
+                                    await self.publish_chunk(request_id, reasoning_content)
+
+                                # 최종 답변이 있으면 </think> 닫고 전송
+                                if content:
+                                    if full_content is None:
+                                        full_content = ""
+                                    # 추론 과정이 있었다면 </think> 닫기
+                                    if full_content.startswith("<think>") and "</think>" not in full_content:
+                                        full_content += "</think>\n\n"
+                                        await self.publish_chunk(request_id, "</think>\n\n")
+
+                                    # NPU (FLM) 서버가 Delta 대신 Full Text를 보내는 경우 처리 (안전하게)
+                                    try:
+                                        clean_content = full_content.replace("<think>", "").replace("</think>", "").strip()
+                                        if use_npu and content and clean_content and content.startswith(clean_content):
+                                            content = content[len(clean_content):]
+                                    except Exception:
+                                        pass
+
+                                    if content:
+                                        full_content += content
+                                        completion_tokens += 1
+                                        await self.publish_chunk(request_id, content)
+                                    
+                            except json.JSONDecodeError:
+                                continue
+                            except Exception as e:
+                                logger.warning(f"Error parsing chunk: {e}")
+
+            logger.info(f"[{request_id}] LLM completion completed ({len(full_content)} chars)")
+
+            # 최종 결과 발행 (호환성 및 완료 신호)
+            result = {
+                "choices": [{
+                    "message": {"content": full_content},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "completion_tokens": completion_tokens
+                }
+            }
 
             # 응답 발행 span
             with trace_response_publish(request_id, success=True):
@@ -619,8 +721,23 @@ class StreamProcessor:
             with trace_response_publish(request_id, success=False):
                 await self.publish_error(request_id, f"LLM completion timeout")
         except httpx.HTTPStatusError as e:
+            error_detail = ""
+            if e.response.status_code == 400:
+                # 400 에러 시 사용 가능한 모델 목록 조회 시도
+                try:
+                    # url: .../v1/chat/completions -> base: .../v1/models
+                    base_url = url.split("/v1/")[0]
+                    models_resp = await self.http_client.get(f"{base_url}/v1/models", timeout=5.0)
+                    if models_resp.status_code == 200:
+                        models_data = models_resp.json()
+                        available_models = [m.get('id') for m in models_data.get('data', [])]
+                        error_detail = f" (Available models: {', '.join(available_models)})"
+                        logger.error(f"[{request_id}] Invalid model requested. Available: {available_models}")
+                except Exception as debug_err:
+                    logger.warning(f"Failed to debug models: {debug_err}")
+
             with trace_response_publish(request_id, success=False):
-                await self.publish_error(request_id, f"LLM HTTP error: {e.response.status_code}")
+                await self.publish_error(request_id, f"LLM HTTP error: {e.response.status_code} - {e.response.text}{error_detail}")
         except Exception as e:
             with trace_response_publish(request_id, success=False):
                 await self.publish_error(request_id, f"LLM completion failed: {str(e)}")
@@ -722,6 +839,7 @@ class StreamProcessor:
             "llama-ocr": f"{settings.llama_ocr_server_url}/health",
             "flm-asr": f"{settings.flm_asr_url}/v1/models",
             "flm-llm": f"{settings.flm_llm_url}/v1/models",
+            "flm-llm-thinking": f"{settings.flm_llm_thinking_url}/v1/models",
             "flm-ocr": f"{settings.flm_ocr_url}/v1/models",
         }
 
@@ -768,6 +886,7 @@ class StreamProcessor:
             "llama-ocr-server": "llama-ocr-server",
             "flm-asr": "flm-asr",
             "flm-llm": "flm-llm",
+            "flm-llm-thinking": "flm-llm-thinking",
             "flm-ocr": "flm-ocr",
         }
         provider_name = provider_name_map.get(provider, provider)
