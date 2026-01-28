@@ -362,17 +362,34 @@ class StreamProcessor:
         elif task_type == "llm_completion":
             model = data.get("model", "")
             target_server = data.get("target_server", "auto")
-            # thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk 등)
+
+            # Thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk, gpt-oss-sg-tk 등)
             is_thinking_model = model and "-tk" in model
+
+            # 명시적 target_server 지정 시 우선
             if target_server in ("flm", "npu"):
                 return "flm-llm-thinking" if is_thinking_model else "flm-llm"
             elif target_server in ("llama", "gpu"):
                 return "llama-server"
-            elif "flm" in model or "npu" in model.lower():
+
+            # 패턴 기반 NPU 모델 감지 (확장성: 새 모델 추가 시 접두사만 추가)
+            # FLM에서 지원하는 모델 패턴: lfm, qwen, gpt-oss, exaone, gemma, deepseek, phi 등
+            NPU_MODEL_PREFIXES = (
+                "lfm", "qwen", "gpt-oss", "exaone", "gemma",
+                "deepseek", "phi", "llama-flm", "mistral-flm"
+            )
+
+            model_lower = model.lower()
+
+            # ":" 포함 (버전 지정) + NPU 접두사 매칭 → NPU로 라우팅
+            if ":" in model and any(model_lower.startswith(p) for p in NPU_MODEL_PREFIXES):
                 return "flm-llm-thinking" if is_thinking_model else "flm-llm"
-            # handle_llm_completion()과 동일한 로직: qwen, gemma 등 + ":" → NPU
-            elif any(p in model.lower() for p in ["qwen", "gemma", "deepseek", "phi", "lfm"]) and ":" in model:
+
+            # 명시적 flm/npu 키워드
+            if "flm" in model_lower or "npu" in model_lower:
                 return "flm-llm-thinking" if is_thinking_model else "flm-llm"
+
+            # 기본값: GPU llama-server
             return "llama-server"
 
         elif task_type == "ocr":
