@@ -1,7 +1,7 @@
 """OCR (문서 인식) 처리 프로세서.
 
-이 모듈은 이미지에서 텍스트를 추출합니다.
-이미지 전처리(PDF → 이미지 변환)는 백엔드에서 수행합니다.
+이 모듈은 파일에서 텍스트를 추출합니다.
+V8.1+: Worker에서 전처리(PDF → 이미지 변환) 수행
 결과는 S3에 저장하고 Redis Stream으로 완료를 알립니다.
 백엔드 DB에 직접 접근하지 않습니다.
 """
@@ -22,6 +22,7 @@ from worker.utils.result_publisher import (
     publish_ocr_failed,
 )
 from worker.pipelines.ocr.vision import OcrVisionProcessor
+from worker.pipelines.ocr.preprocessor import OcrPreprocessor
 
 settings = get_settings()
 
@@ -31,32 +32,38 @@ OcrMode = Literal["document", "portray"]
 def process_ocr_job(
     *,
     file_id: int,
-    image_s3_keys: list[str],
+    file_s3_key: str | None = None,
+    image_s3_keys: list[str] | None = None,
     ocr_mode: OcrMode = "document",
     ocr_accuracy_mode: str = "speed",
 ) -> None:
     """Celery 워커가 호출하는 OCR 작업 진입점.
-    
+
     Args:
         file_id: 파일 ID
-        image_s3_keys: 이미지 S3 경로 목록 (백엔드에서 전처리된 이미지들)
+        file_s3_key: 원본 파일 S3 경로 (새 방식, Worker 전처리)
+        image_s3_keys: 이미지 S3 경로 목록 (기존 방식, Backend 전처리)
         ocr_mode: OCR 모드 ("document" 또는 "portray")
         ocr_accuracy_mode: OCR 정확도 모드 ("speed" 또는 "accuracy")
     """
     logger.info("[OCR] ========================================")
     logger.info(f"[OCR] OCR job started: file_id={file_id}")
-    logger.info(f"[OCR] Image count: {len(image_s3_keys)}")
-    logger.info(f"[OCR] Mode: {ocr_mode}")
+    if file_s3_key:
+        logger.info(f"[OCR] Mode: Worker preprocessing (file_s3_key={file_s3_key})")
+    elif image_s3_keys:
+        logger.info(f"[OCR] Mode: Backend preprocessing (image count={len(image_s3_keys)})")
+    logger.info(f"[OCR] OCR mode: {ocr_mode}")
     logger.info(f"[OCR] Accuracy mode: {ocr_accuracy_mode}")
     logger.info("[OCR] ========================================")
-    
+
     # 이벤트 루프 설정
     loop = setup_worker_event_loop()
-    
+
     try:
         loop.run_until_complete(
             _process_job(
                 file_id=file_id,
+                file_s3_key=file_s3_key,
                 image_s3_keys=image_s3_keys,
                 ocr_mode=ocr_mode,
                 ocr_accuracy_mode=ocr_accuracy_mode,
@@ -73,16 +80,25 @@ def process_ocr_job(
 async def _process_job(
     *,
     file_id: int,
-    image_s3_keys: list[str],
+    file_s3_key: str | None = None,
+    image_s3_keys: list[str] | None = None,
     ocr_mode: OcrMode = "document",
     ocr_accuracy_mode: str = "speed",
 ) -> None:
     """OCR 작업 처리 함수."""
-    logger.info(f"[OCR] [1/4] Starting OCR job: file_id={file_id}, images={len(image_s3_keys)}")
-    logger.info(
-        "[OCR] Received image S3 keys: file_id=%s, keys=%s, endpoint=%s, bucket=%s",
-        file_id, image_s3_keys, settings.s3_endpoint, settings.s3_bucket
-    )
+
+    # 파라미터 검증
+    if not file_s3_key and not image_s3_keys:
+        raise ValueError("Either file_s3_key or image_s3_keys must be provided")
+
+    if file_s3_key:
+        logger.info(f"[OCR] [1/5] Starting OCR job (Worker preprocessing): file_id={file_id}, file_s3_key={file_s3_key}")
+    else:
+        logger.info(f"[OCR] [1/4] Starting OCR job (Backend preprocessing): file_id={file_id}, images={len(image_s3_keys)}")
+        logger.info(
+            "[OCR] Received image S3 keys: file_id=%s, keys=%s, endpoint=%s, bucket=%s",
+            file_id, image_s3_keys, settings.s3_endpoint, settings.s3_bucket
+        )
 
     # OCR provider 결정 (리소스 획득 전에 필요)
     if ocr_accuracy_mode == "speed":
@@ -104,45 +120,101 @@ async def _process_job(
         publish_ocr_started(file_id)
         logger.info(f"[OCR] Resource acquired, published 'started' event for file_id={file_id}")
 
-    # 이미지 다운로드 (리소스 획득 전에 미리 다운로드 - S3 다운로드는 리소스와 무관)
-    logger.info("[OCR] [2/4] Downloading images from S3...")
-
     images: list[Image.Image] = []
     temp_dir = settings.temp_dir / f"ocr_{file_id}_{uuid4().hex[:8]}"
     temp_dir.mkdir(parents=True, exist_ok=True)
+    is_text_file = False
+    text_content = None
 
     try:
-        for idx, s3_key in enumerate(image_s3_keys):
-            temp_path = temp_dir / f"page_{idx + 1}.jpg"
-            try:
-                logger.debug(
-                    "[OCR] Download attempt: %d/%d - key=%s",
-                    idx + 1, len(image_s3_keys), s3_key
-                )
-                download_file(s3_key, destination=temp_path)
+        # 새 방식: 원본 파일 처리 (Worker 전처리)
+        if file_s3_key:
+            logger.info("[OCR] [2/5] Downloading original file from S3...")
 
-                if not temp_path.exists():
-                    raise FileNotFoundError(
-                        f"File does not exist after download: {temp_path}"
+            # 1. 원본 파일 다운로드
+            file_suffix = Path(file_s3_key).suffix
+            original_file_path = temp_dir / f"original{file_suffix}"
+            download_file(file_s3_key, destination=original_file_path)
+            logger.info(f"[OCR] Original file downloaded: {original_file_path}")
+
+            # 2. 전처리: 파일 → 이미지 변환
+            logger.info("[OCR] [3/5] Converting file to images...")
+            preprocessor = OcrPreprocessor()
+            prep_result = preprocessor.convert_to_images(original_file_path, file_id)
+
+            is_text_file = prep_result.get("is_text_file", False)
+            text_content = prep_result.get("text_content")
+
+            if is_text_file:
+                logger.info("[OCR] Text file detected, OCR not required")
+            else:
+                images = prep_result["images"]
+                logger.info(f"[OCR] [4/5] Converted to {len(images)} images, acquiring OCR resource...")
+
+        # 기존 방식: 이미지 다운로드 (Backend 전처리)
+        else:
+            logger.info("[OCR] [2/4] Downloading images from S3...")
+
+            for idx, s3_key in enumerate(image_s3_keys):
+                temp_path = temp_dir / f"page_{idx + 1}.jpg"
+                try:
+                    logger.debug(
+                        "[OCR] Download attempt: %d/%d - key=%s",
+                        idx + 1, len(image_s3_keys), s3_key
                     )
+                    download_file(s3_key, destination=temp_path)
 
-                image = Image.open(temp_path)
-                images.append(image)
-                logger.debug(
-                    "[OCR] Image download completed: %d/%d - key=%s, size=%s",
-                    idx + 1, len(image_s3_keys), s3_key, image.size
-                )
-            except FileNotFoundError as fnf_err:
-                logger.error(
-                    "[OCR] File download failed: %d/%d - key=%s, error=%s",
-                    idx + 1, len(image_s3_keys), s3_key, fnf_err
-                )
-                raise FileNotFoundError(
-                    f"Image file not found: {s3_key} "
-                    f"(file_id={file_id}, page={idx + 1}/{len(image_s3_keys)})"
-                ) from fnf_err
+                    if not temp_path.exists():
+                        raise FileNotFoundError(
+                            f"File does not exist after download: {temp_path}"
+                        )
 
-        logger.info(f"[OCR] [3/4] Downloaded {len(images)} images, acquiring OCR resource...")
+                    image = Image.open(temp_path)
+                    images.append(image)
+                    logger.debug(
+                        "[OCR] Image download completed: %d/%d - key=%s, size=%s",
+                        idx + 1, len(image_s3_keys), s3_key, image.size
+                    )
+                except FileNotFoundError as fnf_err:
+                    logger.error(
+                        "[OCR] File download failed: %d/%d - key=%s, error=%s",
+                        idx + 1, len(image_s3_keys), s3_key, fnf_err
+                    )
+                    raise FileNotFoundError(
+                        f"Image file not found: {s3_key} "
+                        f"(file_id={file_id}, page={idx + 1}/{len(image_s3_keys)})"
+                    ) from fnf_err
+
+            logger.info(f"[OCR] [3/4] Downloaded {len(images)} images, acquiring OCR resource...")
+
+        # 텍스트 파일은 OCR 불필요
+        if is_text_file and text_content is not None:
+            logger.info(f"[OCR] [5/5] Text file processing completed: {len(text_content)} chars")
+
+            # 결과 저장
+            result_data = {
+                "file_id": file_id,
+                "ocr_text": text_content,
+                "page_count": 1,
+                "ocr_metadata": {"file_type": ".txt", "direct_read": True},
+            }
+
+            result_s3_key = f"results/ocr/{file_id}/{uuid4().hex}.json"
+            upload_json(result_data, key=result_s3_key)
+
+            logger.info(f"[OCR] Results saved to S3: {result_s3_key}")
+
+            # Redis Stream: 완료 알림
+            publish_ocr_started(file_id)
+            publish_ocr_completed(
+                file_id,
+                result_s3_key=result_s3_key,
+                page_count=1,
+                text_length=len(text_content),
+            )
+
+            logger.info("[OCR] OK Text file processing completed")
+            return
 
         # OCR 처리 (process_images 내에서 리소스 획득 → on_resource_acquired 호출 → OCR 수행)
         result = ocr_processor.process_images(
@@ -150,8 +222,9 @@ async def _process_job(
             ocr_mode=ocr_mode,
             on_resource_acquired=on_resource_acquired,
         )
-        
-        logger.info(f"[OCR] [4/4] OCR completed: {len(result['ocr_text'])} chars extracted")
+
+        step_num = "[5/5]" if file_s3_key else "[4/4]"
+        logger.info(f"[OCR] {step_num} OCR completed: {len(result['ocr_text'])} chars extracted")
         
     except Exception as exc:
         logger.error(
