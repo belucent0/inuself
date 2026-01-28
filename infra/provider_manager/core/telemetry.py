@@ -20,7 +20,7 @@ try:
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider, SpanProcessor
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource, SERVICE_NAME
     from opentelemetry.trace import Status, StatusCode, Span
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -28,7 +28,7 @@ try:
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
-    logger.warning("[Telemetry] OpenTelemetry not available. Install: pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp")
+    logger.warning("[Telemetry] OpenTelemetry not available. Install: pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http")
 
 
 # ============================================
@@ -116,10 +116,10 @@ def setup_telemetry(service_name: str = None) -> None:
         # TracerProvider 설정
         _tracer_provider = TracerProvider(resource=resource)
 
-        # OTLP Exporter 설정 (gRPC)
+        # OTLP Exporter 설정 (HTTP - /v1/traces 경로 필요)
+        traces_endpoint = f"{endpoint.rstrip('/')}/v1/traces"
         exporter = OTLPSpanExporter(
-            endpoint=endpoint,
-            insecure=True,  # 로컬 통신이므로 TLS 불필요
+            endpoint=traces_endpoint,
         )
 
         # FilteringSpanProcessor로 노이즈 제거

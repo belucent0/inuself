@@ -22,7 +22,11 @@ ENV PATH="${DENO_INSTALL}/bin:${PATH}"
 RUN pip install --no-cache-dir poetry==1.7.1
 
 # Poetry 설정 (가상환경을 만들지 않음)
-RUN poetry config virtualenvs.create false
+RUN poetry config virtualenvs.create false && \
+    poetry config installer.max-workers 10
+
+# 네트워크 타임아웃 환경변수 설정 (300초)
+ENV POETRY_REQUESTS_TIMEOUT=300
 
 # 의존성 파일 복사 및 설치 (API 서버용 - 워커 전용 패키지 제외)
 # API 서버는 기본 의존성만 설치 (torch, pyannote.audio, docling 제외)

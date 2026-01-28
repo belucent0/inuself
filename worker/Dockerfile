@@ -2,17 +2,21 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# 시스템 의존성 설치 (ffmpeg 필수)
+# 시스템 의존성 설치 (ffmpeg만 필요)
+# ffmpeg: 오디오 변환 (WAV), duration 추출
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Poetry 설치
 RUN pip install --no-cache-dir poetry
 
 # Poetry 설정 (가상환경 생성 X)
-RUN poetry config virtualenvs.create false
+RUN poetry config virtualenvs.create false && \
+    poetry config installer.max-workers 10
+
+# 네트워크 타임아웃 환경변수 설정 (300초)
+ENV POETRY_REQUESTS_TIMEOUT=300
 
 # 의존성 설치
 COPY worker/pyproject.toml worker/poetry.lock* ./

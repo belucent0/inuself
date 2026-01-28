@@ -1,11 +1,9 @@
 """Task Queue 추상화 레이어 - Celery를 사용."""
-import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 from ..core.config import get_settings
+from ..core.logging import logger
 from ..core.telemetry import inject_trace_context, get_trace_id
-
-logger = logging.getLogger(__name__)
 
 
 class TaskQueueAdapter(ABC):
@@ -41,15 +39,17 @@ class TaskQueueAdapter(ABC):
     def enqueue_ocr_job(
         self,
         file_id: int,
-        image_s3_keys: list[str],
+        file_s3_key: str | None = None,
+        image_s3_keys: list[str] | None = None,
         ocr_mode: str = "document",
         ocr_accuracy_mode: str = "speed",
     ) -> str:
         """OCR 작업을 큐에 등록하고 작업 ID를 반환.
-        
+
         Args:
             file_id: 파일 ID
-            image_s3_keys: 이미지 S3 경로 목록 (백엔드에서 전처리된 이미지들)
+            file_s3_key: 원본 파일 S3 경로 (새 방식, Worker 전처리)
+            image_s3_keys: 이미지 S3 경로 목록 (기존 방식, Backend 전처리)
             ocr_mode: OCR 모드 ("document" 또는 "portray")
             ocr_accuracy_mode: OCR 정확도 모드 ("speed" 또는 "accuracy")
         """
@@ -88,8 +88,16 @@ class CeleryAdapter(TaskQueueAdapter):
     ) -> str:
         # Trace context 주입 (분산 추적)
         headers = {}
+
+        # 디버그: inject 전 현재 trace_id
+        trace_id_before = get_trace_id()
+        logger.info(f"[TaskQueue] ASR trace_id BEFORE inject: {trace_id_before}")
+
         inject_trace_context(headers)
         trace_id = get_trace_id()
+
+        # 디버그: inject 후 headers 내용
+        logger.info(f"[TaskQueue] ASR headers AFTER inject: {headers}, trace_id={trace_id}")
 
         # send_task로 새 worker의 태스크 이름 직접 호출
         result = self.celery.send_task(
@@ -136,7 +144,8 @@ class CeleryAdapter(TaskQueueAdapter):
     def enqueue_ocr_job(
         self,
         file_id: int,
-        image_s3_keys: list[str],
+        file_s3_key: str | None = None,
+        image_s3_keys: list[str] | None = None,
         ocr_mode: str = "document",
         ocr_accuracy_mode: str = "speed",
     ) -> str:
@@ -145,10 +154,14 @@ class CeleryAdapter(TaskQueueAdapter):
         inject_trace_context(headers)
         trace_id = get_trace_id()
 
+        # 디버그: traceparent 주입 확인
+        logger.info(f"[TaskQueue] OCR headers after inject: {headers}, trace_id={trace_id}")
+
         result = self.celery.send_task(
             "worker.tasks.ocr_task.process_ocr_task",
             kwargs={
                 "file_id": file_id,
+                "file_s3_key": file_s3_key,
                 "image_s3_keys": image_s3_keys,
                 "ocr_mode": ocr_mode,
                 "ocr_accuracy_mode": ocr_accuracy_mode,
@@ -156,7 +169,7 @@ class CeleryAdapter(TaskQueueAdapter):
             queue="ocr_tasks",
             headers=headers,
         )
-        logger.debug(f"[TaskQueue] OCR job enqueued with trace_id={trace_id}")
+        logger.info(f"[TaskQueue] OCR job enqueued: file_id={file_id}, job_id={result.id}, trace_id={trace_id}")
         return result.id
     
     def get_job_status(self, job_id: str) -> str:
