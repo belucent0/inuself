@@ -27,7 +27,7 @@ from typing import Any, Callable, Optional
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.trace import Status, StatusCode, Span
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -137,10 +137,11 @@ def setup_telemetry(app=None, service_name: str = None) -> None:
         # TracerProvider 설정
         _tracer_provider = TracerProvider(resource=resource)
 
-        # OTLP Exporter 설정 (gRPC)
+        # OTLP Exporter 설정 (HTTP)
+        # Jaeger HTTP endpoint는 /v1/traces 경로 필요
+        http_endpoint = f"{endpoint}/v1/traces" if not endpoint.endswith("/v1/traces") else endpoint
         exporter = OTLPSpanExporter(
-            endpoint=endpoint,
-            insecure=True,  # Docker 내부 통신이므로 TLS 불필요
+            endpoint=http_endpoint,
         )
 
         # BatchSpanProcessor를 FilteringSpanProcessor로 감싸서 노이즈 제거
@@ -466,3 +467,80 @@ def create_linked_span(
     """
     tracer = get_tracer("linked")
     return tracer.start_span(name, context=parent_context, attributes=attributes)
+
+
+# ============================================
+# run_in_executor용 Context 전파 유틸리티
+# ============================================
+
+def preserve_otel_context(func: Callable) -> Callable:
+    """run_in_executor에서 OpenTelemetry context를 유지하는 래퍼 생성.
+
+    asyncio.run_in_executor()는 별도 스레드에서 실행되어 OTEL context가 손실됨.
+    이 함수로 래핑하면 context가 스레드로 전파됨.
+
+    사용 예:
+        from app.core.telemetry import preserve_otel_context
+
+        # Before (context 손실)
+        job_id = await loop.run_in_executor(None, enqueue_func)
+
+        # After (context 전파)
+        job_id = await loop.run_in_executor(None, preserve_otel_context(enqueue_func))
+
+    Args:
+        func: 실행할 callable
+
+    Returns:
+        OTEL context가 전파되는 래핑된 callable
+    """
+    from opentelemetry import context as otel_context
+
+    current_ctx = otel_context.get_current()
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        token = otel_context.attach(current_ctx)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            otel_context.detach(token)
+
+    return wrapper
+
+
+async def run_in_executor_with_otel(
+    loop,
+    executor,
+    func: Callable,
+    *args,
+    **kwargs
+):
+    """OpenTelemetry context를 유지하며 executor에서 함수 실행.
+
+    asyncio.run_in_executor()의 OTEL-aware 대체 함수.
+
+    사용 예:
+        from app.core.telemetry import run_in_executor_with_otel
+
+        # Before
+        result = await loop.run_in_executor(None, func, arg1, arg2)
+
+        # After
+        result = await run_in_executor_with_otel(loop, None, func, arg1, arg2)
+
+    Args:
+        loop: asyncio event loop
+        executor: executor (None for default)
+        func: 실행할 callable
+        *args, **kwargs: func에 전달할 인자
+
+    Returns:
+        func의 반환값
+    """
+    from functools import partial
+
+    if args or kwargs:
+        func = partial(func, *args, **kwargs)
+
+    return await loop.run_in_executor(executor, preserve_otel_context(func))
