@@ -63,6 +63,25 @@ class StreamProcessor:
         "ocr": "llama-ocr-server",  # 기본값, 모델에 따라 변경
     }
 
+    # ==========================================
+    # Tier-based Model Routing (인프라 레이어)
+    # ==========================================
+    # Backend(LangGraph)는 "능력 티어"만 결정하고,
+    # 실제 모델 선택은 이 인프라 레이어에서 담당합니다.
+    #
+    # 환경 변수에서 모델명을 읽어옵니다 (.env 파일 참조):
+    # - FLM_LLM_SIMPLE_MODEL: tier-simple용 (간단한 작업)
+    # - FLM_THINKING_MODEL: tier-thinking용 (복잡한 분석 + CoT 추론)
+    #
+    # 단순화: tier-complex/tier-reasoning은 tier-thinking으로 통합
+    # (클라이언트는 reasoning_mode만 구분하므로 실질적으로 2개 티어만 필요)
+    TIER_MODEL_MAP = {
+        "tier-simple": os.environ.get("FLM_LLM_SIMPLE_MODEL", "lfm2:2.6b"),
+        "tier-complex": os.environ.get("FLM_THINKING_MODEL", "qwen3-tk:4b"),     # -> thinking으로 통합
+        "tier-reasoning": os.environ.get("FLM_THINKING_MODEL", "qwen3-tk:4b"),   # -> thinking으로 통합
+        "tier-thinking": os.environ.get("FLM_THINKING_MODEL", "qwen3-tk:4b"),
+    }
+
     # Provider -> Device Group 매핑 (동시성 제한용)
     PROVIDER_DEVICE_GROUP = {
         # GPU 프로바이더
@@ -73,8 +92,8 @@ class StreamProcessor:
         "llama-ocr-server": "gpu",
         # NPU 프로바이더
         "flm-asr": "npu",
-        "flm-llm": "npu",
-        "flm-llm-thinking": "npu",
+        "flm-llm": "npu",           # tier-simple
+        "flm-llm-thinking": "npu",  # tier-complex/reasoning/thinking (통합)
         "flm-ocr": "npu",
     }
 
@@ -363,6 +382,12 @@ class StreamProcessor:
             model = data.get("model", "")
             target_server = data.get("target_server", "auto")
 
+            # Tier 기반 라우팅: tier-* 패턴이면 실제 모델로 변환
+            if model.startswith("tier-"):
+                resolved_model = self.TIER_MODEL_MAP.get(model, self.TIER_MODEL_MAP["tier-simple"])
+                logger.info(f"[Tier Routing] {model} -> {resolved_model}")
+                model = resolved_model
+
             # Thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk, gpt-oss-sg-tk 등)
             is_thinking_model = model and "-tk" in model
 
@@ -584,6 +609,13 @@ class StreamProcessor:
         temperature = float(data.get("temperature", 0.7))
         target_server = data.get("target_server", "auto")
 
+        # Tier 기반 라우팅: tier-* 패턴이면 실제 모델로 변환
+        original_tier = None
+        if model.startswith("tier-"):
+            original_tier = model
+            model = self.TIER_MODEL_MAP.get(model, self.TIER_MODEL_MAP["tier-simple"])
+            logger.info(f"[{request_id}] Tier routing: {original_tier} -> {model}")
+
         logger.info(f"[{request_id}] Starting LLM completion (model={model}, target={target_server})...")
 
         # 서버 선택 로직 (On-Demand 로드 전에 결정)
@@ -594,12 +626,15 @@ class StreamProcessor:
             use_npu = False
         elif "flm" in model or "npu" in model.lower():
             use_npu = True
-        elif any(p in model.lower() for p in ["qwen", "gemma", "deepseek", "phi", "lfm"]) and ":" in model:
+        elif any(p in model.lower() for p in ["qwen", "gemma", "deepseek", "phi", "lfm", "gpt-oss"]) and ":" in model:
             use_npu = True
 
         # On-Demand: 필요한 서버가 준비될 때까지 대기
         # thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk 등)
         is_thinking_model = model and "-tk" in model
+
+        # thinking 모델 감지: -tk 접미사 OR tier-complex/reasoning/thinking에서 변환된 모델
+        is_thinking_model = model and ("-tk" in model or original_tier in ("tier-complex", "tier-reasoning", "tier-thinking"))
 
         if use_npu:
             if is_thinking_model:
@@ -623,9 +658,8 @@ class StreamProcessor:
                     actual_model = model
                     provider_name = "flm-llm-thinking"
                 else:
-                    logger.info(f"[{request_id}] Using FLM LLM server (NPU)...")
+                    logger.info(f"[{request_id}] Using FLM LLM server (NPU, model={model})...")
                     url = f"{settings.flm_llm_url}/v1/chat/completions"
-                    # Remove hardcoded model name, use requested model or default
                     actual_model = model if model else "lfm2.5-it:1.2b"
                     provider_name = "flm-llm"
             else:
@@ -655,69 +689,89 @@ class StreamProcessor:
                         span.set_attribute("http.status_code", response.status_code)
 
                     # SSE 파싱 및 청크 발행
+                    first_chunk_logged = False
                     async for line in response.aiter_lines():
-                        if not line or not line.strip(): 
+                        if not line or not line.strip():
                             continue
-                        
-                        if line.startswith("data: "):
-                            data_str = line[6:].strip()
-                            if data_str == "[DONE]":
-                                break
 
-                            try:
-                                chunk_json = json.loads(data_str)
-                                choices = chunk_json.get("choices", [])
-                                if not choices:
-                                    continue
+                        # 디버그: 첫 번째 줄 로깅 (응답 형식 확인용)
+                        if not first_chunk_logged:
+                            logger.info(f"[{request_id}] First raw line: {line[:200]}...")
+                            first_chunk_logged = True
 
-                                delta = choices[0].get("delta") or {}
-                                if not isinstance(delta, dict):
-                                    delta = {}
+                        if not line.startswith("data: "):
+                            # SSE 형식이 아닌 경우 로깅 (FLM이 다른 형식을 사용할 수 있음)
+                            if completion_tokens < 3:
+                                logger.warning(f"[{request_id}] Non-SSE line: {line[:100]}")
+                            continue
 
-                                # FLM 추론 모델: reasoning_content (추론 과정) + content (최종 답변)
-                                reasoning_content = str(delta.get("reasoning_content") or "")
-                                content = str(delta.get("content") or "")
+                        data_str = line[6:].strip()
+                        if data_str == "[DONE]":
+                            logger.info(f"[{request_id}] Received [DONE] signal")
+                            break
 
-                                # 추론 과정이 있으면 <think> 태그로 감싸서 전송
-                                if reasoning_content:
-                                    # 추론 시작 시 <think> 태그 추가
-                                    if full_content is None:
-                                        full_content = ""
-                                    if not full_content.startswith("<think>"):
-                                        full_content = "<think>"
-                                        await self.publish_chunk(request_id, "<think>")
-                                    full_content += reasoning_content
-                                    completion_tokens += 1
-                                    await self.publish_chunk(request_id, reasoning_content)
-
-                                # 최종 답변이 있으면 </think> 닫고 전송
-                                if content:
-                                    if full_content is None:
-                                        full_content = ""
-                                    # 추론 과정이 있었다면 </think> 닫기
-                                    if full_content.startswith("<think>") and "</think>" not in full_content:
-                                        full_content += "</think>\n\n"
-                                        await self.publish_chunk(request_id, "</think>\n\n")
-
-                                    # NPU (FLM) 서버가 Delta 대신 Full Text를 보내는 경우 처리 (안전하게)
-                                    try:
-                                        clean_content = full_content.replace("<think>", "").replace("</think>", "").strip()
-                                        if use_npu and content and clean_content and content.startswith(clean_content):
-                                            content = content[len(clean_content):]
-                                    except Exception:
-                                        pass
-
-                                    if content:
-                                        full_content += content
-                                        completion_tokens += 1
-                                        await self.publish_chunk(request_id, content)
-                                    
-                            except json.JSONDecodeError:
+                        try:
+                            chunk_json = json.loads(data_str)
+                            choices = chunk_json.get("choices", [])
+                            if not choices:
+                                logger.debug(f"[{request_id}] Chunk has no choices: {list(chunk_json.keys())}")
                                 continue
-                            except Exception as e:
-                                logger.warning(f"Error parsing chunk: {e}")
 
-            logger.info(f"[{request_id}] LLM completion completed ({len(full_content)} chars)")
+                            delta = choices[0].get("delta") or {}
+                            if not isinstance(delta, dict):
+                                logger.warning(f"[{request_id}] Delta is not dict: {type(delta)} - {delta}")
+                                delta = {}
+
+                            # FLM 추론 모델: reasoning_content (추론 과정) + content (최종 답변)
+                            reasoning_content = str(delta.get("reasoning_content") or "")
+                            content = str(delta.get("content") or "")
+
+                            # 디버그: delta 내용 확인 (첫 몇 개만)
+                            if completion_tokens < 3:
+                                logger.debug(f"[{request_id}] Delta keys: {list(delta.keys())}, reasoning={bool(reasoning_content)}, content={bool(content)}")
+
+                            # 추론 과정이 있으면 <think> 태그로 감싸서 전송
+                            if reasoning_content:
+                                # 추론 시작 시 <think> 태그 추가
+                                if full_content is None:
+                                    full_content = ""
+                                if not full_content.startswith("<think>"):
+                                    full_content = "<think>"
+                                    await self.publish_chunk(request_id, "<think>")
+                                full_content += reasoning_content
+                                completion_tokens += 1
+                                await self.publish_chunk(request_id, reasoning_content)
+
+                            # 최종 답변이 있으면 </think> 닫고 전송
+                            if content:
+                                if full_content is None:
+                                    full_content = ""
+                                # 추론 과정이 있었다면 </think> 닫기
+                                if full_content.startswith("<think>") and "</think>" not in full_content:
+                                    full_content += "</think>\n\n"
+                                    await self.publish_chunk(request_id, "</think>\n\n")
+
+                                # NPU (FLM) 서버가 Delta 대신 Full Text를 보내는 경우 처리 (안전하게)
+                                try:
+                                    clean_content = full_content.replace("<think>", "").replace("</think>", "").strip()
+                                    if use_npu and content and clean_content and content.startswith(clean_content):
+                                        content = content[len(clean_content):]
+                                except Exception:
+                                    pass
+
+                                if content:
+                                    full_content += content
+                                    completion_tokens += 1
+                                    await self.publish_chunk(request_id, content)
+
+                        except json.JSONDecodeError:
+                            continue
+                        except Exception as e:
+                            logger.warning(f"Error parsing chunk: {e}")
+
+            logger.info(f"[{request_id}] LLM completion completed ({len(full_content)} chars, {completion_tokens} tokens)")
+            if not full_content:
+                logger.warning(f"[{request_id}] Empty response! No content was captured from streaming")
 
             # 최종 결과 발행 (호환성 및 완료 신호)
             result = {

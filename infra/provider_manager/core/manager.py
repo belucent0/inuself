@@ -167,12 +167,14 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
     ROCM_PYTHON = str(Path(ROCM_ENV_PATH) / "Scripts" / "python.exe")
     SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 
-    # FLM 모델 설정 (환경변수 기반 - 동적 모델 변경 지원)
-    FLM_LLM_MODEL = env_vars.get("FLM_LLM_MODEL", "lfm2:2.6b")
-    FLM_THINKING_MODEL = env_vars.get("FLM_THINKING_MODEL", "lfm2.5-tk:1.2b")
+    # FLM 모델 설정 (환경변수 기반 - Tier-based Routing)
+    # flm-llm 서버: tier-simple 요청 처리 (간단한 작업)
+    # flm-llm-thinking 서버: tier-complex/reasoning/thinking 요청 처리 (복잡한 분석 + CoT 추론)
+    FLM_LLM_SIMPLE_MODEL = env_vars.get("FLM_LLM_SIMPLE_MODEL", "lfm2:2.6b")
+    FLM_THINKING_MODEL = env_vars.get("FLM_THINKING_MODEL", "qwen3-tk:4b")
     FLM_OCR_MODEL = env_vars.get("FLM_OCR_MODEL", "qwen3vl-it:4b")
 
-    logger.info(f"[Config] FLM Models - LLM: {FLM_LLM_MODEL}, Thinking: {FLM_THINKING_MODEL}, OCR: {FLM_OCR_MODEL}")
+    logger.info(f"[Config] FLM Models - Simple: {FLM_LLM_SIMPLE_MODEL}, Thinking: {FLM_THINKING_MODEL}, OCR: {FLM_OCR_MODEL}")
 
     return {
         # FLM NPU 서버들 (RAM 사용량 - NPU는 시스템 RAM 사용)
@@ -187,10 +189,10 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
         ),
         "flm-llm": ProviderConfig(
             name="flm-llm",
-            cmd=["flm", "serve", FLM_LLM_MODEL, "--port", "11435"],
+            cmd=["flm", "serve", FLM_LLM_SIMPLE_MODEL, "--embed", "1", "--port", "11435"],
             port=11435,
             health="/v1/models",
-            estimated_ram=2.0,  # 모델에 따라 다름, 여유있게 설정
+            estimated_ram=2.0,  # tier-simple용 (lfm2:2.6b)
             enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "flm-llm-thinking": ProviderConfig(
@@ -198,7 +200,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
             cmd=["flm", "serve", FLM_THINKING_MODEL, "--port", "11437"],
             port=11437,
             health="/v1/models",
-            estimated_ram=2.0,  # 모델에 따라 다름, 여유있게 설정
+            estimated_ram=2.0,  # tier-complex/reasoning/thinking용 (qwen3-tk:4b)
             enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "flm-ocr": ProviderConfig(
