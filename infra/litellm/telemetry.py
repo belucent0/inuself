@@ -22,7 +22,7 @@ from typing import Callable, Optional
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.trace import Status, StatusCode, Span
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -113,9 +113,10 @@ def setup_litellm_telemetry(service_name: str = None, app=None) -> None:
 
         _tracer_provider = TracerProvider(resource=resource)
 
+        # HTTP exporter는 /v1/traces 경로 필요
+        traces_endpoint = f"{endpoint.rstrip('/')}/v1/traces"
         exporter = OTLPSpanExporter(
-            endpoint=endpoint,
-            insecure=True,
+            endpoint=traces_endpoint,
         )
 
         # FilteringSpanProcessor로 노이즈 제거

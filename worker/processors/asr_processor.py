@@ -8,6 +8,9 @@ import asyncio
 from pathlib import Path
 from uuid import uuid4
 
+# OpenTelemetry context 전파 (run_in_executor용)
+from opentelemetry import context as otel_context
+
 from worker.config import get_settings
 from worker.logging_config import logger
 from worker.utils.event_loop import setup_worker_event_loop, cleanup_worker_event_loop
@@ -131,9 +134,20 @@ async def _process_job(
             accuracy_mode=accuracy_mode,
             on_asr_resource_acquired=on_asr_resource_acquired,
         )
-        
+
+        # OpenTelemetry context를 executor 스레드로 전파
+        current_otel_ctx = otel_context.get_current()
+
+        def pipeline_with_otel_context():
+            """OpenTelemetry context를 복원하여 파이프라인 실행."""
+            token = otel_context.attach(current_otel_ctx)
+            try:
+                return pipeline_func()
+            finally:
+                otel_context.detach(token)
+
         loop = asyncio.get_running_loop()
-        result: PipelineResult = await loop.run_in_executor(None, pipeline_func)
+        result: PipelineResult = await loop.run_in_executor(None, pipeline_with_otel_context)
         logger.info("[Worker] [5/5] ASR pipeline completed!")
         
         num_speakers = len(result.speaker_stats)

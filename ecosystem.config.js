@@ -76,8 +76,8 @@ module.exports = {
         FLM_ASR_URL: 'http://localhost:11434',
         FLM_LLM_URL: 'http://localhost:11435',
         FLM_OCR_URL: 'http://localhost:11436',
-        // OpenTelemetry 분산 추적
-        OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4317',
+        // OpenTelemetry 분산 추적 (HTTP exporter - port 4318)
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
         OTEL_SERVICE_NAME: 'provider-manager',
         OTEL_TRACES_EXPORTER: 'otlp',
       },

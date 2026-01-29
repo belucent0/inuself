@@ -33,8 +33,6 @@ async function initTelemetryAsync(): Promise<void> {
         const { OTLPTraceExporter } = await import('@opentelemetry/exporter-trace-otlp-http');
         const { Resource } = await import('@opentelemetry/resources');
         const { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } = await import('@opentelemetry/semantic-conventions');
-        const { FetchInstrumentation } = await import('@opentelemetry/instrumentation-fetch');
-        const { registerInstrumentations } = await import('@opentelemetry/instrumentation');
 
         // nginx /otlp/ 프록시를 통해 Jaeger OTLP HTTP 엔드포인트로 전송
         // OTLPTraceExporter는 절대 경로를 요구하므로 window.location을 사용하여 URL 생성
@@ -60,35 +58,9 @@ async function initTelemetryAsync(): Promise<void> {
 
         provider.register();
 
-        // 전역 fetch 패치 (span 이름을 "METHOD /path" 형식으로 설정)
+        // 전역 fetch 패치 (span 이름을 "METHOD /path" 형식으로 설정 + traceparent 헤더 주입)
+        // FetchInstrumentation 대신 직접 패치하여 span 이름 제어
         patchGlobalFetch();
-
-        // fetch 요청 자동 계측 (traceparent 헤더 전파용)
-        registerInstrumentations({
-            instrumentations: [
-                new FetchInstrumentation({
-                    // API 요청만 추적 (외부 리소스 및 노이즈 제외)
-                    ignoreUrls: [
-                        /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf)$/,
-                        // Next.js 내부 요청 제외
-                        /\/next\//,
-                        /\/_next\//,
-                        // 헬스체크 및 메트릭 제외
-                        /\/health/,
-                        /\/ready/,
-                        /\/metrics/,
-                        /\/healthz/,
-                    ],
-                    // traceparent 헤더 전파 - 모든 API 요청에 적용
-                    propagateTraceHeaderCorsUrls: [
-                        /^https?:\/\/localhost/,
-                        /^https?:\/\/127\.0\.0\.1/,
-                        /^https?:\/\/asr\.timblo\.io/,
-                        /\/api\//,  // 상대 경로 API 요청도 포함
-                    ],
-                }),
-            ],
-        });
 
         telemetryEnabled = true;
         console.log('[Telemetry] Browser OpenTelemetry initialized (global fetch patched)');
@@ -102,6 +74,7 @@ async function initTelemetryAsync(): Promise<void> {
  * 전역 fetch를 패치하여 모든 API 요청에 적절한 span 이름 설정
  * - span 이름: "METHOD /path" (예: "POST /api/contents/upload")
  * - /api/ 경로 요청만 추적 (정적 리소스 제외)
+ * - traceparent 헤더 자동 주입 (분산 추적)
  */
 function patchGlobalFetch(): void {
     if (originalFetch) return; // 이미 패치됨
@@ -168,7 +141,17 @@ function patchGlobalFetch(): void {
                 span.setAttribute('http.url', url);
                 span.setAttribute('http.target', path);
 
-                const response = await originalFetch!.call(window, input, init);
+                // traceparent 헤더 주입 (W3C Trace Context)
+                const spanContext = span.spanContext();
+                const traceparent = `00-${spanContext.traceId}-${spanContext.spanId}-01`;
+
+                // init 객체 복사 및 헤더 추가
+                const newInit: RequestInit = { ...init };
+                const existingHeaders = new Headers(init?.headers);
+                existingHeaders.set('traceparent', traceparent);
+                newInit.headers = existingHeaders;
+
+                const response = await originalFetch!.call(window, input, newInit);
 
                 span.setAttribute('http.status_code', response.status);
                 if (!response.ok) {

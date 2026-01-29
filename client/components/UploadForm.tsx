@@ -39,15 +39,15 @@ export default function UploadForm() {
 
   const isDocumentFile = (filename: string): boolean => {
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
-    // 허용된 문서 파일: 이미지 파일과 txt
-    let allowedDocumentExtensions = ['.txt', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp',]
-    allowedDocumentExtensions.push(...['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'])
+    // 허용된 문서 파일: PDF, 이미지, 텍스트만 (Office 문서 제외)
+    const allowedDocumentExtensions = ['.txt', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']
     return allowedDocumentExtensions.includes(ext)
   }
 
   const isOfficeDocument = (filename: string): boolean => {
     const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'))
-    const officeExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
+    // Office 문서 확장자 (현재 지원 안 함)
+    const officeExtensions = ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
     return officeExtensions.includes(ext)
   }
 
@@ -57,7 +57,12 @@ export default function UploadForm() {
 
       // 허용되지 않은 파일 체크
       if (!isAudioFile(file.name) && !isDocumentFile(file.name)) {
-        setStatus('지원하지 않는 파일 형식입니다. 오디오/비디오 파일, 이미지 파일, 텍스트 파일, PDF, 또는 Office 문서 파일만 업로드 가능합니다.')
+        // Office 문서인 경우 별도 메시지
+        if (isOfficeDocument(file.name)) {
+          setStatus('Office 문서(.doc, .docx, .xls, .xlsx, .ppt, .pptx)는 현재 지원하지 않습니다. PDF, 이미지, 또는 텍스트 파일로 변환 후 업로드해 주세요.')
+        } else {
+          setStatus('지원하지 않는 파일 형식입니다. 오디오/비디오 파일, PDF, 이미지 파일, 또는 텍스트 파일만 업로드 가능합니다.')
+        }
         if (fileInputRef.current) {
           fileInputRef.current.value = ''
         }

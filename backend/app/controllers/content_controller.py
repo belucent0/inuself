@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.session import get_session
@@ -54,6 +54,7 @@ async def get_content(content_id: int, file_service: FileService = Depends(get_f
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_content(
+    request: Request,
     file: UploadFile,
     min_speakers: int | None = Query(None, ge=1, description="최소 화자 수 (선택사항)"),
     max_speakers: int | None = Query(None, ge=1, description="최대 화자 수 (선택사항)"),
@@ -64,10 +65,27 @@ async def upload_content(
 ):
     """파일 업로드 (오디오 및 문서 지원)."""
     from ..core.logging import logger
-    
-    logger.info("[Upload] File upload request received: filename={}, content_type={}, min_speakers={}, max_speakers={}, ocr_mode={}, ocr_accuracy_mode={}, accuracy_mode={}", 
+    from ..core.telemetry import get_trace_id
+
+    # 디버그: Frontend에서 받은 traceparent 헤더 확인
+    traceparent_header = request.headers.get("traceparent", "NOT_FOUND")
+    current_trace_id = get_trace_id()
+    logger.info("[Upload] TRACE DEBUG: traceparent_header={}, current_trace_id={}", traceparent_header, current_trace_id)
+
+    logger.info("[Upload] File upload request received: filename={}, content_type={}, min_speakers={}, max_speakers={}, ocr_mode={}, ocr_accuracy_mode={}, accuracy_mode={}",
                file.filename, file.content_type, min_speakers, max_speakers, ocr_mode, ocr_accuracy_mode, accuracy_mode)
     print(f"[Upload] 파일 업로드 요청: {file.filename} ({file.content_type}), min_speakers={min_speakers}, max_speakers={max_speakers}, ocr_mode={ocr_mode}, ocr_accuracy_mode={ocr_accuracy_mode}, accuracy_mode={accuracy_mode}")
+
+    # Office 문서 체크 (현재 지원하지 않음)
+    if file.filename:
+        filename_lower = file.filename.lower()
+        office_extensions = ('.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx')
+        if filename_lower.endswith(office_extensions):
+            logger.warning("[Upload] Office document upload rejected: filename={}", file.filename)
+            raise HTTPException(
+                status_code=400,
+                detail="Office 문서(.doc, .docx, .xls, .xlsx, .ppt, .pptx)는 현재 지원하지 않습니다. PDF, 이미지, 또는 텍스트 파일로 변환 후 업로드해 주세요."
+            )
     
     try:
         result = await file_service.upload_and_enqueue(

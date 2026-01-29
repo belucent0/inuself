@@ -1,0 +1,52 @@
+# ==========================================
+# Stage 1: Builder (빌드 의존성)
+# ==========================================
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+# 빌드 도구 설치 (Python 패키지 네이티브 확장 빌드용)
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Poetry 설치
+RUN pip install --no-cache-dir poetry
+
+# Poetry 설정 (가상환경 생성 X)
+RUN poetry config virtualenvs.create false && \
+    poetry config installer.max-workers 10
+
+# 네트워크 타임아웃 환경변수 설정 (300초)
+ENV POETRY_REQUESTS_TIMEOUT=300
+
+# 의존성 설치
+COPY worker/pyproject.toml worker/poetry.lock* ./
+RUN poetry lock --no-update || poetry lock
+RUN poetry install --no-interaction --no-ansi --without dev
+
+# ==========================================
+# Stage 2: Runtime (런타임 의존성만)
+# ==========================================
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 런타임 의존성만 설치 (빌드 도구 제외)
+# ffmpeg만 필요 (오디오 변환, duration 추출)
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 패키지를 builder에서 복사
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# 소스 코드 복사
+COPY . .
+
+# Celery Worker 실행
+ENV PYTHONPATH=/app
+
+CMD ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info", "-Q", "asr_tasks,llm_summary,ocr_tasks"]

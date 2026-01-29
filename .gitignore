@@ -94,6 +94,7 @@ node_modules/
 .turbo/
 .vercel/
 out/
+next-env.d.ts
 
 # Test files (except main script)
 *_test.py

@@ -71,7 +71,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: asr-backend:1.0.0
+    image: asr-backend:latest
     container_name: asr-backend
     ports:
       - "8000:8000"
@@ -106,7 +106,7 @@ services:
       - LITELLM_API_KEY=${LITELLM_API_KEY}
       - LITELLM_MODEL=${LITELLM_MODEL:-qwen3-4b}
       # OpenTelemetry 분산 추적
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_SERVICE_NAME=asr-backend
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
@@ -199,7 +199,7 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
-    image: asr-worker:1.0.0
+    image: asr-worker:latest
     container_name: asr-worker-unified
     command: celery -A worker.celery_app worker --loglevel=info -Q celery,asr,asr_tasks,llm_summary,ocr_tasks,search
     volumes:
@@ -227,7 +227,7 @@ services:
       - LITELLM_API_KEY=${LITELLM_API_KEY}
       - LITELLM_MODEL=${LITELLM_MODEL:-qwen3-4b}
       # OpenTelemetry 분산 추적
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_SERVICE_NAME=asr-worker
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
@@ -270,7 +270,7 @@ services:
       - BACKGROUND_HEALTH_CHECKS=false
       - HEALTH_CHECK_INTERVAL=86400
       # OpenTelemetry 분산 추적
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_SERVICE_NAME=asr-litellm
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none

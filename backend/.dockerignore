@@ -24,6 +24,18 @@ data/uploads/
 tests/
 scripts/
 
+# 추가 최적화
+*.egg-info/
+dist/
+build/
+*.sqlite
+*.db
+.mypy_cache/
+.ruff_cache/
+*.pem
+*.key
+*.crt
+
 
 
 

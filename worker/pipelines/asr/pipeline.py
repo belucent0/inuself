@@ -5,16 +5,16 @@ Architecture V7.0: Worker → Redis Stream → Provider Manager (Host)
 - Provider Manager가 GPU/NPU 서버 직접 호출 (localhost)
 - GPU/ROCm 의존성 없음 - 모든 AI 추론은 Host의 GPU 서버에서 실행
 """
-import contextvars
+import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import librosa
-import soundfile as sf
-import tempfile
+# OpenTelemetry context 전파 (ThreadPoolExecutor용)
+from opentelemetry import context as otel_context
 
 from .diarization_utils import merge_segments_with_speakers, merge_by_diarization_segments
 
@@ -70,15 +70,31 @@ def run_asr_diarization_pipeline(
     
     # 오디오 로드 및 WAV 변환 (whisper.cpp는 WAV 형식 필요)
     print(f"[Pipeline] Loading audio file...")
-    waveform, sample_rate = librosa.load(str(audio_file_path), sr=16000)
-    audio_duration = len(waveform) / sample_rate
+
+    # 1. ffprobe로 duration 추출
+    result = subprocess.run([
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(audio_file_path)
+    ], capture_output=True, text=True, check=True)
+    audio_duration = float(result.stdout.strip())
+    sample_rate = 16000  # 고정값 (ffmpeg -ar 16000)
     print(f"[Pipeline] Audio loaded: {audio_duration:.2f} seconds")
 
-    # WAV 파일로 변환 (임시 파일)
+    # 2. ffmpeg로 WAV 변환 (16kHz, Mono, 16-bit PCM)
     wav_temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     wav_path = Path(wav_temp_file.name)
-    sf.write(wav_path, waveform, sample_rate)
     wav_temp_file.close()
+
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error",
+        "-i", str(audio_file_path),
+        "-ar", "16000",  # 16kHz 리샘플링
+        "-ac", "1",      # Mono
+        "-c:a", "pcm_s16le",  # 16-bit PCM
+        str(wav_path)
+    ], check=True)
     print(f"[Pipeline] Converted to WAV: {wav_path}")
 
     logs.append({
@@ -148,37 +164,46 @@ def _run_case4_parallel_processing(
 
     # ============================================================
     # 병렬 실행: ASR + Diarization 동시 실행
-    # OpenTelemetry context를 명시적으로 복사하여 스레드에 전파
+    # OpenTelemetry context를 명시적으로 복원하여 스레드에 전파
     # ============================================================
 
-    # 각 스레드마다 별도의 context 복사본 (동일한 context를 두 스레드에서 동시에 run() 불가)
-    asr_ctx = contextvars.copy_context()
-    diarization_ctx = contextvars.copy_context()
+    # 현재 OpenTelemetry context 저장 (ThreadPoolExecutor로 전달)
+    current_otel_context = otel_context.get_current()
 
     def run_asr():
-        """ASR 작업 실행."""
-        return call_litellm_transcription(
-            audio_file_path=audio_file_path,
-            accuracy_mode=accuracy_mode,
-            language="ko",
-            on_resource_acquired=on_asr_resource_acquired,
-        )
+        """ASR 작업 실행 (OpenTelemetry context 복원)."""
+        # OpenTelemetry context 복원
+        token = otel_context.attach(current_otel_context)
+        try:
+            return call_litellm_transcription(
+                audio_file_path=audio_file_path,
+                accuracy_mode=accuracy_mode,
+                language="ko",
+                on_resource_acquired=on_asr_resource_acquired,
+            )
+        finally:
+            otel_context.detach(token)
 
     def run_diarization():
-        """Diarization 작업 실행."""
-        return call_litellm_diarization(
-            audio_file_path=audio_file_path,
-            min_speakers=min_speakers,
-            max_speakers=max_speakers,
-            return_embeddings=False,
-        )
+        """Diarization 작업 실행 (OpenTelemetry context 복원)."""
+        # OpenTelemetry context 복원
+        token = otel_context.attach(current_otel_context)
+        try:
+            return call_litellm_diarization(
+                audio_file_path=audio_file_path,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+                return_embeddings=False,
+            )
+        finally:
+            otel_context.detach(token)
 
     print(f"\n[Parallel] Starting ASR and Diarization simultaneously...")
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        # 두 작업을 동시에 시작 (각 스레드마다 별도 context 복사본 사용)
-        asr_future = executor.submit(asr_ctx.run, run_asr)
-        diarization_future = executor.submit(diarization_ctx.run, run_diarization)
+        # 두 작업을 동시에 시작 (OpenTelemetry context가 각 스레드에서 복원됨)
+        asr_future = executor.submit(run_asr)
+        diarization_future = executor.submit(run_diarization)
 
         # ASR 결과 대기 (필수)
         try:
