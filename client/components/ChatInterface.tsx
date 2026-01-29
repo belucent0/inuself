@@ -4,42 +4,70 @@ import * as React from "react"
 import { ChatPrompt } from "@/components/ChatPrompt"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import { formatErrorForUser } from "@/lib/errors"
 import MarkdownContent from "@/components/MarkdownContent"
-import { Badge } from "@/components/ui/badge"
-import { ExternalLink, Search, MessageSquare, Loader2, Sparkles, BookOpen, ChevronRight, ChevronLeft } from "lucide-react"
+import {
+    Loader2,
+    Sparkles,
+    BookOpen,
+    Globe,
+    Database,
+    MessageSquare,
+    Brain
+} from "lucide-react"
 
 import { SourceCarousel } from "@/components/SourceCarousel"
 import { ThinkingProcessAccordion } from "@/components/ThinkingProcessAccordion"
-
-type ChatMode = 'chat' | 'search'
+import { AIModeSelector, AIModeBadge, AI_MODE_CONFIG, type AIMode } from "@/components/AIModeSelector"
 
 interface SearchSource {
     position: number
     title: string
     url: string
     snippet: string
-    engine: string
+    engine?: string
+    source?: 'web' | 'rag'  // 소스 타입 구분
+}
+
+interface ThinkingStep {
+    step: string
+    content: string
+    timestamp?: number
+}
+
+interface QueryAnalysis {
+    original_query: string
+    reformulated_query: string
+    search_queries: string[]
+    keywords: string[]
+    search_focus: string
 }
 
 interface Message {
     id: string
     role: 'user' | 'assistant'
     content: string
-    mode?: ChatMode
+    mode?: AIMode
     sources?: SearchSource[]
-    citationsUsed?: number[]
-    isSearching?: boolean // 검색/생성 중 여부
-    status?: string // 현재 진행 상태 메시지 (예: "웹 검색 중...", "분석 중...")
+    thinkingSteps?: ThinkingStep[]  // 사고 과정 단계
+    queryAnalysis?: QueryAnalysis   // 쿼리 분석 결과 (Perplexity 스타일)
+    isStreaming?: boolean
+    status?: string
 }
 
-// 생각하는 과정 표시 (애니메이션)
-function ThinkingProcess({ status }: { status: string }) {
+// 진행 상태 표시
+function ThinkingProcess({ status, mode }: { status: string; mode?: AIMode }) {
+    const config = mode ? AI_MODE_CONFIG[mode] : AI_MODE_CONFIG.simple
+
     return (
-        <div className="flex items-center gap-3 p-3 mb-4 rounded-lg bg-muted/50 border border-border/50 animate-in fade-in slide-in-from-left-2 duration-300">
+        <div className={cn(
+            "flex items-center gap-3 p-3 mb-4 rounded-lg border border-border/50 animate-in fade-in slide-in-from-left-2 duration-300",
+            config.bgColor
+        )}>
             <div className="relative shrink-0">
-                <div className="absolute inset-0 bg-primary/20 rounded-full animate-ping" />
-                <div className="relative bg-background rounded-full p-1.5 border shadow-sm">
-                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <div className={cn("absolute inset-0 rounded-full animate-ping opacity-30", config.bgColor)} />
+                <div className={cn("relative rounded-full p-1.5 border shadow-sm bg-background", config.color)}>
+                    <Loader2 className="h-4 w-4 animate-spin" />
                 </div>
             </div>
             <span className="text-sm font-medium text-foreground">
@@ -49,18 +77,107 @@ function ThinkingProcess({ status }: { status: string }) {
     )
 }
 
+// 쿼리 분석 결과 표시 (Multi-Query 스타일)
+function QueryAnalysisDisplay({ analysis }: { analysis: QueryAnalysis }) {
+    const hasQueries = analysis.search_queries && analysis.search_queries.length > 0
+
+    if (!hasQueries) return null
+
+    return (
+        <div className="mb-4 p-3 rounded-lg bg-gradient-to-r from-blue-500/10 to-cyan-500/10 border border-blue-500/20 animate-in fade-in slide-in-from-left-2 duration-300">
+            <div className="flex items-center gap-2 mb-2">
+                <Globe className="h-4 w-4 text-blue-500" />
+                <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
+                    검색 중...
+                </span>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-2">
+                {analysis.search_queries.map((q, i) => (
+                    <span
+                        key={i}
+                        className="inline-flex items-center px-2.5 py-1 text-xs rounded-md bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30"
+                    >
+                        <span className="w-4 h-4 flex items-center justify-center rounded-full bg-blue-500/20 text-[10px] font-bold mr-1.5">
+                            {i + 1}
+                        </span>
+                        {q}
+                    </span>
+                ))}
+            </div>
+        </div>
+    )
+}
+
+// 모드 아이콘
+function getModeIcon(mode?: AIMode) {
+    switch (mode) {
+        case 'search': return <Globe className="h-4 w-4" />
+        case 'rag': return <Database className="h-4 w-4" />
+        case 'reasoning': return <Brain className="h-4 w-4" />
+        case 'hybrid': return <Sparkles className="h-4 w-4" />
+        default: return <MessageSquare className="h-4 w-4" />
+    }
+}
+
 export function ChatInterface() {
     const [messages, setMessages] = React.useState<Message[]>([])
     const [input, setInput] = React.useState('')
     const [isLoading, setIsLoading] = React.useState(false)
-    const [mode, setMode] = React.useState<ChatMode>('search')
-    const [isReasoning, setIsReasoning] = React.useState(false) // 추론 모드 상태
+    const [mode, setMode] = React.useState<AIMode>('search')
+    const [conversationId, setConversationId] = React.useState<string | null>(null)
 
     const scrollRef = React.useRef<HTMLDivElement>(null)
+    const scrollAreaRef = React.useRef<HTMLDivElement>(null)
+    const isUserScrollingRef = React.useRef(false)
+    const lastScrollTopRef = React.useRef(0)
 
-    // 메시지가 추가되거나 내용이 바뀌면 스크롤
+    // 사용자가 맨 아래 근처에 있는지 확인 (100px 여유)
+    const isNearBottom = React.useCallback(() => {
+        const viewport = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement
+        if (!viewport) return true
+        const { scrollTop, scrollHeight, clientHeight } = viewport
+        return scrollHeight - scrollTop - clientHeight < 100
+    }, [])
+
+    // 스크롤 이벤트 핸들러 - 사용자가 위로 스크롤했는지 감지
+    const handleScroll = React.useCallback(() => {
+        const viewport = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement
+        if (!viewport) return
+
+        const currentScrollTop = viewport.scrollTop
+        // 사용자가 위로 스크롤하면 자동 스크롤 비활성화
+        if (currentScrollTop < lastScrollTopRef.current - 10) {
+            isUserScrollingRef.current = true
+        }
+        // 사용자가 맨 아래 근처로 스크롤하면 자동 스크롤 다시 활성화
+        if (isNearBottom()) {
+            isUserScrollingRef.current = false
+        }
+        lastScrollTopRef.current = currentScrollTop
+    }, [isNearBottom])
+
+    // 스크롤 이벤트 리스너 등록
     React.useEffect(() => {
-        if (scrollRef.current) {
+        const viewport = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement
+        if (viewport) {
+            viewport.addEventListener('scroll', handleScroll, { passive: true })
+            return () => viewport.removeEventListener('scroll', handleScroll)
+        }
+    }, [handleScroll])
+
+    // 새 메시지가 추가되면 자동 스크롤 활성화 (사용자 메시지 전송 시)
+    const prevMessageCountRef = React.useRef(0)
+    React.useEffect(() => {
+        if (messages.length > prevMessageCountRef.current) {
+            // 새 메시지가 추가되면 자동 스크롤 다시 활성화
+            isUserScrollingRef.current = false
+        }
+        prevMessageCountRef.current = messages.length
+    }, [messages.length])
+
+    // 스크롤 자동 이동 (사용자가 위로 스크롤하지 않았을 때만)
+    React.useEffect(() => {
+        if (scrollRef.current && !isUserScrollingRef.current) {
             scrollRef.current.scrollIntoView({ behavior: 'smooth' })
         }
     }, [messages.length, messages[messages.length - 1]?.content, messages[messages.length - 1]?.status])
@@ -73,44 +190,47 @@ export function ChatInterface() {
             : `${window.location.origin}/api/${endpoint}`
     }
 
-    const handleSearchMessage = async (text: string) => {
+    const handleSendMessage = async (text: string) => {
+        if (!text.trim() || isLoading) return
+
+        // 사용자 메시지 추가
         const userMessage: Message = {
             id: Date.now().toString(),
             role: 'user',
             content: text,
-            mode: 'search'
+            mode: mode
         }
-
         setMessages(prev => [...prev, userMessage])
         setInput('')
         setIsLoading(true)
 
-        // 초기 어시스턴트 메시지 (빈 상태)
+        // 어시스턴트 메시지 초기화
         const assistantMessageId = (Date.now() + 1).toString()
         const assistantMessage: Message = {
             id: assistantMessageId,
             role: 'assistant',
             content: '',
-            mode: 'search',
-            isSearching: true,
-            status: '웹 검색을 시작합니다...'
+            mode: mode,
+            isStreaming: true,
+            status: '질문 분석 중...',
+            thinkingSteps: []
         }
         setMessages(prev => [...prev, assistantMessage])
 
         try {
-            const response = await fetch(getApiUrl('search'), {
+            // 새 AI Agent API 호출
+            const response = await fetch(getApiUrl('ai/chat/stream'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     query: text,
-                    max_results: 10,
-                    language: 'ko-KR',
-                    reasoning_mode: isReasoning // 추론 모드 여부 전달
+                    mode: mode,
+                    conversation_id: conversationId
                 })
             })
 
             if (!response.ok) {
-                throw new Error('검색 요청 실패')
+                throw new Error('AI 요청 실패')
             }
 
             const reader = response.body?.getReader()
@@ -119,7 +239,9 @@ export function ChatInterface() {
             if (!reader) throw new Error('No response body')
 
             let buffer = ''
-            let accumulatedContent = '' // 전체 답변 내용을 누적할 변수
+            let accumulatedContent = ''
+            let accumulatedSources: SearchSource[] = []
+            let accumulatedThinking: ThinkingStep[] = []
 
             while (true) {
                 const { done, value } = await reader.read()
@@ -127,23 +249,32 @@ export function ChatInterface() {
 
                 buffer += decoder.decode(value, { stream: true })
                 const lines = buffer.split('\n\n')
-                buffer = lines.pop() || '' // 불완전한 마지막 라인 보관
+                buffer = lines.pop() || ''
 
                 for (const line of lines) {
-                    if (!line.startsWith('event: ')) continue
+                    // SSE format: "data: {...}"
+                    if (!line.startsWith('data: ')) continue
 
-                    const [eventLine, dataLine] = line.split('\n')
-                    const event = eventLine.replace('event: ', '').trim()
-                    const dataStr = dataLine.replace('data: ', '').trim()
+                    const dataStr = line.replace('data: ', '').trim()
+                    if (!dataStr) continue
+
+                    let parsed: { type: string; data: any }
+                    try {
+                        parsed = JSON.parse(dataStr)
+                    } catch {
+                        continue
+                    }
+
+                    const event = parsed.type
+                    const eventData = parsed.data
 
                     if (event === 'done') {
-                        // 완료 처리
                         setMessages(prev => {
                             const updated = [...prev]
                             const lastMsg = updated.find(m => m.id === assistantMessageId)
                             if (lastMsg) {
-                                lastMsg.isSearching = false
-                                lastMsg.status = undefined // 상태 메시지 제거
+                                lastMsg.isStreaming = false
+                                lastMsg.status = undefined
                             }
                             return updated
                         })
@@ -151,71 +282,117 @@ export function ChatInterface() {
                     }
 
                     if (event === 'error') {
-                        // 에러 처리
-                        try {
-                            const errorMsg = JSON.parse(dataStr)
-                            setMessages(prev => {
-                                const updated = [...prev]
-                                const lastMsg = updated.find(m => m.id === assistantMessageId)
-                                if (lastMsg) {
-                                    lastMsg.content = `⚠️ 오류가 발생했습니다: ${errorMsg}`
-                                    lastMsg.isSearching = false
-                                    lastMsg.status = undefined
-                                }
-                                return updated
-                            })
-                        } catch (e) { }
+                        // 서버 에러를 사용자 친화적 메시지로 변환
+                        const userMessage = formatErrorForUser(eventData)
+                        setMessages(prev => {
+                            const updated = [...prev]
+                            const lastMsg = updated.find(m => m.id === assistantMessageId)
+                            if (lastMsg) {
+                                lastMsg.content = userMessage
+                                lastMsg.isStreaming = false
+                                lastMsg.status = undefined
+                            }
+                            return updated
+                        })
                         continue
                     }
 
-                    try {
-                        const data = JSON.parse(dataStr)
+                    if (event === 'thinking') {
+                        // 사고 과정 업데이트
+                        const thinkingData = eventData || {}
+                        accumulatedThinking.push({
+                            step: thinkingData.step,
+                            content: thinkingData.content,
+                            timestamp: Date.now()
+                        })
 
-                        if (event === 'status') {
-                            setMessages(prev => {
-                                const updated = [...prev]
-                                const lastMsg = updated.find(m => m.id === assistantMessageId)
-                                if (lastMsg) lastMsg.status = data
-                                return updated
-                            })
-                        } else if (event === 'sources') {
-                            setMessages(prev => {
-                                const updated = [...prev]
-                                const lastMsg = updated.find(m => m.id === assistantMessageId)
-                                if (lastMsg) lastMsg.sources = data
-                                return updated
-                            })
-                        } else if (event === 'token') {
-                            accumulatedContent += data // 로컬 변수에 누적
+                        setMessages(prev => {
+                            const updated = [...prev]
+                            const lastMsg = updated.find(m => m.id === assistantMessageId)
+                            if (lastMsg) {
+                                lastMsg.status = thinkingData.content
+                                lastMsg.thinkingSteps = [...accumulatedThinking]
 
-                            setMessages(prev => {
-                                const updated = [...prev]
-                                const lastMsg = updated.find(m => m.id === assistantMessageId)
-                                if (lastMsg) {
-                                    lastMsg.content = accumulatedContent // 누적된 전체 내용으로 교체 (중복 방지)
-                                    
-                                    // 토큰이 들어오면 상태 메시지는 더 이상 보여주지 않거나 "작성 중"으로 변경 가능
-                                    // 여기서는 내용이 생기기 시작하면 상태 메시지 제거
-                                    if (lastMsg.status && accumulatedContent.length > 10) {
-                                        lastMsg.status = undefined
-                                    }
+                                // 모드 업데이트 (Intent Parser 결과)
+                                if (thinkingData.mode) {
+                                    lastMsg.mode = thinkingData.mode.replace('AIMode.', '').toLowerCase() as AIMode
                                 }
-                                return updated
-                            })
-                        }
-                    } catch (e) {
-                        console.error('JSON parse error', e)
+                            }
+                            return updated
+                        })
+                    } else if (event === 'token') {
+                        // 토큰 단위 스트리밍 - 점진적으로 콘텐츠 축적
+                        const token = typeof eventData === 'string' ? eventData : String(eventData || '')
+                        accumulatedContent += token
+
+                        setMessages(prev => {
+                            const updated = [...prev]
+                            const lastMsg = updated.find(m => m.id === assistantMessageId)
+                            if (lastMsg) {
+                                lastMsg.content = accumulatedContent
+                                lastMsg.status = undefined
+                            }
+                            return updated
+                        })
+                    } else if (event === 'sources') {
+                        // 소스 업데이트
+                        const sourcesData = Array.isArray(eventData) ? eventData : []
+                        accumulatedSources = sourcesData.map((s: any, i: number) => ({
+                            position: i + 1,
+                            title: s.title || '',
+                            url: s.url || '',
+                            snippet: s.snippet || '',
+                            engine: s.engine,
+                            source: s.source || 'web'
+                        }))
+
+                        setMessages(prev => {
+                            const updated = [...prev]
+                            const lastMsg = updated.find(m => m.id === assistantMessageId)
+                            if (lastMsg) {
+                                lastMsg.sources = accumulatedSources
+                                lastMsg.status = undefined
+                            }
+                            return updated
+                        })
+                    } else if (event === 'content') {
+                        // 콘텐츠 업데이트
+                        accumulatedContent = typeof eventData === 'string' ? eventData : String(eventData || '')
+
+                        setMessages(prev => {
+                            const updated = [...prev]
+                            const lastMsg = updated.find(m => m.id === assistantMessageId)
+                            if (lastMsg) {
+                                lastMsg.content = accumulatedContent
+                                lastMsg.status = undefined
+                            }
+                            return updated
+                        })
+                    } else if (event === 'conversation_id') {
+                        // 대화 ID 저장
+                        setConversationId(eventData)
+                    } else if (event === 'query_analysis') {
+                        // 쿼리 분석 결과 (Perplexity 스타일)
+                        setMessages(prev => {
+                            const updated = [...prev]
+                            const lastMsg = updated.find(m => m.id === assistantMessageId)
+                            if (lastMsg) {
+                                lastMsg.queryAnalysis = eventData as QueryAnalysis
+                            }
+                            return updated
+                        })
                     }
                 }
             }
 
         } catch (error) {
+            console.error('AI chat error:', error)
             setMessages(prev => {
                 const updated = [...prev]
                 const lastMsg = updated.find(m => m.id === assistantMessageId)
                 if (lastMsg) {
-                    lastMsg.content = '죄송합니다. 검색 중 오류가 발생했습니다.'
-                    lastMsg.isSearching = false
+                    lastMsg.content = '죄송합니다. 요청 처리 중 오류가 발생했습니다.'
+                    lastMsg.isStreaming = false
                     lastMsg.status = undefined
                 }
                 return updated
@@ -225,115 +402,47 @@ export function ChatInterface() {
         }
     }
 
-    const handleChatMessage = async (text: string) => {
-        // 기존 채팅 로직 유지 (필요하다면 여기도 스트리밍 개선 가능)
-        // ... (이전 코드와 동일, 생략 없이 복원하거나 필요시 검색과 통일)
-        // 여기서는 검색 기능 개선에 집중하므로 간단히 구현하거나 기존 로직 유지
-        // 사용자가 "AI 모드"를 주로 쓸 것이므로 검색 로직만 고도화해도 무방함
-        
-        // 편의상 검색 로직으로 통일하거나, 별도 채팅 로직을 유지할 수 있음
-        // 사용자 요청은 "AI 모드"에 대한 것이므로 handleSearchMessage가 메인임
-        
-        // 기존 채팅 로직 복원 (스트리밍 유지)
-        const userMessage: Message = {
-            id: Date.now().toString(),
-            role: 'user',
-            content: text,
-            mode: 'chat'
-        }
-        setMessages(prev => [...prev, userMessage])
-        setInput('')
-        setIsLoading(true)
-
-        try {
-            const response = await fetch(getApiUrl('chat'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    messages: [...messages, userMessage].map(m => ({ role: m.role, content: m.content }))
-                }),
-            })
-
-            const reader = response.body?.getReader()
-            const decoder = new TextDecoder()
-            if (!reader) throw new Error('No body')
-
-            const assistantMessage: Message = {
-                id: (Date.now() + 1).toString(),
-                role: 'assistant',
-                content: '',
-                mode: 'chat'
-            }
-            setMessages(prev => [...prev, assistantMessage])
-
-            let accumulatedContent = ''
-            let buffer = ''
-
-            while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
-                buffer += decoder.decode(value, { stream: true })
-                const lines = buffer.split('\n')
-                buffer = lines.pop() || ''
-                
-                for (const line of lines) {
-                    if (line.trim() === '') continue
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6).trim()
-                        if (data === '[DONE]') continue
-                        try {
-                            const parsed = JSON.parse(data)
-                            const content = parsed.choices?.[0]?.delta?.content
-                            if (content) {
-                                accumulatedContent += content
-                                setMessages(prev => {
-                                    const updated = [...prev]
-                                    const lastMsg = updated[updated.length - 1]
-                                    if (lastMsg && lastMsg.role === 'assistant') {
-                                        lastMsg.content = accumulatedContent
-                                    }
-                                    return updated
-                                })
-                            }
-                        } catch(e) {}
-                    }
-                }
-            }
-        } catch (error) {
-            console.error(error)
-        } finally {
-            setIsLoading(false)
-        }
-    }
-
-    const handleSendMessage = async (text: string) => {
-        if (!text.trim() || isLoading) return
-        if (mode === 'search') {
-            await handleSearchMessage(text)
-        } else {
-            await handleChatMessage(text)
-        }
-    }
-
-    const handleModeChange = (newMode: ChatMode) => {
+    const handleModeChange = (newMode: AIMode) => {
         setMode(newMode)
+    }
+
+    const handleNewChat = () => {
+        setMessages([])
+        setConversationId(null)
     }
 
     return (
         <div className="flex flex-col h-[calc(85vh-4rem)] md:h-[calc(100vh-4rem)] relative">
-            <ScrollArea className="flex-1 px-4">
+            {/* 헤더: 모드 선택 */}
+            <div className="flex items-center justify-between px-4 py-2 border-b bg-background/80 backdrop-blur-sm">
+                <AIModeSelector mode={mode} onModeChange={handleModeChange} disabled={isLoading} />
+                {conversationId && (
+                    <button
+                        onClick={handleNewChat}
+                        className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        새 대화
+                    </button>
+                )}
+            </div>
+
+            <ScrollArea className="flex-1 px-4" ref={scrollAreaRef}>
                 {messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center p-8 mt-20 opacity-50 space-y-4 animate-in fade-in zoom-in-95 duration-500">
-                        <div className="bg-primary/10 p-4 rounded-full mb-4">
-                            {mode === 'search' ? (
-                                <Sparkles className="h-12 w-12 text-indigo-500" />
-                            ) : (
-                                <MessageSquare className="h-12 w-12 text-primary" />
-                            )}
+                        <div className={cn(
+                            "p-4 rounded-full mb-4",
+                            AI_MODE_CONFIG[mode].bgColor
+                        )}>
+                            <div className={cn("h-12 w-12", AI_MODE_CONFIG[mode].color)}>
+                                {getModeIcon(mode)}
+                            </div>
                         </div>
                         <h2 className="text-3xl font-bold bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">
-                            {mode === 'search' ? '무엇을 도와드릴까요?' : '채팅 모드'}
+                            {AI_MODE_CONFIG[mode].label} 모드
                         </h2>
+                        <p className="text-muted-foreground text-sm">
+                            {AI_MODE_CONFIG[mode].description}
+                        </p>
                     </div>
                 ) : (
                     <div className="flex flex-col gap-6 max-w-3xl mx-auto py-8 pb-32">
@@ -347,7 +456,7 @@ export function ChatInterface() {
                             >
                                 <div
                                     className={cn(
-                                        "w-full max-w-[90%]", // 말풍선 너비 확장
+                                        "w-full max-w-[90%]",
                                         msg.role === 'user'
                                             ? "px-5 py-3 bg-secondary text-secondary-foreground rounded-2xl rounded-tr-sm whitespace-pre-wrap ml-auto w-fit"
                                             : "space-y-4"
@@ -355,68 +464,50 @@ export function ChatInterface() {
                                 >
                                     {msg.role === 'user' ? (
                                         <div className="flex items-center gap-2">
-                                            {msg.mode === 'search' && (
-                                                <Search className="h-4 w-4 text-muted-foreground" />
-                                            )}
+                                            <div className={cn("shrink-0", AI_MODE_CONFIG[msg.mode || 'simple'].color)}>
+                                                {getModeIcon(msg.mode)}
+                                            </div>
                                             <span className="text-base">{msg.content}</span>
                                         </div>
                                     ) : (
                                         <>
-                                            {/* 1. 진행 상태 메시지 (검색 중, 분석 중...) */}
-                                            {msg.status && <ThinkingProcess status={msg.status} />}
+                                            {/* 1. 진행 상태 */}
+                                            {msg.status && <ThinkingProcess status={msg.status} mode={msg.mode} />}
 
-                                            {/* 2. 검색 소스 그리드 (캐러셀 형태) */}
-                                            {msg.mode === 'search' && msg.sources && msg.sources.length > 0 && (
+                                            {/* 1.5. 쿼리 분석 결과 (Perplexity 스타일) */}
+                                            {msg.queryAnalysis && (
+                                                <QueryAnalysisDisplay analysis={msg.queryAnalysis} />
+                                            )}
+
+                                            {/* 2. 사고 과정 (Reasoning 모드) */}
+                                            {msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
+                                                <ThinkingProcessAccordion
+                                                    steps={msg.thinkingSteps}
+                                                    isStreaming={msg.isStreaming}
+                                                />
+                                            )}
+
+                                            {/* 3. 검색 소스 */}
+                                            {msg.sources && msg.sources.length > 0 && (
                                                 <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
                                                     <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground px-1">
                                                         <BookOpen className="h-4 w-4" />
-                                                        <span>검색된 자료 ({msg.sources.length})</span>
+                                                        <span>참조된 자료 ({msg.sources.length})</span>
                                                     </div>
-                                                    
-                                                    {/* 캐러셀 컴포넌트 */}
                                                     <SourceCarousel sources={msg.sources} />
                                                 </div>
                                             )}
 
-                                            {/* 3. 생각 과정 및 답변 내용 (스트리밍) */}
-                                            {msg.content && (() => {
-                                                // 생각 태그 파싱
-                                                const thinkMatch = msg.content.match(/<think>([\s\S]*?)<\/think>/)
-                                                const isThinking = msg.content.includes('<think>') && !msg.content.includes('</think>')
-                                                
-                                                let thinkingContent = ''
-                                                let mainContent = msg.content
-
-                                                if (thinkMatch) {
-                                                    // 완료된 생각
-                                                    thinkingContent = thinkMatch[1]
-                                                    mainContent = msg.content.replace(/<think>[\s\S]*?<\/think>/, '').trim()
-                                                } else if (isThinking) {
-                                                    // 생각 중...
-                                                    thinkingContent = msg.content.replace('<think>', '')
-                                                    mainContent = '' // 아직 본문 없음
-                                                }
-
-                                                return (
-                                                    <div className="animate-in fade-in duration-300">
-                                                        {/* 생각 과정 아코디언 */}
-                                                        {thinkingContent && (
-                                                            <ThinkingProcessAccordion 
-                                                                content={thinkingContent} 
-                                                                isStreaming={isThinking && (msg.isSearching ?? false)} 
-                                                            />
-                                                        )}
-                                                        
-                                                        {/* 메인 답변 */}
-                                                        {mainContent && (
-                                                            <MarkdownContent 
-                                                                content={mainContent} 
-                                                                sources={msg.sources} // 출처 목록 전달 (링크 생성용)
-                                                            />
-                                                        )}
-                                                    </div>
-                                                )
-                                            })()}
+                                            {/* 4. 답변 내용 */}
+                                            {msg.content && (
+                                                <div className="animate-in fade-in duration-300">
+                                                    <MarkdownContent
+                                                        content={msg.content}
+                                                        sources={msg.sources}
+                                                        isStreaming={msg.isStreaming}
+                                                    />
+                                                </div>
+                                            )}
                                         </>
                                     )}
                                 </div>
@@ -436,8 +527,6 @@ export function ChatInterface() {
                     mode={mode}
                     onModeChange={handleModeChange}
                     messages={messages}
-                    isReasoning={isReasoning}
-                    onReasoningChange={setIsReasoning}
                 />
             </div>
         </div>

@@ -1,50 +1,20 @@
 model_list:
-  # Prometheus 기반 라우팅 모델 (Chat)
-  - model_name: "qwen3-4b"
-    litellm_params:
-      model: "prometheus-router/qwen3-4b"
-      stream: true
+  # ============================================================
+  # 동적 라우팅 (와일드카드) - 새 모델 추가 시 config 수정 불필요
+  # ============================================================
+  # 모든 LLM 모델은 prometheus-router를 통해 동적으로 라우팅됩니다.
+  # stream_processor.py가 모델명 패턴을 분석하여 적절한 프로바이더(GPU/NPU)로 전달합니다.
+  #
+  # 사용 예시:
+  #   - model: "lfm2:2.6b" → NPU (flm-llm)
+  #   - model: "gpt-oss-sg:20b" → NPU (flm-llm)
+  #   - model: "lfm2.5-tk:1.2b" → NPU (flm-llm-thinking)
+  #   - model: "llama3:8b" → GPU (llama-server)
 
-  # LFM 모델 (NPU) - 정적 정의로 모델명 유지
-  - model_name: "lfm2:2.6b"
+  # LLM 와일드카드 - 모든 LLM 모델 동적 라우팅
+  - model_name: "*"
     litellm_params:
-      model: "prometheus-router/lfm2:2.6b"
-      stream: true
-
-  - model_name: "lfm2:1.2b"
-    litellm_params:
-      model: "prometheus-router/lfm2:1.2b"
-      stream: true
-
-  - model_name: "lfm2.5-it:1.2b"
-    litellm_params:
-      model: "prometheus-router/lfm2.5-it:1.2b"
-      stream: true
-
-  - model_name: "lfm2.5-tk:1.2b"
-    litellm_params:
-      model: "prometheus-router/lfm2.5-tk:1.2b"
-      stream: true
-
-  - model_name: "lfm2-trans:2.6b"
-    litellm_params:
-      model: "prometheus-router/lfm2-trans:2.6b"
-      stream: true
-
-  # Qwen 모델 (NPU)
-  - model_name: "qwen3-tk:4b"
-    litellm_params:
-      model: "prometheus-router/qwen3-tk:4b"
-      stream: true
-
-  - model_name: "qwen3-it:4b"
-    litellm_params:
-      model: "prometheus-router/qwen3-it:4b"
-      stream: true
-
-  - model_name: "qwen3vl-it:4b"
-    litellm_params:
-      model: "prometheus-router/qwen3vl-it:4b"
+      model: "prometheus-router/*"
       stream: true
 
   # Audio Models - V6.6: prometheus-router를 통해 Redis Stream으로 라우팅

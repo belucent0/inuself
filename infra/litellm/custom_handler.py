@@ -98,6 +98,37 @@ _cached_npu_device_id: str | None = None
 GPU_MODEL = os.getenv("GPU_MODEL", "Qwen3-4B-Instruct-2507-Q4_K_S.gguf")  # llama-server Router mode
 NPU_MODEL = os.getenv("NPU_MODEL", "qwen3vl-it:4b")  # FLM unified (LLM + OCR)
 
+# ============================================================
+# Tier-based Model Routing (V8.1 - 단순화)
+# ============================================================
+# Backend(LangGraph)는 "능력 티어"만 결정하고,
+# LiteLLM에서 실제 모델로 변환합니다.
+#
+# 단순화: 2개 티어만 사용
+# - tier-simple: 간단한 작업 (인사, 짧은 질문)
+# - tier-thinking: 복잡한 분석 + Chain-of-Thought 추론 (complex/reasoning 통합)
+TIER_MODEL_MAP = {
+    "tier-simple": os.getenv("FLM_LLM_SIMPLE_MODEL", "lfm2:2.6b"),
+    "tier-complex": os.getenv("FLM_THINKING_MODEL", "qwen3-tk:4b"),     # -> thinking으로 통합
+    "tier-reasoning": os.getenv("FLM_THINKING_MODEL", "qwen3-tk:4b"),   # -> thinking으로 통합
+    "tier-thinking": os.getenv("FLM_THINKING_MODEL", "qwen3-tk:4b"),
+}
+
+def resolve_tier_to_model(model_name: str) -> str:
+    """티어명을 실제 모델명으로 변환.
+
+    Args:
+        model_name: 요청된 모델명 (예: "tier-complex", "lfm2:2.6b")
+
+    Returns:
+        실제 모델명 (예: "gpt-oss-sg:20b")
+    """
+    if model_name.startswith("tier-"):
+        resolved = TIER_MODEL_MAP.get(model_name, TIER_MODEL_MAP.get("tier-simple"))
+        logger.info(f"[Tier Routing] {model_name} -> {resolved}")
+        return resolved
+    return model_name
+
 # Audio 설정
 GPU_AUDIO_API_BASE = os.getenv("GPU_AUDIO_API_BASE", "http://host.docker.internal:8001")
 NPU_AUDIO_API_BASE = os.getenv("NPU_AUDIO_API_BASE", "http://host.docker.internal:11434")
@@ -1748,8 +1779,11 @@ class PrometheusRouter(CustomLLM):
         # 요청된 모델명 사용 (라우터 prefix 제거)
         requested_model_name = model.split("/")[-1] if "/" in model else model
 
+        # V8.0: Tier-based routing - 티어명을 실제 모델명으로 변환
+        requested_model_name = resolve_tier_to_model(requested_model_name)
+
         selection_latency = time.time() - start_ts
-        logger.debug(f"{get_log_prefix()} [PrometheusRouter V7.4] Provider: {target_provider}, model={requested_model_name} (Latency: {selection_latency:.3f}s)")
+        logger.debug(f"{get_log_prefix()} [PrometheusRouter V8.0] Provider: {target_provider}, model={requested_model_name} (Latency: {selection_latency:.3f}s)")
 
         await increment_active_count(target_provider)
 

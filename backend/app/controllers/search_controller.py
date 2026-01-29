@@ -46,12 +46,11 @@ def get_litellm_api_key() -> str:
 
 def get_litellm_model(reasoning_mode: bool = False) -> str:
     """사용할 LLM 모델명 조회 (Env Only)."""
-    env_key = "FLM_THINKING_MODEL" if reasoning_mode else "FLM_LLM_MODEL"
+    env_key = "FLM_THINKING_MODEL" if reasoning_mode else "FLM_LLM_SIMPLE_MODEL"
     model = os.getenv(env_key)
     if not model:
-        # 안전한 기본값보다는 명확한 에러를 발생시켜 설정 누락을 알림
         logger.warning(f"[Config] {env_key} is missing in .env")
-        return "lfm2:2.6b" if not reasoning_mode else "lfm2.5-tk:1.2b"
+        return "qwen3-tk:4b" if reasoning_mode else "lfm2:2.6b"
     return model
 
 

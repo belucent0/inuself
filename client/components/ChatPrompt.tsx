@@ -2,16 +2,14 @@
 
 import * as React from "react"
 import { useState } from "react"
-import { Send, Paperclip, Globe, Youtube, MessageSquare, Brain } from "lucide-react"
+import { Send, Paperclip, Youtube } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { Switch } from "@/components/ui/switch"
 import { YouTubeLinkModal } from "./YouTubeLinkModal"
 import { uploadYouTubeContent } from "@/lib/api"
-
-type ChatMode = 'chat' | 'search'
+import { AIModeSelector, AI_MODE_CONFIG, type AIMode } from "@/components/AIModeSelector"
 
 interface ChatPromptProps extends React.HTMLAttributes<HTMLDivElement> {
     input: string
@@ -19,11 +17,9 @@ interface ChatPromptProps extends React.HTMLAttributes<HTMLDivElement> {
     onSendMessage: (message: string) => void
     isLoading?: boolean
     onFileUpload?: () => void
-    mode?: ChatMode
-    onModeChange?: (mode: ChatMode) => void
+    mode?: AIMode
+    onModeChange?: (mode: AIMode) => void
     messages?: any[]
-    isReasoning?: boolean
-    onReasoningChange?: (checked: boolean) => void
 }
 
 export function ChatPrompt({
@@ -33,11 +29,9 @@ export function ChatPrompt({
     onSendMessage,
     isLoading,
     onFileUpload,
-    mode = 'chat',
+    mode = 'search',
     onModeChange,
     messages = [],
-    isReasoning = false,
-    onReasoningChange,
     ...props
 }: ChatPromptProps) {
     const textareaRef = React.useRef<HTMLTextAreaElement>(null)
@@ -79,34 +73,37 @@ export function ChatPrompt({
         }
     }
 
-    const toggleMode = () => {
-        const newMode = mode === 'chat' ? 'search' : 'chat'
-        onModeChange?.(newMode)
-        toast.info(newMode === 'search' ? '🔍 웹 검색 모드' : '💬 채팅 모드', {
-            description: newMode === 'search'
-                ? '웹 검색 결과를 바탕으로 답변합니다.'
-                : 'AI와 자유롭게 대화합니다.',
-            duration: 2000,
-        })
-    }
-
+    const currentConfig = AI_MODE_CONFIG[mode]
     const inputValue = input ?? ''
     const isDisabled = !inputValue.trim() || (isLoading ?? false)
+
+    // 모드별 placeholder
+    const placeholders: Record<AIMode, string> = {
+        simple: "무엇이든 물어보세요...",
+        search: "웹에서 검색할 내용을 입력하세요...",
+        rag: "내 문서에서 검색할 내용을 입력하세요...",
+        reasoning: "분석이 필요한 질문을 입력하세요...",
+        hybrid: "웹과 내 문서에서 통합 검색할 내용을 입력하세요..."
+    }
 
     return (
         <div className={cn("relative w-full max-w-3xl mx-auto", className)} {...props}>
             <div className={cn(
                 "relative flex flex-col w-full p-3 rounded-xl border transition-all",
-                mode === 'search'
-                    ? "bg-blue-500/5 border-blue-500/20 focus-within:ring-1 focus-within:ring-blue-500/50 focus-within:border-blue-500/50"
-                    : "bg-secondary/50 focus-within:ring-1 focus-within:ring-ring focus-within:border-ring"
+                currentConfig.bgColor,
+                "border-border/50 focus-within:ring-1 focus-within:border-opacity-50",
+                mode === 'search' && "focus-within:ring-blue-500/50 focus-within:border-blue-500/50",
+                mode === 'rag' && "focus-within:ring-green-500/50 focus-within:border-green-500/50",
+                mode === 'reasoning' && "focus-within:ring-purple-500/50 focus-within:border-purple-500/50",
+                mode === 'hybrid' && "focus-within:ring-amber-500/50 focus-within:border-amber-500/50",
+                mode === 'simple' && "focus-within:ring-slate-500/50 focus-within:border-slate-500/50"
             )}>
                 <textarea
                     ref={textareaRef}
                     value={inputValue}
                     onChange={handleChange}
                     onKeyDown={handleKeyDown}
-                    placeholder={mode === 'search' ? "웹에서 검색할 내용을 입력하세요..." : "무엇이든 물어보세요..."}
+                    placeholder={placeholders[mode]}
                     disabled={isLoading ?? false}
                     className="w-full resize-none bg-transparent border-0 focus-visible:ring-0 p-1 min-h-[44px] max-h-[200px] text-sm md:text-base leading-relaxed scrollbar-thin scrollbar-thumb-muted-foreground/20"
                     rows={1}
@@ -114,35 +111,21 @@ export function ChatPrompt({
 
                 <div className="flex justify-between items-end mt-2">
                     <div className="flex items-center gap-1">
-                        {/* 모드 토글 버튼 */}
-                        <TooltipProvider>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <Button
-                                        type="button"
-                                        variant={mode === 'search' ? 'default' : 'ghost'}
-                                        size="icon"
-                                        className={cn(
-                                            "h-8 w-8 rounded-full transition-all",
-                                            mode === 'search'
-                                                ? "bg-blue-500 text-white hover:bg-blue-600"
-                                                : "text-muted-foreground hover:text-foreground"
-                                        )}
-                                        onClick={toggleMode}
-                                    >
-                                        {mode === 'search' ? (
-                                            <Globe className="h-4 w-4" />
-                                        ) : (
-                                            <Globe className="h-4 w-4" />
-                                        )}
-                                        <span className="sr-only">웹 검색 모드 {mode === 'search' ? '끄기' : '켜기'}</span>
-                                    </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                    {mode === 'search' ? '채팅 모드로 전환' : '웹 검색 모드로 전환'}
-                                </TooltipContent>
-                            </Tooltip>
-                        </TooltipProvider>
+                        {/* AI 모드 선택 */}
+                        <AIModeSelector
+                            mode={mode}
+                            onModeChange={(newMode) => {
+                                onModeChange?.(newMode)
+                                toast.info(`${AI_MODE_CONFIG[newMode].label} 모드`, {
+                                    description: AI_MODE_CONFIG[newMode].description,
+                                    duration: 2000,
+                                })
+                            }}
+                            disabled={isLoading}
+                            compact
+                        />
+
+                        <div className="mx-1 h-4 w-[1px] bg-border" />
 
                         <TooltipProvider>
                             <Tooltip>
@@ -173,47 +156,9 @@ export function ChatPrompt({
                                 <TooltipContent>YouTube 링크로 콘텐츠 생성</TooltipContent>
                             </Tooltip>
                         </TooltipProvider>
-
-                        {/* 구분선 및 추론 모드 토글 */}
-                        <div className="mx-1 h-4 w-[1px] bg-border" />
-                        
-                        <TooltipProvider>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div className="flex items-center gap-1.5 px-1">
-                                        <Switch 
-                                            checked={isReasoning}
-                                            onCheckedChange={onReasoningChange}
-                                            className="scale-75 data-[state=checked]:bg-purple-500"
-                                            id="reasoning-mode"
-                                        />
-                                        <label 
-                                            htmlFor="reasoning-mode"
-                                            className={cn(
-                                                "text-xs font-medium cursor-pointer flex items-center gap-1 select-none", 
-                                                isReasoning ? "text-purple-500" : "text-muted-foreground"
-                                            )}
-                                        >
-                                            <Brain className="h-3 w-3" />
-                                            추론
-                                        </label>
-                                    </div>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                    <p>추론(Reasoning) 모델을 사용하여 깊이 있는 답변을 생성합니다.</p>
-                                </TooltipContent>
-                            </Tooltip>
-                        </TooltipProvider>
                     </div>
 
                     <div className="flex items-center gap-2">
-                        {/* 현재 모드 표시 */}
-                        {mode === 'search' && (
-                            <span className="text-xs text-blue-500 font-medium">
-                                🔍 검색 모드
-                            </span>
-                        )}
-
                         <TooltipProvider>
                             <Tooltip>
                                 <TooltipTrigger asChild>
@@ -225,9 +170,7 @@ export function ChatPrompt({
                                         className={cn(
                                             "h-8 w-8 rounded-full transition-all",
                                             inputValue.trim()
-                                                ? mode === 'search'
-                                                    ? "bg-blue-500 text-white hover:bg-blue-600"
-                                                    : "bg-primary text-primary-foreground"
+                                                ? cn("text-white", currentConfig.color.replace('text-', 'bg-').replace('/500', '-500'))
                                                 : "bg-muted text-muted-foreground"
                                         )}
                                     >
@@ -244,9 +187,7 @@ export function ChatPrompt({
 
             {messages.length === 0 && (
                 <div className="text-center mt-2 text-xs text-muted-foreground animate-in fade-in slide-in-from-bottom-2">
-                    {mode === 'search'
-                        ? '웹 검색 결과를 바탕으로 출처가 명시된 답변을 제공합니다.'
-                        : 'AI는 실수를 할 수 있습니다. 중요한 정보는 확인해 주세요.'}
+                    {currentConfig.description}
                 </div>
             )}
 
