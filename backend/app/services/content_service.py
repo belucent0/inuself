@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.config import get_settings
 from ..core.logging import logger
 from ..core.storage import delete_file, upload_fileobj, get_public_media_url, delete_files_by_prefix
+from ..core.telemetry import preserve_otel_context
 from ..db.models import ContentStatus
 from ..repositories.content_repository import ContentRepository
 from ..schemas.content import ContentDetail, ContentListItem, ContentListResponse, UploadResponse
@@ -132,7 +133,7 @@ class ContentService:
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
             )
-            job_id = await loop.run_in_executor(None, enqueue_func)
+            job_id = await loop.run_in_executor(None, preserve_otel_context(enqueue_func))
             logger.info("[Upload] 큐에 작업 등록 성공: content_id=%s, job_id=%s", content.id, job_id)
             print(f"[Upload] OK 큐 등록 완료: content_id={content.id}, job_id={job_id}")
         except Exception as exc:
@@ -292,95 +293,23 @@ class ContentService:
                 )
                 await self.session.commit()
                 
-                # OCR 전처리: 원본 파일을 이미지로 변환하고 S3에 업로드
-                import tempfile
-                from ..core.storage import download_file, wait_for_files
-                from ..services.ocr_service import OcrPreprocessor
-                
-                temp_file_path = None
-                try:
-                    # S3에서 원본 파일 다운로드
-                    temp_dir = Path(tempfile.gettempdir())
-                    temp_file_path = temp_dir / f"ocr_retry_{content_id}_{uuid4().hex[:8]}{Path(file_obj.filename or '').suffix}"
-                    
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(
-                        None,
-                        lambda: download_file(file_obj.object_key, destination=temp_file_path)
-                    )
-                    logger.info("[Retry OCR] 파일 다운로드 완료: file_id=%s, path=%s", content_id, temp_file_path)
-                    
-                    # OCR 전처리 수행
-                    preprocessor = OcrPreprocessor()
-                    prep_result = await loop.run_in_executor(
-                        None,
-                        lambda: preprocessor.prepare_for_ocr(temp_file_path, content_id)
-                    )
-                    
-                    image_s3_keys = prep_result["image_s3_keys"]
-                    is_text_file = prep_result.get("is_text_file", False)
-                    text_content = prep_result.get("text_content")
-                    
-                    if is_text_file and text_content:
-                        # 텍스트 파일은 OCR 불필요, 직접 저장
-                        logger.info("[Retry OCR] 텍스트 파일 직접 저장: file_id=%s", content_id)
-                        from ..repositories.document_repository import DocumentRepository
-                        document_repo = DocumentRepository(self.session)
-                        await document_repo.update_document(
-                            file_id=content_id,
-                            ocr_text=text_content,
-                            page_count=prep_result.get("page_count", 1),
-                            ocr_metadata={"file_type": ".txt", "direct_read": True},
-                        )
-                        await file_repo.update_file_status(content_id, FileStatus.SUMMARY_QUEUED)
-                        await self.session.commit()
-                        return {"success": True, "message": "OCR reprocessing completed (text file)", "job_id": None}
-                    
-                    if not image_s3_keys:
-                        raise ValueError(f"No images generated for OCR retry: file_id={content_id}")
-                    
-                    # 이미지 파일 가용성 확인
-                    all_ready, failed_keys = await loop.run_in_executor(
-                        None,
-                        lambda: wait_for_files(
-                            image_s3_keys,
-                            max_attempts=10,
-                            interval=0.5,
-                            context=f"file_id={content_id}"
-                        )
-                    )
-                    
-                    if not all_ready:
-                        raise FileNotFoundError(
-                            f"OCR 이미지 파일이 S3에서 가용하지 않습니다: "
-                            f"file_id={content_id}, failed_keys={failed_keys}"
-                        )
-                    
-                    # OCR 작업 큐잉
-                    from functools import partial
-                    from ..utils.task_queue_adapter import get_task_queue
-                    
-                    task_queue = get_task_queue()
-                    enqueue_func = partial(
-                        task_queue.enqueue_ocr_job,
-                        file_id=content_id,
-                        image_s3_keys=image_s3_keys,
-                        ocr_mode=ocr_mode,
-                        ocr_accuracy_mode=ocr_accuracy_mode,
-                    )
-                    job_id = await loop.run_in_executor(None, enqueue_func)
-                    
-                    logger.info("Manual OCR retry enqueued: file_id=%s, job_id=%s, images=%d", 
-                               content_id, job_id, len(image_s3_keys))
-                    return {"success": True, "message": "OCR reprocessing started", "job_id": job_id}
-                    
-                finally:
-                    # 임시 파일 삭제
-                    if temp_file_path and temp_file_path.exists():
-                        try:
-                            temp_file_path.unlink()
-                        except Exception:
-                            pass
+                # OCR 작업 큐잉 (Worker에서 전처리)
+                loop = asyncio.get_running_loop()
+                from functools import partial
+                from ..utils.task_queue_adapter import get_task_queue
+
+                task_queue = get_task_queue()
+                enqueue_func = partial(
+                    task_queue.enqueue_ocr_job,
+                    file_id=content_id,
+                    file_s3_key=file_obj.object_key,  # 원본 파일 S3 경로
+                    ocr_mode=ocr_mode,
+                    ocr_accuracy_mode=ocr_accuracy_mode,
+                )
+                job_id = await loop.run_in_executor(None, preserve_otel_context(enqueue_func))
+
+                logger.info("Manual OCR retry enqueued: file_id=%s, job_id=%s", content_id, job_id)
+                return {"success": True, "message": "OCR reprocessing started", "job_id": job_id}
             elif retry_type == "asr":
                 # ASR 재처리
                 if file_obj.content_type != ContentType.AUDIO:
@@ -425,9 +354,9 @@ class ContentService:
                     max_speakers=max_speakers,
                     accuracy_mode=accuracy_mode,
                 )
-                job_id = await loop.run_in_executor(None, enqueue_func)
-                
-                logger.info("Manual ASR retry enqueued: file_id=%s, job_id=%s, min_speakers=%s, max_speakers=%s, accuracy_mode=%s", 
+                job_id = await loop.run_in_executor(None, preserve_otel_context(enqueue_func))
+
+                logger.info("Manual ASR retry enqueued: file_id=%s, job_id=%s, min_speakers=%s, max_speakers=%s, accuracy_mode=%s",
                            content_id, job_id, min_speakers, max_speakers, accuracy_mode)
                 return {"success": True, "message": "ASR reprocessing started", "job_id": job_id}
             
@@ -479,12 +408,12 @@ class ContentService:
                     file_id=content_id,
                     text_to_summarize=text_to_summarize,
                 )
-                job_id = await loop.run_in_executor(None, enqueue_func)
-                
-                logger.info("Manual LLM retry enqueued: file_id=%s, job_id=%s, text_length=%d", 
+                job_id = await loop.run_in_executor(None, preserve_otel_context(enqueue_func))
+
+                logger.info("Manual LLM retry enqueued: file_id=%s, job_id=%s, text_length=%d",
                            content_id, job_id, len(text_to_summarize))
                 return {"success": True, "message": "LLM summary reprocessing started", "job_id": job_id}
-            
+
             else:
                 raise ValueError(f"Invalid retry_type: {retry_type}. Must be 'asr', 'summary', or 'ocr'")
         
@@ -534,12 +463,12 @@ class ContentService:
                 max_speakers=max_speakers,
                 accuracy_mode=accuracy_mode,
             )
-            job_id = await loop.run_in_executor(None, enqueue_func)
-            
-            logger.info("Manual ASR retry enqueued: content_id=%s, job_id=%s, min_speakers=%s, max_speakers=%s, accuracy_mode=%s", 
+            job_id = await loop.run_in_executor(None, preserve_otel_context(enqueue_func))
+
+            logger.info("Manual ASR retry enqueued: content_id=%s, job_id=%s, min_speakers=%s, max_speakers=%s, accuracy_mode=%s",
                        content_id, job_id, min_speakers, max_speakers, accuracy_mode)
             return {"success": True, "message": "ASR reprocessing started", "job_id": job_id}
-        
+
         elif retry_type == "summary":
             if content.status not in [ContentStatus.SUMMARY_FAILED, ContentStatus.SUMMARY_QUEUED, ContentStatus.SUMMARIZING]:
                 raise ValueError(f"Cannot retry LLM summary for content with status: {content.status.value}")
@@ -579,12 +508,12 @@ class ContentService:
                 file_id=content_id,
                 text_to_summarize=text_to_summarize,
             )
-            job_id = await loop.run_in_executor(None, enqueue_func)
-            
-            logger.info("Manual LLM retry enqueued: content_id=%s, job_id=%s, text_length=%d", 
+            job_id = await loop.run_in_executor(None, preserve_otel_context(enqueue_func))
+
+            logger.info("Manual LLM retry enqueued: content_id=%s, job_id=%s, text_length=%d",
                        content_id, job_id, len(text_to_summarize))
             return {"success": True, "message": "LLM summary reprocessing started", "job_id": job_id}
-        
+
         else:
             raise ValueError(f"Invalid retry_type: {retry_type}. Must be 'asr' or 'summary'")
     

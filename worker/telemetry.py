@@ -25,7 +25,7 @@ from typing import Any, Callable, Optional
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.trace import Status, StatusCode, Span
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -120,10 +120,11 @@ def setup_worker_telemetry(service_name: str = None) -> None:
         # TracerProvider 설정
         _tracer_provider = TracerProvider(resource=resource)
 
-        # OTLP Exporter
+        # OTLP Exporter (HTTP)
+        # Jaeger HTTP endpoint는 /v1/traces 경로 필요
+        http_endpoint = f"{endpoint}/v1/traces" if not endpoint.endswith("/v1/traces") else endpoint
         exporter = OTLPSpanExporter(
-            endpoint=endpoint,
-            insecure=True,
+            endpoint=http_endpoint,
         )
 
         # FilteringSpanProcessor로 노이즈 제거
@@ -240,7 +241,8 @@ def trace_celery_task(
 ):
     """Celery 태스크 내에서 상세 추적을 위한 컨텍스트 매니저.
 
-    자동 계측된 Celery span의 자식 span으로 생성됩니다.
+    Backend에서 주입한 trace context (traceparent)를 추출하여
+    부모 span과 연결합니다.
 
     사용 예:
         @celery_app.task(bind=True)
@@ -254,7 +256,27 @@ def trace_celery_task(
     task_name = task_instance.name if hasattr(task_instance, 'name') else 'unknown'
     span_name = f"task.{task_name.split('.')[-1]}"
 
-    with tracer.start_as_current_span(span_name) as span:
+    # Backend에서 주입한 trace context 추출 (분산 추적 연결)
+    parent_context = None
+    raw_headers = None
+    if hasattr(task_instance, 'request'):
+        raw_headers = task_instance.request.headers
+        logger.info(f"[Telemetry] Celery request.headers type={type(raw_headers)}, value={raw_headers}")
+        if raw_headers:
+            headers = dict(raw_headers)
+            logger.info(f"[Telemetry] Celery headers dict: {headers}")
+            parent_context = extract_trace_context(headers)
+            logger.info(f"[Telemetry] Extracted parent context: {parent_context}")
+
+    with tracer.start_as_current_span(span_name, context=parent_context) as span:
+        # 디버그: span이 실제로 시작되었는지 확인
+        current_span = trace.get_current_span()
+        if current_span and current_span.get_span_context().is_valid:
+            ctx = current_span.get_span_context()
+            logger.info(f"[Telemetry] Span started: trace_id={format(ctx.trace_id, '032x')}, span_id={format(ctx.span_id, '016x')}")
+        else:
+            logger.warning(f"[Telemetry] Span NOT started or invalid! current_span={current_span}")
+
         # Celery 메타데이터
         if hasattr(task_instance, 'request'):
             span.set_attribute(BottleneckAttributes.CELERY_TASK_ID, task_instance.request.id or "")
