@@ -1,12 +1,13 @@
 'use client';
 
-import { Span } from '@opentelemetry/api';
+import { Span, trace, context, SpanStatusCode } from '@opentelemetry/api';
 
 // OpenTelemetry 브라우저 추적
 // 패키지가 없거나 초기화 실패 시 graceful fallback
 
 let initialized = false;
 let telemetryEnabled = false;
+let originalFetch: typeof fetch | null = null;
 
 /**
  * 브라우저 OpenTelemetry 초기화
@@ -59,7 +60,10 @@ async function initTelemetryAsync(): Promise<void> {
 
         provider.register();
 
-        // fetch 요청 자동 계측
+        // 전역 fetch 패치 (span 이름을 "METHOD /path" 형식으로 설정)
+        patchGlobalFetch();
+
+        // fetch 요청 자동 계측 (traceparent 헤더 전파용)
         registerInstrumentations({
             instrumentations: [
                 new FetchInstrumentation({
@@ -87,11 +91,101 @@ async function initTelemetryAsync(): Promise<void> {
         });
 
         telemetryEnabled = true;
-        console.log('[Telemetry] Browser OpenTelemetry initialized');
+        console.log('[Telemetry] Browser OpenTelemetry initialized (global fetch patched)');
     } catch (e) {
         // 패키지가 없거나 초기화 실패 - 무시
         throw e;
     }
+}
+
+/**
+ * 전역 fetch를 패치하여 모든 API 요청에 적절한 span 이름 설정
+ * - span 이름: "METHOD /path" (예: "POST /api/contents/upload")
+ * - /api/ 경로 요청만 추적 (정적 리소스 제외)
+ */
+function patchGlobalFetch(): void {
+    if (originalFetch) return; // 이미 패치됨
+
+    originalFetch = window.fetch;
+    const tracer = trace.getTracer('asr-frontend');
+
+    // 추적하지 않을 URL 패턴
+    const ignorePatterns = [
+        /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf)$/,
+        /\/next\//,
+        /\/_next\//,
+        /\/health/,
+        /\/ready/,
+        /\/metrics/,
+        /\/healthz/,
+        /\/otlp\//,  // OTLP exporter 요청 제외 (무한 루프 방지)
+    ];
+
+    window.fetch = async function(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+        // URL 추출
+        let url: string;
+        let method = 'GET';
+
+        if (typeof input === 'string') {
+            url = input;
+            method = init?.method || 'GET';
+        } else if (input instanceof URL) {
+            url = input.toString();
+            method = init?.method || 'GET';
+        } else if (input instanceof Request) {
+            url = input.url;
+            method = input.method || init?.method || 'GET';
+        } else {
+            // 알 수 없는 타입 - 원본 fetch 호출
+            return originalFetch!.call(window, input, init);
+        }
+
+        // 무시할 URL인지 확인
+        const shouldIgnore = ignorePatterns.some(pattern => pattern.test(url));
+        if (shouldIgnore) {
+            return originalFetch!.call(window, input, init);
+        }
+
+        // API 요청만 추적 (/api/ 경로)
+        if (!url.includes('/api/')) {
+            return originalFetch!.call(window, input, init);
+        }
+
+        // span 이름 생성: "METHOD /path"
+        let path: string;
+        try {
+            const urlObj = new URL(url, window.location.origin);
+            path = urlObj.pathname;
+        } catch {
+            path = url;
+        }
+        const spanName = `${method} ${path}`;
+
+        // span 생성 및 fetch 실행
+        return tracer.startActiveSpan(spanName, async (span) => {
+            try {
+                span.setAttribute('http.method', method);
+                span.setAttribute('http.url', url);
+                span.setAttribute('http.target', path);
+
+                const response = await originalFetch!.call(window, input, init);
+
+                span.setAttribute('http.status_code', response.status);
+                if (!response.ok) {
+                    span.setStatus({ code: SpanStatusCode.ERROR, message: `HTTP ${response.status}` });
+                }
+
+                return response;
+            } catch (error) {
+                span.setStatus({ code: SpanStatusCode.ERROR, message: String(error) });
+                throw error;
+            } finally {
+                span.end();
+            }
+        });
+    };
+
+    console.log('[Telemetry] Global fetch patched for tracing');
 }
 
 /**

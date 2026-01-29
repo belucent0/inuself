@@ -167,8 +167,18 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
     ROCM_PYTHON = str(Path(ROCM_ENV_PATH) / "Scripts" / "python.exe")
     SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 
+    # FLM 모델 설정 (환경변수 기반 - Tier-based Routing)
+    # flm-llm 서버: tier-simple 요청 처리 (간단한 작업)
+    # flm-llm-thinking 서버: tier-complex/reasoning/thinking 요청 처리 (복잡한 분석 + CoT 추론)
+    FLM_LLM_SIMPLE_MODEL = env_vars.get("FLM_LLM_SIMPLE_MODEL", "lfm2:2.6b")
+    FLM_THINKING_MODEL = env_vars.get("FLM_THINKING_MODEL", "qwen3-tk:4b")
+    FLM_OCR_MODEL = env_vars.get("FLM_OCR_MODEL", "qwen3vl-it:4b")
+
+    logger.info(f"[Config] FLM Models - Simple: {FLM_LLM_SIMPLE_MODEL}, Thinking: {FLM_THINKING_MODEL}, OCR: {FLM_OCR_MODEL}")
+
     return {
         # FLM NPU 서버들 (RAM 사용량 - NPU는 시스템 RAM 사용)
+        # 모델명은 환경변수에서 로드 (동적 변경 지원)
         "flm-asr": ProviderConfig(
             name="flm-asr",
             cmd=["flm", "serve", "--asr", "1", "--port", "11434"],
@@ -179,23 +189,23 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
         ),
         "flm-llm": ProviderConfig(
             name="flm-llm",
-            cmd=["flm", "serve", "lfm2:2.6b", "--port", "11435"],
+            cmd=["flm", "serve", FLM_LLM_SIMPLE_MODEL, "--embed", "1", "--port", "11435"],
             port=11435,
             health="/v1/models",
-            estimated_ram=0.5,  # lfm2:2.6b 실측 ~0.3GB
+            estimated_ram=2.0,  # tier-simple용 (lfm2:2.6b)
             enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "flm-llm-thinking": ProviderConfig(
             name="flm-llm-thinking",
-            cmd=["flm", "serve", "lfm2.5-tk:1.2b", "--port", "11437"],
+            cmd=["flm", "serve", FLM_THINKING_MODEL, "--port", "11437"],
             port=11437,
             health="/v1/models",
-            estimated_ram=1.0,  # lfm2.5-tk:1.2b ~0.8GB
+            estimated_ram=2.0,  # tier-complex/reasoning/thinking용 (qwen3-tk:4b)
             enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "flm-ocr": ProviderConfig(
             name="flm-ocr",
-            cmd=["flm", "serve", "qwen3vl-it:4b", "--port", "11436"],
+            cmd=["flm", "serve", FLM_OCR_MODEL, "--port", "11436"],
             port=11436,
             health="/v1/models",
             estimated_ram=2.0,  # qwen3vl-it:4b 실측 ~1.7GB

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
 from ..core.logging import logger
+from ..core.telemetry import preserve_otel_context
 from ..core.storage import delete_file, upload_fileobj, get_public_media_url, wait_for_file, wait_for_files, download_file, delete_files_by_prefix
 from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
@@ -187,7 +188,7 @@ class FileService:
                 loop = asyncio.get_running_loop()
                 from functools import partial
                 from ..utils.task_queue_adapter import get_task_queue
-                
+
                 task_queue = get_task_queue()
                 enqueue_func = partial(
                     task_queue.enqueue_asr_job,
@@ -201,7 +202,7 @@ class FileService:
                     max_speakers=max_speakers,
                     accuracy_mode=accuracy_mode,
                 )
-                job_id = await loop.run_in_executor(None, enqueue_func)
+                job_id = await loop.run_in_executor(None, preserve_otel_context(enqueue_func))
                 logger.info("[Upload] ASR 작업 큐잉 성공: file_id=%s, job_id=%s", file_obj.id, job_id)
                 print(f"[Upload] OK ASR 큐 등록 완료: file_id={file_obj.id}, job_id={job_id}")
             except Exception as exc:
@@ -210,7 +211,7 @@ class FileService:
                 print(f"[Upload] ERROR {error_msg}")
         
         elif content_type in (ContentType.DOCUMENT, ContentType.PORTRAY):
-            # 문서 또는 이미지 묘사: Document 생성 + OCR 전처리 + 작업 큐잉
+            # 문서 또는 이미지 묘사: Document 생성 + OCR 작업 큐잉
             await self.document_repo.create_document(
                 file_id=file_obj.id,
                 ocr_text="",
@@ -218,112 +219,32 @@ class FileService:
                 ocr_metadata={},
             )
             await self.session.commit()
-            
-            # OCR 전처리 및 작업 큐잉
-            logger.info("[Upload] OCR 전처리 시작: file_id=%s, ocr_mode=%s, ocr_accuracy_mode=%s", file_obj.id, ocr_mode, ocr_accuracy_mode)
-            print(f"[Upload] [4/4] OCR 전처리 및 큐잉 중: file_id={file_obj.id}, ocr_mode={ocr_mode}, ocr_accuracy_mode={ocr_accuracy_mode}")
-            
-            import tempfile
-            temp_file_path = None
+
+            # OCR 작업 큐잉 (Worker에서 전처리)
+            logger.info("[Upload] OCR 작업 큐잉 시작: file_id=%s, ocr_mode=%s, ocr_accuracy_mode=%s",
+                       file_obj.id, ocr_mode, ocr_accuracy_mode)
+            print(f"[Upload] [4/4] OCR 큐잉 중: file_id={file_obj.id}, ocr_mode={ocr_mode}, ocr_accuracy_mode={ocr_accuracy_mode}")
+
             try:
-                # S3에서 파일 다운로드
-                temp_dir = Path(tempfile.gettempdir())
-                temp_file_path = temp_dir / f"ocr_prep_{file_obj.id}_{uuid4().hex[:8]}{Path(file.filename or '').suffix}"
-                download_file(object_key, destination=temp_file_path)
-                logger.info("[Upload] OCR 전처리: 파일 다운로드 완료: %s", temp_file_path)
-                
-                # 전처리 (PDF/이미지 → 이미지 목록 → S3 업로드)
-                from .ocr_service import OcrPreprocessor
-                preprocessor = OcrPreprocessor()
-                prep_result = preprocessor.prepare_for_ocr(temp_file_path, file_obj.id)
-                
-                image_s3_keys = prep_result["image_s3_keys"]
-                is_text_file = prep_result.get("is_text_file", False)
-                text_content = prep_result.get("text_content")
-                page_count = prep_result.get("page_count", 0)
-                
-                # 이미지 파일인 경우, S3 업로드 후 파일 가용성 확인
-                if not is_text_file and image_s3_keys:
-                    logger.info(
-                        "[Upload] 업로드된 OCR 이미지 경로 목록: file_id=%s, keys=%s",
-                        file_obj.id, image_s3_keys
-                    )
-                    
-                    loop = asyncio.get_running_loop()
-                    all_ready, failed_keys = await loop.run_in_executor(
-                        None,
-                        lambda: wait_for_files(
-                            image_s3_keys,
-                            max_attempts=10,
-                            interval=0.5,
-                            context=f"file_id={file_obj.id}"
-                        )
-                    )
-                    
-                    if not all_ready:
-                        settings = get_settings()
-                        error_msg = (
-                            f"OCR 이미지 파일이 S3에서 가용하지 않습니다: "
-                            f"file_id={file_obj.id}, uploaded={len(image_s3_keys)}, "
-                            f"failed={len(failed_keys)}, failed_keys={failed_keys}, "
-                            f"endpoint={settings.s3_endpoint}, bucket={settings.s3_bucket}"
-                        )
-                        logger.error(f"[Upload] {error_msg}")
-                        raise FileNotFoundError(error_msg)
-                
-                if is_text_file and text_content:
-                    # 텍스트 파일은 OCR 불필요, 직접 저장
-                    logger.info("[Upload] 텍스트 파일 직접 저장: file_id=%s", file_obj.id)
-                    await self.document_repo.update_document(
-                        file_id=file_obj.id,
-                        ocr_text=text_content,
-                        page_count=page_count,
-                        ocr_metadata={"file_type": ".txt", "direct_read": True},
-                    )
-                    await self.file_repo.update_file_status(file_obj.id, FileStatus.SUMMARY_QUEUED)
-                    await self.session.commit()
-                    
-                    # LLM 요약 큐잉
-                    loop = asyncio.get_running_loop()
-                    from functools import partial
-                    from ..utils.task_queue_adapter import get_task_queue
-                    task_queue = get_task_queue()
-                    enqueue_func = partial(
-                        task_queue.enqueue_llm_job,
-                        file_id=file_obj.id,
-                        text_to_summarize=text_content,
-                    )
-                    await loop.run_in_executor(None, enqueue_func)
-                    print(f"[Upload] OK 텍스트 파일 저장 완료, LLM 큐잉: file_id={file_obj.id}")
-                else:
-                    # 이미지로 변환된 파일: OCR 워커 큐잉
-                    loop = asyncio.get_running_loop()
-                    from functools import partial
-                    from ..utils.task_queue_adapter import get_task_queue
-                    
-                    task_queue = get_task_queue()
-                    enqueue_func = partial(
-                        task_queue.enqueue_ocr_job,
-                        file_id=file_obj.id,
-                        image_s3_keys=image_s3_keys,
-                        ocr_mode=ocr_mode,
-                        ocr_accuracy_mode=ocr_accuracy_mode,
-                    )
-                    job_id = await loop.run_in_executor(None, enqueue_func)
-                    logger.info("[Upload] OCR 작업 큐잉 성공: file_id=%s, job_id=%s, images=%d", file_obj.id, job_id, len(image_s3_keys))
-                    print(f"[Upload] OK OCR 큐 등록 완료: file_id={file_obj.id}, job_id={job_id}, images={len(image_s3_keys)}")
-                    
+                loop = asyncio.get_running_loop()
+                from functools import partial
+                from ..utils.task_queue_adapter import get_task_queue
+
+                task_queue = get_task_queue()
+                enqueue_func = partial(
+                    task_queue.enqueue_ocr_job,
+                    file_id=file_obj.id,
+                    file_s3_key=object_key,  # 원본 파일 S3 경로
+                    ocr_mode=ocr_mode,
+                    ocr_accuracy_mode=ocr_accuracy_mode,
+                )
+                job_id = await loop.run_in_executor(None, preserve_otel_context(enqueue_func))
+                logger.info("[Upload] OCR 작업 큐잉 성공: file_id=%s, job_id=%s", file_obj.id, job_id)
+                print(f"[Upload] OK OCR 큐 등록 완료: file_id={file_obj.id}, job_id={job_id}")
             except Exception as exc:
-                error_msg = f"OCR 전처리/큐잉 실패: file_id={file_obj.id}, error={exc}"
+                error_msg = f"OCR 큐잉 실패: file_id={file_obj.id}, error={exc}"
                 logger.exception("[Upload] %s", error_msg)
                 print(f"[Upload] ERROR {error_msg}")
-            finally:
-                # 임시 파일 삭제
-                if temp_file_path and temp_file_path.exists():
-                    try:
-                        temp_file_path.unlink()
-                    except Exception:
-                        pass
         
         logger.info("[Upload] 파일 업로드 전체 프로세스 완료: file_id=%s, filename=%s", file_obj.id, file.filename)
         print(f"[Upload] ========================================")
@@ -521,7 +442,7 @@ class FileService:
             loop = asyncio.get_running_loop()
             from functools import partial
             from ..utils.task_queue_adapter import get_task_queue
-            
+
             task_queue = get_task_queue()
             enqueue_func = partial(
                 task_queue.enqueue_asr_job,
@@ -535,7 +456,7 @@ class FileService:
                 max_speakers=None,
                 accuracy_mode="speed",
             )
-            job_id = await loop.run_in_executor(None, enqueue_func)
+            job_id = await loop.run_in_executor(None, preserve_otel_context(enqueue_func))
             
             logger.info("[YouTube] ASR 작업 큐잉 완료: file_id=%s, job_id=%s", file_obj.id, job_id)
             

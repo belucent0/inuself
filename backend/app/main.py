@@ -92,6 +92,13 @@ async def lifespan(app: FastAPI):
     # 임시 파일 정리 (서버 시작 시)
     logger.info("[Lifespan] Cleaning up temporary files...")
     cleanup_temp_files()
+
+    # Kiwi 형태소 분석기 워밍업 (첫 요청 지연 방지)
+    try:
+        from .agents.nodes.intent_parser import warmup_kiwi
+        warmup_kiwi()
+    except Exception as e:
+        logger.warning(f"[Lifespan] Kiwi warmup failed: {e}")
     
     # RedisListener 시작
     from .websocket.dependencies import get_redis_listener
@@ -220,6 +227,11 @@ def create_app() -> FastAPI:
     from .controllers import websocket_controller
     app.include_router(websocket_controller.router)
     logger.info("[FastAPI] WebSocket routes registered at /ws")
+
+    # AI Chat 라우터 추가 (V8.0 LangGraph 기반)
+    from .controllers import ai_chat_controller
+    app.include_router(ai_chat_controller.router)
+    logger.info("[FastAPI] AI Chat routes registered at /api/ai")
 
     @app.get("/health", tags=["system"])
     async def healthcheck():

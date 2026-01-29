@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { Badge } from "@/components/ui/badge"
-import { ChevronLeft, ChevronRight } from "lucide-react"
+import { ChevronLeft, ChevronRight, Globe, Database, FileText } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface SearchSource {
@@ -10,7 +10,8 @@ interface SearchSource {
     title: string
     url: string
     snippet: string
-    engine: string
+    engine?: string
+    source?: 'web' | 'rag'  // 소스 타입 구분
 }
 
 function GlobeIcon({ className }: { className?: string }) {
@@ -35,30 +36,79 @@ function GlobeIcon({ className }: { className?: string }) {
 }
 
 function SourceCard({ source }: { source: SearchSource }) {
+    const isRag = source.source === 'rag'
+    const isInternalUrl = source.url.startsWith('/contents/')
+
+    // RAG 소스는 내부 링크로 처리
+    const href = isInternalUrl ? source.url : source.url
+    const target = isInternalUrl ? '_self' : '_blank'
+
     return (
         <a
-            href={source.url}
-            target="_blank"
+            href={href}
+            target={target}
             rel="noopener noreferrer"
-            className="flex flex-col justify-between p-3 rounded-xl border bg-card hover:bg-muted/50 transition-all h-24 min-w-[160px] w-[160px] group relative overflow-hidden shrink-0 snap-start"
+            className={cn(
+                "flex flex-col justify-between p-3 rounded-xl border bg-card hover:bg-muted/50 transition-all h-24 min-w-[160px] w-[160px] group relative overflow-hidden shrink-0 snap-start",
+                isRag ? "border-green-500/30 hover:border-green-500/50" : "border-border"
+            )}
         >
             <div className="flex items-start justify-between gap-2">
-                <span className="text-xs font-medium line-clamp-2 leading-tight group-hover:text-primary transition-colors">
+                <span className={cn(
+                    "text-xs font-medium line-clamp-2 leading-tight group-hover:text-primary transition-colors",
+                    isRag && "group-hover:text-green-600"
+                )}>
                     {source.title}
                 </span>
-                <Badge variant="secondary" className="text-[10px] h-5 px-1.5 shrink-0 bg-muted-foreground/10">
+                <Badge
+                    variant="secondary"
+                    className={cn(
+                        "text-[10px] h-5 px-1.5 shrink-0",
+                        isRag ? "bg-green-500/10 text-green-600" : "bg-muted-foreground/10"
+                    )}
+                >
                     {source.position}
                 </Badge>
             </div>
             <div className="flex items-center gap-1 mt-auto">
-                <div className="w-4 h-4 rounded-full bg-muted flex items-center justify-center shrink-0">
-                    <GlobeIcon className="w-2.5 h-2.5 text-muted-foreground" />
+                <div className={cn(
+                    "w-4 h-4 rounded-full flex items-center justify-center shrink-0",
+                    isRag ? "bg-green-500/10" : "bg-muted"
+                )}>
+                    {isRag ? (
+                        <FileText className="w-2.5 h-2.5 text-green-600" />
+                    ) : (
+                        <GlobeIcon className="w-2.5 h-2.5 text-muted-foreground" />
+                    )}
                 </div>
-                <span className="text-[10px] text-muted-foreground truncate max-w-[80%]">
-                    {new URL(source.url).hostname}
+                <span className={cn(
+                    "text-[10px] truncate max-w-[80%]",
+                    isRag ? "text-green-600/70" : "text-muted-foreground"
+                )}>
+                    {isRag ? '내 문서' : (
+                        (() => {
+                            try {
+                                return new URL(source.url).hostname
+                            } catch {
+                                return source.url
+                            }
+                        })()
+                    )}
                 </span>
             </div>
-            <div className="absolute inset-0 border-2 border-primary/0 group-hover:border-primary/10 rounded-xl transition-all pointer-events-none" />
+            <div className={cn(
+                "absolute inset-0 border-2 rounded-xl transition-all pointer-events-none",
+                isRag
+                    ? "border-green-500/0 group-hover:border-green-500/20"
+                    : "border-primary/0 group-hover:border-primary/10"
+            )} />
+
+            {/* RAG 뱃지 */}
+            {isRag && (
+                <div className="absolute top-1 right-1">
+                    <Database className="w-3 h-3 text-green-500/50" />
+                </div>
+            )}
         </a>
     )
 }
@@ -67,6 +117,10 @@ export function SourceCarousel({ sources }: { sources: SearchSource[] }) {
     const scrollRef = React.useRef<HTMLDivElement>(null)
     const [canScrollLeft, setCanScrollLeft] = React.useState(false)
     const [canScrollRight, setCanScrollRight] = React.useState(true)
+
+    // 웹 소스와 RAG 소스 분리해서 표시
+    const webSources = sources.filter(s => s.source !== 'rag')
+    const ragSources = sources.filter(s => s.source === 'rag')
 
     const checkScroll = () => {
         if (scrollRef.current) {
@@ -84,7 +138,6 @@ export function SourceCarousel({ sources }: { sources: SearchSource[] }) {
 
     const scroll = (direction: 'left' | 'right') => {
         if (scrollRef.current) {
-            // 한 화면 너비만큼 이동 (페이징 효과)
             const scrollAmount = scrollRef.current.clientWidth
             scrollRef.current.scrollBy({
                 left: direction === 'left' ? -scrollAmount : scrollAmount,
@@ -95,11 +148,14 @@ export function SourceCarousel({ sources }: { sources: SearchSource[] }) {
 
     if (!sources || sources.length === 0) return null
 
+    // 소스가 섞여있으면 그룹별로 표시
+    const hasMixedSources = webSources.length > 0 && ragSources.length > 0
+
     return (
         <div className="relative group/carousel">
             {/* 좌측 화살표 */}
             {canScrollLeft && (
-                <button 
+                <button
                     onClick={() => scroll('left')}
                     className="absolute -left-3 top-1/2 -translate-y-1/2 z-10 p-1.5 bg-background/90 backdrop-blur-sm border rounded-full shadow-md hover:bg-muted text-muted-foreground hover:text-foreground transition-all opacity-0 group-hover/carousel:opacity-100"
                     aria-label="Scroll left"
@@ -107,10 +163,10 @@ export function SourceCarousel({ sources }: { sources: SearchSource[] }) {
                     <ChevronLeft className="h-4 w-4" />
                 </button>
             )}
-            
+
             {/* 우측 화살표 */}
             {canScrollRight && (
-                <button 
+                <button
                     onClick={() => scroll('right')}
                     className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 p-1.5 bg-background/90 backdrop-blur-sm border rounded-full shadow-md hover:bg-muted text-muted-foreground hover:text-foreground transition-all opacity-0 group-hover/carousel:opacity-100"
                     aria-label="Scroll right"
@@ -119,26 +175,50 @@ export function SourceCarousel({ sources }: { sources: SearchSource[] }) {
                 </button>
             )}
 
-            <div 
+            <div
                 ref={scrollRef}
                 onScroll={checkScroll}
                 className="flex gap-3 overflow-x-auto pb-2 px-1 snap-x"
-                style={{ 
-                    scrollbarWidth: 'none',  /* Firefox */
-                    msOverflowStyle: 'none'  /* IE and Edge */
-                }} 
+                style={{
+                    scrollbarWidth: 'none',
+                    msOverflowStyle: 'none'
+                }}
             >
                 <style jsx>{`
                     div::-webkit-scrollbar {
                         display: none;
                     }
                 `}</style>
-                {sources.map((source) => (
-                    <SourceCard key={source.position} source={source} />
+
+                {/* 웹 소스 먼저 */}
+                {webSources.length > 0 && hasMixedSources && (
+                    <div className="flex items-center gap-1 px-2 py-1 bg-blue-500/10 rounded-lg shrink-0">
+                        <Globe className="h-3 w-3 text-blue-500" />
+                        <span className="text-[10px] font-medium text-blue-500">웹</span>
+                    </div>
+                )}
+                {webSources.map((source) => (
+                    <SourceCard key={`web-${source.position}`} source={source} />
+                ))}
+
+                {/* 구분선 */}
+                {hasMixedSources && (
+                    <div className="w-px h-20 self-center bg-border shrink-0 mx-1" />
+                )}
+
+                {/* RAG 소스 */}
+                {ragSources.length > 0 && hasMixedSources && (
+                    <div className="flex items-center gap-1 px-2 py-1 bg-green-500/10 rounded-lg shrink-0">
+                        <Database className="h-3 w-3 text-green-500" />
+                        <span className="text-[10px] font-medium text-green-500">문서</span>
+                    </div>
+                )}
+                {ragSources.map((source) => (
+                    <SourceCard key={`rag-${source.position}`} source={source} />
                 ))}
             </div>
-            
-            {/* 우측 페이드 효과 (더 있다는 힌트) - 우측 스크롤 가능할 때만 표시 */}
+
+            {/* 우측 페이드 효과 */}
             {canScrollRight && (
                 <div className="absolute right-0 top-0 bottom-2 w-16 bg-gradient-to-l from-background to-transparent pointer-events-none transition-opacity duration-300" />
             )}
