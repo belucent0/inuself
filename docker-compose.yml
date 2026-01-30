@@ -104,7 +104,7 @@ services:
       - LLM_PROVIDER=litellm
       - LITELLM_BASE_URL=http://litellm:4000
       - LITELLM_API_KEY=${LITELLM_API_KEY}
-      - LITELLM_MODEL=${LITELLM_MODEL:-qwen3-4b}
+      - LITELLM_MODEL=${LITELLM_MODEL:-tier-simple}
       # OpenTelemetry 분산 추적
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_SERVICE_NAME=asr-backend
@@ -225,7 +225,7 @@ services:
       # LiteLLM 프록시 설정 (LLM 요약용)
       - LITELLM_BASE_URL=http://litellm:4000
       - LITELLM_API_KEY=${LITELLM_API_KEY}
-      - LITELLM_MODEL=${LITELLM_MODEL:-qwen3-4b}
+      - LITELLM_MODEL=${LITELLM_MODEL:-tier-simple}
       # OpenTelemetry 분산 추적
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_SERVICE_NAME=asr-worker
@@ -253,6 +253,7 @@ services:
     volumes:
       # config.yaml은 이미지에 포함됨 (볼륨 마운트 제거 - Windows 동기화 문제 방지)
       - ./infra/litellm:/app/custom:ro
+      - ./infra/shared:/app/infra/shared:ro  # 공통 tier_config 모듈
     env_file:
       - .env
     environment:

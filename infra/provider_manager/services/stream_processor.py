@@ -36,6 +36,14 @@ from core.telemetry import (
 from services.job_tracker import JobTracker, JobStatus
 from services.provider_service import ProviderService
 
+# Tier 라우팅 설정 (공통 모듈에서 import)
+try:
+    from shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
+except ImportError:
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    from infra.shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
+
 # TYPE_CHECKING으로 순환 임포트 방지
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -64,23 +72,10 @@ class StreamProcessor:
     }
 
     # ==========================================
-    # Tier-based Model Routing (인프라 레이어)
+    # Tier-based Model Routing (공통 모듈 사용)
     # ==========================================
-    # Backend(LangGraph)는 "능력 티어"만 결정하고,
-    # 실제 모델 선택은 이 인프라 레이어에서 담당합니다.
-    #
-    # 환경 변수에서 모델명을 읽어옵니다 (.env 파일 참조):
-    # - FLM_LLM_SIMPLE_MODEL: tier-simple용 (간단한 작업)
-    # - FLM_THINKING_MODEL: tier-thinking용 (복잡한 분석 + CoT 추론)
-    #
-    # 단순화: tier-complex/tier-reasoning은 tier-thinking으로 통합
-    # (클라이언트는 reasoning_mode만 구분하므로 실질적으로 2개 티어만 필요)
-    TIER_MODEL_MAP = {
-        "tier-simple": os.environ.get("FLM_LLM_SIMPLE_MODEL", "lfm2:2.6b"),
-        "tier-complex": os.environ.get("FLM_THINKING_MODEL", "qwen3-tk:4b"),     # -> thinking으로 통합
-        "tier-reasoning": os.environ.get("FLM_THINKING_MODEL", "qwen3-tk:4b"),   # -> thinking으로 통합
-        "tier-thinking": os.environ.get("FLM_THINKING_MODEL", "qwen3-tk:4b"),
-    }
+    # TIER_MODEL_MAP은 infra/shared/tier_config.py에서 import됨
+    # 모든 티어 관련 수정은 tier_config.py에서 하세요.
 
     # Provider -> Device Group 매핑 (동시성 제한용)
     PROVIDER_DEVICE_GROUP = {
@@ -93,7 +88,7 @@ class StreamProcessor:
         # NPU 프로바이더
         "flm-asr": "npu",
         "flm-llm": "npu",           # tier-simple
-        "flm-llm-thinking": "npu",  # tier-complex/reasoning/thinking (통합)
+        "flm-llm-thinking": "npu",  # tier-thinking
         "flm-ocr": "npu",
     }
 
@@ -384,8 +379,7 @@ class StreamProcessor:
 
             # Tier 기반 라우팅: tier-* 패턴이면 실제 모델로 변환
             if model.startswith("tier-"):
-                resolved_model = self.TIER_MODEL_MAP.get(model, self.TIER_MODEL_MAP["tier-simple"])
-                logger.info(f"[Tier Routing] {model} -> {resolved_model}")
+                resolved_model = resolve_tier_to_model(model)
                 model = resolved_model
 
             # Thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk, gpt-oss-sg-tk 등)
@@ -604,7 +598,7 @@ class StreamProcessor:
         """LLM Completion 작업 처리 (스트리밍 지원)."""
         messages_raw = data.get("messages", "[]")
         messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
-        model = data.get("model", "qwen3-4b")
+        model = data.get("model", "tier-simple")
         max_tokens = int(data.get("max_tokens", 4096))
         temperature = float(data.get("temperature", 0.7))
         target_server = data.get("target_server", "auto")
@@ -613,7 +607,7 @@ class StreamProcessor:
         original_tier = None
         if model.startswith("tier-"):
             original_tier = model
-            model = self.TIER_MODEL_MAP.get(model, self.TIER_MODEL_MAP["tier-simple"])
+            model = resolve_tier_to_model(model)
             logger.info(f"[{request_id}] Tier routing: {original_tier} -> {model}")
 
         logger.info(f"[{request_id}] Starting LLM completion (model={model}, target={target_server})...")
@@ -633,8 +627,8 @@ class StreamProcessor:
         # thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk 등)
         is_thinking_model = model and "-tk" in model
 
-        # thinking 모델 감지: -tk 접미사 OR tier-complex/reasoning/thinking에서 변환된 모델
-        is_thinking_model = model and ("-tk" in model or original_tier in ("tier-complex", "tier-reasoning", "tier-thinking"))
+        # thinking 모델 감지: -tk 접미사 OR tier-thinking 요청
+        is_thinking_model = model and ("-tk" in model or original_tier == "tier-thinking")
 
         if use_npu:
             if is_thinking_model:

@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # FLM NPU Server URLs
     flm_asr_url: str = "http://localhost:11434"
     flm_llm_url: str = "http://localhost:11435"           # tier-simple (간단한 작업)
-    flm_llm_thinking_url: str = "http://localhost:11437"  # tier-complex/reasoning/thinking (복잡한 분석 + CoT)
+    flm_llm_thinking_url: str = "http://localhost:11437"  # tier-thinking (복잡한 분석 + CoT)
     flm_ocr_url: str = "http://localhost:11436"
 
     # Server paths (from environment)

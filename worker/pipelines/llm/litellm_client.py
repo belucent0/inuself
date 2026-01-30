@@ -52,18 +52,23 @@ def request_litellm_completion(
     temperature: float | None = None,
     max_tokens: int | None = None,
     stream: bool = False,
+    model: str | None = None,
 ) -> str:
     """LiteLLM 프록시를 통한 Chat Completion 요청.
-    
+
     OpenAI SDK를 사용하여 LiteLLM 프록시와 통신합니다.
     LiteLLM이 GPU/NPU 자원 상태에 따라 자동으로 라우팅합니다.
+
+    Args:
+        model: 사용할 모델. None이면 settings.litellm_model 사용
     """
     client = get_openai_client(settings.litellm_base_url, settings.litellm_api_key)
-    
+    model_name = model or settings.litellm_model
+
     logger.info(
-        "LiteLLM request: url=%s model=%s", 
+        "LiteLLM request: url=%s model=%s",
         client.base_url,
-        settings.litellm_model
+        model_name
     )
     
     # 재시도 로직 (모델 로딩 대기)
@@ -74,7 +79,7 @@ def request_litellm_completion(
     while elapsed < max_retry_time:
         try:
             response = client.chat.completions.create(
-                model=settings.litellm_model,
+                model=model_name,
                 messages=_build_messages(messages),
                 temperature=temperature if temperature is not None else settings.llm_temperature,
                 max_tokens=max_tokens if max_tokens is not None else settings.llm_max_tokens,

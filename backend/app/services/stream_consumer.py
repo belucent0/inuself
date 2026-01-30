@@ -19,6 +19,7 @@ from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
 from ..utils.task_queue_adapter import get_task_queue
 from ..utils.event_publisher import publish_file_progress
+from .transcription_postprocess import segments_to_text_with_metadata
 
 # Stream 이름 (worker/utils/result_publisher.py와 동일해야 함)
 RESULT_STREAM = "stream:worker:results"
@@ -258,16 +259,26 @@ class StreamConsumer:
                     },
                 )
                 
-                # LLM 요약 큐잉
-                text_to_summarize = transcription_data.get("text", "")
+                # LLM 요약 큐잉 - 세그먼트 형식(화자/시간 포함) 사용
+                segments = transcription_data.get("segments", [])
+                if segments:
+                    text_to_summarize = segments_to_text_with_metadata(segments)
+                    logger.info(f"Using segment format with speaker/time metadata: file_id={file_id}")
+                else:
+                    text_to_summarize = transcription_data.get("text", "")
+
                 if text_to_summarize:
                     task_queue = get_task_queue()
                     task_queue.enqueue_llm_job(file_id=file_id, text_to_summarize=text_to_summarize)
                     logger.info(f"LLM job enqueued: file_id={file_id}")
-                
+
+                # ASR 활성 작업 해제
+                task_queue = get_task_queue()
+                task_queue.clear_active_job("asr", file_id)
+
             elif event == "failed":
                 error = message.get("error", "Unknown error")
-                
+
                 await file_repo.update_file_status(file_id, FileStatus.ASR_FAILED)
                 await file_repo.add_log(
                     file_id,
@@ -275,9 +286,9 @@ class StreamConsumer:
                     message=f"ASR failed: {error}",
                 )
                 await session.commit()
-                
+
                 logger.error(f"ASR failed: file_id={file_id}, error={error}")
-                
+
                 # 클라이언트에 이벤트 발행
                 publish_file_progress(
                     file_id=file_id,
@@ -286,6 +297,10 @@ class StreamConsumer:
                     progress=0.0,
                     message=f"음성 인식 실패: {error}",
                 )
+
+                # ASR 활성 작업 해제
+                task_queue = get_task_queue()
+                task_queue.clear_active_job("asr", file_id)
 
     async def _handle_llm_result(self, message: dict[str, Any]) -> None:
         """LLM 결과를 처리합니다."""
@@ -351,10 +366,14 @@ class StreamConsumer:
                     message="모든 처리가 완료되었습니다.",
                     metadata={"title": title} if title else None,
                 )
-                
+
+                # LLM 활성 작업 해제
+                task_queue = get_task_queue()
+                task_queue.clear_active_job("llm", file_id)
+
             elif event == "failed":
                 error = message.get("error", "Unknown error")
-                
+
                 await file_repo.update_file_status(file_id, FileStatus.SUMMARY_FAILED)
                 await file_repo.add_llm_log(
                     file_id,
@@ -362,9 +381,9 @@ class StreamConsumer:
                     message=f"LLM failed: {error}",
                 )
                 await session.commit()
-                
+
                 logger.error(f"LLM failed: file_id={file_id}, error={error}")
-                
+
                 # 클라이언트에 이벤트 발행
                 publish_file_progress(
                     file_id=file_id,
@@ -373,8 +392,10 @@ class StreamConsumer:
                     progress=0.0,
                     message=f"요약 생성 실패: {error}",
                 )
-                
-                logger.error(f"LLM failed: file_id={file_id}, error={error}")
+
+                # LLM 활성 작업 해제
+                task_queue = get_task_queue()
+                task_queue.clear_active_job("llm", file_id)
 
     async def _handle_ocr_result(self, message: dict[str, Any]) -> None:
         """OCR 결과를 처리합니다."""
@@ -456,10 +477,14 @@ class StreamConsumer:
                     task_queue = get_task_queue()
                     task_queue.enqueue_llm_job(file_id=file_id, text_to_summarize=ocr_text)
                     logger.info(f"LLM job enqueued: file_id={file_id}")
-                
+
+                # OCR 활성 작업 해제
+                task_queue = get_task_queue()
+                task_queue.clear_active_job("ocr", file_id)
+
             elif event == "failed":
                 error = message.get("error", "Unknown error")
-                
+
                 await file_repo.update_file_status(file_id, FileStatus.OCR_FAILED)
                 await file_repo.add_log(
                     file_id,
@@ -467,9 +492,9 @@ class StreamConsumer:
                     message=f"OCR failed: {error}",
                 )
                 await session.commit()
-                
+
                 logger.error(f"OCR failed: file_id={file_id}, error={error}")
-                
+
                 # 클라이언트에 이벤트 발행
                 publish_file_progress(
                     file_id=file_id,
@@ -478,6 +503,10 @@ class StreamConsumer:
                     progress=0.0,
                     message=f"문서 인식 실패: {error}",
                 )
+
+                # OCR 활성 작업 해제
+                task_queue = get_task_queue()
+                task_queue.clear_active_job("ocr", file_id)
 
                 # 임시 이미지 삭제 (실패 시)
                 try:

@@ -65,15 +65,14 @@ async def _process_job(*, file_id: int, text_to_summarize: str) -> None:
     try:
         logger.info("[LLM] Starting LLM summarization...")
 
-        from worker.pipelines.llm.summarizer import summarize_transcription, sanitize_summary_output
+        from worker.pipelines.llm.summarizer import summarize_transcription
 
         def on_resource_acquired():
             publish_llm_started(file_id)
             logger.info(f"[LLM] Resource acquired, published 'started' event for file_id={file_id}")
 
-        # 요약 생성 + 제목 추출 (한 번에 처리)
+        # 요약 생성 + 제목 추출 (3단계 파이프라인)
         title, summary_md = summarize_transcription(text_to_summarize, on_resource_acquired=on_resource_acquired)
-        summary_md = sanitize_summary_output(summary_md, text_to_summarize)
         logger.info(f"[LLM] Summarization completed: title='{title}', summary_length={len(summary_md)}")
         
     except Exception as exc:

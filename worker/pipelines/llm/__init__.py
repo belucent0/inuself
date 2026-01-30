@@ -1,5 +1,5 @@
 """LLM 파이프라인 모듈."""
-from .summarizer import summarize_transcription, sanitize_summary_output
+from .summarizer import summarize_transcription, summarize_text
 from .llamacpp_client import (
     LlamaServerClientError,
     request_chat_completion,
@@ -8,7 +8,7 @@ from .llamacpp_client import (
 
 __all__ = [
     "summarize_transcription",
-    "sanitize_summary_output",
+    "summarize_text",
     "LlamaServerClientError",
     "request_chat_completion",
     "_llama_server_process",

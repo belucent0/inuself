@@ -21,9 +21,10 @@ from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
 from .litellm_client import request_litellm_completion, LiteLLMClientError
+from .transcription_postprocess import segments_to_text_with_metadata
 from ..prompts.summary import (
     SUMMARY_SYSTEM_PROMPT,
-    SUMMARY_PROMPT_TEMPLATE,
+    STEP1_PROMPT_TEMPLATE,
     MERGE_PROMPT_TEMPLATE,
 )
 
@@ -212,7 +213,7 @@ def summarize_transcription(text: str) -> tuple[str, str]:
     for i, chunk in enumerate(chunks, 1):
         logger.info(f"[Summarizer] Processing chunk {i}/{len(chunks)}...")
         try:
-            prompt = SUMMARY_PROMPT_TEMPLATE.format(transcript=chunk)
+            prompt = STEP1_PROMPT_TEMPLATE.format(transcript=chunk)
             messages = [
                 {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
@@ -329,7 +330,13 @@ class LlmSummaryService:
             transcription = await self.transcription_repo.get_by_file_id(file_id)
             if transcription:
                 transcript_data = transcription.transcription or {}
-                text_to_summarize = str(transcript_data.get("text") or "").strip()
+                # 세그먼트가 있으면 화자/시간 정보 포함 형식 사용
+                segments = transcript_data.get("segments", [])
+                if segments:
+                    text_to_summarize = segments_to_text_with_metadata(segments)
+                    logger.info("Using segment format with speaker/time metadata for file_id=%s", file_id)
+                else:
+                    text_to_summarize = str(transcript_data.get("text") or "").strip()
         elif file_obj.content_type in [ContentType.DOCUMENT, ContentType.PORTRAY]:
             document = await self.document_repo.get_by_file_id(file_id)
             if document:

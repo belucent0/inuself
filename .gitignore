@@ -115,3 +115,6 @@ infra/provider_manager/_legacy/
 test_*.py
 debug_*.py
 backups/
+
+#docs
+docs/recab/*

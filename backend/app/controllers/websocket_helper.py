@@ -166,7 +166,7 @@ async def post_process_with_llm(text: str, base_url: str = None) -> str:
     """
     try:
         client = get_async_openai_client()
-        model = os.getenv("LITELLM_MODEL", "qwen3-4b")
+        model = os.getenv("LITELLM_MODEL", "tier-simple")
         
         response = await client.chat.completions.create(
             model=model,

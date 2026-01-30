@@ -27,8 +27,8 @@ def get_litellm_api_key() -> str:
 
 def get_litellm_model() -> str:
     """FLM 모델명 반환."""
-    # FLM 요청이므로 flm-audio 또는 qwen3-4b 등 LiteLLM 라우팅 키 사용
-    return os.getenv("LITELLM_MODEL", "qwen3-4b")
+    # 티어 기반 라우팅 사용
+    return os.getenv("LITELLM_MODEL", "tier-simple")
 
 
 @lru_cache(maxsize=1)

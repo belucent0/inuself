@@ -145,6 +145,45 @@ def rebuild_transcription_text(segments: list[dict[str, Any]]) -> str:
     return " ".join(texts).strip()
 
 
+def _format_time(seconds: float) -> str:
+    """초를 M:SS 형식으로 변환."""
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes}:{secs:02d}"
+
+
+def segments_to_text_with_metadata(segments: list[dict[str, Any]]) -> str:
+    """세그먼트를 화자/시간 정보 포함 텍스트로 변환한다.
+
+    LLM 요약 시 화자 구분과 시간 컨텍스트를 제공하기 위해 사용.
+
+    Args:
+        segments: ASR 세그먼트 목록.
+
+    Returns:
+        "[SPEAKER_00] (0:00-0:15) 텍스트..." 형식의 문자열.
+    """
+    if not segments:
+        return ""
+
+    lines = []
+    for segment in segments:
+        text = (segment.get("text") or "").strip()
+        if not text:
+            continue
+
+        speaker = segment.get("speaker") or "UNKNOWN"
+        start = segment.get("start", 0.0)
+        end = segment.get("end", 0.0)
+
+        start_str = _format_time(start)
+        end_str = _format_time(end)
+
+        lines.append(f"[{speaker}] ({start_str}-{end_str}) {text}")
+
+    return "\n\n".join(lines)
+
+
 def _merge_segment(base: dict[str, Any], addition: dict[str, Any]) -> None:
     """base 세그먼트에 addition 세그먼트를 합친다 (제자리 작업)."""
     base["end"] = addition.get("end", base.get("end"))

@@ -1,5 +1,21 @@
 model_list:
-  # Prometheus 기반 라우팅 모델 (Chat)
+  # Tier 기반 라우팅 모델 (LLM 요약/채팅)
+  - model_name: "tier-simple"
+    litellm_params:
+      model: "prometheus-router/tier-simple"
+      stream: true
+
+  - model_name: "tier-thinking"
+    litellm_params:
+      model: "prometheus-router/tier-thinking"
+      stream: true
+
+  # 직접 모델명 지정 (레거시 호환)
+  - model_name: "lfm2-2.6b"
+    litellm_params:
+      model: "prometheus-router/lfm2-2.6b"
+      stream: true
+
   - model_name: "qwen3-4b"
     litellm_params:
       model: "prometheus-router/qwen3-4b"
