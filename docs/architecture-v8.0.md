@@ -180,8 +180,8 @@
 
 | 레이어 | 컴포넌트 | 역할 | 결정 내용 |
 |--------|---------|------|----------|
-| **Backend** | TierRouter | WHAT - "어떤 능력이 필요한가?" | tier-simple, tier-complex, tier-reasoning |
-| **Infrastructure** | StreamProcessor | HOW - "어떤 모델로 제공할 것인가?" | lfm2:2.6b, qwen3:4b, qwen3-tk:4b |
+| **Backend** | TierRouter | WHAT - "어떤 능력이 필요한가?" | tier-simple, tier-thinking, tier-summarize |
+| **Infrastructure** | StreamProcessor | HOW - "어떤 모델로 제공할 것인가?" | lfm2:2.6b, qwen3-tk:4b, lfm2-trans:2.6b |
 
 **Tier 결정 흐름:**
 
@@ -193,13 +193,13 @@
 │  Backend (TierRouter)  │
 │                        │
 │  1. 모드 확인:         │
-│     reasoning → tier-reasoning
+│     reasoning → tier-thinking
 │                        │
 │  2. 컨텍스트 크기:     │
-│     >3000 → tier-complex
+│     >3000 → tier-thinking
 │                        │
 │  3. 규칙 기반:         │
-│     복잡 키워드 → tier-complex
+│     복잡 키워드 → tier-thinking
 │     기본 → tier-simple │
 └───────────┬────────────┘
             │ tier 결정
@@ -208,8 +208,8 @@
 │ Infrastructure (StreamProcessor)│
 │                                │
 │  tier-simple → lfm2:2.6b       │
-│  tier-complex → qwen3:4b       │
-│  tier-reasoning → qwen3-tk:4b  │
+│  tier-thinking → qwen3-tk:4b   │
+│  tier-summarize → lfm2-trans:2.6b │
 └────────────────────────────────┘
 ```
 
@@ -286,14 +286,14 @@ client/
 |-----------|------|----------|----------|------------------|
 | **provider-manager** | 9998 | Redis Stream 브릿지 | PM2 항상 실행 | - |
 | **npu-exporter** | 9183 | NPU 메트릭 수집 | PM2 항상 실행 | - |
-| **llama-server** | 8080 | LLM 요약 (Qwen3-4B) | On-Demand | tier-complex |
+| **llama-server** | 8080 | LLM 요약 (Qwen3-4B) | On-Demand | tier-thinking (GPU) |
 | **llama-ocr-server** | 8081 | OCR Vision (Qwen3-VL-8B) | On-Demand | - |
 | **whisper-server** | 8001 | ASR Speed Mode | On-Demand | - |
 | **insanely-fast** | 8002 | ASR Accuracy Mode | On-Demand | - |
 | **diarization** | 8003 | Speaker Diarization | On-Demand | - |
 | **flm-asr** | 11434 | NPU ASR (whisper-v3:turbo) | Always-On | - |
 | **flm-llm** | 11435 | NPU LLM (lfm2:2.6b) | Always-On | tier-simple |
-| **flm-llm-thinking** | 11437 | NPU LLM (qwen3-tk:4b) | On-Demand | tier-reasoning |
+| **flm-llm-thinking** | 11437 | NPU LLM (qwen3-tk:4b) | On-Demand | tier-thinking |
 | **flm-ocr** | 11436 | NPU OCR (qwen3vl-it:4b) | Always-On | - |
 
 ---
