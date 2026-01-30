@@ -169,7 +169,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
 
     # FLM 모델 설정 (환경변수 기반 - Tier-based Routing)
     # flm-llm 서버: tier-simple 요청 처리 (간단한 작업)
-    # flm-llm-thinking 서버: tier-complex/reasoning/thinking 요청 처리 (복잡한 분석 + CoT 추론)
+    # flm-llm-thinking 서버: tier-thinking 요청 처리 (복잡한 분석 + CoT 추론)
     FLM_LLM_SIMPLE_MODEL = env_vars.get("FLM_LLM_SIMPLE_MODEL", "lfm2:2.6b")
     FLM_THINKING_MODEL = env_vars.get("FLM_THINKING_MODEL", "qwen3-tk:4b")
     FLM_OCR_MODEL = env_vars.get("FLM_OCR_MODEL", "qwen3vl-it:4b")
@@ -200,7 +200,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
             cmd=["flm", "serve", FLM_THINKING_MODEL, "--port", "11437"],
             port=11437,
             health="/v1/models",
-            estimated_ram=2.0,  # tier-complex/reasoning/thinking용 (qwen3-tk:4b)
+            estimated_ram=2.0,  # tier-thinking용 (qwen3-tk:4b)
             enabled=False,  # On-Demand: 요청 시에만 로드
         ),
         "flm-ocr": ProviderConfig(

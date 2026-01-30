@@ -206,7 +206,7 @@ class GPUStreamClient:
     def request_llm_completion(
         self,
         messages: list[dict],
-        model: str = "qwen3-4b",
+        model: str = "tier-simple",
         max_tokens: int = 4096,
         temperature: float = 0.7,
         target_server: str = "auto",
@@ -442,7 +442,7 @@ class AsyncGPUStreamClient:
     async def request_llm_completion_stream(
         self,
         messages: list[dict],
-        model: str = "qwen3-4b",
+        model: str = "tier-simple",
         max_tokens: int = 4096,
         temperature: float = 0.7,
         target_server: str = "auto",
@@ -551,7 +551,7 @@ class AsyncGPUStreamClient:
     async def request_llm_completion(
         self,
         messages: list[dict],
-        model: str = "qwen3-4b",
+        model: str = "tier-simple",
         max_tokens: int = 4096,
         temperature: float = 0.7,
         target_server: str = "auto",
