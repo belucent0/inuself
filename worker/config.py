@@ -72,8 +72,12 @@ class WorkerSettings(BaseSettings):
         validation_alias="LITELLM_API_KEY"
     )
     litellm_model: str = Field(
-        "qwen3-4b", 
+        "tier-simple",
         validation_alias="LITELLM_MODEL"
+    )
+    litellm_model_summarize: str = Field(
+        "tier-summarize",
+        validation_alias="LITELLM_MODEL_SUMMARIZE"
     )
 
     @field_validator("litellm_base_url")

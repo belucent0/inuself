@@ -43,8 +43,7 @@ class TierRouter:
 
     Tiers:
     - tier-simple: 간단한 작업 (인사, 짧은 질문)
-    - tier-complex: 복잡한 분석, 추론
-    - tier-reasoning: REASONING 모드 전용
+    - tier-thinking: 복잡한 분석 + Chain-of-Thought 추론
     """
 
     def __init__(self, settings: Any):
@@ -71,17 +70,17 @@ class TierRouter:
             context_size: 컨텍스트 크기 (토큰 수 추정)
 
         Returns:
-            선택된 티어명 (tier-simple, tier-complex, tier-reasoning)
+            선택된 티어명 (tier-simple, tier-thinking)
         """
-        # 1. 모드 기반 빠른 판단 (REASONING은 항상 tier-reasoning)
+        # 1. 모드 기반 빠른 판단 (REASONING은 항상 tier-thinking)
         if mode == "reasoning":
-            logger.info(f"[TierRouter] REASONING mode -> tier-reasoning")
-            return "tier-reasoning"
+            logger.info(f"[TierRouter] REASONING mode -> tier-thinking")
+            return "tier-thinking"
 
         # 2. 컨텍스트 크기 기반 판단 (많은 문서 = 복잡한 작업)
         if context_size > 3000:
-            logger.info(f"[TierRouter] Large context ({context_size}) -> tier-complex")
-            return "tier-complex"
+            logger.info(f"[TierRouter] Large context ({context_size}) -> tier-thinking")
+            return "tier-thinking"
 
         # 3. 임베딩 기반 유사도 매칭 (현재 비활성화 - Docker 환경에서 localhost 접근 불가)
         # TODO: 임베딩 서버를 Docker 네트워크로 노출하거나 설정으로 URL 변경
@@ -250,13 +249,13 @@ class TierRouter:
         ]
 
         if any(kw in query_lower for kw in complex_keywords):
-            logger.info(f"[TierRouter] Rule-based: complex keywords detected -> tier-complex")
-            return "tier-complex"
+            logger.info(f"[TierRouter] Rule-based: complex keywords detected -> tier-thinking")
+            return "tier-thinking"
 
         # 긴 질문은 복잡한 것으로 간주
         if len(query) > 100:
-            logger.info(f"[TierRouter] Rule-based: long query ({len(query)} chars) -> tier-complex")
-            return "tier-complex"
+            logger.info(f"[TierRouter] Rule-based: long query ({len(query)} chars) -> tier-thinking")
+            return "tier-thinking"
 
         logger.info(f"[TierRouter] Rule-based: default -> {self.default_tier}")
         return self.default_tier

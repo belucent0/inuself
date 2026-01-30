@@ -4,21 +4,21 @@
   "tiers": {
     "tier-simple": {
       "description": "간단한 작업 (인사, 짧은 질문, 요약)",
-      "note": "실제 모델은 stream_processor.py TIER_MODEL_MAP에서 결정"
+      "note": "실제 모델은 infra/shared/tier_config.py에서 결정"
     },
-    "tier-complex": {
-      "description": "복잡한 분석, 비교, 추론이 필요한 작업",
-      "note": "실제 모델은 stream_processor.py TIER_MODEL_MAP에서 결정"
+    "tier-thinking": {
+      "description": "복잡한 분석 + Chain-of-Thought 추론",
+      "note": "실제 모델은 infra/shared/tier_config.py에서 결정"
     },
-    "tier-reasoning": {
-      "description": "REASONING 모드 전용 (단계별 사고)",
-      "note": "실제 모델은 stream_processor.py TIER_MODEL_MAP에서 결정"
+    "tier-summarize": {
+      "description": "전사 텍스트 요약 (Transcript 특화)",
+      "note": "실제 모델은 infra/shared/tier_config.py에서 결정"
     }
   },
   "rules": [
     {
       "name": "complex_analysis",
-      "tier": "tier-complex",
+      "tier": "tier-thinking",
       "description": "복잡한 분석, 추론, 비교가 필요한 질문",
       "score_threshold": 0.75,
       "utterances": [
@@ -40,7 +40,7 @@
     },
     {
       "name": "reasoning_task",
-      "tier": "tier-complex",
+      "tier": "tier-thinking",
       "description": "추론, 계산, 복잡한 판단이 필요한 질문",
       "score_threshold": 0.70,
       "utterances": [

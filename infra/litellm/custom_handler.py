@@ -99,35 +99,17 @@ GPU_MODEL = os.getenv("GPU_MODEL", "Qwen3-4B-Instruct-2507-Q4_K_S.gguf")  # llam
 NPU_MODEL = os.getenv("NPU_MODEL", "qwen3vl-it:4b")  # FLM unified (LLM + OCR)
 
 # ============================================================
-# Tier-based Model Routing (V8.1 - 단순화)
+# Tier-based Model Routing (공통 모듈에서 import)
 # ============================================================
-# Backend(LangGraph)는 "능력 티어"만 결정하고,
-# LiteLLM에서 실제 모델로 변환합니다.
-#
-# 단순화: 2개 티어만 사용
-# - tier-simple: 간단한 작업 (인사, 짧은 질문)
-# - tier-thinking: 복잡한 분석 + Chain-of-Thought 추론 (complex/reasoning 통합)
-TIER_MODEL_MAP = {
-    "tier-simple": os.getenv("FLM_LLM_SIMPLE_MODEL", "lfm2:2.6b"),
-    "tier-complex": os.getenv("FLM_THINKING_MODEL", "qwen3-tk:4b"),     # -> thinking으로 통합
-    "tier-reasoning": os.getenv("FLM_THINKING_MODEL", "qwen3-tk:4b"),   # -> thinking으로 통합
-    "tier-thinking": os.getenv("FLM_THINKING_MODEL", "qwen3-tk:4b"),
-}
-
-def resolve_tier_to_model(model_name: str) -> str:
-    """티어명을 실제 모델명으로 변환.
-
-    Args:
-        model_name: 요청된 모델명 (예: "tier-complex", "lfm2:2.6b")
-
-    Returns:
-        실제 모델명 (예: "gpt-oss-sg:20b")
-    """
-    if model_name.startswith("tier-"):
-        resolved = TIER_MODEL_MAP.get(model_name, TIER_MODEL_MAP.get("tier-simple"))
-        logger.info(f"[Tier Routing] {model_name} -> {resolved}")
-        return resolved
-    return model_name
+# infra/shared/tier_config.py에서 정의된 설정을 사용합니다.
+# 모든 티어 관련 수정은 tier_config.py에서 하세요.
+try:
+    from infra.shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
+except ImportError:
+    # Docker 환경에서 경로가 다를 수 있음
+    import sys
+    sys.path.insert(0, "/app/infra")
+    from shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
 
 # Audio 설정
 GPU_AUDIO_API_BASE = os.getenv("GPU_AUDIO_API_BASE", "http://host.docker.internal:8001")
