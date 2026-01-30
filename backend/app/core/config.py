@@ -78,7 +78,7 @@ class Settings(BaseSettings):
         validation_alias="LITELLM_API_KEY"
     )
     litellm_model: str = Field(
-        "qwen3-4b", 
+        "tier-simple",
         validation_alias="LITELLM_MODEL"
     )
     
