@@ -1,4 +1,5 @@
 """Task Queue 추상화 레이어 - Celery를 사용."""
+
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 import redis
@@ -12,7 +13,7 @@ ACTIVE_JOB_TTL = 7200
 
 class TaskQueueAdapter(ABC):
     """Task Queue 추상 인터페이스."""
-    
+
     @abstractmethod
     def enqueue_asr_job(
         self,
@@ -35,12 +36,14 @@ class TaskQueueAdapter(ABC):
         pass
 
     @abstractmethod
-    def enqueue_llm_job(self, file_id: int, text_to_summarize: str) -> str | None:
+    def enqueue_llm_job(self, file_id: int, messages: list[dict]) -> str | None:
         """LLM 작업을 큐에 등록하고 작업 ID를 반환.
+
+        [Phase 1] 프롬프트 주입 패턴: 완성된 messages 리스트를 받습니다.
 
         Args:
             file_id: 파일 ID
-            text_to_summarize: 요약할 텍스트 (transcription 또는 OCR 결과)
+            messages: LLM 호출용 완성된 messages 리스트 (Backend에서 생성)
 
         Returns:
             job_id: 작업 ID (성공 시)
@@ -73,13 +76,29 @@ class TaskQueueAdapter(ABC):
         pass
 
     @abstractmethod
-    def clear_active_job(self, task_type: str, file_id: int) -> None:
-        """활성 작업 해제 (작업 완료 시 호출)."""
+    def enqueue_llm_job(self, file_id: int, messages: list[dict]) -> str | None:
+        """LLM 작업을 큐에 등록하고 작업 ID를 반환.
+
+        [Phase 1] 프롬프트 주입 패턴: 완성된 messages 리스트를 받습니다.
+
+        Args:
+            file_id: 파일 ID
+            messages: LLM 호출용 완성된 messages 리스트 (Backend에서 생성)
+
+        Returns:
+            job_id: 작업 ID (성공 시)
+            None: 중복으로 스킵됨
+        """
         pass
-    
+
     @abstractmethod
     def get_job_status(self, job_id: str) -> str:
         """작업 상태 조회."""
+        pass
+
+    @abstractmethod
+    def clear_active_job(self, task_type: str, file_id: int) -> None:
+        """활성 작업 해제 (작업 완료 시 호출)."""
         pass
 
 
@@ -88,6 +107,7 @@ class CeleryAdapter(TaskQueueAdapter):
 
     def __init__(self):
         from celery import Celery
+
         settings = get_settings()
         # send_task 전용 Celery 앱 (태스크 정의 없이 이름으로 호출)
         self.celery = Celery(
@@ -128,7 +148,9 @@ class CeleryAdapter(TaskQueueAdapter):
             existing_job_id = self.redis.get(key)
             logger.warning(
                 "[TaskQueue] Duplicate job skipped: %s for file_id=%s (existing job_id=%s)",
-                task_type, file_id, existing_job_id
+                task_type,
+                file_id,
+                existing_job_id,
             )
             return None
 
@@ -144,7 +166,9 @@ class CeleryAdapter(TaskQueueAdapter):
         self.redis.setex(key, ACTIVE_JOB_TTL, result.id)
         logger.info(
             "[TaskQueue] Job enqueued: %s for file_id=%s, job_id=%s",
-            task_type, file_id, result.id
+            task_type,
+            file_id,
+            result.id,
         )
 
         return result.id
@@ -161,8 +185,10 @@ class CeleryAdapter(TaskQueueAdapter):
         if deleted:
             logger.debug("[TaskQueue] Active job cleared: %s", key)
         else:
-            logger.debug("[TaskQueue] Active job not found (already cleared or expired): %s", key)
-    
+            logger.debug(
+                "[TaskQueue] Active job not found (already cleared or expired): %s", key
+            )
+
     def enqueue_asr_job(
         self,
         file_id: int,
@@ -199,8 +225,19 @@ class CeleryAdapter(TaskQueueAdapter):
             queue="asr",
             headers=headers,
         )
-    
-    def enqueue_llm_job(self, file_id: int, text_to_summarize: str) -> str | None:
+
+    def enqueue_llm_job(self, file_id: int, messages: list[dict]) -> str | None:
+        """
+        [Phase 1] LLM 작업을 큐에 등록 (프롬프트 주입 패턴).
+
+        Args:
+            file_id: 파일 ID
+            messages: LLM 호출용 완성된 messages 리스트
+
+        Returns:
+            job_id: 작업 ID (성공 시)
+            None: 중복으로 스킵됨
+        """
         try:
             # Trace context 주입 (분산 추적)
             headers = {}
@@ -214,15 +251,19 @@ class CeleryAdapter(TaskQueueAdapter):
                 task_name="worker.tasks.llm_task.process_llm_task",
                 kwargs={
                     "file_id": file_id,
-                    "text_to_summarize": text_to_summarize,
+                    "messages": messages,  # [Phase 1] 프롬프트 주입
                 },
                 queue="llm_summary",
                 headers=headers,
             )
         except Exception as exc:
-            logger.error("[TaskQueue] Failed to enqueue LLM job: file_id=%s, error=%s", file_id, exc)
+            logger.error(
+                "[TaskQueue] Failed to enqueue LLM job: file_id=%s, error=%s",
+                file_id,
+                exc,
+            )
             raise
-    
+
     def enqueue_ocr_job(
         self,
         file_id: int,
@@ -251,10 +292,10 @@ class CeleryAdapter(TaskQueueAdapter):
             queue="ocr_tasks",
             headers=headers,
         )
-    
+
     def get_job_status(self, job_id: str) -> str:
         from celery.result import AsyncResult
-        
+
         result = AsyncResult(job_id, app=self.celery)
         return result.status
 
@@ -262,15 +303,18 @@ class CeleryAdapter(TaskQueueAdapter):
 def get_task_queue() -> TaskQueueAdapter:
     """Celery Task Queue 어댑터를 반환."""
     import logging
+
     logger = logging.getLogger(__name__)
-    
+
     settings = get_settings()
     queue_type = settings.task_queue_type.lower()
-    
+
     logger.info(f"[TaskQueue] 큐 타입 확인: task_queue_type={queue_type}")
-    
+
     if queue_type == "celery":
         logger.info("[TaskQueue] Celery 어댑터 사용")
         return CeleryAdapter()
     else:
-        raise ValueError(f"Unknown task queue type: {queue_type}. Only 'celery' is supported.")
+        raise ValueError(
+            f"Unknown task queue type: {queue_type}. Only 'celery' is supported."
+        )

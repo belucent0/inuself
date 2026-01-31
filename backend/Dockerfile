@@ -1,5 +1,5 @@
 # ===========================================
-# Stage 1: 빌드 (빌드 도구 포함)
+# Stage 1: 빌드 (uv 사용)
 # ===========================================
 FROM python:3.12-slim AS builder
 
@@ -11,21 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Poetry 설치
-RUN pip install --no-cache-dir poetry==1.7.1
+# uv 설치 (공식 이미지에서 복사)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Poetry 설정 (가상환경을 만들지 않음)
-RUN poetry config virtualenvs.create false
+# uv 환경 변수 설정
+ENV UV_SYSTEM_PYTHON=1
+ENV UV_COMPILE_BYTECODE=1
 
 # 의존성 파일 복사
-COPY pyproject.toml poetry.lock* ./
+COPY pyproject.toml uv.lock ./
 
-# 네트워크 타임아웃 환경변수 설정
-ENV POETRY_REQUESTS_TIMEOUT=300
-
-# 의존성 설치 (빌드 단계)
-RUN poetry lock --no-update || poetry lock
-RUN poetry install --no-interaction --no-ansi --no-root --without dev
+# 의존성 설치 (uv pip 방식 - 시스템 Python에 직접 설치)
+RUN uv pip install --system -r pyproject.toml
 
 # ===========================================
 # Stage 2: 런타임 (빌드 도구 제외)
