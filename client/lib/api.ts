@@ -10,7 +10,7 @@ const getApiBase = (): string => {
 const API_BASE = getApiBase()
 
 export type SttLog = {
-  id: number
+  id: string  // UUID v7
   message?: string
   created_at: string
   log: Record<string, unknown>
@@ -31,7 +31,8 @@ export type ContentStatus =
 export type ContentType = 'AUDIO' | 'DOCUMENT' | 'PORTRAY'
 
 export type ContentSummary = {
-  id: number
+  id: string  // File.id (UUID v7)
+  public_id: string | null  // Content.id (UUID v7) - 하위 호환성
   filename: string
   object_key: string
   media_url?: string | null
@@ -61,7 +62,7 @@ export type ContentSummary = {
 }
 
 export type LlmLog = {
-  id: number
+  id: string  // UUID v7
   message?: string
   created_at: string
   log: Record<string, unknown>
@@ -119,7 +120,10 @@ export async function listContents(page: number = 1, pageSize: number = 20): Pro
 }
 
 export async function getContentDetail(id: string): Promise<ContentDetail | null> {
-  const res = await fetch(`${API_BASE}/contents/${id}`, { cache: 'no-store' })
+  // 항상 File.id (UUID)로 직접 조회
+  const endpoint = `${API_BASE}/contents/${id}`
+
+  const res = await fetch(endpoint, { cache: 'no-store' })
   if (res.status === 404) {
     return null
   }
@@ -142,12 +146,12 @@ export async function deleteQueuedContents(): Promise<{ deleted_count: number; m
 
 export type BulkDeleteResponse = {
   deleted_count: number
-  deleted_ids: number[]
-  skipped_ids: number[]
+  deleted_ids: string[]  // UUID
+  skipped_ids: string[]  // UUID
   message: string
 }
 
-export async function deleteContentsBulk(contentIds: number[]): Promise<BulkDeleteResponse> {
+export async function deleteContentsBulk(contentIds: string[]): Promise<BulkDeleteResponse> {
   const res = await fetch(`${API_BASE}/contents/bulk-delete`, {
     method: 'POST',
     headers: {
@@ -171,7 +175,7 @@ export async function uploadContent(
   ocrMode?: string,
   ocrAccuracyMode?: 'speed' | 'accuracy',
   accuracyMode?: 'speed' | 'accuracy'
-): Promise<{ content_id: number }> {
+): Promise<{ content_id: string; public_id: string | null }> {
   const formData = new FormData()
   formData.append('file', file)
 
@@ -235,7 +239,7 @@ export async function uploadContent(
 }
 
 export async function retryProcessing(
-  contentId: number,
+  contentId: string,  // UUID
   type: 'asr' | 'summary' | 'ocr',
   minSpeakers?: number,
   maxSpeakers?: number,
@@ -271,7 +275,7 @@ export async function retryProcessing(
 }
 
 export async function reclusterSpeakers(
-  contentId: number,
+  contentId: string,  // UUID
   numSpeakers?: number,
   similarityThreshold?: number
 ): Promise<{ message: string; num_speakers: number; speaker_labels: string[]; updated_segments_count: number }> {
@@ -328,7 +332,7 @@ export const getWebSocketBase = (): string => {
  * @param url YouTube 영상 URL
  * @returns content_id가 포함된 응답
  */
-export async function uploadYouTubeContent(url: string): Promise<{ content_id: number }> {
+export async function uploadYouTubeContent(url: string): Promise<{ content_id: string; public_id?: string | null }> {
   const res = await fetch(`${API_BASE}/contents/upload-youtube`, {
     method: 'POST',
     headers: {

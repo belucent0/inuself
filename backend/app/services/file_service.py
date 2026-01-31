@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Sequence
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# File.id는 이제 UUID
 
 from ..core.config import get_settings
 from ..core.logging import logger
@@ -14,6 +16,7 @@ from ..core.telemetry import preserve_otel_context
 from ..core.storage import delete_file, upload_fileobj, get_public_media_url, wait_for_file, wait_for_files, download_file, delete_files_by_prefix
 from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
+from ..repositories.content_repository import ContentRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
 from ..schemas.content import ContentDetail, ContentListItem, ContentListResponse, SttLogSchema, LlmLogSchema
@@ -27,6 +30,7 @@ class FileService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.file_repo = FileRepository(session)
+        self.content_repo = ContentRepository(session)
         self.transcription_repo = TranscriptionRepository(session)
         self.document_repo = DocumentRepository(session)
         self.settings = get_settings()
@@ -44,22 +48,33 @@ class FileService:
         
         items = []
         for row in rows:
+            # Content와 관계 데이터 조회
+            content = row.content
+            transcription = content.transcription_result if content else None
+            document = content.document_result if content else None
+
+            # Content가 없는 File은 건너뛰기 (데이터 무결성 문제)
+            if not content:
+                logger.warning(f"File {row.id} has no associated Content, skipping")
+                continue
+
             # SQLAlchemy 객체를 딕셔너리로 변환
             item_data = {
                 "id": row.id,
+                "public_id": str(content.id),  # UUID v7 (Content.id)
                 "filename": row.filename,
                 "object_key": row.object_key,
                 "media_url": get_public_media_url(row.object_key),
                 "content_type": row.content_type,
-                "status": row.status,
-                "summary_md": row.summary_md,
-                "title": row.title,
+                "status": content.status or FileStatus.QUEUED,  # None이면 기본값
+                "summary_md": content.summary_md,
+                "title": content.title,
                 "created_at": row.created_at,
-                "speakers": row.transcription.speakers if row.transcription else [],
-                "duration_seconds": row.transcription.duration_seconds if row.transcription else 0.0,
+                "speakers": transcription.speakers if transcription else [],
+                "duration_seconds": transcription.duration_seconds if transcription else 0.0,
                 "file_type": row.content_type.value if row.content_type else None,
-                "transcription_content": row.transcription.transcription if row.transcription else None,
-                "document": DocumentSchema.model_validate(row.document).model_dump() if row.document else None,
+                "transcription_content": transcription.transcription if transcription else None,
+                "document": DocumentSchema.model_validate(document).model_dump() if document else None,
             }
             item = ContentListItem.model_validate(item_data)
             items.append(item)
@@ -74,33 +89,80 @@ class FileService:
             total_pages=total_pages,
         )
 
-    async def get_file(self, file_id: int) -> ContentDetail:
-        """파일 상세 조회."""
+    async def get_file(self, file_id: UUID) -> ContentDetail:
+        """파일 상세 조회 (UUID)."""
         file_obj = await self.file_repo.get_file(file_id)
         if not file_obj:
             raise ValueError("File not found")
-        
+
+        # Content와 관계 데이터 조회
+        content = file_obj.content
+        if not content:
+            raise ValueError("Content not found for file")
+
+        transcription = content.transcription_result
+        document = content.document_result
+        logs = content.logs or []
+        llm_logs = content.llm_logs or []
+
         # SQLAlchemy 객체를 딕셔너리로 변환
         detail_data = {
             "id": file_obj.id,
+            "public_id": str(content.id),  # UUID v7 (Content.id)
             "filename": file_obj.filename,
             "object_key": file_obj.object_key,
             "media_url": get_public_media_url(file_obj.object_key),
             "content_type": file_obj.content_type,
-            "status": file_obj.status,
-            "summary_md": file_obj.summary_md,
-            "title": file_obj.title,
+            "status": content.status or FileStatus.QUEUED,  # None이면 기본값
+            "summary_md": content.summary_md,
+            "title": content.title,
             "created_at": file_obj.created_at,
-            "updated_at": None,  # File 모델에는 없음
-            "speakers": file_obj.transcription.speakers if file_obj.transcription else [],
-            "duration_seconds": file_obj.transcription.duration_seconds if file_obj.transcription else 0.0,
+            "updated_at": content.updated_at,
+            "speakers": transcription.speakers if transcription else [],
+            "duration_seconds": transcription.duration_seconds if transcription else 0.0,
             "file_type": file_obj.content_type.value if file_obj.content_type else None,
             # transcription 필드는 필수이므로, transcription이 없으면 빈 딕셔너리 사용
-            "transcription": file_obj.transcription.transcription if file_obj.transcription else {},
-            "transcription_content": file_obj.transcription.transcription if file_obj.transcription else None,
-            "document": DocumentSchema.model_validate(file_obj.document).model_dump() if file_obj.document else None,
-            "logs": [SttLogSchema.model_validate(log) for log in file_obj.logs],
-            "llm_logs": [LlmLogSchema.model_validate(log) for log in file_obj.llm_logs],
+            "transcription": transcription.transcription if transcription else {},
+            "transcription_content": transcription.transcription if transcription else None,
+            "document": DocumentSchema.model_validate(document).model_dump() if document else None,
+            "logs": [SttLogSchema.model_validate(log) for log in logs],
+            "llm_logs": [LlmLogSchema.model_validate(log) for log in llm_logs],
+        }
+        detail = ContentDetail.model_validate(detail_data)
+        return detail
+
+    async def get_file_by_content_id(self, content_id: UUID) -> ContentDetail:
+        """Content ID (UUID v7)로 파일 상세 조회."""
+        content = await self.content_repo.get_content(content_id)
+        if not content:
+            raise ValueError("Content not found")
+
+        # Content에서 File 정보 추출
+        file_obj = content.file
+        if not file_obj:
+            raise ValueError("File not found for content")
+
+        # SQLAlchemy 객체를 딕셔너리로 변환
+        detail_data = {
+            "id": file_obj.id,
+            "public_id": str(content.id),  # UUID v7 (Content.id)
+            "filename": file_obj.filename,
+            "object_key": file_obj.object_key,
+            "media_url": get_public_media_url(file_obj.object_key),
+            "content_type": file_obj.content_type,
+            "status": content.status,  # Content의 status 사용
+            "summary_md": content.summary_md,
+            "title": content.title,
+            "created_at": content.created_at,
+            "updated_at": content.updated_at,
+            "speakers": content.transcription_result.speakers if content.transcription_result else [],
+            "duration_seconds": content.transcription_result.duration_seconds if content.transcription_result else 0.0,
+            "file_type": file_obj.content_type.value if file_obj.content_type else None,
+            "transcription": content.transcription_result.transcription if content.transcription_result else {},
+            "transcription_content": content.transcription_result.transcription if content.transcription_result else None,
+            "document": DocumentSchema.model_validate(content.document_result).model_dump() if content.document_result else None,
+            "logs": [SttLogSchema.model_validate(log) for log in content.logs],
+            "llm_logs": [LlmLogSchema.model_validate(log) for log in content.llm_logs],
         }
         detail = ContentDetail.model_validate(detail_data)
         return detail
@@ -250,11 +312,16 @@ class FileService:
         print(f"[Upload] ========================================")
         print(f"[Upload] 파일 업로드 완료: file_id={file_obj.id}, filename={file.filename}")
         print(f"[Upload] ========================================")
-        return {"file_id": file_obj.id}
 
-    async def delete_files_by_ids(self, file_ids: list[int]) -> tuple[list[int], list[int]]:
+        # Content ID (UUID) 조회
+        content = await self.content_repo.get_by_file_id(file_obj.id)
+        content_uuid = str(content.id) if content else None
+
+        return {"file_id": file_obj.id, "public_id": content_uuid, "content_type": content_type.value}
+
+    async def delete_files_by_ids(self, file_ids: list[UUID]) -> tuple[list[UUID], list[UUID]]:
         """
-        주어진 ID의 파일을 상태와 무관하게 삭제하고,
+        주어진 ID(UUID)의 파일을 상태와 무관하게 삭제하고,
         (deleted_ids, skipped_ids) 튜플을 반환한다.
         """
         unique_ids = list(dict.fromkeys(file_ids))
@@ -286,7 +353,7 @@ class FileService:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: upload_fileobj(file_obj, key=object_key))
 
-    async def _cleanup_queue_and_storage(self, file_ids: list[int], object_keys: list[str]) -> None:
+    async def _cleanup_queue_and_storage(self, file_ids: list[UUID], object_keys: list[str]) -> None:
         """큐 작업 취소와 스토리지 파일 삭제를 일괄 처리."""
         loop = asyncio.get_running_loop()
 

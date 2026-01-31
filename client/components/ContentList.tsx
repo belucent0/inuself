@@ -42,7 +42,7 @@ type Props = {
 
 export default function ContentList({ contents, pagination, onRefresh }: Props) {
   const router = useRouter()
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isDeleting, setIsDeleting] = useState(false)
   const [message, setMessage] = useState<string>('')
 
@@ -53,7 +53,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
   const [isRetrying, setIsRetrying] = useState(false)
 
   // 모든 파일의 진행 상태를 관리하는 Map
-  const [progressMap, setProgressMap] = useState<Record<number, FileProgress>>({})
+  const [progressMap, setProgressMap] = useState<Record<string, FileProgress>>({})
 
   // 콘텐츠 목록을 내부 상태로 관리 (소켓 이벤트로 실시간 업데이트)
   const [localContents, setLocalContents] = useState<ContentSummary[]>(contents)
@@ -164,7 +164,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
       if (!prev.size) {
         return prev
       }
-      const next = new Set<number>()
+      const next = new Set<string>()
       selectableIds.forEach((id) => {
         if (prev.has(id)) {
           next.add(id)
@@ -174,7 +174,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
     })
   }, [selectableIds])
 
-  const toggleSelection = (id: number) => {
+  const toggleSelection = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev)
       if (next.has(id)) {
@@ -225,7 +225,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
     }
   }
 
-  const handleRetry = (contentId: number, type: 'asr' | 'ocr' | 'summary', event: React.MouseEvent) => {
+  const handleRetry = (contentId: string, type: 'asr' | 'ocr' | 'summary', event: React.MouseEvent) => {
     event.stopPropagation()
 
     // 재시도 대상 콘텐츠 찾기
@@ -253,7 +253,7 @@ export default function ContentList({ contents, pagination, onRefresh }: Props) 
   }
 
   // LLM 요약 재처리
-  const handleSummaryRetry = async (contentId: number) => {
+  const handleSummaryRetry = async (contentId: string) => {
     try {
       const result = await retryProcessing(contentId, 'summary')
       setMessage(result.message)
