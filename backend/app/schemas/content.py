@@ -1,12 +1,13 @@
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 from pydantic import BaseModel, Field
 
 from ..db.models import ContentStatus, ContentType
 
 
 class SttLogSchema(BaseModel):
-    id: int
+    id: UUID  # UUID v7
     message: str | None = ""
     log: dict[str, Any]
     created_at: datetime
@@ -16,7 +17,7 @@ class SttLogSchema(BaseModel):
 
 
 class LlmLogSchema(BaseModel):
-    id: int
+    id: UUID  # UUID v7
     message: str | None = ""
     log: dict[str, Any]
     created_at: datetime
@@ -26,7 +27,8 @@ class LlmLogSchema(BaseModel):
 
 
 class ContentBaseSchema(BaseModel):
-    id: int
+    id: UUID  # File.id (UUID v7)
+    public_id: UUID | None = None  # 하위 호환성 - Content.id (id와 동일)
     filename: str
     object_key: str
     media_url: str | None = None
@@ -61,18 +63,19 @@ class ContentDetail(ContentBaseSchema):
 
 
 class UploadResponse(BaseModel):
-    content_id: int
+    content_id: UUID  # File.id (UUID v7)
+    public_id: UUID | None = None  # 하위 호환성 - Content.id
     queued: bool = True
 
 
 class BulkDeleteRequest(BaseModel):
-    content_ids: list[int] = Field(..., min_length=1, description="삭제 대상 콘텐츠 ID 목록")
+    content_ids: list[UUID] = Field(..., min_length=1, description="삭제 대상 콘텐츠 ID 목록 (UUID)")
 
 
 class BulkDeleteResponse(BaseModel):
     deleted_count: int
-    deleted_ids: list[int] = Field(default_factory=list)
-    skipped_ids: list[int] = Field(default_factory=list)
+    deleted_ids: list[UUID] = Field(default_factory=list)
+    skipped_ids: list[UUID] = Field(default_factory=list)
     message: str
 
 
@@ -103,7 +106,7 @@ class YouTubeUploadRequest(BaseModel):
 
 class YouTubeUploadResponse(BaseModel):
     """YouTube URL 업로드 응답"""
-    content_id: int
+    content_id: UUID  # File.id (UUID v7)
     queued: bool = True
     message: str = "YouTube 다운로드가 시작되었습니다"
 
