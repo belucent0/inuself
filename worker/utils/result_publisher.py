@@ -6,6 +6,15 @@
 import json
 from datetime import datetime
 from typing import Any
+from uuid import UUID
+
+
+class UUIDEncoder(json.JSONEncoder):
+    """UUID를 문자열로 직렬화하는 JSON Encoder."""
+    def default(self, obj):
+        if isinstance(obj, UUID):
+            return str(obj)
+        return super().default(obj)
 
 from redis import Redis
 
@@ -44,7 +53,7 @@ def _publish_result(data: dict[str, Any]) -> str:
     data["timestamp"] = datetime.utcnow().isoformat()
     
     # Redis Stream은 flat한 key-value만 지원하므로 JSON으로 직렬화
-    entry_id = redis.xadd(RESULT_STREAM, {"data": json.dumps(data)})
+    entry_id = redis.xadd(RESULT_STREAM, {"data": json.dumps(data, cls=UUIDEncoder)})
     
     logger.info(
         "[ResultPublisher] Published to {}: type={}, file_id={}, entry_id={}",
@@ -60,7 +69,7 @@ def _publish_result(data: dict[str, Any]) -> str:
 # ASR 결과 발행
 # =============================================================================
 
-def publish_asr_started(file_id: int) -> str:
+def publish_asr_started(file_id: int | UUID) -> str:
     """ASR 작업 시작을 발행합니다."""
     return _publish_result({
         "type": "asr",

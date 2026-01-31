@@ -7,6 +7,16 @@ import shutil
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, BinaryIO
+from uuid import UUID
+
+
+class UUIDEncoder(json.JSONEncoder):
+    """UUID 객체를 JSON으로 직렬화하는 인코더."""
+
+    def default(self, obj):
+        if isinstance(obj, UUID):
+            return str(obj)
+        return super().default(obj)
 
 from minio import Minio
 from minio.error import S3Error
@@ -210,7 +220,7 @@ def upload_json(data: dict[str, Any], *, key: str) -> str:
     settings = get_settings()
     client = get_s3_client()
 
-    json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    json_bytes = json.dumps(data, ensure_ascii=False, indent=2, cls=UUIDEncoder).encode("utf-8")
 
     if client:
         try:
