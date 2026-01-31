@@ -9,11 +9,12 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.logging import logger
-from ..db.models import File, FileStatus, ContentType, SttLog, LlmLog
+from ..db.models import File, FileStatus, ContentType, SttLog, LlmLog, Content
 from ..db.session import AsyncSessionLocal
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
@@ -26,7 +27,7 @@ from .state_watchdog import WatchdogFinding, run_watchdog_scan
 @dataclass
 class ReconcileAction:
     """Reconciler가 수행한 액션."""
-    file_id: int
+    file_id: UUID
     action: str  # "marked_failed", "requeued", "fixed_status", "skipped"
     details: str
     success: bool
@@ -85,12 +86,22 @@ class StateReconciler:
             )
 
         # 이미 완료/실패 상태면 스킵
-        if file.status in [FileStatus.COMPLETED, FileStatus.CANCELLED,
+        content = file.content
+        if not content:
+            return ReconcileAction(
+                file_id=finding.file_id,
+                action="skipped",
+                details="Content not found for file",
+                success=False,
+            )
+
+        status = content.status
+        if status in [FileStatus.COMPLETED, FileStatus.CANCELLED,
                           FileStatus.ASR_FAILED, FileStatus.OCR_FAILED, FileStatus.SUMMARY_FAILED]:
             return ReconcileAction(
                 file_id=finding.file_id,
                 action="skipped",
-                details=f"File already in terminal state: {file.status.value}",
+                details=f"File already in terminal state: {status.value}",
                 success=True,
             )
 
@@ -98,13 +109,13 @@ class StateReconciler:
         retry_count = await self._get_retry_count(file.id)
 
         if finding.issue_type == "stuck":
-            return await self._handle_stuck(file, finding, retry_count)
+            return await self._handle_stuck(file, status, finding, retry_count)
         elif finding.issue_type == "no_job":
-            return await self._handle_no_job(file, finding, retry_count)
+            return await self._handle_no_job(file, status, finding, retry_count)
         elif finding.issue_type == "job_mismatch":
-            return await self._handle_job_mismatch(file, finding)
+            return await self._handle_job_mismatch(file, status, finding)
         elif finding.issue_type == "job_failed":
-            return await self._handle_job_failed(file, finding)
+            return await self._handle_job_failed(file, status, finding)
         else:
             return ReconcileAction(
                 file_id=finding.file_id,
@@ -114,75 +125,80 @@ class StateReconciler:
             )
 
     async def _handle_stuck(
-        self, file: File, finding: WatchdogFinding, retry_count: int
+        self, file: File, status: FileStatus, finding: WatchdogFinding, retry_count: int
     ) -> ReconcileAction:
         """Stuck 상태 처리."""
         if retry_count >= MAX_RETRY_COUNT:
             # 최대 재시도 횟수 초과 - 실패로 마킹
             return await self._mark_as_failed(
                 file,
+                status,
                 f"Max retries ({MAX_RETRY_COUNT}) exceeded. Stuck for {finding.stuck_minutes:.1f} minutes.",
             )
 
         # 상태에 따라 재시도 또는 실패 처리
-        if file.status == FileStatus.PROCESSING:
+        if status == FileStatus.PROCESSING:
             # ASR 처리 중 stuck - 실패로 마킹 (ASR은 외부 서버 의존)
             return await self._mark_as_failed(
                 file,
+                status,
                 f"ASR processing stuck for {finding.stuck_minutes:.1f} minutes",
             )
 
-        elif file.status == FileStatus.OCR_PROCESSING:
+        elif status == FileStatus.OCR_PROCESSING:
             # OCR 처리 중 stuck - 실패로 마킹
             return await self._mark_as_failed(
                 file,
+                status,
                 f"OCR processing stuck for {finding.stuck_minutes:.1f} minutes",
             )
 
-        elif file.status == FileStatus.SUMMARIZING:
+        elif status == FileStatus.SUMMARIZING:
             # LLM 요약 중 stuck - 실패로 마킹
             return await self._mark_as_failed(
                 file,
+                status,
                 f"LLM summarizing stuck for {finding.stuck_minutes:.1f} minutes",
             )
 
-        elif file.status == FileStatus.SUMMARY_QUEUED:
+        elif status == FileStatus.SUMMARY_QUEUED:
             # 요약 대기 중 stuck - LLM 작업 재큐잉 시도
             return await self._requeue_llm_job(file, retry_count)
 
-        elif file.status == FileStatus.QUEUED:
+        elif status == FileStatus.QUEUED:
             # 초기 대기 중 stuck - 파일 타입에 따라 처리
             return await self._requeue_initial_job(file, retry_count)
 
         return ReconcileAction(
             file_id=file.id,
             action="skipped",
-            details=f"No action defined for stuck {file.status.value}",
+            details=f"No action defined for stuck {status.value}",
             success=False,
         )
 
     async def _handle_no_job(
-        self, file: File, finding: WatchdogFinding, retry_count: int
+        self, file: File, status: FileStatus, finding: WatchdogFinding, retry_count: int
     ) -> ReconcileAction:
         """작업이 없는 상태 처리."""
         if retry_count >= MAX_RETRY_COUNT:
             return await self._mark_as_failed(
                 file,
+                status,
                 f"Max retries ({MAX_RETRY_COUNT}) exceeded. No job found.",
             )
 
-        if file.status == FileStatus.SUMMARY_QUEUED:
+        if status == FileStatus.SUMMARY_QUEUED:
             return await self._requeue_llm_job(file, retry_count)
 
         return ReconcileAction(
             file_id=file.id,
             action="skipped",
-            details=f"No job handling for status {file.status.value}",
+            details=f"No job handling for status {status.value}",
             success=False,
         )
 
     async def _handle_job_mismatch(
-        self, file: File, finding: WatchdogFinding
+        self, file: File, status: FileStatus, finding: WatchdogFinding
     ) -> ReconcileAction:
         """작업 상태 불일치 처리.
 
@@ -193,11 +209,11 @@ class StateReconciler:
 
         if "_failed" in last_event:
             # 실패 이벤트가 있으면 실패 상태로 업데이트
-            if file.status == FileStatus.PROCESSING:
+            if status == FileStatus.PROCESSING:
                 new_status = FileStatus.ASR_FAILED
-            elif file.status == FileStatus.OCR_PROCESSING:
+            elif status == FileStatus.OCR_PROCESSING:
                 new_status = FileStatus.OCR_FAILED
-            elif file.status == FileStatus.SUMMARIZING:
+            elif status == FileStatus.SUMMARIZING:
                 new_status = FileStatus.SUMMARY_FAILED
             else:
                 new_status = FileStatus.CANCELLED
@@ -205,8 +221,8 @@ class StateReconciler:
             await self.file_repo.update_file_status(file.id, new_status)
             await self.file_repo.add_log(
                 file.id,
-                log={"event": "reconciler_status_fix", "old_status": file.status.value, "new_status": new_status.value},
-                message=f"[Reconciler] Fixed status: {file.status.value} → {new_status.value}",
+                log={"event": "reconciler_status_fix", "old_status": status.value, "new_status": new_status.value},
+                message=f"[Reconciler] Fixed status: {status.value} → {new_status.value}",
             )
 
             # 이벤트 발행
@@ -221,7 +237,7 @@ class StateReconciler:
             return ReconcileAction(
                 file_id=file.id,
                 action="fixed_status",
-                details=f"Status updated: {file.status.value} → {new_status.value}",
+                details=f"Status updated: {status.value} → {new_status.value}",
                 success=True,
             )
 
@@ -233,19 +249,19 @@ class StateReconciler:
         )
 
     async def _handle_job_failed(
-        self, file: File, finding: WatchdogFinding
+        self, file: File, status: FileStatus, finding: WatchdogFinding
     ) -> ReconcileAction:
         """Celery 작업 실패 처리."""
-        return await self._mark_as_failed(file, "Celery job failed")
+        return await self._mark_as_failed(file, status, "Celery job failed")
 
-    async def _mark_as_failed(self, file: File, reason: str) -> ReconcileAction:
+    async def _mark_as_failed(self, file: File, status: FileStatus, reason: str) -> ReconcileAction:
         """파일을 실패 상태로 마킹합니다."""
         # 상태에 따라 적절한 실패 상태 결정
-        if file.status in [FileStatus.QUEUED, FileStatus.PROCESSING]:
+        if status in [FileStatus.QUEUED, FileStatus.PROCESSING]:
             new_status = FileStatus.ASR_FAILED
-        elif file.status == FileStatus.OCR_PROCESSING:
+        elif status == FileStatus.OCR_PROCESSING:
             new_status = FileStatus.OCR_FAILED
-        elif file.status in [FileStatus.SUMMARY_QUEUED, FileStatus.SUMMARIZING]:
+        elif status in [FileStatus.SUMMARY_QUEUED, FileStatus.SUMMARIZING]:
             new_status = FileStatus.SUMMARY_FAILED
         else:
             new_status = FileStatus.CANCELLED
@@ -253,7 +269,7 @@ class StateReconciler:
         await self.file_repo.update_file_status(file.id, new_status)
         await self.file_repo.add_log(
             file.id,
-            log={"event": "reconciler_marked_failed", "reason": reason, "old_status": file.status.value},
+            log={"event": "reconciler_marked_failed", "reason": reason, "old_status": status.value},
             message=f"[Reconciler] Marked as failed: {reason}",
         )
 
@@ -271,7 +287,7 @@ class StateReconciler:
         return ReconcileAction(
             file_id=file.id,
             action="marked_failed",
-            details=f"Status: {file.status.value} → {new_status.value}. Reason: {reason}",
+            details=f"Status: {status.value} → {new_status.value}. Reason: {reason}",
             success=True,
         )
 
@@ -328,15 +344,23 @@ class StateReconciler:
             f"QUEUED state stuck for too long. Cannot requeue initial job without original parameters.",
         )
 
-    async def _get_retry_count(self, file_id: int) -> int:
+    async def _get_retry_count(self, file_id: UUID) -> int:
         """Reconciler 재시도 횟수를 조회합니다."""
         from sqlalchemy import select, func
+
+        # file_id로 content_id 조회
+        content_stmt = select(Content.id).where(Content.file_id == file_id)
+        content_result = await self.session.execute(content_stmt)
+        content_id = content_result.scalar_one_or_none()
+
+        if not content_id:
+            return 0
 
         stmt = (
             select(func.count())
             .select_from(SttLog)
             .where(
-                SttLog.file_id == file_id,
+                SttLog.content_id == content_id,
                 SttLog.log["event"].astext == "reconciler_requeued",
             )
         )
@@ -347,7 +371,7 @@ class StateReconciler:
             select(func.count())
             .select_from(LlmLog)
             .where(
-                LlmLog.file_id == file_id,
+                LlmLog.content_id == content_id,
                 LlmLog.log["event"].astext == "reconciler_requeued",
             )
         )
