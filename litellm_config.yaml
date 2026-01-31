@@ -5,6 +5,11 @@ model_list:
       model: "prometheus-router/tier-simple"
       stream: true
 
+  - model_name: "tier-recap"
+    litellm_params:
+      model: "prometheus-router/tier-recap"
+      stream: true
+
   - model_name: "tier-thinking"
     litellm_params:
       model: "prometheus-router/tier-thinking"
