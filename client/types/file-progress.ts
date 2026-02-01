@@ -28,8 +28,8 @@ export type FileProgressStep =
 /** 파일 진행 상태 이벤트 */
 export interface FileProgressEvent {
     type: 'file_progress' | 'connection' | 'pong' | 'content_created'
-    file_id?: number
-    content_id?: number
+    file_id?: string  // UUID
+    content_id?: string  // UUID
     filename?: string
     content_type?: string
     status?: FileStatus | string
@@ -48,8 +48,8 @@ export interface FileProgressEvent {
 
 /** 파일 진행 상태 */
 export interface FileProgress {
-    /** 파일 ID */
-    fileId: number | null
+    /** 파일 ID (UUID) */
+    fileId: string | null
     /** 현재 상태 */
     status: FileStatus
     /** 현재 처리 단계 */

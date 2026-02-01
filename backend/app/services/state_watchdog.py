@@ -7,12 +7,14 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from typing import Sequence
+from uuid import UUID
 
 from sqlalchemy import select, and_
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.logging import logger
-from ..db.models import File, FileStatus, SttLog, LlmLog
+from ..db.models import File, FileStatus, SttLog, LlmLog, Content
 from ..db.session import AsyncSessionLocal
 from ..repositories.file_repository import FileRepository
 from ..utils.task_queue_adapter import get_task_queue
@@ -21,7 +23,7 @@ from ..utils.task_queue_adapter import get_task_queue
 @dataclass
 class WatchdogFinding:
     """Watchdog이 발견한 문제."""
-    file_id: int
+    file_id: UUID
     file_status: FileStatus
     issue_type: str  # "stuck", "no_job", "job_failed", "job_mismatch"
     details: str
@@ -90,7 +92,9 @@ class StateWatchdog:
         """불안정 상태의 파일 목록을 조회합니다."""
         stmt = (
             select(File)
-            .where(File.status.in_(UNSTABLE_STATUSES))
+            .join(Content, Content.file_id == File.id)
+            .options(selectinload(File.content))
+            .where(Content.status.in_(UNSTABLE_STATUSES))
             .order_by(File.created_at.asc())
         )
         result = await self.session.execute(stmt)
@@ -101,8 +105,15 @@ class StateWatchdog:
         findings: list[WatchdogFinding] = []
         now = datetime.now(timezone.utc)
 
+        # Content에서 status 조회
+        content = file.content
+        if not content:
+            return findings
+
+        status = content.status
+
         # 1. 타임아웃 체크
-        timeout_minutes = STATUS_TIMEOUTS.get(file.status, 30)
+        timeout_minutes = STATUS_TIMEOUTS.get(status, 30)
         age_minutes = (now - file.created_at).total_seconds() / 60
 
         # 마지막 로그 시간으로 stuck 판단 (최근 활동 기준)
@@ -115,26 +126,26 @@ class StateWatchdog:
         if stuck_minutes > timeout_minutes:
             findings.append(WatchdogFinding(
                 file_id=file.id,
-                file_status=file.status,
+                file_status=status,
                 issue_type="stuck",
-                details=f"Status '{file.status.value}' for {stuck_minutes:.1f} minutes (timeout: {timeout_minutes}m)",
+                details=f"Status '{status.value}' for {stuck_minutes:.1f} minutes (timeout: {timeout_minutes}m)",
                 stuck_minutes=stuck_minutes,
             ))
 
         # 2. Celery 작업 상태 확인 (PROCESSING/SUMMARIZING/OCR_PROCESSING 상태)
-        if file.status in [FileStatus.PROCESSING, FileStatus.SUMMARIZING, FileStatus.OCR_PROCESSING]:
-            celery_finding = await self._check_celery_job(file)
+        if status in [FileStatus.PROCESSING, FileStatus.SUMMARIZING, FileStatus.OCR_PROCESSING]:
+            celery_finding = await self._check_celery_job(file, status)
             if celery_finding:
                 findings.append(celery_finding)
 
         # 3. SUMMARY_QUEUED 상태에서 LLM 작업이 큐에 있는지 확인
-        if file.status == FileStatus.SUMMARY_QUEUED and stuck_minutes > 5:
+        if status == FileStatus.SUMMARY_QUEUED and stuck_minutes > 5:
             # 5분 이상 SUMMARY_QUEUED면 작업이 큐잉되었는지 확인
             has_llm_job = await self._check_llm_job_queued(file.id)
             if not has_llm_job:
                 findings.append(WatchdogFinding(
                     file_id=file.id,
-                    file_status=file.status,
+                    file_status=status,
                     issue_type="no_job",
                     details=f"SUMMARY_QUEUED but no LLM job found after {stuck_minutes:.1f} minutes",
                     stuck_minutes=stuck_minutes,
@@ -142,12 +153,20 @@ class StateWatchdog:
 
         return findings
 
-    async def _get_last_activity_time(self, file_id: int) -> datetime | None:
+    async def _get_last_activity_time(self, file_id: UUID) -> datetime | None:
         """파일의 마지막 활동 시간을 조회합니다 (로그 기준)."""
+        # file_id로 content_id 조회
+        content_stmt = select(Content.id).where(Content.file_id == file_id)
+        content_result = await self.session.execute(content_stmt)
+        content_id = content_result.scalar_one_or_none()
+
+        if not content_id:
+            return None
+
         # SttLog에서 가장 최근 로그 시간
         stt_stmt = (
             select(SttLog.created_at)
-            .where(SttLog.file_id == file_id)
+            .where(SttLog.content_id == content_id)
             .order_by(SttLog.created_at.desc())
             .limit(1)
         )
@@ -157,7 +176,7 @@ class StateWatchdog:
         # LlmLog에서 가장 최근 로그 시간
         llm_stmt = (
             select(LlmLog.created_at)
-            .where(LlmLog.file_id == file_id)
+            .where(LlmLog.content_id == content_id)
             .order_by(LlmLog.created_at.desc())
             .limit(1)
         )
@@ -170,7 +189,7 @@ class StateWatchdog:
             return max(times)
         return None
 
-    async def _check_celery_job(self, file: File) -> WatchdogFinding | None:
+    async def _check_celery_job(self, file: File, status: FileStatus) -> WatchdogFinding | None:
         """Celery 작업 상태를 확인합니다.
 
         Note: 현재 구조에서는 job_id를 별도로 저장하지 않으므로,
@@ -192,19 +211,27 @@ class StateWatchdog:
                 # 이미 실패 처리된 것으로 보이지만 상태가 아직 안 바뀜
                 return WatchdogFinding(
                     file_id=file.id,
-                    file_status=file.status,
+                    file_status=status,
                     issue_type="job_mismatch",
-                    details=f"Last event was '{event}' but status is still {file.status.value}",
+                    details=f"Last event was '{event}' but status is still {status.value}",
                 )
 
         return None
 
-    async def _get_last_log_event(self, file_id: int) -> dict | None:
+    async def _get_last_log_event(self, file_id: UUID) -> dict | None:
         """파일의 마지막 로그 이벤트를 조회합니다."""
+        # file_id로 content_id 조회
+        content_stmt = select(Content.id).where(Content.file_id == file_id)
+        content_result = await self.session.execute(content_stmt)
+        content_id = content_result.scalar_one_or_none()
+
+        if not content_id:
+            return None
+
         # SttLog에서 조회
         stt_stmt = (
             select(SttLog)
-            .where(SttLog.file_id == file_id)
+            .where(SttLog.content_id == content_id)
             .order_by(SttLog.created_at.desc())
             .limit(1)
         )
@@ -214,7 +241,7 @@ class StateWatchdog:
         # LlmLog에서 조회
         llm_stmt = (
             select(LlmLog)
-            .where(LlmLog.file_id == file_id)
+            .where(LlmLog.content_id == content_id)
             .order_by(LlmLog.created_at.desc())
             .limit(1)
         )
@@ -233,16 +260,24 @@ class StateWatchdog:
 
         return None
 
-    async def _check_llm_job_queued(self, file_id: int) -> bool:
+    async def _check_llm_job_queued(self, file_id: UUID) -> bool:
         """LLM 작업이 큐에 있는지 확인합니다.
 
         LlmLog에 큐잉 로그가 있는지 확인합니다.
         """
+        # file_id로 content_id 조회
+        content_stmt = select(Content.id).where(Content.file_id == file_id)
+        content_result = await self.session.execute(content_stmt)
+        content_id = content_result.scalar_one_or_none()
+
+        if not content_id:
+            return False
+
         stmt = (
             select(LlmLog)
             .where(
                 and_(
-                    LlmLog.file_id == file_id,
+                    LlmLog.content_id == content_id,
                     # 큐잉 관련 로그 확인 (ASR/OCR 완료 시 자동 큐잉됨)
                 )
             )

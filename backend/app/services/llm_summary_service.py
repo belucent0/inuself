@@ -12,6 +12,7 @@ import re
 import time
 import asyncio
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -812,7 +813,7 @@ class LlmSummaryService:
         self.document_repo = DocumentRepository(session)
         self.settings = get_settings()
 
-    async def summarize(self, file_id: int) -> None:
+    async def summarize(self, file_id: UUID) -> None:
         """LLM 요약 수행."""
         file_obj = await self.file_repo.get_file(file_id)
         if not file_obj:
@@ -833,8 +834,9 @@ class LlmSummaryService:
     async def _summarize_file(self, file_obj) -> None:
         """File을 사용한 요약."""
         file_id = file_obj.id
+        content = file_obj.content
 
-        if file_obj.status == FileStatus.COMPLETED and file_obj.summary_md:
+        if content and content.status == FileStatus.COMPLETED and content.summary_md:
             logger.info("File %s already completed with summary, skipping", file_id)
             return
 
@@ -879,7 +881,7 @@ class LlmSummaryService:
                 file_id,
                 log={
                     "event": "summarizing_started",
-                    "previous_status": file_obj.status.value,
+                    "previous_status": content.status.value if content else "UNKNOWN",
                 },
                 message="LLM summarization started",
             )

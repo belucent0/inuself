@@ -79,15 +79,15 @@ const getFileExtension = (filename: string): string => {
 interface ContentItemProps {
     item: ContentSummary
     selected: boolean
-    onToggle: (id: number) => void
-    onRetry: (id: number, type: 'asr' | 'ocr' | 'summary', event: React.MouseEvent) => void
+    onToggle: (id: string) => void  // UUID
+    onRetry: (id: string, type: 'asr' | 'ocr' | 'summary', event: React.MouseEvent) => void  // UUID
     liveProgress?: FileProgress
 }
 
 export function ContentItem({ item, selected, onToggle, onRetry, liveProgress }: ContentItemProps) {
     // 기본 상태 (Props가 없을 때 사용)
     const defaultProgress: FileProgress = {
-        fileId: item.id,
+        fileId: item.id,  // UUID string
         status: 'queued', // 초기값, 아래에서 덮어씀
         step: null,
         progress: 0,

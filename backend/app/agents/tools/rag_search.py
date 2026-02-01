@@ -9,9 +9,10 @@ from loguru import logger
 from typing import Any
 
 from sqlalchemy import select, or_, func
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...db.models import File, FileStatus, Transcription, Document
+from ...db.models import File, Content, FileStatus, Transcription, Document
 from ...db.session import AsyncSessionLocal
 
 
@@ -58,10 +59,15 @@ async def search_internal_content(
 
     try:
         async with AsyncSessionLocal() as session:
-            # 완료된 콘텐츠만 검색
-            stmt = select(File).where(
-                File.status == FileStatus.COMPLETED,
-                File.summary_md.isnot(None),
+            # 완료된 콘텐츠만 검색 (Content 테이블에서 status, summary_md 조회)
+            stmt = (
+                select(File)
+                .join(Content, Content.file_id == File.id)
+                .options(selectinload(File.content))
+                .where(
+                    Content.status == FileStatus.COMPLETED,
+                    Content.summary_md.isnot(None),
+                )
             )
 
             # 특정 콘텐츠 ID로 제한
@@ -73,8 +79,8 @@ async def search_internal_content(
             for kw in keywords[:5]:  # 최대 5개 키워드
                 keyword_conditions.append(
                     or_(
-                        File.title.ilike(f"%{kw}%"),
-                        File.summary_md.ilike(f"%{kw}%"),
+                        Content.title.ilike(f"%{kw}%"),
+                        Content.summary_md.ilike(f"%{kw}%"),
                     )
                 )
 
@@ -90,12 +96,13 @@ async def search_internal_content(
             # 결과 포맷팅
             search_results = []
             for i, file in enumerate(files):
+                content = file.content
                 # 요약에서 관련 스니펫 추출
-                snippet = _extract_relevant_snippet(file.summary_md or "", keywords)
+                snippet = _extract_relevant_snippet(content.summary_md or "" if content else "", keywords)
 
                 search_results.append({
                     "position": i + 1,
-                    "title": file.title or file.filename,
+                    "title": (content.title if content else None) or file.filename,
                     "url": f"/contents/{file.id}",  # 내부 URL
                     "snippet": snippet,
                     "source": "rag",
@@ -169,22 +176,29 @@ async def get_content_context(
 
     try:
         async with AsyncSessionLocal() as session:
-            stmt = select(File).where(File.id.in_(content_ids))
+            stmt = (
+                select(File)
+                .options(
+                    selectinload(File.content).selectinload(Content.transcription_result)
+                )
+                .where(File.id.in_(content_ids))
+            )
             result = await session.execute(stmt)
             files = result.scalars().all()
 
             contexts = []
             for file in files:
+                content = file.content
                 context = {
                     "id": file.id,
-                    "title": file.title or file.filename,
-                    "summary": file.summary_md or "",
+                    "title": (content.title if content else None) or file.filename,
+                    "summary": content.summary_md or "" if content else "",
                     "content_type": str(file.content_type.value) if file.content_type else "unknown",
                 }
 
                 # 전사 텍스트 포함 (선택적)
-                if include_transcription and file.transcription:
-                    trans_data = file.transcription.transcription
+                if include_transcription and content and content.transcription_result:
+                    trans_data = content.transcription_result.transcription
                     if isinstance(trans_data, dict):
                         context["transcription"] = trans_data.get("text", "")[:2000]
 
