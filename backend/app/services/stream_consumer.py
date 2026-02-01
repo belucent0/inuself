@@ -444,6 +444,27 @@ class StreamConsumer:
                             message=f"요약 생성 실패: {exc}",
                         )
 
+                else:
+                    # 요약할 텍스트가 없는 경우
+                    logger.info(f"No text to summarize, skipping LLM: file_id={file_id}")
+                    
+                    await file_repo.update_file_status(file_id, FileStatus.COMPLETED)
+                    await file_repo.add_llm_log(
+                        file_id,
+                        log={"event": "llm_skipped", "reason": "empty_text"},
+                        message="LLM skipped: No text to summarize",
+                    )
+                    await session.commit()
+
+                    # 클라이언트에 이벤트 발행 (완료 처리)
+                    publish_file_progress(
+                        file_id=file_id,
+                        status="completed",
+                        step="completed",
+                        progress=100.0,
+                        message="텍스트가 없어 요약을 건너뛰고 완료했습니다.",
+                    )
+
                 # ASR 활성 작업 해제
                 task_queue = get_task_queue()
                 task_queue.clear_active_job("asr", file_id)
