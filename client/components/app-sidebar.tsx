@@ -33,8 +33,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
     const handleYouTubeSubmit = async (url: string) => {
         await uploadYouTubeContent(url)
-        toast.success("YouTube 영상이 처리 대기열에 추가되었습니다", {
-            description: "콘텐츠 목록에서 진행 상황을 확인할 수 있습니다.",
+        toast.success("YouTube 영상 다운로드가 시작되었습니다", {
+            description: "다운로드 진행 상황은 콘텐츠 목록에서 확인할 수 있습니다.",
         })
     }
 
