@@ -9,6 +9,8 @@ export type FileStatus =
 
 /** 파일 처리 단계 (WebSocket) */
 export type FileProgressStep =
+    | 'youtube_download'
+    | 'uploading'
     | 'download_complete'
     | 'asr_pipeline_start'
     | 'asr_pipeline_complete'

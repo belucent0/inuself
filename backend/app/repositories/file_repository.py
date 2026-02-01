@@ -62,12 +62,8 @@ class FileRepository:
                 selectinload(models.File.content).selectinload(
                     models.Content.document_result
                 ),
-                selectinload(models.File.content).selectinload(
-                    models.Content.logs
-                ),
-                selectinload(models.File.content).selectinload(
-                    models.Content.llm_logs
-                ),
+                selectinload(models.File.content).selectinload(models.Content.logs),
+                selectinload(models.File.content).selectinload(models.Content.llm_logs),
             )
             .where(models.File.id == file_id)
         )
@@ -129,6 +125,16 @@ class FileRepository:
         await self.session.execute(stmt)
         await self.session.flush()
 
+    async def update_object_key(self, file_id: UUID, object_key: str) -> None:
+        """파일 object_key 업데이트."""
+        stmt = (
+            update(models.File)
+            .where(models.File.id == file_id)
+            .values(object_key=object_key)
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()
+
     async def update_summary_markdown(self, file_id: UUID, summary_md: str) -> None:
         """요약 마크다운 업데이트 (Content만 업데이트)."""
         now = datetime.now(timezone.utc)
@@ -174,7 +180,9 @@ class FileRepository:
         await self.session.flush()
         return count, file_ids, object_keys
 
-    async def delete_files_by_ids(self, file_ids: list[UUID]) -> tuple[list[UUID], list[str]]:
+    async def delete_files_by_ids(
+        self, file_ids: list[UUID]
+    ) -> tuple[list[UUID], list[str]]:
         """지정된 파일을 상태와 무관하게 삭제하고 삭제된 ID, object_key를 반환."""
         if not file_ids:
             return [], []
@@ -192,7 +200,9 @@ class FileRepository:
         await self.session.flush()
         return deleted_ids, object_keys
 
-    async def add_log(self, file_id: UUID, log: dict, message: str = "") -> models.SttLog | None:
+    async def add_log(
+        self, file_id: UUID, log: dict, message: str = ""
+    ) -> models.SttLog | None:
         """로그 추가. file이 존재하지 않으면 None 반환."""
         file = await self.get_file(file_id)
         if not file:
@@ -210,7 +220,9 @@ class FileRepository:
         await self.session.flush()
         return entry
 
-    async def add_llm_log(self, file_id: UUID, log: dict, message: str = "") -> models.LlmLog | None:
+    async def add_llm_log(
+        self, file_id: UUID, log: dict, message: str = ""
+    ) -> models.LlmLog | None:
         """LLM 로그 추가. file이 존재하지 않으면 None 반환."""
         file = await self.get_file(file_id)
         if not file:

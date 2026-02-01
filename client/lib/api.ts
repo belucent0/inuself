@@ -18,6 +18,7 @@ export type SttLog = {
 
 export type ContentStatus =
   | 'QUEUED' // 처리 대기중 (큐에 등록됨)
+  | 'PULLING' // 외부 소스에서 다운로드 중 (YouTube 등)
   | 'PROCESSING' // 처리중 (ASR/화자분리 진행 중)
   | 'OCR_PROCESSING' // OCR 처리 중
   | 'SUMMARY_QUEUED' // LLM 요약 대기중 (큐에 등록됨)

@@ -17,6 +17,7 @@ import { formatToKST } from '@/lib/utils'
 
 const statusLabels: Record<ContentStatus, string> = {
     QUEUED: '대기중',
+    PULLING: '다운로드 중',
     PROCESSING: '인식중',
     OCR_PROCESSING: '인식중',
     SUMMARY_QUEUED: '요약 대기',
@@ -38,6 +39,7 @@ const getStatusVariant = (status: ContentStatus): 'default' | 'secondary' | 'des
             return 'destructive'
         case 'SUMMARY_FAILED':
             return 'warning'
+        case 'PULLING':
         case 'PROCESSING':
         case 'OCR_PROCESSING':
         case 'SUMMARIZING':
@@ -54,6 +56,7 @@ const getStatusVariant = (status: ContentStatus): 'default' | 'secondary' | 'des
 const getStatusIcon = (status: ContentStatus) => {
     switch (status) {
         case 'QUEUED':
+        case 'PULLING':
         case 'PROCESSING':
         case 'OCR_PROCESSING':
         case 'SUMMARY_QUEUED':

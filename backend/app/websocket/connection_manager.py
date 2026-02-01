@@ -147,12 +147,13 @@ class ConnectionManager:
         for websocket in disconnected:
             await self.disconnect(websocket)
 
-        logger.info(
-            "[ConnectionManager] Broadcasted to channel={}, sent={}, failed={}",
-            channel,
-            len(subscribers) - len(disconnected),
-            len(disconnected),
-        )
+        if len(subscribers) - len(disconnected) > 0:
+            logger.debug(
+                "[ConnectionManager] Broadcasted to channel={}, sent={}, failed={}",
+                channel,
+                len(subscribers) - len(disconnected),
+                len(disconnected),
+            )
 
     def get_stats(self) -> dict:
         """현재 연결 통계를 반환합니다.
