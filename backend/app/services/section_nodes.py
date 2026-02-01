@@ -51,22 +51,21 @@ def extract_fallback_content(topic: str, transcript: str) -> str:
             break
 
     if relevant_sentences:
-        result = " ".join(relevant_sentences)
-        return result[:300]  # 최대 300자
+        return " ".join(relevant_sentences)
 
-    # 관련 문장을 찾지 못하면 앞부분 반환
-    return transcript[:250] if transcript else ""
+    # 관련 문장을 찾지 못하면 앞부분 반환 (최소한의 내용 제공)
+    return transcript[:500] if transcript else ""
 
 
 def validate_section_length(
-    content: str, min_len: int = 50, max_len: int = 300
+    content: str, min_len: int = 50, max_len: int | None = None
 ) -> Tuple[bool, str]:
     """섹션 내용의 길이를 검증합니다.
 
     Args:
         content: 검증할 내용
         min_len: 최소 길이 (기본 50)
-        max_len: 최대 길이 (기본 300)
+        max_len: 최대 길이 (기본 None - 제한 없음)
 
     Returns:
         (is_valid, message) 튜플
@@ -81,7 +80,8 @@ def validate_section_length(
     if length < min_len:
         return False, f"내용이 너무 짧습니다: {length}자 (최소 {min_len}자)"
 
-    if length > max_len:
+    # 최대 길이 제한은 선택적 (None이면 제한 없음)
+    if max_len is not None and length > max_len:
         return False, f"내용이 너무 깁니다: {length}자 (최대 {max_len}자)"
 
     return True, f"검증 통과: {length}자"
@@ -147,16 +147,12 @@ def create_section_node(
             transcript=state["transcript"],
         )
 
-        # 재시도 시 이전 답변의 길이 피드백 추가
+        # 재시도 시 이전 답변의 길이 피드백 추가 (너무 짧은 경우에만)
         if retry_count > 0 and previous_content:
             prev_length = len(previous_content)
-            if prev_length > 300:
-                feedback = f"\n\n[피드백] 이전 답변이 {prev_length}자로 300자를 초과했습니다. 내용을 압축하여 300자 이내(50-300자)로 작성해주세요."
-            elif prev_length < 50:
-                feedback = f"\n\n[피드백] 이전 답변이 {prev_length}자로 50자 미만이었습니다. 내용을 더 자세히 작성하여 50자 이상(50-300자)으로 작성해주세요."
-            else:
-                feedback = f"\n\n[피드백] 이전 답변은 {prev_length}자였습니다. 50-300자 범위 내에서 적절한 길이로 작성해주세요."
-            prompt += feedback
+            if prev_length < 50:
+                feedback = f"\n\n[피드백] 이전 답변이 {prev_length}자로 너무 짧았습니다. 내용을 더 자세히 작성하여 50자 이상으로 작성해주세요."
+                prompt += feedback
 
         messages = [
             {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},

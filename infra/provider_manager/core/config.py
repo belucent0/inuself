@@ -2,6 +2,7 @@
 
 모든 설정을 중앙에서 관리하는 Pydantic Settings 기반 설정 모듈.
 """
+
 import os
 from pathlib import Path
 from typing import Optional
@@ -21,9 +22,16 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # Stream names (GPU 작업용)
-    request_stream: str = "stream:gpu:requests"
+    request_stream: str = "stream:chat:requests"  # Deprecated: use specific streams below. Defaulting to chat for backward compatibility.
     response_stream: str = "stream:gpu:responses"
     consumer_group: str = "gpu-workers"
+
+    # New Topic-based Streams (V8.1)
+    media_request_stream: str = (
+        "stream:media:requests"  # Audio(ASR), Vision(OCR) - MAXLEN 50
+    )
+    chat_request_stream: str = "stream:chat:requests"  # Simple, Thinking - MAXLEN 3000
+    recap_request_stream: str = "stream:recap:requests"  # Summary - MAXLEN 1000
 
     # Control Stream names (Provider 관리용)
     control_request_stream: str = "stream:provider:requests"
@@ -39,8 +47,10 @@ class Settings(BaseSettings):
 
     # FLM NPU Server URLs
     flm_asr_url: str = "http://localhost:11434"
-    flm_llm_url: str = "http://localhost:11435"           # tier-simple (간단한 작업)
-    flm_llm_thinking_url: str = "http://localhost:11437"  # tier-thinking (복잡한 분석 + CoT)
+    flm_llm_url: str = "http://localhost:11435"  # tier-simple (간단한 작업)
+    flm_llm_thinking_url: str = (
+        "http://localhost:11437"  # tier-thinking (복잡한 분석 + CoT)
+    )
     flm_ocr_url: str = "http://localhost:11436"
 
     # Server paths (from environment)
@@ -68,7 +78,9 @@ class Settings(BaseSettings):
     health_check_timeout: float = 10.0  # 헬스체크 타임아웃 (초)
     max_recovery_attempts: int = 3  # 최대 복구 시도 횟수
     recovery_cooldown: int = 300  # 복구 실패 후 대기 시간 (초, 5분)
-    consecutive_failure_threshold: int = 3  # 연속 실패 임계값 (이 횟수 이상 연속 실패 시 recovery 시작)
+    consecutive_failure_threshold: int = (
+        3  # 연속 실패 임계값 (이 횟수 이상 연속 실패 시 recovery 시작)
+    )
 
     # Idle Timeout (On-Demand 프로바이더 자동 언로드)
     idle_timeout: float = 60.0  # idle timeout 시간 (초, 기본값 60초)
@@ -111,11 +123,11 @@ class Settings(BaseSettings):
         """Load additional settings from .env file."""
         env_path = self.project_root / ".env"
         if env_path.exists():
-            with open(env_path, 'r', encoding='utf-8') as f:
+            with open(env_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
-                    if line and not line.startswith('#') and '=' in line:
-                        key, _, value = line.partition('=')
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, value = line.partition("=")
                         key = key.strip().lower()
                         value = value.strip().strip('"').strip("'")
 

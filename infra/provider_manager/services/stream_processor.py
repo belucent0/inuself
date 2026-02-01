@@ -41,11 +41,13 @@ try:
     from shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
 except ImportError:
     import sys
+
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
     from infra.shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
 
 # TYPE_CHECKING으로 순환 임포트 방지
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from services.idle_manager import IdleTimeoutManager
 
@@ -87,7 +89,7 @@ class StreamProcessor:
         "llama-ocr-server": "gpu",
         # NPU 프로바이더
         "flm-asr": "npu",
-        "flm-llm": "npu",           # tier-simple
+        "flm-llm": "npu",  # tier-simple
         "flm-llm-thinking": "npu",  # tier-thinking
         "flm-ocr": "npu",
     }
@@ -111,7 +113,10 @@ class StreamProcessor:
             "gpu": asyncio.Semaphore(settings.gpu_max_concurrent),
             "npu": asyncio.Semaphore(settings.npu_max_concurrent),
         }
-        self._pending_jobs: Dict[str, int] = {"gpu": 0, "npu": 0}  # 대기 중인 작업 수 추적
+        self._pending_jobs: Dict[str, int] = {
+            "gpu": 0,
+            "npu": 0,
+        }  # 대기 중인 작업 수 추적
 
     @property
     def service(self) -> ProviderService:
@@ -133,20 +138,29 @@ class StreamProcessor:
         self.job_tracker = JobTracker(self.redis)
         logger.info("JobTracker initialized")
 
-        # GPU 작업 Consumer Group 생성
-        try:
-            await self.redis.xgroup_create(
-                settings.request_stream,
-                settings.consumer_group,
-                id="0",
-                mkstream=True
-            )
-            logger.info(f"Created GPU consumer group '{settings.consumer_group}'")
-        except redis_async.ResponseError as e:
-            if "BUSYGROUP" in str(e):
-                logger.info(f"GPU consumer group '{settings.consumer_group}' already exists")
-            else:
-                raise
+        # 모든 GPU 작업 스트림에 Consumer Group 생성
+        gpu_streams = [
+            settings.request_stream,  # legacy stream (chat)
+            settings.media_request_stream,  # audio/vision
+            settings.chat_request_stream,  # chat completions
+            settings.recap_request_stream,  # summaries
+        ]
+        # 중복 제거
+        gpu_streams = list(dict.fromkeys(gpu_streams))
+
+        for stream in gpu_streams:
+            try:
+                await self.redis.xgroup_create(
+                    stream, settings.consumer_group, id="0", mkstream=True
+                )
+                logger.info(f"Created GPU consumer group '{settings.consumer_group}' for {stream}")
+            except redis_async.ResponseError as e:
+                if "BUSYGROUP" in str(e):
+                    logger.info(
+                        f"GPU consumer group '{settings.consumer_group}' already exists for {stream}"
+                    )
+                else:
+                    raise
 
         # Control API Consumer Group 생성
         try:
@@ -154,12 +168,16 @@ class StreamProcessor:
                 settings.control_request_stream,
                 settings.control_consumer_group,
                 id="0",
-                mkstream=True
+                mkstream=True,
             )
-            logger.info(f"Created Control consumer group '{settings.control_consumer_group}'")
+            logger.info(
+                f"Created Control consumer group '{settings.control_consumer_group}'"
+            )
         except redis_async.ResponseError as e:
             if "BUSYGROUP" in str(e):
-                logger.info(f"Control consumer group '{settings.control_consumer_group}' already exists")
+                logger.info(
+                    f"Control consumer group '{settings.control_consumer_group}' already exists"
+                )
             else:
                 raise
 
@@ -185,7 +203,9 @@ class StreamProcessor:
         await self.redis.xadd(settings.response_stream, response)
         logger.info(f"Published response for request_id={request_id}")
 
-    async def publish_chunk(self, request_id: str, chunk: str, finish_reason: Optional[str] = None):
+    async def publish_chunk(
+        self, request_id: str, chunk: str, finish_reason: Optional[str] = None
+    ):
         """스트리밍 청크를 Response Stream에 발행."""
         response = {
             "request_id": request_id,
@@ -194,7 +214,7 @@ class StreamProcessor:
         }
         if finish_reason:
             response["finish_reason"] = finish_reason
-            
+
         await self.redis.xadd(settings.response_stream, response)
 
     async def publish_error(self, request_id: str, error: str):
@@ -235,10 +255,13 @@ class StreamProcessor:
         """프로바이더 목록 조회."""
         try:
             result = await self.service.list_providers()
-            await self.publish_control_response(request_id, {
-                "action": "list_providers",
-                **result,
-            })
+            await self.publish_control_response(
+                request_id,
+                {
+                    "action": "list_providers",
+                    **result,
+                },
+            )
         except Exception as e:
             await self.publish_control_error(request_id, str(e))
 
@@ -246,10 +269,13 @@ class StreamProcessor:
         """전체 상태 조회."""
         try:
             result = await self.service.get_status()
-            await self.publish_control_response(request_id, {
-                "action": "get_status",
-                **result,
-            })
+            await self.publish_control_response(
+                request_id,
+                {
+                    "action": "get_status",
+                    **result,
+                },
+            )
         except Exception as e:
             await self.publish_control_error(request_id, str(e))
 
@@ -259,10 +285,13 @@ class StreamProcessor:
             provider = data.get("provider")
             trace_id = data.get("trace_id")
             result = await self.service.get_jobs(provider=provider, trace_id=trace_id)
-            await self.publish_control_response(request_id, {
-                "action": "get_jobs",
-                **result,
-            })
+            await self.publish_control_response(
+                request_id,
+                {
+                    "action": "get_jobs",
+                    **result,
+                },
+            )
         except Exception as e:
             await self.publish_control_error(request_id, str(e))
 
@@ -274,7 +303,9 @@ class StreamProcessor:
                 await self.publish_control_error(request_id, "Provider name required")
                 return
             result = await self.service.load_provider(name)
-            await self.publish_control_response(request_id, {"action": "load", **result})
+            await self.publish_control_response(
+                request_id, {"action": "load", **result}
+            )
         except Exception as e:
             await self.publish_control_error(request_id, str(e))
 
@@ -286,7 +317,9 @@ class StreamProcessor:
                 await self.publish_control_error(request_id, "Provider name required")
                 return
             result = await self.service.unload_provider(name)
-            await self.publish_control_response(request_id, {"action": "unload", **result})
+            await self.publish_control_response(
+                request_id, {"action": "unload", **result}
+            )
         except Exception as e:
             await self.publish_control_error(request_id, str(e))
 
@@ -298,7 +331,9 @@ class StreamProcessor:
                 await self.publish_control_error(request_id, "Provider name required")
                 return
             result = await self.service.reload_provider(name)
-            await self.publish_control_response(request_id, {"action": "reload", **result})
+            await self.publish_control_response(
+                request_id, {"action": "reload", **result}
+            )
         except Exception as e:
             await self.publish_control_error(request_id, str(e))
 
@@ -306,7 +341,9 @@ class StreamProcessor:
         """모든 프로바이더 시작."""
         try:
             result = await self.service.start_all()
-            await self.publish_control_response(request_id, {"action": "start_all", **result})
+            await self.publish_control_response(
+                request_id, {"action": "start_all", **result}
+            )
         except Exception as e:
             await self.publish_control_error(request_id, str(e))
 
@@ -314,7 +351,9 @@ class StreamProcessor:
         """모든 프로바이더 중지."""
         try:
             result = await self.service.stop_all()
-            await self.publish_control_response(request_id, {"action": "stop_all", **result})
+            await self.publish_control_response(
+                request_id, {"action": "stop_all", **result}
+            )
         except Exception as e:
             await self.publish_control_error(request_id, str(e))
 
@@ -323,7 +362,9 @@ class StreamProcessor:
         request_id = data.get("request_id", str(uuid.uuid4()))
         action = data.get("action")
 
-        logger.info(f"Processing control message: id={message_id}, action={action}, request_id={request_id}")
+        logger.info(
+            f"Processing control message: id={message_id}, action={action}, request_id={request_id}"
+        )
 
         try:
             if action == "list_providers":
@@ -343,12 +384,14 @@ class StreamProcessor:
             elif action == "stop_all":
                 await self.handle_control_stop_all(request_id, data)
             else:
-                await self.publish_control_error(request_id, f"Unknown action: {action}")
+                await self.publish_control_error(
+                    request_id, f"Unknown action: {action}"
+                )
 
             await self.redis.xack(
                 settings.control_request_stream,
                 settings.control_consumer_group,
-                message_id
+                message_id,
             )
         except Exception as e:
             logger.exception(f"Error processing control message {message_id}: {e}")
@@ -356,7 +399,7 @@ class StreamProcessor:
             await self.redis.xack(
                 settings.control_request_stream,
                 settings.control_consumer_group,
-                message_id
+                message_id,
             )
 
     # ==========================================
@@ -394,14 +437,23 @@ class StreamProcessor:
             # 패턴 기반 NPU 모델 감지 (확장성: 새 모델 추가 시 접두사만 추가)
             # FLM에서 지원하는 모델 패턴: lfm, qwen, gpt-oss, exaone, gemma, deepseek, phi 등
             NPU_MODEL_PREFIXES = (
-                "lfm", "qwen", "gpt-oss", "exaone", "gemma",
-                "deepseek", "phi", "llama-flm", "mistral-flm"
+                "lfm",
+                "qwen",
+                "gpt-oss",
+                "exaone",
+                "gemma",
+                "deepseek",
+                "phi",
+                "llama-flm",
+                "mistral-flm",
             )
 
             model_lower = model.lower()
 
             # ":" 포함 (버전 지정) + NPU 접두사 매칭 → NPU로 라우팅
-            if ":" in model and any(model_lower.startswith(p) for p in NPU_MODEL_PREFIXES):
+            if ":" in model and any(
+                model_lower.startswith(p) for p in NPU_MODEL_PREFIXES
+            ):
                 return "flm-llm-thinking" if is_thinking_model else "flm-llm"
 
             # 명시적 flm/npu 키워드
@@ -419,7 +471,9 @@ class StreamProcessor:
 
         return self.TASK_PROVIDER_MAP.get(task_type, "unknown")
 
-    async def _ensure_provider_ready(self, provider_name: str, timeout: float = 120.0) -> bool:
+    async def _ensure_provider_ready(
+        self, provider_name: str, timeout: float = 120.0
+    ) -> bool:
         """On-Demand 프로바이더가 준비될 때까지 대기 (필요시 자동 로드).
 
         Args:
@@ -455,6 +509,7 @@ class StreamProcessor:
 
             # STARTING 상태면 UP 될 때까지 대기
             import asyncio
+
             start_time = asyncio.get_event_loop().time()
             while asyncio.get_event_loop().time() - start_time < timeout:
                 state = self.provider_manager.provider_states.get(provider_name)
@@ -470,7 +525,9 @@ class StreamProcessor:
             if span:
                 span.set_attribute("load.success", False)
                 span.set_attribute("load.error", f"Timeout after {timeout}s")
-            logger.error(f"[On-Demand] {provider_name} failed to become ready within {timeout}s")
+            logger.error(
+                f"[On-Demand] {provider_name} failed to become ready within {timeout}s"
+            )
             return False
 
     async def handle_diarization(self, request_id: str, data: dict):
@@ -498,16 +555,22 @@ class StreamProcessor:
                 form_data["max_speakers"] = str(max_speakers)
 
             # HTTP 요청 span
-            with trace_http_request("diarization-server", url, model="pyannote") as span:
+            with trace_http_request(
+                "diarization-server", url, model="pyannote"
+            ) as span:
                 response = await self.http_client.post(url, files=files, data=form_data)
                 response.raise_for_status()
                 result = response.json()
 
                 if span:
                     span.set_attribute("http.status_code", response.status_code)
-                    span.set_attribute("response.segments_count", len(result.get('segments', [])))
+                    span.set_attribute(
+                        "response.segments_count", len(result.get("segments", []))
+                    )
 
-            logger.info(f"[{request_id}] Diarization completed: {len(result.get('segments', []))} segments")
+            logger.info(
+                f"[{request_id}] Diarization completed: {len(result.get('segments', []))} segments"
+            )
 
             # 응답 발행 span
             with trace_response_publish(request_id, success=True):
@@ -518,7 +581,9 @@ class StreamProcessor:
                 await self.publish_error(request_id, f"Diarization timeout")
         except httpx.HTTPStatusError as e:
             with trace_response_publish(request_id, success=False):
-                await self.publish_error(request_id, f"Diarization HTTP error: {e.response.status_code}")
+                await self.publish_error(
+                    request_id, f"Diarization HTTP error: {e.response.status_code}"
+                )
         except Exception as e:
             with trace_response_publish(request_id, success=False):
                 await self.publish_error(request_id, f"Diarization failed: {str(e)}")
@@ -534,7 +599,9 @@ class StreamProcessor:
         # On-Demand: 모델에 따라 해당 서버 준비
         if model in ("whisper-large-v3", "whisper", "openai/whisper-large-v3"):
             if not await self._ensure_provider_ready("insanely-fast-server"):
-                await self.publish_error(request_id, "Insanely-fast server failed to start")
+                await self.publish_error(
+                    request_id, "Insanely-fast server failed to start"
+                )
                 return
         elif model in ("flm-audio", "flm", "openai/flm-audio"):
             # FLM ASR (NPU)
@@ -589,7 +656,9 @@ class StreamProcessor:
                 await self.publish_error(request_id, f"Transcription timeout")
         except httpx.HTTPStatusError as e:
             with trace_response_publish(request_id, success=False):
-                await self.publish_error(request_id, f"Transcription HTTP error: {e.response.status_code}")
+                await self.publish_error(
+                    request_id, f"Transcription HTTP error: {e.response.status_code}"
+                )
         except Exception as e:
             with trace_response_publish(request_id, success=False):
                 await self.publish_error(request_id, f"Transcription failed: {str(e)}")
@@ -597,7 +666,9 @@ class StreamProcessor:
     async def handle_llm_completion(self, request_id: str, data: dict):
         """LLM Completion 작업 처리 (스트리밍 지원)."""
         messages_raw = data.get("messages", "[]")
-        messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
+        messages = (
+            json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
+        )
         model = data.get("model", "tier-simple")
         max_tokens = int(data.get("max_tokens", 4096))
         temperature = float(data.get("temperature", 0.7))
@@ -610,7 +681,9 @@ class StreamProcessor:
             model = resolve_tier_to_model(model)
             logger.info(f"[{request_id}] Tier routing: {original_tier} -> {model}")
 
-        logger.info(f"[{request_id}] Starting LLM completion (model={model}, target={target_server})...")
+        logger.info(
+            f"[{request_id}] Starting LLM completion (model={model}, target={target_server})..."
+        )
 
         # 서버 선택 로직 (On-Demand 로드 전에 결정)
         use_npu = False
@@ -620,7 +693,13 @@ class StreamProcessor:
             use_npu = False
         elif "flm" in model or "npu" in model.lower():
             use_npu = True
-        elif any(p in model.lower() for p in ["qwen", "gemma", "deepseek", "phi", "lfm", "gpt-oss"]) and ":" in model:
+        elif (
+            any(
+                p in model.lower()
+                for p in ["qwen", "gemma", "deepseek", "phi", "lfm", "gpt-oss"]
+            )
+            and ":" in model
+        ):
             use_npu = True
 
         # On-Demand: 필요한 서버가 준비될 때까지 대기
@@ -628,16 +707,22 @@ class StreamProcessor:
         is_thinking_model = model and "-tk" in model
 
         # thinking 모델 감지: -tk 접미사 OR tier-thinking 요청
-        is_thinking_model = model and ("-tk" in model or original_tier == "tier-thinking")
+        is_thinking_model = model and (
+            "-tk" in model or original_tier == "tier-thinking"
+        )
 
         if use_npu:
             if is_thinking_model:
                 if not await self._ensure_provider_ready("flm-llm-thinking"):
-                    await self.publish_error(request_id, "FLM LLM Thinking server failed to start")
+                    await self.publish_error(
+                        request_id, "FLM LLM Thinking server failed to start"
+                    )
                     return
             else:
                 if not await self._ensure_provider_ready("flm-llm"):
-                    await self.publish_error(request_id, "FLM LLM server failed to start")
+                    await self.publish_error(
+                        request_id, "FLM LLM server failed to start"
+                    )
                     return
         else:
             if not await self._ensure_provider_ready("llama-server"):
@@ -647,12 +732,16 @@ class StreamProcessor:
         try:
             if use_npu:
                 if is_thinking_model:
-                    logger.info(f"[{request_id}] Using FLM LLM Thinking server (NPU, model={model})...")
+                    logger.info(
+                        f"[{request_id}] Using FLM LLM Thinking server (NPU, model={model})..."
+                    )
                     url = f"{settings.flm_llm_thinking_url}/v1/chat/completions"
                     actual_model = model
                     provider_name = "flm-llm-thinking"
                 else:
-                    logger.info(f"[{request_id}] Using FLM LLM server (NPU, model={model})...")
+                    logger.info(
+                        f"[{request_id}] Using FLM LLM server (NPU, model={model})..."
+                    )
                     url = f"{settings.flm_llm_url}/v1/chat/completions"
                     actual_model = model if model else "lfm2.5-it:1.2b"
                     provider_name = "flm-llm"
@@ -673,12 +762,19 @@ class StreamProcessor:
             # HTTP 요청 span
             full_content = ""
             completion_tokens = 0
-            
-            with trace_http_request(provider_name, url, model=actual_model, device="npu" if use_npu else "gpu") as span:
+
+            with trace_http_request(
+                provider_name,
+                url,
+                model=actual_model,
+                device="npu" if use_npu else "gpu",
+            ) as span:
                 # 스트리밍 요청 (Read Timeout 무제한)
-                async with self.http_client.stream("POST", url, json=payload, timeout=None) as response:
+                async with self.http_client.stream(
+                    "POST", url, json=payload, timeout=None
+                ) as response:
                     response.raise_for_status()
-                    
+
                     if span:
                         span.set_attribute("http.status_code", response.status_code)
 
@@ -690,13 +786,17 @@ class StreamProcessor:
 
                         # 디버그: 첫 번째 줄 로깅 (응답 형식 확인용)
                         if not first_chunk_logged:
-                            logger.info(f"[{request_id}] First raw line: {line[:200]}...")
+                            logger.info(
+                                f"[{request_id}] First raw line: {line[:200]}..."
+                            )
                             first_chunk_logged = True
 
                         if not line.startswith("data: "):
                             # SSE 형식이 아닌 경우 로깅 (FLM이 다른 형식을 사용할 수 있음)
                             if completion_tokens < 3:
-                                logger.warning(f"[{request_id}] Non-SSE line: {line[:100]}")
+                                logger.warning(
+                                    f"[{request_id}] Non-SSE line: {line[:100]}"
+                                )
                             continue
 
                         data_str = line[6:].strip()
@@ -708,21 +808,29 @@ class StreamProcessor:
                             chunk_json = json.loads(data_str)
                             choices = chunk_json.get("choices", [])
                             if not choices:
-                                logger.debug(f"[{request_id}] Chunk has no choices: {list(chunk_json.keys())}")
+                                logger.debug(
+                                    f"[{request_id}] Chunk has no choices: {list(chunk_json.keys())}"
+                                )
                                 continue
 
                             delta = choices[0].get("delta") or {}
                             if not isinstance(delta, dict):
-                                logger.warning(f"[{request_id}] Delta is not dict: {type(delta)} - {delta}")
+                                logger.warning(
+                                    f"[{request_id}] Delta is not dict: {type(delta)} - {delta}"
+                                )
                                 delta = {}
 
                             # FLM 추론 모델: reasoning_content (추론 과정) + content (최종 답변)
-                            reasoning_content = str(delta.get("reasoning_content") or "")
+                            reasoning_content = str(
+                                delta.get("reasoning_content") or ""
+                            )
                             content = str(delta.get("content") or "")
 
                             # 디버그: delta 내용 확인 (첫 몇 개만)
                             if completion_tokens < 3:
-                                logger.debug(f"[{request_id}] Delta keys: {list(delta.keys())}, reasoning={bool(reasoning_content)}, content={bool(content)}")
+                                logger.debug(
+                                    f"[{request_id}] Delta keys: {list(delta.keys())}, reasoning={bool(reasoning_content)}, content={bool(content)}"
+                                )
 
                             # 추론 과정이 있으면 <think> 태그로 감싸서 전송
                             if reasoning_content:
@@ -741,15 +849,27 @@ class StreamProcessor:
                                 if full_content is None:
                                     full_content = ""
                                 # 추론 과정이 있었다면 </think> 닫기
-                                if full_content.startswith("<think>") and "</think>" not in full_content:
+                                if (
+                                    full_content.startswith("<think>")
+                                    and "</think>" not in full_content
+                                ):
                                     full_content += "</think>\n\n"
                                     await self.publish_chunk(request_id, "</think>\n\n")
 
                                 # NPU (FLM) 서버가 Delta 대신 Full Text를 보내는 경우 처리 (안전하게)
                                 try:
-                                    clean_content = full_content.replace("<think>", "").replace("</think>", "").strip()
-                                    if use_npu and content and clean_content and content.startswith(clean_content):
-                                        content = content[len(clean_content):]
+                                    clean_content = (
+                                        full_content.replace("<think>", "")
+                                        .replace("</think>", "")
+                                        .strip()
+                                    )
+                                    if (
+                                        use_npu
+                                        and content
+                                        and clean_content
+                                        and content.startswith(clean_content)
+                                    ):
+                                        content = content[len(clean_content) :]
                                 except Exception:
                                     pass
 
@@ -763,19 +883,20 @@ class StreamProcessor:
                         except Exception as e:
                             logger.warning(f"Error parsing chunk: {e}")
 
-            logger.info(f"[{request_id}] LLM completion completed ({len(full_content)} chars, {completion_tokens} tokens)")
+            logger.info(
+                f"[{request_id}] LLM completion completed ({len(full_content)} chars, {completion_tokens} tokens)"
+            )
             if not full_content:
-                logger.warning(f"[{request_id}] Empty response! No content was captured from streaming")
+                logger.warning(
+                    f"[{request_id}] Empty response! No content was captured from streaming"
+                )
 
             # 최종 결과 발행 (호환성 및 완료 신호)
             result = {
-                "choices": [{
-                    "message": {"content": full_content},
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "completion_tokens": completion_tokens
-                }
+                "choices": [
+                    {"message": {"content": full_content}, "finish_reason": "stop"}
+                ],
+                "usage": {"completion_tokens": completion_tokens},
             }
 
             # 응답 발행 span
@@ -792,17 +913,28 @@ class StreamProcessor:
                 try:
                     # url: .../v1/chat/completions -> base: .../v1/models
                     base_url = url.split("/v1/")[0]
-                    models_resp = await self.http_client.get(f"{base_url}/v1/models", timeout=5.0)
+                    models_resp = await self.http_client.get(
+                        f"{base_url}/v1/models", timeout=5.0
+                    )
                     if models_resp.status_code == 200:
                         models_data = models_resp.json()
-                        available_models = [m.get('id') for m in models_data.get('data', [])]
-                        error_detail = f" (Available models: {', '.join(available_models)})"
-                        logger.error(f"[{request_id}] Invalid model requested. Available: {available_models}")
+                        available_models = [
+                            m.get("id") for m in models_data.get("data", [])
+                        ]
+                        error_detail = (
+                            f" (Available models: {', '.join(available_models)})"
+                        )
+                        logger.error(
+                            f"[{request_id}] Invalid model requested. Available: {available_models}"
+                        )
                 except Exception as debug_err:
                     logger.warning(f"Failed to debug models: {debug_err}")
 
             with trace_response_publish(request_id, success=False):
-                await self.publish_error(request_id, f"LLM HTTP error: {e.response.status_code} - {e.response.text}{error_detail}")
+                await self.publish_error(
+                    request_id,
+                    f"LLM HTTP error: {e.response.status_code} - {e.response.text}{error_detail}",
+                )
         except Exception as e:
             with trace_response_publish(request_id, success=False):
                 await self.publish_error(request_id, f"LLM completion failed: {str(e)}")
@@ -814,7 +946,9 @@ class StreamProcessor:
         prompt = data.get("prompt", "Extract all text from this image.")
         accuracy_mode = data.get("accuracy_mode", "speed")
 
-        logger.info(f"[{request_id}] Starting OCR (model={model}, mode={accuracy_mode})...")
+        logger.info(
+            f"[{request_id}] Starting OCR (model={model}, mode={accuracy_mode})..."
+        )
 
         use_npu = accuracy_mode == "speed"
 
@@ -849,7 +983,9 @@ class StreamProcessor:
                             {"type": "text", "text": prompt},
                             {
                                 "type": "image_url",
-                                "image_url": {"url": f"data:image/png;base64,{image_content_b64}"},
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{image_content_b64}"
+                                },
                             },
                         ],
                     }
@@ -859,7 +995,9 @@ class StreamProcessor:
             }
 
             # HTTP 요청 span
-            with trace_http_request(provider_name, url, model=ocr_model, device="npu" if use_npu else "gpu") as span:
+            with trace_http_request(
+                provider_name, url, model=ocr_model, device="npu" if use_npu else "gpu"
+            ) as span:
                 response = await self.http_client.post(url, json=payload)
                 response.raise_for_status()
                 result = response.json()
@@ -885,7 +1023,9 @@ class StreamProcessor:
                 await self.publish_error(request_id, f"OCR timeout")
         except httpx.HTTPStatusError as e:
             with trace_response_publish(request_id, success=False):
-                await self.publish_error(request_id, f"OCR HTTP error: {e.response.status_code}")
+                await self.publish_error(
+                    request_id, f"OCR HTTP error: {e.response.status_code}"
+                )
         except Exception as e:
             logger.exception(f"[{request_id}] OCR failed")
             with trace_response_publish(request_id, success=False):
@@ -937,7 +1077,9 @@ class StreamProcessor:
         trace_id = data.get("trace_id")  # 레거시 호환성
 
         log_trace = f", traceparent={traceparent[:50]}..." if traceparent else ""
-        logger.info(f"Processing message: id={message_id}, type={task_type}, request_id={request_id}{log_trace}")
+        logger.info(
+            f"Processing message: id={message_id}, type={task_type}, request_id={request_id}{log_trace}"
+        )
 
         # 프로바이더 결정
         provider = self._get_provider_for_task(task_type, data)
@@ -963,7 +1105,9 @@ class StreamProcessor:
         # health_check는 세마포어 없이 즉시 처리
         if task_type == "health_check":
             await self.handle_health_check(request_id, data)
-            await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
+            await self.redis.xack(
+                settings.request_stream, settings.consumer_group, message_id
+            )
             return
 
         # 대기 중인 작업 수 추적 (로깅용)
@@ -971,13 +1115,17 @@ class StreamProcessor:
             self._pending_jobs[device_group] += 1
             pending = self._pending_jobs[device_group]
             if pending > 1:
-                logger.info(f"[Queue] {device_group.upper()} queue: {pending} jobs waiting (request_id={request_id})")
+                logger.info(
+                    f"[Queue] {device_group.upper()} queue: {pending} jobs waiting (request_id={request_id})"
+                )
 
         # Device Group 세마포어 획득 (동일 device group 내 순차 실행)
         async with semaphore if semaphore else asyncio.Lock():
             if device_group:
                 self._pending_jobs[device_group] -= 1
-                logger.info(f"[Queue] {device_group.upper()} semaphore acquired for {task_type} (request_id={request_id})")
+                logger.info(
+                    f"[Queue] {device_group.upper()} semaphore acquired for {task_type} (request_id={request_id})"
+                )
 
             # ProviderManager에 작업 등록 (active_jobs 증가)
             await self.provider_manager.register_job(provider_name, message_id)
@@ -1016,16 +1164,22 @@ class StreamProcessor:
                     elif task_type == "ocr":
                         await self.handle_ocr(request_id, data)
                     else:
-                        await self.publish_error(request_id, f"Unknown task type: {task_type}")
+                        await self.publish_error(
+                            request_id, f"Unknown task type: {task_type}"
+                        )
                         success = False
                         error_msg = f"Unknown task type: {task_type}"
 
-                    await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
+                    await self.redis.xack(
+                        settings.request_stream, settings.consumer_group, message_id
+                    )
 
                 except Exception as e:
                     logger.exception(f"Error processing message {message_id}: {e}")
                     await self.publish_error(request_id, str(e))
-                    await self.redis.xack(settings.request_stream, settings.consumer_group, message_id)
+                    await self.redis.xack(
+                        settings.request_stream, settings.consumer_group, message_id
+                    )
                     success = False
                     error_msg = str(e)
 
@@ -1041,10 +1195,14 @@ class StreamProcessor:
 
             # 작업 완료 기록
             if job and self.job_tracker:
-                await self.job_tracker.complete_job(message_id, success=success, error=error_msg)
+                await self.job_tracker.complete_job(
+                    message_id, success=success, error=error_msg
+                )
 
             if device_group:
-                logger.info(f"[Queue] {device_group.upper()} semaphore released for {task_type} (request_id={request_id})")
+                logger.info(
+                    f"[Queue] {device_group.upper()} semaphore released for {task_type} (request_id={request_id})"
+                )
 
     async def run(self):
         """메인 루프 - GPU 작업 + Control API 스트림 동시 처리."""
@@ -1056,14 +1214,22 @@ class StreamProcessor:
 
         while self.is_running:
             try:
-                # 양쪽 스트림 동시 읽기
+                # 양쪽 스트림 동시 읽기 (Multi-stream listening)
+                streams_to_listen = {
+                    settings.control_request_stream: ">",
+                    settings.chat_request_stream: ">",
+                    settings.media_request_stream: ">",
+                    settings.recap_request_stream: ">",
+                }
+
+                # 호환성 유지: 기존 request_stream이 위 3개 중 하나와 다르면 추가
+                if settings.request_stream not in streams_to_listen:
+                    streams_to_listen[settings.request_stream] = ">"
+
                 messages = await self.redis.xreadgroup(
                     settings.consumer_group,
                     settings.consumer_name,
-                    {
-                        settings.request_stream: ">",
-                        settings.control_request_stream: ">",
-                    },
+                    streams_to_listen,
                     count=5,
                     block=5000,
                 )
@@ -1072,11 +1238,15 @@ class StreamProcessor:
                     for stream_name, stream_messages in messages:
                         for message_id, message_data in stream_messages:
                             # 스트림에 따라 처리 분기
-                            if stream_name == settings.request_stream:
-                                # GPU 작업은 병렬 처리 (Background Task)
-                                asyncio.create_task(self.process_message(message_id, message_data))
-                            elif stream_name == settings.control_request_stream:
-                                await self.process_control_message(message_id, message_data)
+                            if stream_name == settings.control_request_stream:
+                                await self.process_control_message(
+                                    message_id, message_data
+                                )
+                            else:
+                                # GPU 작업 (media, chat, recap, legacy)은 모두 process_message로 처리
+                                asyncio.create_task(
+                                    self.process_message(message_id, message_data)
+                                )
 
             except asyncio.CancelledError:
                 break
