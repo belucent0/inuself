@@ -3,9 +3,11 @@
 이 모듈은 워커에서 Redis Pub/Sub으로 직접 이벤트를 발행합니다.
 백엔드 services 레이어에 의존하지 않아 워커 분리 시 그대로 사용 가능합니다.
 """
+
 import json
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from redis import Redis
 
@@ -18,6 +20,15 @@ settings = get_settings()
 _redis_client: Redis | None = None
 
 
+class UUIDEncoder(json.JSONEncoder):
+    """UUID를 문자열로 변환하는 JSON Encoder."""
+
+    def default(self, obj):
+        if isinstance(obj, UUID):
+            return str(obj)
+        return super().default(obj)
+
+
 def _get_redis() -> Redis:
     """Redis 클라이언트를 가져옵니다 (싱글톤)."""
     global _redis_client
@@ -27,7 +38,7 @@ def _get_redis() -> Redis:
 
 
 def publish_file_progress(
-    file_id: int,
+    file_id: int | UUID,
     status: str,
     step: str,
     progress: float,
@@ -74,7 +85,7 @@ def publish_file_progress(
             event["metadata"] = metadata
 
         redis = _get_redis()
-        redis.publish(channel, json.dumps(event))
+        redis.publish(channel, json.dumps(event, cls=UUIDEncoder))
 
         logger.debug(
             "[EventPublisher] Published file_progress: file_id={}, step={}, progress={}%",
@@ -91,7 +102,7 @@ def publish_file_progress(
         )
 
 
-def publish_asr_stream(file_id: int, segment: dict[str, Any]) -> None:
+def publish_asr_stream(file_id: int | UUID, segment: dict[str, Any]) -> None:
     """실시간 ASR 세그먼트를 발행합니다 (향후 사용).
 
     Args:
@@ -116,7 +127,7 @@ def publish_asr_stream(file_id: int, segment: dict[str, Any]) -> None:
         }
 
         redis = _get_redis()
-        redis.publish(channel, json.dumps(event))
+        redis.publish(channel, json.dumps(event, cls=UUIDEncoder))
 
         logger.debug(
             "[EventPublisher] Published asr_stream: file_id={}, is_final={}",
@@ -131,7 +142,7 @@ def publish_asr_stream(file_id: int, segment: dict[str, Any]) -> None:
         )
 
 
-def publish_llm_stream(file_id: int, token: str, is_final: bool = False) -> None:
+def publish_llm_stream(file_id: int | UUID, token: str, is_final: bool = False) -> None:
     """LLM 스트리밍 토큰을 발행합니다 (향후 사용).
 
     Args:
@@ -152,7 +163,7 @@ def publish_llm_stream(file_id: int, token: str, is_final: bool = False) -> None
         }
 
         redis = _get_redis()
-        redis.publish(channel, json.dumps(event))
+        redis.publish(channel, json.dumps(event, cls=UUIDEncoder))
 
         logger.debug(
             "[EventPublisher] Published llm_stream: file_id={}, is_final={}",
@@ -165,8 +176,10 @@ def publish_llm_stream(file_id: int, token: str, is_final: bool = False) -> None
             file_id,
             exc,
         )
+
+
 def publish_content_created(
-    content_id: int,
+    content_id: int | UUID,
     filename: str,
     content_type: str,
     status: str = "QUEUED",
@@ -193,7 +206,7 @@ def publish_content_created(
         }
 
         redis = _get_redis()
-        redis.publish(channel, json.dumps(event))
+        redis.publish(channel, json.dumps(event, cls=UUIDEncoder))
 
         logger.info(
             "[EventPublisher] Published content_created: content_id={}, filename={}",
@@ -210,12 +223,12 @@ def publish_content_created(
 
 class ProgressReporter:
     """파일 진행 상태 보고 헬퍼 클래스.
-    
+
     file_id를 캡슐화하여 반복적인 인자 전달을 줄이고,
     메서드 체이닝이나 직관적인 메서드 명으로 상태를 보고합니다.
     """
-    
-    def __init__(self, file_id: int):
+
+    def __init__(self, file_id: int | UUID):
         self.file_id = file_id
 
     def report(
@@ -237,31 +250,31 @@ class ProgressReporter:
         )
 
     def processing(
-        self, 
-        step: str, 
-        progress: float, 
-        message: str, 
-        metadata: dict[str, Any] | None = None
+        self,
+        step: str,
+        progress: float,
+        message: str,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """처리 중 상태 보고"""
         self.report("processing", step, progress, message, metadata)
 
     def summarizing(
-        self, 
-        step: str, 
-        progress: float, 
-        message: str, 
-        metadata: dict[str, Any] | None = None
+        self,
+        step: str,
+        progress: float,
+        message: str,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """요약 중 상태 보고"""
         self.report("summarizing", step, progress, message, metadata)
 
     def summary_queued(
-        self, 
-        step: str = "summary_queued", 
-        progress: float = 50.0, 
-        message: str = "요약 대기 중", 
-        metadata: dict[str, Any] | None = None
+        self,
+        step: str = "summary_queued",
+        progress: float = 50.0,
+        message: str = "요약 대기 중",
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """요약 대기 상태 보고"""
         self.report("summary_queued", step, progress, message, metadata)

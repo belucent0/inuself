@@ -41,7 +41,7 @@ def _get_local_storage_path(key: str) -> Path:
     return storage_dir / key.replace("/", "_")
 
 
-def upload_fileobj(file_obj: BinaryIO, *, key: str) -> None:
+def upload_fileobj(file_obj: BinaryIO, *, key: str, content_type: str | None = None) -> None:
     """파일을 스토리지에 업로드 (로컬 파일 시스템 또는 S3)."""
     settings = get_settings()
 
@@ -59,7 +59,13 @@ def upload_fileobj(file_obj: BinaryIO, *, key: str) -> None:
             file_obj.seek(0)  # 처음으로 리셋
 
             # 버킷이 존재하면 S3 사용
-            client.put_object(settings.s3_bucket, key, file_obj, file_size)
+            client.put_object(
+                settings.s3_bucket,
+                key,
+                file_obj,
+                file_size,
+                content_type=content_type or "application/octet-stream",
+            )
             logger.info(
                 "[Storage] S3 업로드 완료: endpoint=%s, bucket=%s, key=%s",
                 settings.s3_endpoint,
