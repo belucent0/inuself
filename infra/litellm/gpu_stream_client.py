@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 try:
     from opentelemetry.propagate import inject as otel_inject
     from opentelemetry import trace as otel_trace
+
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
@@ -34,8 +35,11 @@ except ImportError:
 import redis
 import redis.asyncio as redis_async
 
-# Stream Names
-REQUEST_STREAM = "stream:gpu:requests"
+# Stream Names (V8.1: Topic-based streams)
+REQUEST_STREAM_LEGACY = "stream:gpu:requests"  # Deprecated
+MEDIA_STREAM = "stream:media:requests"  # Audio, Vision
+CHAT_STREAM = "stream:chat:requests"  # Simple, Thinking
+RECAP_STREAM = "stream:recap:requests"  # Summary
 RESPONSE_STREAM = "stream:gpu:responses"
 
 # Timeouts
@@ -68,11 +72,15 @@ class GPUStreamClient:
             otel_inject(carrier)
             if "traceparent" in carrier:
                 request_data["traceparent"] = carrier["traceparent"]
-                logger.info(f"[GPUStream] Trace context injected: traceparent={carrier['traceparent']}")
+                logger.info(
+                    f"[GPUStream] Trace context injected: traceparent={carrier['traceparent']}"
+                )
             else:
                 logger.warning("[GPUStream] No active trace context to inject")
         else:
-            logger.warning(f"[GPUStream] OpenTelemetry not available (OTEL_AVAILABLE={OTEL_AVAILABLE})")
+            logger.warning(
+                f"[GPUStream] OpenTelemetry not available (OTEL_AVAILABLE={OTEL_AVAILABLE})"
+            )
         return request_data
 
     def _wait_for_response(self, request_id: str, timeout: float) -> dict:
@@ -106,7 +114,9 @@ class GPUStreamClient:
                 time.sleep(1)
                 continue
 
-        raise TimeoutError(f"No response received within {timeout}s for request_id={request_id}")
+        raise TimeoutError(
+            f"No response received within {timeout}s for request_id={request_id}"
+        )
 
     def request_diarization(
         self,
@@ -150,8 +160,8 @@ class GPUStreamClient:
 
         logger.info(f"[GPUStream] Sending diarization request: request_id={request_id}")
 
-        # Request Stream에 발행
-        self.redis_client.xadd(REQUEST_STREAM, request_data)
+        # Request Stream에 발행 (Media Stream)
+        self.redis_client.xadd(MEDIA_STREAM, request_data)
 
         # 응답 대기
         result = self._wait_for_response(request_id, timeout)
@@ -195,9 +205,11 @@ class GPUStreamClient:
         # Trace context 주입 (분산 추적)
         self._inject_trace_context(request_data)
 
-        logger.info(f"[GPUStream] Sending transcription request: request_id={request_id}, model={model}")
+        logger.info(
+            f"[GPUStream] Sending transcription request: request_id={request_id}, model={model}"
+        )
 
-        self.redis_client.xadd(REQUEST_STREAM, request_data)
+        self.redis_client.xadd(MEDIA_STREAM, request_data)
         result = self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] Transcription completed: request_id={request_id}")
@@ -241,9 +253,13 @@ class GPUStreamClient:
         # Trace context 주입 (분산 추적)
         self._inject_trace_context(request_data)
 
-        logger.info(f"[GPUStream] Sending LLM completion request: request_id={request_id}, model={model}")
+        logger.info(
+            f"[GPUStream] Sending LLM completion request: request_id={request_id}, model={model}"
+        )
 
-        self.redis_client.xadd(REQUEST_STREAM, request_data)
+        # Stream 분기 (Chat vs Recap)
+        target_stream = RECAP_STREAM if model == "tier-recap" else CHAT_STREAM
+        self.redis_client.xadd(target_stream, request_data)
         result = self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] LLM completion completed: request_id={request_id}")
@@ -284,9 +300,11 @@ class GPUStreamClient:
         # Trace context 주입 (분산 추적)
         self._inject_trace_context(request_data)
 
-        logger.info(f"[GPUStream] Sending OCR request: request_id={request_id}, model={model}, mode={accuracy_mode}")
+        logger.info(
+            f"[GPUStream] Sending OCR request: request_id={request_id}, model={model}, mode={accuracy_mode}"
+        )
 
-        self.redis_client.xadd(REQUEST_STREAM, request_data)
+        self.redis_client.xadd(MEDIA_STREAM, request_data)
         result = self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] OCR completed: request_id={request_id}")
@@ -311,13 +329,14 @@ class GPUStreamClient:
             "timestamp": str(time.time()),
         }
 
-        self.redis_client.xadd(REQUEST_STREAM, request_data)
+        self.redis_client.xadd(CHAT_STREAM, request_data)
         return self._wait_for_response(request_id, timeout)
 
 
 # ==========================================
 # Async Client (LiteLLM Custom Handler용)
 # ==========================================
+
 
 class AsyncGPUStreamClient:
     """Redis Stream 기반 GPU 작업 클라이언트 (비동기).
@@ -352,11 +371,15 @@ class AsyncGPUStreamClient:
             otel_inject(carrier)
             if "traceparent" in carrier:
                 request_data["traceparent"] = carrier["traceparent"]
-                logger.info(f"[GPUStream/Async] Trace context injected: traceparent={carrier['traceparent']}")
+                logger.info(
+                    f"[GPUStream/Async] Trace context injected: traceparent={carrier['traceparent']}"
+                )
             else:
                 logger.warning("[GPUStream/Async] No active trace context to inject")
         else:
-            logger.warning(f"[GPUStream/Async] OpenTelemetry not available (OTEL_AVAILABLE={OTEL_AVAILABLE})")
+            logger.warning(
+                f"[GPUStream/Async] OpenTelemetry not available (OTEL_AVAILABLE={OTEL_AVAILABLE})"
+            )
         return request_data
 
     async def _wait_for_response(self, request_id: str, timeout: float) -> dict:
@@ -391,9 +414,13 @@ class AsyncGPUStreamClient:
                 await asyncio.sleep(1)
                 continue
 
-        raise TimeoutError(f"No response received within {timeout}s for request_id={request_id}")
+        raise TimeoutError(
+            f"No response received within {timeout}s for request_id={request_id}"
+        )
 
-    async def _wait_for_stream_response(self, request_id: str, timeout: float) -> AsyncIterator[dict]:
+    async def _wait_for_stream_response(
+        self, request_id: str, timeout: float
+    ) -> AsyncIterator[dict]:
         """Response Stream에서 결과 스트리밍 대기 (비동기).
 
         Activity-based timeout: 청크가 들어올 때마다 타이머 리셋.
@@ -466,14 +493,18 @@ class AsyncGPUStreamClient:
         # Trace context 주입 (분산 추적)
         self._inject_trace_context(request_data)
 
-        logger.info(f"[GPUStream] Sending LLM completion stream request: request_id={request_id}, model={model}")
+        logger.info(
+            f"[GPUStream] Sending LLM completion stream request: request_id={request_id}, model={model}"
+        )
 
         await redis_client.xadd(REQUEST_STREAM, request_data)
-        
+
         async for chunk in self._wait_for_stream_response(request_id, timeout):
             yield chunk
-            
-        logger.info(f"[GPUStream] LLM stream completion completed: request_id={request_id}")
+
+        logger.info(
+            f"[GPUStream] LLM stream completion completed: request_id={request_id}"
+        )
 
     async def request_diarization(
         self,
@@ -507,7 +538,7 @@ class AsyncGPUStreamClient:
 
         logger.info(f"[GPUStream] Sending diarization request: request_id={request_id}")
 
-        await redis_client.xadd(REQUEST_STREAM, request_data)
+        await redis_client.xadd(MEDIA_STREAM, request_data)
         result = await self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] Diarization completed: request_id={request_id}")
@@ -540,9 +571,11 @@ class AsyncGPUStreamClient:
         # Trace context 주입 (분산 추적)
         self._inject_trace_context(request_data)
 
-        logger.info(f"[GPUStream] Sending transcription request: request_id={request_id}, model={model}")
+        logger.info(
+            f"[GPUStream] Sending transcription request: request_id={request_id}, model={model}"
+        )
 
-        await redis_client.xadd(REQUEST_STREAM, request_data)
+        await redis_client.xadd(MEDIA_STREAM, request_data)
         result = await self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] Transcription completed: request_id={request_id}")
@@ -575,9 +608,13 @@ class AsyncGPUStreamClient:
         # Trace context 주입 (분산 추적)
         self._inject_trace_context(request_data)
 
-        logger.info(f"[GPUStream] Sending LLM completion request: request_id={request_id}, model={model}")
+        logger.info(
+            f"[GPUStream] Sending LLM completion request: request_id={request_id}, model={model}"
+        )
 
-        await redis_client.xadd(REQUEST_STREAM, request_data)
+        # Stream 분기 (Chat vs Recap)
+        target_stream = RECAP_STREAM if model == "tier-recap" else CHAT_STREAM
+        await redis_client.xadd(target_stream, request_data)
         result = await self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] LLM completion completed: request_id={request_id}")
@@ -621,9 +658,11 @@ class AsyncGPUStreamClient:
         # Trace context 주입 (분산 추적)
         self._inject_trace_context(request_data)
 
-        logger.info(f"[GPUStream] Sending OCR request: request_id={request_id}, model={model}, mode={accuracy_mode}")
+        logger.info(
+            f"[GPUStream] Sending OCR request: request_id={request_id}, model={model}, mode={accuracy_mode}"
+        )
 
-        await redis_client.xadd(REQUEST_STREAM, request_data)
+        await redis_client.xadd(MEDIA_STREAM, request_data)
         result = await self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] OCR completed: request_id={request_id}")
@@ -641,7 +680,7 @@ class AsyncGPUStreamClient:
             "timestamp": str(time.time()),
         }
 
-        await redis_client.xadd(REQUEST_STREAM, request_data)
+        await redis_client.xadd(CHAT_STREAM, request_data)
         return await self._wait_for_response(request_id, timeout)
 
 
@@ -651,6 +690,7 @@ class AsyncGPUStreamClient:
 
 # Sync client
 _client_instance: Optional[GPUStreamClient] = None
+
 
 def get_gpu_stream_client() -> GPUStreamClient:
     """GPUStreamClient 싱글톤 인스턴스 반환."""
@@ -662,6 +702,7 @@ def get_gpu_stream_client() -> GPUStreamClient:
 
 # Async client
 _async_client_instance: Optional[AsyncGPUStreamClient] = None
+
 
 def get_async_gpu_stream_client() -> AsyncGPUStreamClient:
     """AsyncGPUStreamClient 싱글톤 인스턴스 반환."""

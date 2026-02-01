@@ -418,17 +418,29 @@ async def run_combined(api_port: int = 9998):
     else:
         raise RuntimeError("Redis failed to become ready after maximum retries")
 
-    # GPU 작업 Consumer Group 생성
-    try:
-        await stream_processor.redis.xgroup_create(
-            settings.request_stream,
-            settings.consumer_group,
-            id="0",
-            mkstream=True
-        )
-    except Exception as e:
-        if "BUSYGROUP" not in str(e):
-            raise
+    # 모든 GPU 작업 스트림에 Consumer Group 생성
+    gpu_streams = [
+        settings.request_stream,  # legacy stream (chat)
+        settings.media_request_stream,  # audio/vision (ASR, OCR)
+        settings.chat_request_stream,  # chat completions
+        settings.recap_request_stream,  # summaries
+    ]
+    # 중복 제거
+    gpu_streams = list(dict.fromkeys(gpu_streams))
+
+    for stream in gpu_streams:
+        try:
+            await stream_processor.redis.xgroup_create(
+                stream,
+                settings.consumer_group,
+                id="0",
+                mkstream=True
+            )
+            logger.info(f"Created consumer group '{settings.consumer_group}' for {stream}")
+        except Exception as e:
+            if "BUSYGROUP" not in str(e):
+                raise
+            logger.info(f"Consumer group '{settings.consumer_group}' already exists for {stream}")
 
     # Control API Consumer Group 생성 (동일한 consumer_group 사용 - xreadgroup에서 함께 읽기 위해)
     try:
@@ -438,12 +450,14 @@ async def run_combined(api_port: int = 9998):
             id="0",
             mkstream=True
         )
+        logger.info(f"Created consumer group '{settings.consumer_group}' for {settings.control_request_stream}")
     except Exception as e:
         if "BUSYGROUP" not in str(e):
             raise
+        logger.info(f"Consumer group '{settings.consumer_group}' already exists for {settings.control_request_stream}")
 
     logger.info(f"Provider Manager started. API: http://0.0.0.0:{api_port}")
-    logger.info(f"  GPU Stream: {settings.request_stream}")
+    logger.info(f"  GPU Streams: {', '.join(gpu_streams)}")
     logger.info(f"  Control Stream: {settings.control_request_stream}")
 
     # Stale job cleanup 주기 (5분마다)
@@ -451,16 +465,17 @@ async def run_combined(api_port: int = 9998):
     CLEANUP_INTERVAL = 300  # 5분
     STALE_JOB_MAX_AGE = settings.default_timeout + 300  # timeout + 5분
 
+    # 모든 GPU 스트림을 위한 streams_to_listen 구성
+    streams_to_listen = {stream: ">" for stream in gpu_streams}
+    streams_to_listen[settings.control_request_stream] = ">"
+
     # Stream 처리 루프 (양쪽 스트림 동시 처리)
     while stream_processor.is_running:
         try:
             messages = await stream_processor.redis.xreadgroup(
                 settings.consumer_group,
                 settings.consumer_name,
-                {
-                    settings.request_stream: ">",
-                    settings.control_request_stream: ">",
-                },
+                streams_to_listen,
                 count=5,
                 block=5000,
             )
@@ -468,11 +483,11 @@ async def run_combined(api_port: int = 9998):
             if messages:
                 for stream_name, stream_messages in messages:
                     for message_id, message_data in stream_messages:
-                        if stream_name == settings.request_stream:
+                        if stream_name == settings.control_request_stream:
+                            await stream_processor.process_control_message(message_id, message_data)
+                        else:
                             # GPU 작업은 병렬 처리 (Background Task)
                             asyncio.create_task(stream_processor.process_message(message_id, message_data))
-                        elif stream_name == settings.control_request_stream:
-                            await stream_processor.process_control_message(message_id, message_data)
 
             # 주기적 stale job 정리 (5분마다)
             current_time = time.time()
@@ -501,16 +516,19 @@ async def run_combined(api_port: int = 9998):
             # NOGROUP 에러 시 consumer group 자동 재생성
             if "NOGROUP" in error_str:
                 logger.warning(f"Consumer group missing, recreating...")
-                try:
-                    await stream_processor.redis.xgroup_create(
-                        settings.request_stream,
-                        settings.consumer_group,
-                        id="0",
-                        mkstream=True
-                    )
-                except Exception as create_err:
-                    if "BUSYGROUP" not in str(create_err):
-                        logger.error(f"Failed to recreate GPU stream group: {create_err}")
+                # 모든 GPU 스트림에 대해 Consumer Group 재생성
+                for stream in gpu_streams:
+                    try:
+                        await stream_processor.redis.xgroup_create(
+                            stream,
+                            settings.consumer_group,
+                            id="0",
+                            mkstream=True
+                        )
+                    except Exception as create_err:
+                        if "BUSYGROUP" not in str(create_err):
+                            logger.error(f"Failed to recreate GPU stream group for {stream}: {create_err}")
+                # Control 스트림 재생성
                 try:
                     await stream_processor.redis.xgroup_create(
                         settings.control_request_stream,
