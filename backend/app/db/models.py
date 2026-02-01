@@ -2,7 +2,17 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, Enum, ForeignKey, Integer, String, TIMESTAMP, Text, Float
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    TIMESTAMP,
+    Text,
+    Float,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,11 +21,12 @@ from .base import Base
 
 def generate_uuid7() -> uuid.UUID:
     """UUID v7 생성 (Python 3.13+ 또는 uuid_utils 폴백)."""
-    if hasattr(uuid, 'uuid7'):
+    if hasattr(uuid, "uuid7"):
         return uuid.uuid7()
     # Python 3.12 이하: uuid_utils 사용
     try:
         import uuid_utils
+
         return uuid.UUID(str(uuid_utils.uuid7()))
     except ImportError:
         # 폴백: uuid4 사용 (시간 순서 보장 안 됨)
@@ -29,6 +40,7 @@ class FileStatus(str, enum.Enum):
     QUEUED = "QUEUED"  # 처리 대기중 (큐에 등록됨)
 
     # 진행 중 상태
+    PULLING = "PULLING"  # 외부 소스에서 파일 다운로드/가져오기 진행 중
     PROCESSING = "PROCESSING"  # ASR/화자분리 진행 중
     OCR_PROCESSING = "OCR_PROCESSING"  # OCR 처리 중
     SUMMARY_QUEUED = "SUMMARY_QUEUED"  # LLM 요약 대기중 (큐에 등록됨)
@@ -77,7 +89,9 @@ class File(Base):
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
     # 관계
@@ -103,8 +117,11 @@ class Content(Base):
 
     # File FK (UUID)
     file_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("file.id", ondelete="CASCADE"),
-        unique=True, nullable=True, index=True
+        PG_UUID(as_uuid=True),
+        ForeignKey("file.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=True,
+        index=True,
     )
 
     # 처리 상태 및 결과
@@ -121,7 +138,9 @@ class Content(Base):
 
     # 타임스탬프
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
@@ -133,10 +152,16 @@ class Content(Base):
     # 관계
     file: Mapped["File | None"] = relationship("File", back_populates="content")
     transcription_result: Mapped["Transcription | None"] = relationship(
-        "Transcription", back_populates="content", uselist=False, cascade="all, delete-orphan"
+        "Transcription",
+        back_populates="content",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
     document_result: Mapped["Document | None"] = relationship(
-        "Document", back_populates="content", uselist=False, cascade="all, delete-orphan"
+        "Document",
+        back_populates="content",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
     logs: Mapped[list["SttLog"]] = relationship(
         "SttLog", back_populates="content", cascade="all, delete-orphan"
@@ -156,8 +181,11 @@ class Transcription(Base):
         PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
     )
     content_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("content.id", ondelete="CASCADE"),
-        unique=True, nullable=True, index=True
+        PG_UUID(as_uuid=True),
+        ForeignKey("content.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=True,
+        index=True,
     )
     speakers: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
@@ -179,8 +207,11 @@ class Document(Base):
         PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
     )
     content_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("content.id", ondelete="CASCADE"),
-        unique=True, nullable=True, index=True
+        PG_UUID(as_uuid=True),
+        ForeignKey("content.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=True,
+        index=True,
     )
     ocr_text: Mapped[str] = mapped_column(Text, nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -203,13 +234,17 @@ class SttLog(Base):
         PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
     )
     content_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("content.id", ondelete="CASCADE"),
-        nullable=True, index=True
+        PG_UUID(as_uuid=True),
+        ForeignKey("content.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
     log: Mapped[dict] = mapped_column(JSONB, nullable=False)
     message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
     # 관계
@@ -226,22 +261,29 @@ class LlmLog(Base):
         PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
     )
     content_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("content.id", ondelete="CASCADE"),
-        nullable=True, index=True
+        PG_UUID(as_uuid=True),
+        ForeignKey("content.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
     log: Mapped[dict] = mapped_column(JSONB, nullable=False)
     message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
     # 관계
-    content: Mapped["Content | None"] = relationship("Content", back_populates="llm_logs")
+    content: Mapped["Content | None"] = relationship(
+        "Content", back_populates="llm_logs"
+    )
 
 
 def generate_storage_key() -> str:
     """스토리지 네임스페이스 키 생성 (12자 hex)."""
     import secrets
+
     return secrets.token_hex(6)
 
 
@@ -254,7 +296,9 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
     )
-    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    email: Mapped[str] = mapped_column(
+        String(255), nullable=False, unique=True, index=True
+    )
     password: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -264,7 +308,9 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_super: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
     updated_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True

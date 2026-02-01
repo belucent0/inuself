@@ -3,6 +3,7 @@
 파일 처리 상태의 불일치 및 stuck 상태를 감지합니다.
 주기적으로 실행되어 PROCESSING, SUMMARIZING 등 진행 상태의 파일을 모니터링합니다.
 """
+
 import asyncio
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from ..utils.task_queue_adapter import get_task_queue
 @dataclass
 class WatchdogFinding:
     """Watchdog이 발견한 문제."""
+
     file_id: UUID
     file_status: FileStatus
     issue_type: str  # "stuck", "no_job", "job_failed", "job_mismatch"
@@ -34,6 +36,7 @@ class WatchdogFinding:
 # 상태별 타임아웃 (분)
 STATUS_TIMEOUTS = {
     FileStatus.QUEUED: 30,  # 30분 동안 QUEUED 상태면 문제
+    FileStatus.PULLING: 30,  # 외부 소스 다운로드 30분 타임아웃
     FileStatus.PROCESSING: 60,  # ASR 처리 60분 타임아웃
     FileStatus.OCR_PROCESSING: 30,  # OCR 처리 30분 타임아웃
     FileStatus.SUMMARY_QUEUED: 30,  # 요약 대기 30분 타임아웃
@@ -43,6 +46,7 @@ STATUS_TIMEOUTS = {
 # 모니터링 대상 상태
 UNSTABLE_STATUSES = [
     FileStatus.QUEUED,
+    FileStatus.PULLING,
     FileStatus.PROCESSING,
     FileStatus.OCR_PROCESSING,
     FileStatus.SUMMARY_QUEUED,
@@ -124,16 +128,22 @@ class StateWatchdog:
             stuck_minutes = age_minutes
 
         if stuck_minutes > timeout_minutes:
-            findings.append(WatchdogFinding(
-                file_id=file.id,
-                file_status=status,
-                issue_type="stuck",
-                details=f"Status '{status.value}' for {stuck_minutes:.1f} minutes (timeout: {timeout_minutes}m)",
-                stuck_minutes=stuck_minutes,
-            ))
+            findings.append(
+                WatchdogFinding(
+                    file_id=file.id,
+                    file_status=status,
+                    issue_type="stuck",
+                    details=f"Status '{status.value}' for {stuck_minutes:.1f} minutes (timeout: {timeout_minutes}m)",
+                    stuck_minutes=stuck_minutes,
+                )
+            )
 
         # 2. Celery 작업 상태 확인 (PROCESSING/SUMMARIZING/OCR_PROCESSING 상태)
-        if status in [FileStatus.PROCESSING, FileStatus.SUMMARIZING, FileStatus.OCR_PROCESSING]:
+        if status in [
+            FileStatus.PROCESSING,
+            FileStatus.SUMMARIZING,
+            FileStatus.OCR_PROCESSING,
+        ]:
             celery_finding = await self._check_celery_job(file, status)
             if celery_finding:
                 findings.append(celery_finding)
@@ -143,13 +153,15 @@ class StateWatchdog:
             # 5분 이상 SUMMARY_QUEUED면 작업이 큐잉되었는지 확인
             has_llm_job = await self._check_llm_job_queued(file.id)
             if not has_llm_job:
-                findings.append(WatchdogFinding(
-                    file_id=file.id,
-                    file_status=status,
-                    issue_type="no_job",
-                    details=f"SUMMARY_QUEUED but no LLM job found after {stuck_minutes:.1f} minutes",
-                    stuck_minutes=stuck_minutes,
-                ))
+                findings.append(
+                    WatchdogFinding(
+                        file_id=file.id,
+                        file_status=status,
+                        issue_type="no_job",
+                        details=f"SUMMARY_QUEUED but no LLM job found after {stuck_minutes:.1f} minutes",
+                        stuck_minutes=stuck_minutes,
+                    )
+                )
 
         return findings
 
@@ -189,7 +201,9 @@ class StateWatchdog:
             return max(times)
         return None
 
-    async def _check_celery_job(self, file: File, status: FileStatus) -> WatchdogFinding | None:
+    async def _check_celery_job(
+        self, file: File, status: FileStatus
+    ) -> WatchdogFinding | None:
         """Celery 작업 상태를 확인합니다.
 
         Note: 현재 구조에서는 job_id를 별도로 저장하지 않으므로,
