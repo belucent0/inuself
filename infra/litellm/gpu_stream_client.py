@@ -497,7 +497,9 @@ class AsyncGPUStreamClient:
             f"[GPUStream] Sending LLM completion stream request: request_id={request_id}, model={model}"
         )
 
-        await redis_client.xadd(REQUEST_STREAM, request_data)
+        # Stream 분기 (Chat vs Recap)
+        target_stream = RECAP_STREAM if model == "tier-recap" else CHAT_STREAM
+        await redis_client.xadd(target_stream, request_data)
 
         async for chunk in self._wait_for_stream_response(request_id, timeout):
             yield chunk
