@@ -87,9 +87,11 @@
 # 요청 처리 (trace_id 포함)
 2026-02-02 19:15:50 [INFO] trace_id=5a8ec4ab92b438994db128f42e3c2838 | StreamProcessor | Transcription completed
 
-# 백그라운드 작업 (trace_id=0)
-2026-02-02 19:31:13 [INFO] trace_id=0 | ProviderManager | Starting all provider processes...
+# 백그라운드 작업 (trace_id=00_00)
+2026-02-02 19:31:13 [INFO] trace_id=00_00 | ProviderManager | Starting all provider processes...
 ```
+
+> **Note**: 백그라운드 작업은 `trace_id=00_00`으로 표시됩니다. 시각적으로 구분되어 Loki 검색이 용이합니다.
 
 ### 서비스별 구현
 
@@ -97,6 +99,7 @@
 |--------|------|------|
 | Backend | `backend/app/core/logging.py` | Loguru patcher |
 | Worker | `worker/logging_config.py` | Loguru patcher |
+| LiteLLM Proxy | `infra/litellm/run_proxy.py` | logging.Formatter |
 | Provider Manager | `infra/provider_manager/main.py` | logging.Formatter |
 
 ---
@@ -124,11 +127,11 @@ URL: http://localhost:3002
 # 특정 trace_id로 전체 서비스 로그 추적
 {trace_id="5a8ec4ab92b438994db128f42e3c2838"}
 
-# 백그라운드 작업만 (trace_id=0)
-{container="provider-manager"} |= "trace_id=0 |"
+# 백그라운드 작업만 (trace_id=00_00)
+{trace_id="00_00"}
 
 # 실제 요청만 (백그라운드 제외)
-{container="provider-manager"} |~ "trace_id=[a-f0-9]{32}"
+{container="asr-backend"} |~ "trace_id=[a-f0-9]{32}"
 ```
 
 ### 3. 분산 추적 (Jaeger)
@@ -169,6 +172,66 @@ Grafana Loki에서 로그 조회 시:
 |------|------|
 | `$container` | 컨테이너 필터 (다중 선택) |
 | `$search` | 텍스트 검색 |
+
+---
+
+## 로그 필터링
+
+### 헬스체크/메트릭 로그 제외
+
+노이즈 감소를 위해 헬스체크 및 메트릭 로그를 필터링합니다.
+
+**Backend (`backend/app/main.py`):**
+- `/health`, `/metrics`, `/ready`, `/livez`, `/readyz` 경로
+- 성공 응답(200, 204)만 제외, **에러는 로깅**
+
+**Promtail (`infra/promtail/config.yaml`):**
+```yaml
+pipeline_stages:
+  - drop:
+      expression: '(GET|POST) /health'
+  - drop:
+      expression: '(GET|POST) /metrics'
+```
+
+### 필터링 원칙
+
+| 응답 코드 | 로깅 여부 | 이유 |
+|-----------|----------|------|
+| 200, 204 | ❌ 제외 | 정상 동작, 노이즈 |
+| 4xx, 5xx | ✅ 로깅 | 문제 감지 필요 |
+
+---
+
+## 보안
+
+### Grafana 관리자 비밀번호
+
+Grafana admin 비밀번호는 환경변수로 관리합니다.
+
+**docker-compose.yml:**
+```yaml
+grafana:
+  environment:
+    - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
+```
+
+**프로덕션 설정:**
+```bash
+# .env 파일
+GF_SECURITY_ADMIN_PASSWORD=your-secure-password
+```
+
+### Nginx 접근 제어
+
+외부 사용자의 Grafana 관리 페이지 접근 차단:
+
+```nginx
+# 차단 경로
+location ~ ^/grafana/(login|admin|org|profile|datasources) {
+    return 403;
+}
+```
 
 ---
 
@@ -253,3 +316,4 @@ compactor:
 | 버전 | 날짜 | 변경사항 |
 |------|------|----------|
 | v1.0 | 2026-02-02 | 초기 버전 - Loki, Promtail, Tempo, trace_id 연계 로깅 |
+| v1.1 | 2026-02-02 | LiteLLM trace_id 추가, 00_00 형식, 헬스체크 필터링, Grafana 보안 |
