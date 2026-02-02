@@ -78,7 +78,7 @@ class FileService:
 
             # SQLAlchemy 객체를 딕셔너리로 변환
             item_data = {
-                "id": content.id,  # Content.id (UUID v7)
+                "id": row.id,  # File.id (UUID v7) - 이벤트의 file_id와 일치
                 "filename": row.filename,
                 "object_key": row.object_key,
                 "media_url": get_public_media_url(row.object_key),
@@ -130,7 +130,7 @@ class FileService:
 
         # SQLAlchemy 객체를 딕셔너리로 변환
         detail_data = {
-            "id": content.id,  # Content.id (UUID v7)
+            "id": file_obj.id,  # File.id (UUID v7) - 이벤트의 file_id와 일치
             "filename": file_obj.filename,
             "object_key": file_obj.object_key,
             "media_url": get_public_media_url(file_obj.object_key),
@@ -172,7 +172,7 @@ class FileService:
 
         # SQLAlchemy 객체를 딕셔너리로 변환
         detail_data = {
-            "id": content.id,  # Content.id (UUID v7)
+            "id": file_obj.id,  # File.id (UUID v7) - 이벤트의 file_id와 일치
             "filename": file_obj.filename,
             "object_key": file_obj.object_key,
             "media_url": get_public_media_url(file_obj.object_key),
@@ -394,12 +394,9 @@ class FileService:
         )
         print(f"[Upload] ========================================")
 
-        # Content ID (UUID) 조회
-        content = await self.content_repo.get_by_file_id(file_obj.id)
-        content_id = content.id if content else None
-
+        # File.id (UUID v7)를 반환 - 이벤트의 file_id와 일치하도록
         return {
-            "content_id": content_id,  # Content.id (UUID v7)
+            "content_id": file_obj.id,  # File.id (UUID v7) - 이벤트의 file_id와 일치
             "content_type": content_type.value,
         }
 

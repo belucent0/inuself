@@ -70,7 +70,6 @@ def publish_file_progress(
         }
     """
     try:
-        channel = f"events:file_progress:{file_id}"
         event = {
             "type": "file_progress",
             "file_id": file_id,
@@ -85,7 +84,14 @@ def publish_file_progress(
             event["metadata"] = metadata
 
         redis = _get_redis()
-        redis.publish(channel, json.dumps(event, cls=UUIDEncoder))
+        event_json = json.dumps(event, cls=UUIDEncoder)
+
+        # 파일별 채널 + 전역 채널 둘 다 발행
+        file_channel = f"events:file_progress:{file_id}"
+        global_channel = "events:file_progress:global"
+
+        redis.publish(file_channel, event_json)
+        redis.publish(global_channel, event_json)
 
         logger.debug(
             "[EventPublisher] Published file_progress: file_id={}, step={}, progress={}%",
