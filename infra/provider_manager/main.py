@@ -129,11 +129,8 @@ class TraceIdFormatter(logging.Formatter):
 
     def format(self, record):
         trace_id = get_trace_id()
-        # zero trace_id는 "0"으로 표시 (백그라운드 작업 - 검색 용이)
-        if trace_id and trace_id != "00000000000000000000000000000000":
-            record.trace_id = trace_id
-        else:
-            record.trace_id = "0"
+        # 유효한 trace_id가 없으면 "00_00"으로 표시 (백그라운드 작업 - Loki 검색 용이)
+        record.trace_id = trace_id if trace_id else "00_00"
         return super().format(record)
 
 

@@ -30,9 +30,9 @@ scrape_configs:
           expression: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}: (?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) \[(?P<level>\w+)\] (?P<message>.*)'
       - labels:
           level:
-      # trace_id 추출 (32자리 hex 또는 백그라운드 작업용 0)
+      # trace_id 추출 (32자리 hex 또는 백그라운드 작업용 00_00)
       - regex:
-          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32}|0)'
+          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32}|00_00)'
       - labels:
           trace_id:
 
@@ -66,9 +66,9 @@ scrape_configs:
           expression: '(GET|POST) /health'
       - drop:
           expression: '(GET|POST) /metrics'
-      # trace_id 추출 (32자리 hex 또는 백그라운드 작업용 0)
+      # trace_id 추출 (32자리 hex 또는 백그라운드 작업용 00_00)
       - regex:
-          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32}|0)'
+          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32}|00_00)'
       # 추출된 trace_id를 라벨로 추가
       - labels:
           trace_id:

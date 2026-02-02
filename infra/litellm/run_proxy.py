@@ -85,15 +85,15 @@ except Exception as e:
 # trace_id 포함 로깅 설정
 # ============================================
 def get_trace_id_safe() -> str:
-    """OTEL trace_id를 안전하게 가져옴."""
+    """OTEL trace_id를 안전하게 가져옴. 없으면 0 반환 (백그라운드 작업)."""
     try:
         from custom.telemetry import get_trace_id
         trace_id = get_trace_id()
-        if trace_id and trace_id != "00000000000000000000000000000000":
+        if trace_id:
             return trace_id
     except Exception:
         pass
-    return "0"
+    return "00_00"
 
 
 class TraceIdFormatter(logging.Formatter):

@@ -12,11 +12,11 @@ def get_trace_id_safe() -> str:
     try:
         from app.core.telemetry import get_trace_id
         trace_id = get_trace_id()
-        if trace_id and trace_id != "00000000000000000000000000000000":
+        if trace_id:
             return trace_id
     except Exception:
         pass
-    return "0"
+    return "00_00"
 
 
 def trace_id_patcher(record):
