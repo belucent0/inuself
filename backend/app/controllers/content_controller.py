@@ -54,18 +54,6 @@ async def list_contents(
     return await file_service.list_files(page=page, page_size=page_size)
 
 
-@router.get("/by-public-id/{public_id}", response_model=ContentDetail)
-async def get_content_by_public_id(
-    public_id: UUID = Path(..., description="콘텐츠 ID (UUID v7)"),
-    file_service: FileService = Depends(get_file_service),
-):
-    """Content ID (UUID v7)로 콘텐츠 상세 조회."""
-    try:
-        return await file_service.get_file_by_content_id(public_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
 @router.get("/{content_id}", response_model=ContentDetail)
 async def get_content(
     content_id: UUID, file_service: FileService = Depends(get_file_service)
@@ -143,23 +131,21 @@ async def upload_content(
             ocr_accuracy_mode=ocr_accuracy_mode,
             accuracy_mode=accuracy_mode,
         )
-        # 하위 호환성을 위해 content_id로 변환 + public_id 포함
         upload_response = UploadResponse(
-            content_id=result["file_id"], public_id=result.get("public_id"), queued=True
+            content_id=result["content_id"], queued=True
         )
         logger.info(
-            "[Upload] File upload successful: file_id={}, public_id={}, filename={}",
-            result["file_id"],
-            result.get("public_id"),
+            "[Upload] File upload successful: content_id={}, filename={}",
+            result["content_id"],
             file.filename,
         )
         print(
-            f"[Upload] OK 파일 업로드 완료: file_id={result['file_id']}, public_id={result.get('public_id')}, filename={file.filename}"
+            f"[Upload] OK 파일 업로드 완료: content_id={result['content_id']}, filename={file.filename}"
         )
 
         # 콘텐츠 생성 이벤트 발행 (클라이언트 목록 자동 새로고침용)
         publish_content_created(
-            content_id=result["file_id"],
+            content_id=result["content_id"],
             filename=file.filename or "unknown",
             content_type=str(result.get("content_type", "AUDIO")),
             status="QUEUED",

@@ -27,8 +27,7 @@ class LlmLogSchema(BaseModel):
 
 
 class ContentBaseSchema(BaseModel):
-    id: UUID  # File.id (UUID v7)
-    public_id: UUID | None = None  # 하위 호환성 - Content.id (id와 동일)
+    id: UUID  # Content.id (UUID v7)
     filename: str
     object_key: str
     media_url: str | None = None
@@ -63,8 +62,7 @@ class ContentDetail(ContentBaseSchema):
 
 
 class UploadResponse(BaseModel):
-    content_id: UUID  # File.id (UUID v7)
-    public_id: UUID | None = None  # 하위 호환성 - Content.id
+    content_id: UUID  # Content.id (UUID v7)
     queued: bool = True
 
 

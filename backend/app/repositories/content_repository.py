@@ -67,10 +67,6 @@ class ContentRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_public_id(self, public_id: UUID) -> models.Content | None:
-        """Public ID (UUID)로 Content 조회. (하위 호환성 - get_content로 리다이렉트)"""
-        return await self.get_content(public_id)
-
     async def create_content(
         self,
         *,

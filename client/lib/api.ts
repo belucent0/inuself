@@ -32,8 +32,7 @@ export type ContentStatus =
 export type ContentType = 'AUDIO' | 'DOCUMENT' | 'PORTRAY'
 
 export type ContentSummary = {
-  id: string  // File.id (UUID v7)
-  public_id: string | null  // Content.id (UUID v7) - 하위 호환성
+  id: string  // Content.id (UUID v7)
   filename: string
   object_key: string
   media_url?: string | null
@@ -176,7 +175,7 @@ export async function uploadContent(
   ocrMode?: string,
   ocrAccuracyMode?: 'speed' | 'accuracy',
   accuracyMode?: 'speed' | 'accuracy'
-): Promise<{ content_id: string; public_id: string | null }> {
+): Promise<{ content_id: string }> {
   const formData = new FormData()
   formData.append('file', file)
 
@@ -333,7 +332,7 @@ export const getWebSocketBase = (): string => {
  * @param url YouTube 영상 URL
  * @returns content_id가 포함된 응답
  */
-export async function uploadYouTubeContent(url: string): Promise<{ content_id: string; public_id?: string | null }> {
+export async function uploadYouTubeContent(url: string): Promise<{ content_id: string }> {
   const res = await fetch(`${API_BASE}/contents/upload-youtube`, {
     method: 'POST',
     headers: {

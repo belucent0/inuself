@@ -78,8 +78,7 @@ class FileService:
 
             # SQLAlchemy 객체를 딕셔너리로 변환
             item_data = {
-                "id": row.id,
-                "public_id": str(content.id),  # UUID v7 (Content.id)
+                "id": content.id,  # Content.id (UUID v7)
                 "filename": row.filename,
                 "object_key": row.object_key,
                 "media_url": get_public_media_url(row.object_key),
@@ -131,8 +130,7 @@ class FileService:
 
         # SQLAlchemy 객체를 딕셔너리로 변환
         detail_data = {
-            "id": file_obj.id,
-            "public_id": str(content.id),  # UUID v7 (Content.id)
+            "id": content.id,  # Content.id (UUID v7)
             "filename": file_obj.filename,
             "object_key": file_obj.object_key,
             "media_url": get_public_media_url(file_obj.object_key),
@@ -174,8 +172,7 @@ class FileService:
 
         # SQLAlchemy 객체를 딕셔너리로 변환
         detail_data = {
-            "id": file_obj.id,
-            "public_id": str(content.id),  # UUID v7 (Content.id)
+            "id": content.id,  # Content.id (UUID v7)
             "filename": file_obj.filename,
             "object_key": file_obj.object_key,
             "media_url": get_public_media_url(file_obj.object_key),
@@ -399,11 +396,10 @@ class FileService:
 
         # Content ID (UUID) 조회
         content = await self.content_repo.get_by_file_id(file_obj.id)
-        content_uuid = str(content.id) if content else None
+        content_id = content.id if content else None
 
         return {
-            "file_id": file_obj.id,
-            "public_id": content_uuid,
+            "content_id": content_id,  # Content.id (UUID v7)
             "content_type": content_type.value,
         }
 
