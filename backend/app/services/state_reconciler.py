@@ -19,9 +19,13 @@ from ..db.session import AsyncSessionLocal
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
+from ..state_machines.machines import ContentStateMachine
 from ..utils.task_queue_adapter import get_task_queue
 from ..utils.event_publisher import publish_file_progress
 from .state_watchdog import WatchdogFinding, run_watchdog_scan
+
+# StateMachine 인스턴스
+_state_machine = ContentStateMachine()
 
 
 @dataclass
@@ -96,8 +100,7 @@ class StateReconciler:
             )
 
         status = content.status
-        if status in [FileStatus.COMPLETED, FileStatus.CANCELLED,
-                          FileStatus.ASR_FAILED, FileStatus.OCR_FAILED, FileStatus.SUMMARY_FAILED]:
+        if _state_machine.is_terminal_state(status):
             return ReconcileAction(
                 file_id=finding.file_id,
                 action="skipped",
@@ -208,17 +211,13 @@ class StateReconciler:
         last_event = finding.details
 
         if "_failed" in last_event:
-            # 실패 이벤트가 있으면 실패 상태로 업데이트
-            if status == FileStatus.PROCESSING:
-                new_status = FileStatus.ASR_FAILED
-            elif status == FileStatus.OCR_PROCESSING:
-                new_status = FileStatus.OCR_FAILED
-            elif status == FileStatus.SUMMARIZING:
-                new_status = FileStatus.SUMMARY_FAILED
-            else:
-                new_status = FileStatus.CANCELLED
+            # StateMachine에서 적절한 실패 상태 결정
+            new_status = _state_machine.get_failure_state_for(status) or FileStatus.CANCELLED
 
-            await self.file_repo.update_file_status(file.id, new_status)
+            # Reconciler는 validate=False로 강제 전이 (상태 복구 목적)
+            await self.file_repo.update_file_status(
+                file.id, new_status, triggered_by="reconciler", validate=False
+            )
             await self.file_repo.add_log(
                 file.id,
                 log={"event": "reconciler_status_fix", "old_status": status.value, "new_status": new_status.value},
@@ -256,17 +255,13 @@ class StateReconciler:
 
     async def _mark_as_failed(self, file: File, status: FileStatus, reason: str) -> ReconcileAction:
         """파일을 실패 상태로 마킹합니다."""
-        # 상태에 따라 적절한 실패 상태 결정
-        if status in [FileStatus.QUEUED, FileStatus.PROCESSING]:
-            new_status = FileStatus.ASR_FAILED
-        elif status == FileStatus.OCR_PROCESSING:
-            new_status = FileStatus.OCR_FAILED
-        elif status in [FileStatus.SUMMARY_QUEUED, FileStatus.SUMMARIZING]:
-            new_status = FileStatus.SUMMARY_FAILED
-        else:
-            new_status = FileStatus.CANCELLED
+        # StateMachine에서 적절한 실패 상태 결정
+        new_status = _state_machine.get_failure_state_for(status) or FileStatus.CANCELLED
 
-        await self.file_repo.update_file_status(file.id, new_status)
+        # Reconciler는 validate=False로 강제 전이 (stuck 복구 목적)
+        await self.file_repo.update_file_status(
+            file.id, new_status, triggered_by="reconciler", validate=False
+        )
         await self.file_repo.add_log(
             file.id,
             log={"event": "reconciler_marked_failed", "reason": reason, "old_status": status.value},

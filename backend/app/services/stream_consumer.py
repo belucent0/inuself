@@ -445,24 +445,36 @@ class StreamConsumer:
                         )
 
                 else:
-                    # 요약할 텍스트가 없는 경우
-                    logger.info(f"No text to summarize, skipping LLM: file_id={file_id}")
-                    
-                    await file_repo.update_file_status(file_id, FileStatus.COMPLETED)
+                    # 요약할 텍스트가 없는 경우 → 완료 처리 (빈 결과)
+                    logger.info(
+                        f"No text to summarize, completing without summary: file_id={file_id}"
+                    )
+
+                    # 파일명 기반 제목 설정
+                    file = await file_repo.get_file(file_id)
+                    if file:
+                        # 확장자 제거한 파일명 + "- 내용 없음"
+                        base_name = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
+                        empty_title = f"{base_name} - 내용 없음"
+                        await file_repo.update_title(file_id, empty_title)
+
+                    await file_repo.update_file_status(
+                        file_id, FileStatus.COMPLETED, triggered_by="stream_consumer"
+                    )
                     await file_repo.add_llm_log(
                         file_id,
                         log={"event": "llm_skipped", "reason": "empty_text"},
-                        message="LLM skipped: No text to summarize",
+                        message="LLM skipped: No text detected in audio",
                     )
                     await session.commit()
 
-                    # 클라이언트에 이벤트 발행 (완료 처리)
+                    # 클라이언트에 이벤트 발행 (완료 - 빈 결과)
                     publish_file_progress(
                         file_id=file_id,
                         status="completed",
                         step="completed",
                         progress=100.0,
-                        message="텍스트가 없어 요약을 건너뛰고 완료했습니다.",
+                        message="처리 완료 (음성/텍스트가 감지되지 않았습니다)",
                     )
 
                 # ASR 활성 작업 해제
@@ -533,6 +545,15 @@ class StreamConsumer:
                     # 상태 업데이트: COMPLETED (요약 생략)
                     await file_repo.update_file_status(file_id, FileStatus.COMPLETED)
                     await session.commit()
+
+                    # 클라이언트에 이벤트 발행
+                    publish_file_progress(
+                        file_id=file_id,
+                        status="completed",
+                        step="completed",
+                        progress=100.0,
+                        message="처리 완료 (요약 생략)",
+                    )
                     return
 
                 # [Phase 1] Backend에서 응답 파싱
@@ -550,6 +571,15 @@ class StreamConsumer:
                         file_id, FileStatus.SUMMARY_FAILED
                     )
                     await session.commit()
+
+                    # 클라이언트에 이벤트 발행
+                    publish_file_progress(
+                        file_id=file_id,
+                        status="failed",
+                        step="llm_failed",
+                        progress=0.0,
+                        message=f"요약 파싱 실패: {exc}",
+                    )
                     return
 
                 # 제목과 요약 저장
@@ -697,6 +727,37 @@ class StreamConsumer:
                         file_id=file_id, text_to_summarize=ocr_text
                     )
                     logger.info(f"LLM job enqueued: file_id={file_id}")
+                else:
+                    # OCR 결과가 비어있는 경우 → 완료 처리 (빈 결과)
+                    logger.info(
+                        f"No text from OCR, completing without summary: file_id={file_id}"
+                    )
+
+                    # 파일명 기반 제목 설정
+                    file = await file_repo.get_file(file_id)
+                    if file:
+                        base_name = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
+                        empty_title = f"{base_name} - 내용 없음"
+                        await file_repo.update_title(file_id, empty_title)
+
+                    await file_repo.update_file_status(
+                        file_id, FileStatus.COMPLETED, triggered_by="stream_consumer"
+                    )
+                    await file_repo.add_llm_log(
+                        file_id,
+                        log={"event": "llm_skipped", "reason": "empty_ocr_text"},
+                        message="LLM skipped: No text detected in document",
+                    )
+                    await session.commit()
+
+                    # 클라이언트에 이벤트 발행 (완료 - 빈 결과)
+                    publish_file_progress(
+                        file_id=file_id,
+                        status="completed",
+                        step="completed",
+                        progress=100.0,
+                        message="처리 완료 (문서에서 텍스트가 감지되지 않았습니다)",
+                    )
 
                 # OCR 활성 작업 해제
                 task_queue = get_task_queue()
