@@ -150,6 +150,21 @@ def get_tracer(name: str = "provider-manager") -> "trace.Tracer":
     return trace.get_tracer(name)
 
 
+def get_trace_id() -> str:
+    """현재 활성 trace의 trace_id를 반환. 없으면 zero trace_id 반환."""
+    if not OTEL_AVAILABLE:
+        return "00000000000000000000000000000000"
+
+    try:
+        span = trace.get_current_span()
+        if span and span.get_span_context().is_valid:
+            return format(span.get_span_context().trace_id, '032x')
+    except Exception:
+        pass
+
+    return "00000000000000000000000000000000"
+
+
 def extract_trace_context(traceparent: str) -> Optional["trace.Context"]:
     """traceparent 문자열에서 trace context 추출.
 
