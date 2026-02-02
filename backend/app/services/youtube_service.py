@@ -198,13 +198,13 @@ class YouTubeService:
         logger.info(f"[YouTube] Downloading: {title} ({duration}s)")
         logger.info(f"[YouTube] Output template: {output_template}")
 
-        # 영상+오디오 다운로드 (bestvideo+bestaudio 명시적 병합)
-        # YouTube는 고화질 영상을 비디오/오디오 분리 스트림으로 제공
-        # best[ext=mp4]는 이미 합쳐진(muxed) 저화질만 선택하므로 병합 필수
+        # 영상+오디오 다운로드 (360p 제한, 저용량 우선)
+        # ASR에는 오디오가 중요하므로 영상 화질은 낮춰도 됨
+        # 360p 이하 → 240p 이하 → 최저화질 순으로 폴백
         ydl_opts = {
             **self._get_base_opts(),
-            # mp4 비디오 + m4a 오디오 우선, 없으면 아무 포맷이나 병합
-            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+            # 360p 이하 mp4 + m4a 오디오, 없으면 240p, 최종적으로 worst
+            "format": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=240]+bestaudio/worst[ext=mp4]/worst",
             "outtmpl": output_template,
             "quiet": False,
             "no_warnings": False,

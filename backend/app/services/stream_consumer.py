@@ -1,18 +1,23 @@
 """Redis Stream Consumer.
 
 워커가 발행한 결과 메시지를 수신하여 DB에 저장합니다.
+
+분산 추적: Worker에서 주입한 traceparent를 복원하여 trace context 연결.
 """
 
 import asyncio
 import json
 import socket
+from contextlib import contextmanager
 from typing import Any
 
 from redis.asyncio import Redis
+from opentelemetry import context as otel_context
 
 from ..core.config import get_settings
 from ..core.logging import logger
 from ..core.storage import download_json, delete_file, delete_files_by_prefix
+from ..core.telemetry import extract_trace_context, get_tracer
 from ..db.models import FileStatus
 from ..db.session import AsyncSessionLocal
 from ..repositories.file_repository import FileRepository
@@ -176,10 +181,6 @@ class StreamConsumer:
         # data는 {"data": json_string} 형태
         message = json.loads(data.get("data", "{}"))
 
-        msg_type = message.get("type")
-        event = message.get("event")
-        file_id = message.get("file_id")
-
         if not message:
             logger.warning(f"Received empty data in message: {entry_id}")
             return
@@ -188,19 +189,52 @@ class StreamConsumer:
         event = message.get("event")
         file_id = message.get("file_id")
 
-        logger.info(
-            f"[StreamConsumer] Handling message {entry_id}: type={msg_type}, event={event}, file_id={file_id}"
-        )
-        logger.debug(f"[StreamConsumer] Message payload: {message}")
+        # 분산 추적: Worker에서 주입한 traceparent 복원
+        with self._restore_trace_context(message):
+            logger.info(
+                f"[StreamConsumer] Handling message {entry_id}: type={msg_type}, event={event}, file_id={file_id}"
+            )
+            logger.debug(f"[StreamConsumer] Message payload: {message}")
 
-        if msg_type == "asr":
-            await self._handle_asr_result(message)
-        elif msg_type == "llm":
-            await self._handle_llm_result(message)
-        elif msg_type == "ocr":
-            await self._handle_ocr_result(message)
-        else:
-            logger.warning(f"Unknown message type: {msg_type}")
+            if msg_type == "asr":
+                await self._handle_asr_result(message)
+            elif msg_type == "llm":
+                await self._handle_llm_result(message)
+            elif msg_type == "ocr":
+                await self._handle_ocr_result(message)
+            else:
+                logger.warning(f"Unknown message type: {msg_type}")
+
+    @contextmanager
+    def _restore_trace_context(self, message: dict[str, Any]):
+        """Worker에서 주입한 traceparent를 복원하여 trace context 연결.
+
+        Redis Stream 메시지에 traceparent가 있으면 해당 context로 전환하여
+        Worker의 trace와 Backend 처리를 연결합니다.
+        """
+        traceparent = message.get("traceparent")
+        if not traceparent:
+            yield
+            return
+
+        # traceparent에서 context 추출
+        carrier = {"traceparent": traceparent}
+        ctx = extract_trace_context(carrier)
+
+        # context 활성화하여 로그 및 span에 trace_id 연결
+        token = otel_context.attach(ctx)
+        try:
+            # 새 span 시작하여 Backend 처리 추적
+            tracer = get_tracer("stream-consumer")
+            with tracer.start_as_current_span(
+                "stream_consumer.handle_message",
+                context=ctx,
+            ) as span:
+                span.set_attribute("message.type", message.get("type", "unknown"))
+                span.set_attribute("file.id", str(message.get("file_id", "")))
+                yield
+        finally:
+            otel_context.detach(token)
 
     async def _handle_asr_result(self, message: dict[str, Any]) -> None:
         """ASR 결과를 처리합니다."""

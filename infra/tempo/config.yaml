@@ -1,5 +1,24 @@
+# Tempo 2.4 단일 인스턴스 설정
+stream_over_http_enabled: true
+multitenancy_enabled: false
+
 server:
   http_listen_port: 3200
+  grpc_listen_port: 9095
+
+memberlist:
+  abort_if_cluster_join_fails: false
+  bind_port: 7946
+  join_members: []
+
+ingester:
+  max_block_duration: 5m
+  lifecycler:
+    ring:
+      kvstore:
+        store: memberlist
+      replication_factor: 1
+    final_sleep: 0s
 
 distributor:
   receivers:
@@ -10,12 +29,24 @@ distributor:
         http:
           endpoint: "0.0.0.0:4318"
 
+querier:
+  frontend_worker:
+    frontend_address: ""
+
 storage:
   trace:
     backend: s3
+    wal:
+      path: /var/tempo/wal
     s3:
-      bucket: loki-logs
+      bucket: tempo-traces
       endpoint: asr-minio:9000
       access_key: ${S3_ACCESS_KEY:-torchdev}
       secret_key: ${S3_SECRET_KEY:-torchdev-secret}
       insecure: true
+      forcepathstyle: true
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: []

@@ -264,20 +264,24 @@ def delete_file(key: str) -> None:
             # 버킷이 존재하면 S3에서 삭제
             try:
                 client.remove_object(settings.s3_bucket, key)
+                logger.info(f"[Storage] S3 파일 삭제 완료: bucket={settings.s3_bucket}, key={key}")
                 return
             except S3Error as e:
                 # 파일이 없어도 에러를 발생시키지 않음 (이미 삭제된 경우)
                 if e.code != "NoSuchKey":
                     raise
+                logger.warning(f"[Storage] S3 파일 이미 없음: key={key}")
                 return
-        except S3Error:
+        except S3Error as e:
             # 버킷이 없거나 접근 불가능하면 로컬 파일 시스템 사용
+            logger.warning(f"[Storage] S3 접근 실패, 로컬로 폴백: {e}")
             pass
 
     # 로컬 파일 시스템 사용
     local_path = _get_local_storage_path(key)
     if local_path.exists():
         local_path.unlink()
+        logger.info(f"[Storage] 로컬 파일 삭제 완료: {local_path}")
 
 
 def get_public_media_url(key: str) -> str:

@@ -452,19 +452,21 @@ class FileService:
         loop = asyncio.get_running_loop()
 
         if file_ids:
-            # Celery 큐 작업 취소
+            # Celery 큐 작업 취소 (OTEL context 전파)
             celery_cancelled = await loop.run_in_executor(
-                None, cancel_celery_tasks_by_content_ids, file_ids
+                None, preserve_otel_context(lambda: cancel_celery_tasks_by_content_ids(file_ids))
             )
             if celery_cancelled:
                 logger.info(
                     "Cancelled %s Celery tasks for deleted files", celery_cancelled
                 )
 
-        # object_key 기반 파일 삭제
+        # object_key 기반 파일 삭제 (OTEL context 전파)
         for object_key in object_keys:
             try:
-                await loop.run_in_executor(None, delete_file, object_key)
+                await loop.run_in_executor(
+                    None, preserve_otel_context(lambda key=object_key: delete_file(key))
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to delete file from storage: %s, error: %s", object_key, exc
@@ -473,13 +475,17 @@ class FileService:
         # 임시 파일 삭제 (temp/ocr/{file_id}/, temp/asr/{file_id}/ 등)
         for file_id in file_ids:
             try:
-                # OCR 임시 이미지
+                # OCR 임시 이미지 (OTEL context 전파)
                 ocr_prefix = f"temp/ocr/{file_id}/"
-                await loop.run_in_executor(None, delete_files_by_prefix, ocr_prefix)
+                await loop.run_in_executor(
+                    None, preserve_otel_context(lambda p=ocr_prefix: delete_files_by_prefix(p))
+                )
 
-                # ASR 임시 파일
+                # ASR 임시 파일 (OTEL context 전파)
                 asr_prefix = f"temp/asr/{file_id}/"
-                await loop.run_in_executor(None, delete_files_by_prefix, asr_prefix)
+                await loop.run_in_executor(
+                    None, preserve_otel_context(lambda p=asr_prefix: delete_files_by_prefix(p))
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to delete temp files for file_id=%s: error=%s", file_id, exc

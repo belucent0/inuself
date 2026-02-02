@@ -2,6 +2,8 @@
 
 워커가 작업 완료 후 결과를 Redis Stream에 발행하면,
 백엔드의 StreamConsumer가 이를 구독하여 DB에 저장합니다.
+
+분산 추적: traceparent를 메시지에 포함하여 Backend에서 trace context를 복원.
 """
 import json
 from datetime import datetime
@@ -20,6 +22,7 @@ from redis import Redis
 
 from worker.config import get_settings
 from worker.logging_config import logger
+from worker.telemetry import inject_trace_context
 
 settings = get_settings()
 
@@ -40,18 +43,24 @@ def _get_redis() -> Redis:
 
 def _publish_result(data: dict[str, Any]) -> str:
     """Redis Stream에 결과를 발행합니다.
-    
+
     Args:
         data: 발행할 데이터
-        
+
     Returns:
         Stream entry ID
     """
     redis = _get_redis()
-    
+
     # timestamp 추가
     data["timestamp"] = datetime.utcnow().isoformat()
-    
+
+    # 분산 추적: traceparent 주입 (Backend에서 trace context 복원용)
+    trace_carrier = {}
+    inject_trace_context(trace_carrier)
+    if trace_carrier.get("traceparent"):
+        data["traceparent"] = trace_carrier["traceparent"]
+
     # Redis Stream은 flat한 key-value만 지원하므로 JSON으로 직렬화
     entry_id = redis.xadd(RESULT_STREAM, {"data": json.dumps(data, cls=UUIDEncoder)})
     
