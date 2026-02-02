@@ -81,8 +81,38 @@ except Exception as e:
 
 # --- MONKEYPATCH END ---
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# ============================================
+# trace_id 포함 로깅 설정
+# ============================================
+def get_trace_id_safe() -> str:
+    """OTEL trace_id를 안전하게 가져옴. 없으면 0 반환 (백그라운드 작업)."""
+    try:
+        from custom.telemetry import get_trace_id
+        trace_id = get_trace_id()
+        if trace_id:
+            return trace_id
+    except Exception:
+        pass
+    return "00_00"
+
+
+class TraceIdFormatter(logging.Formatter):
+    """trace_id를 포함하는 포매터. 없으면 0으로 표시 (백그라운드 작업)."""
+
+    def format(self, record):
+        record.trace_id = get_trace_id_safe()
+        return super().format(record)
+
+
+LOG_FORMAT = "%(asctime)s [%(levelname)s] trace_id=%(trace_id)s | %(name)s | %(message)s"
+
+# Configure logging with trace_id
+handler = logging.StreamHandler()
+handler.setFormatter(TraceIdFormatter(LOG_FORMAT))
+logging.root.handlers = []
+logging.root.addHandler(handler)
+logging.root.setLevel(logging.INFO)
+
 logger = logging.getLogger("CustomProxyRunner")
 
 # Initialize OpenTelemetry - MOVED later to pass 'app' object

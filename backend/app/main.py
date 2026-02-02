@@ -23,15 +23,30 @@ except ImportError:
 
 
 class HealthCheckLogFilter(logging.Filter):
-    """헬스체크 요청 로그를 필터링하는 필터."""
-    
+    """헬스체크/메트릭 요청 로그를 필터링하는 필터.
+
+    - 성공 응답(2xx)은 로그에서 제외
+    - 에러 응답(4xx, 5xx)은 로깅하여 문제 감지
+    """
+
+    # 필터링할 경로 패턴
+    EXCLUDED_PATHS = ("/health", "/metrics", "/ready", "/livez", "/readyz")
+    # 성공 응답 코드 (제외 대상)
+    SUCCESS_CODES = ("200", "204")
+
     def filter(self, record: logging.LogRecord) -> bool:
-        """헬스체크 경로(`/health`)는 로그에서 제외."""
+        """모니터링 경로의 성공 응답만 제외, 에러는 로깅."""
         # uvicorn access log 형식: "127.0.0.1:xxxxx - "GET /health HTTP/1.1" 200 OK"
         message = record.getMessage()
-        if "/health" in message and "200" in message:
-            return False  # 로그 제외
-        return True  # 다른 로그는 정상 출력
+
+        # 모니터링 경로 체크
+        is_monitoring_path = any(path in message for path in self.EXCLUDED_PATHS)
+        if not is_monitoring_path:
+            return True  # 일반 요청은 로깅
+
+        # 성공 응답만 제외 (에러는 로깅)
+        is_success = any(code in message for code in self.SUCCESS_CODES)
+        return not is_success  # 성공이면 제외(False), 에러면 로깅(True)
 
 
 def cleanup_temp_files() -> None:

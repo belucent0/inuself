@@ -1,0 +1,74 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # PM2 로그 (Windows 호스트의 Provider Manager)
+  - job_name: pm2
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: pm2
+          container: provider-manager
+          service_name: provider-manager
+          __path__: /host-logs/pm2-provider-manager-*.log
+    pipeline_stages:
+      # 헬스체크 로그 제외
+      - drop:
+          expression: 'GET http://localhost:8003/health'
+      - drop:
+          expression: '(GET|POST) /metrics'
+      # Python logging 형식 파싱: 2026-02-02 18:59:28,725 [INFO] message
+      - regex:
+          expression: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}: (?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) \[(?P<level>\w+)\] (?P<message>.*)'
+      - labels:
+          level:
+      # trace_id 추출 (32자리 hex 또는 백그라운드 작업용 00_00)
+      - regex:
+          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32}|00_00)'
+      - labels:
+          trace_id:
+
+  # Docker container logs via Docker SD
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # 컨테이너 이름을 container 라벨로
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      # 컨테이너 이름을 service_name 라벨로도 설정
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: service_name
+      # compose 서비스 이름 (있으면)
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: compose_service
+      # compose 프로젝트 이름
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: compose_project
+    pipeline_stages:
+      # Docker JSON 로그 파싱
+      - docker: {}
+      # 헬스체크 로그 제외 (노이즈 감소)
+      - drop:
+          expression: '(GET|POST) /api/v1/health'
+      - drop:
+          expression: '(GET|POST) /health'
+      - drop:
+          expression: '(GET|POST) /metrics'
+      # trace_id 추출 (32자리 hex 또는 백그라운드 작업용 00_00)
+      - regex:
+          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32}|00_00)'
+      # 추출된 trace_id를 라벨로 추가
+      - labels:
+          trace_id:

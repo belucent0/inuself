@@ -39,7 +39,7 @@ from fastapi import FastAPI
 
 from core.config import settings
 from core.manager import ProviderManager
-from core.telemetry import setup_telemetry
+from core.telemetry import setup_telemetry, get_trace_id
 from api.routes import providers_router, groups_router, health_router, jobs_router
 from api.routes.providers import set_service
 from services.stream_processor import StreamProcessor
@@ -119,21 +119,38 @@ def release_singleton_lock():
 
 
 # ==========================================
-# Logging Setup
+# Logging Setup (with trace_id)
 # ==========================================
 settings.log_dir.mkdir(exist_ok=True)
 
+
+class TraceIdFormatter(logging.Formatter):
+    """trace_id를 포함하는 포매터. 없으면 0으로 표시 (백그라운드 작업)."""
+
+    def format(self, record):
+        trace_id = get_trace_id()
+        # 유효한 trace_id가 없으면 "00_00"으로 표시 (백그라운드 작업 - Loki 검색 용이)
+        record.trace_id = trace_id if trace_id else "00_00"
+        return super().format(record)
+
+
+# 로그 포맷 (trace_id 항상 포함, 백그라운드는 0)
+LOG_FORMAT = "%(asctime)s [%(levelname)s] trace_id=%(trace_id)s | %(name)s | %(message)s"
+
+# 핸들러 생성
+file_handler = RotatingFileHandler(
+    settings.log_dir / "provider-manager.log",
+    maxBytes=10*1024*1024,
+    backupCount=5
+)
+file_handler.setFormatter(TraceIdFormatter(LOG_FORMAT))
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(TraceIdFormatter(LOG_FORMAT))
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        RotatingFileHandler(
-            settings.log_dir / "provider-manager.log",
-            maxBytes=10*1024*1024,
-            backupCount=5
-        ),
-        logging.StreamHandler()
-    ]
+    handlers=[file_handler, stream_handler]
 )
 logger = logging.getLogger("ProviderManager")
 

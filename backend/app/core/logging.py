@@ -6,13 +6,35 @@ from loguru import logger
 # 기본 로거 제거
 logger.remove()
 
-# 로그 포맷 설정
+
+def get_trace_id_safe() -> str:
+    """OpenTelemetry trace_id를 안전하게 가져옴. 없으면 0 반환 (백그라운드 작업)."""
+    try:
+        from app.core.telemetry import get_trace_id
+        trace_id = get_trace_id()
+        if trace_id:
+            return trace_id
+    except Exception:
+        pass
+    return "00_00"
+
+
+def trace_id_patcher(record):
+    """모든 로그 레코드에 trace_id를 자동으로 추가."""
+    record["extra"]["trace_id"] = get_trace_id_safe()
+
+
+# 로그 포맷 설정 (trace_id 포함)
 log_format = (
     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
     "<level>{level: <8}</level> | "
+    "trace_id={extra[trace_id]} | "
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
     "<level>{message}</level>"
 )
+
+# trace_id patcher 적용
+logger = logger.patch(trace_id_patcher)
 
 # 콘솔 출력 설정
 logger.add(
