@@ -222,8 +222,10 @@ class ContentService:
                         content_id,
                     )
 
-                # 상태를 QUEUED로 변경
-                await file_repo.update_file_status(content_id, FileStatus.QUEUED)
+                # 상태를 QUEUED로 변경 (재처리이므로 validate=False)
+                await file_repo.update_file_status(
+                    content_id, FileStatus.QUEUED, triggered_by="manual_retry", validate=False
+                )
                 await file_repo.add_log(
                     file_id=content_id,
                     log={"event": "manual_retry", "type": "ocr", "ocr_mode": ocr_mode},
@@ -284,8 +286,10 @@ class ContentService:
                         "min_speakers must be less than or equal to max_speakers"
                     )
 
-                # 상태를 QUEUED로 변경
-                await file_repo.update_file_status(content_id, FileStatus.QUEUED)
+                # 상태를 QUEUED로 변경 (재처리이므로 validate=False)
+                await file_repo.update_file_status(
+                    content_id, FileStatus.QUEUED, triggered_by="manual_retry", validate=False
+                )
                 log_data = {"event": "manual_retry", "type": "asr"}
                 if min_speakers is not None:
                     log_data["min_speakers"] = min_speakers
@@ -376,9 +380,9 @@ class ContentService:
                         f"(content_type: {file_obj.content_type.value})"
                     )
 
-                # 상태를 SUMMARY_QUEUED로 변경 (큐에 등록)
+                # 상태를 SUMMARY_QUEUED로 변경 (재처리이므로 validate=False)
                 await file_repo.update_file_status(
-                    content_id, FileStatus.SUMMARY_QUEUED
+                    content_id, FileStatus.SUMMARY_QUEUED, triggered_by="manual_retry", validate=False
                 )
                 await file_repo.add_llm_log(
                     file_id=content_id,
@@ -395,7 +399,7 @@ class ContentService:
                     try:
                         # 상태를 SUMMARIZING으로 변경
                         await file_repo.update_file_status(
-                            content_id, FileStatus.SUMMARIZING
+                            content_id, FileStatus.SUMMARIZING, triggered_by="manual_retry"
                         )
                         await file_repo.add_llm_log(
                             file_id=content_id,
