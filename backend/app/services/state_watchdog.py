@@ -4,8 +4,7 @@
 주기적으로 실행되어 PROCESSING, SUMMARIZING 등 진행 상태의 파일을 모니터링합니다.
 """
 
-import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Sequence
 from uuid import UUID
@@ -18,6 +17,7 @@ from ..core.logging import logger
 from ..db.models import File, FileStatus, SttLog, LlmLog, Content
 from ..db.session import AsyncSessionLocal
 from ..repositories.file_repository import FileRepository
+from ..state_machines.machines import ContentStateMachine
 from ..utils.task_queue_adapter import get_task_queue
 
 
@@ -33,24 +33,12 @@ class WatchdogFinding:
     stuck_minutes: float | None = None
 
 
-# 상태별 타임아웃 (분)
-STATUS_TIMEOUTS = {
-    FileStatus.QUEUED: 30,  # 30분 동안 QUEUED 상태면 문제
-    FileStatus.PULLING: 30,  # 외부 소스 다운로드 30분 타임아웃
-    FileStatus.PROCESSING: 60,  # ASR 처리 60분 타임아웃
-    FileStatus.OCR_PROCESSING: 30,  # OCR 처리 30분 타임아웃
-    FileStatus.SUMMARY_QUEUED: 30,  # 요약 대기 30분 타임아웃
-    FileStatus.SUMMARIZING: 15,  # LLM 요약 15분 타임아웃
-}
+# StateMachine에서 타임아웃/상태 정보 가져오기
+_state_machine = ContentStateMachine()
 
-# 모니터링 대상 상태
+# 모니터링 대상 상태 (터미널이 아닌 모든 상태)
 UNSTABLE_STATUSES = [
-    FileStatus.QUEUED,
-    FileStatus.PULLING,
-    FileStatus.PROCESSING,
-    FileStatus.OCR_PROCESSING,
-    FileStatus.SUMMARY_QUEUED,
-    FileStatus.SUMMARIZING,
+    status for status in FileStatus if _state_machine.is_processing_state(status)
 ]
 
 
@@ -116,8 +104,8 @@ class StateWatchdog:
 
         status = content.status
 
-        # 1. 타임아웃 체크
-        timeout_minutes = STATUS_TIMEOUTS.get(status, 30)
+        # 1. 타임아웃 체크 (StateMachine에서 가져옴)
+        timeout_minutes = _state_machine.get_timeout(status) or 30
         age_minutes = (now - file.created_at).total_seconds() / 60
 
         # 마지막 로그 시간으로 stuck 판단 (최근 활동 기준)

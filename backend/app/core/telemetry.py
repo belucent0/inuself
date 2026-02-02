@@ -164,6 +164,9 @@ def setup_telemetry(app=None, service_name: str = None) -> None:
         # 공통 라이브러리 자동 계측
         _instrument_common_libraries()
 
+        # run_in_executor 자동 컨텍스트 전파 패치
+        patch_run_in_executor()
+
         _initialized = True
         logger.info(f"[Telemetry] Initialized: service={service}, endpoint={endpoint}")
 
@@ -544,3 +547,60 @@ async def run_in_executor_with_otel(
         func = partial(func, *args, **kwargs)
 
     return await loop.run_in_executor(executor, preserve_otel_context(func))
+
+
+# ============================================
+# 전역 패치: run_in_executor 자동 컨텍스트 전파
+# ============================================
+
+_original_run_in_executor = None
+
+
+def patch_run_in_executor():
+    """asyncio.AbstractEventLoop.run_in_executor를 패치하여 OTEL 컨텍스트 자동 전파.
+
+    이 함수를 호출하면 모든 run_in_executor 호출에서 OTEL 컨텍스트가 자동으로
+    스레드로 전파됩니다. 더 이상 preserve_otel_context()를 수동으로 래핑할 필요가 없습니다.
+
+    사용법:
+        # main.py 또는 앱 초기화 시
+        from app.core.telemetry import patch_run_in_executor
+        patch_run_in_executor()
+
+        # 이후 모든 run_in_executor 호출은 자동으로 OTEL 컨텍스트 전파
+        await loop.run_in_executor(None, func)  # 자동으로 컨텍스트 전파됨
+
+    Note:
+        - 이 패치는 idempotent합니다 (여러 번 호출해도 안전)
+        - 앱 시작 시 한 번만 호출하면 됩니다
+    """
+    global _original_run_in_executor
+
+    import asyncio
+    from opentelemetry import context as otel_context
+
+    # 이미 패치되었으면 스킵
+    if _original_run_in_executor is not None:
+        logger.debug("[OTEL] run_in_executor already patched, skipping")
+        return
+
+    # 원본 저장
+    _original_run_in_executor = asyncio.AbstractEventLoop.run_in_executor
+
+    def patched_run_in_executor(self, executor, func, *args):
+        """OTEL 컨텍스트를 자동으로 전파하는 run_in_executor."""
+        current_ctx = otel_context.get_current()
+
+        @functools.wraps(func)
+        def wrapper():
+            token = otel_context.attach(current_ctx)
+            try:
+                return func(*args) if args else func()
+            finally:
+                otel_context.detach(token)
+
+        return _original_run_in_executor(self, executor, wrapper)
+
+    # 패치 적용
+    asyncio.AbstractEventLoop.run_in_executor = patched_run_in_executor
+    logger.info("[OTEL] Patched run_in_executor for automatic context propagation")

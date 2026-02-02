@@ -106,7 +106,7 @@ services:
       - LITELLM_API_KEY=${LITELLM_API_KEY}
       - LITELLM_MODEL=${LITELLM_MODEL:-tier-simple}
       # OpenTelemetry 분산 추적
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - OTEL_SERVICE_NAME=asr-backend
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
@@ -178,16 +178,33 @@ services:
       - tempo
     restart: unless-stopped
 
-  # Jaeger - 분산 추적 (OpenTelemetry 백엔드)
-  # Jaeger 2.x는 YAML 설정 파일 사용 (환경변수 미지원)
+  # OpenTelemetry Collector - 트레이스 팬아웃 (Jaeger + Tempo) - 현재 미사용
+  # otel-collector:
+  #   image: otel/opentelemetry-collector-contrib:latest
+  #   container_name: asr-otel-collector
+  #   command: [ "--config", "/etc/otel-collector/config.yaml" ]
+  #   ports:
+  #     - "4317:4317"
+  #     - "4318:4318"
+  #     - "8889:8888"
+  #   volumes:
+  #     - ./infra/otel-collector/config.yaml:/etc/otel-collector/config.yaml:ro
+  #   depends_on:
+  #     - jaeger
+  #     - tempo
+  #   restart: unless-stopped
+
+  # Jaeger - 분산 추적 UI (메모리 저장) - 현재 미사용, Tempo로 대체
+  # OTEL Collector에서 트레이스 수신
   jaeger:
     image: jaegertracing/jaeger:2.14.1
     container_name: asr-jaeger
     command: [ "--config", "/etc/jaeger/config.yaml" ]
     ports:
       - "16686:16686" # Jaeger UI
-      - "4317:4317" # OTLP gRPC (traces)
-      - "4318:4318" # OTLP HTTP (traces)
+      # OTLP 포트는 내부에서만 사용 (Collector → Jaeger)
+      # - "4317:4317"
+      # - "4318:4318"
       - "9411:9411" # Zipkin compatible
       - "13133:13133" # Health check
     volumes:
@@ -231,14 +248,14 @@ services:
       - loki
     restart: unless-stopped
 
-  # Tempo - 분산 추적 백엔드 (Jaeger 대체용, 점진적 전환)
+  # Tempo - 분산 추적 백엔드 (S3 영구 저장, Grafana 통합)
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:2.4.2
     container_name: asr-tempo
     ports:
       - "3200:3200"   # Tempo API
-      - "5317:4317"   # OTLP gRPC (외부 5317 → 내부 4317, Jaeger와 충돌 방지)
-      - "5318:4318"   # OTLP HTTP (외부 5318 → 내부 4318, Jaeger와 충돌 방지)
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
     volumes:
       - ./infra/tempo/config.yaml:/etc/tempo/config.yaml:ro
     command: -config.file=/etc/tempo/config.yaml -config.expand-env=true
@@ -249,6 +266,12 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3200/ready" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   worker:
     build:
@@ -282,7 +305,7 @@ services:
       - LITELLM_API_KEY=${LITELLM_API_KEY}
       - LITELLM_MODEL=${LITELLM_MODEL:-tier-simple}
       # OpenTelemetry 분산 추적
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - OTEL_SERVICE_NAME=asr-worker
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
@@ -293,8 +316,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      jaeger:
-        condition: service_healthy
+      tempo:
+        condition: service_started
     restart: unless-stopped
 
   litellm:
@@ -326,7 +349,7 @@ services:
       - BACKGROUND_HEALTH_CHECKS=false
       - HEALTH_CHECK_INTERVAL=86400
       # OpenTelemetry 분산 추적
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - OTEL_SERVICE_NAME=asr-litellm
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
@@ -334,7 +357,7 @@ services:
     depends_on:
       - prometheus
       - valkey
-      - jaeger
+      - tempo
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:4000/health/liveliness" ]

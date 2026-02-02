@@ -116,19 +116,21 @@ class ContentService:
         loop = asyncio.get_running_loop()
 
         if content_ids:
-            # Celery 큐 작업 취소
+            # Celery 큐 작업 취소 (OTEL context 전파)
             celery_cancelled = await loop.run_in_executor(
-                None, cancel_celery_tasks_by_content_ids, content_ids
+                None, preserve_otel_context(lambda: cancel_celery_tasks_by_content_ids(content_ids))
             )
             if celery_cancelled:
                 logger.info(
                     "Cancelled %s Celery tasks for deleted contents", celery_cancelled
                 )
 
-        # object_key 기반 파일 삭제
+        # object_key 기반 파일 삭제 (OTEL context 전파)
         for object_key in object_keys:
             try:
-                await loop.run_in_executor(None, delete_file, object_key)
+                await loop.run_in_executor(
+                    None, preserve_otel_context(lambda key=object_key: delete_file(key))
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to delete file from storage: %s, error: %s", object_key, exc
@@ -137,13 +139,17 @@ class ContentService:
         # 임시 파일 삭제 (temp/ocr/{content_id}/, temp/asr/{content_id}/ 등)
         for content_id in content_ids:
             try:
-                # OCR 임시 이미지
+                # OCR 임시 이미지 (OTEL context 전파)
                 ocr_prefix = f"temp/ocr/{content_id}/"
-                await loop.run_in_executor(None, delete_files_by_prefix, ocr_prefix)
+                await loop.run_in_executor(
+                    None, preserve_otel_context(lambda p=ocr_prefix: delete_files_by_prefix(p))
+                )
 
-                # ASR 임시 파일
+                # ASR 임시 파일 (OTEL context 전파)
                 asr_prefix = f"temp/asr/{content_id}/"
-                await loop.run_in_executor(None, delete_files_by_prefix, asr_prefix)
+                await loop.run_in_executor(
+                    None, preserve_otel_context(lambda p=asr_prefix: delete_files_by_prefix(p))
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to delete temp files for content_id=%s: error=%s",
@@ -222,8 +228,10 @@ class ContentService:
                         content_id,
                     )
 
-                # 상태를 QUEUED로 변경
-                await file_repo.update_file_status(content_id, FileStatus.QUEUED)
+                # 상태를 QUEUED로 변경 (재처리이므로 validate=False)
+                await file_repo.update_file_status(
+                    content_id, FileStatus.QUEUED, triggered_by="manual_retry", validate=False
+                )
                 await file_repo.add_log(
                     file_id=content_id,
                     log={"event": "manual_retry", "type": "ocr", "ocr_mode": ocr_mode},
@@ -284,8 +292,10 @@ class ContentService:
                         "min_speakers must be less than or equal to max_speakers"
                     )
 
-                # 상태를 QUEUED로 변경
-                await file_repo.update_file_status(content_id, FileStatus.QUEUED)
+                # 상태를 QUEUED로 변경 (재처리이므로 validate=False)
+                await file_repo.update_file_status(
+                    content_id, FileStatus.QUEUED, triggered_by="manual_retry", validate=False
+                )
                 log_data = {"event": "manual_retry", "type": "asr"}
                 if min_speakers is not None:
                     log_data["min_speakers"] = min_speakers
@@ -376,9 +386,9 @@ class ContentService:
                         f"(content_type: {file_obj.content_type.value})"
                     )
 
-                # 상태를 SUMMARY_QUEUED로 변경 (큐에 등록)
+                # 상태를 SUMMARY_QUEUED로 변경 (재처리이므로 validate=False)
                 await file_repo.update_file_status(
-                    content_id, FileStatus.SUMMARY_QUEUED
+                    content_id, FileStatus.SUMMARY_QUEUED, triggered_by="manual_retry", validate=False
                 )
                 await file_repo.add_llm_log(
                     file_id=content_id,
@@ -395,7 +405,7 @@ class ContentService:
                     try:
                         # 상태를 SUMMARIZING으로 변경
                         await file_repo.update_file_status(
-                            content_id, FileStatus.SUMMARIZING
+                            content_id, FileStatus.SUMMARIZING, triggered_by="manual_retry"
                         )
                         await file_repo.add_llm_log(
                             file_id=content_id,
@@ -409,16 +419,21 @@ class ContentService:
                         from .llm_summary_service import summarize_transcription_3phase
 
                         loop = asyncio.get_running_loop()
+                        # Phase 1: 메타데이터 추출 (OTEL context 전파)
                         metadata = await loop.run_in_executor(
                             None,
-                            lambda: extract_metadata(text_to_summarize, self.settings),
+                            preserve_otel_context(
+                                lambda: extract_metadata(text_to_summarize, self.settings)
+                            ),
                         )
 
-                        # Phase 2: 핵심 요약 (기존)
+                        # Phase 2: 핵심 요약 (OTEL context 전파)
                         core_summary = await loop.run_in_executor(
                             None,
-                            lambda: generate_core_summary(
-                                text_to_summarize, metadata, self.settings
+                            preserve_otel_context(
+                                lambda: generate_core_summary(
+                                    text_to_summarize, metadata, self.settings
+                                )
                             ),
                         )
 

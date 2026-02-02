@@ -1,17 +1,30 @@
 from datetime import datetime, timezone
 from typing import Sequence
 from uuid import UUID
+
+from ..core.logging import logger
 from sqlalchemy import select, update, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from ..db import models
+from ..state_machines import InvalidTransitionError, TransitionContext, TransitionResult
+from ..state_machines.machines import ContentStateMachine
 
 
 class FileRepository:
     """파일 CRUD 쿼리 집합."""
 
+    # 상태 머신 싱글톤
+    _state_machine = ContentStateMachine()
+
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    @property
+    def state_machine(self) -> ContentStateMachine:
+        """상태 머신 인스턴스."""
+        return self._state_machine
 
     async def list_files(
         self,
@@ -107,12 +120,71 @@ class FileRepository:
 
         return file
 
+    async def get_content_status(self, file_id: UUID) -> models.FileStatus | None:
+        """파일의 현재 상태 조회."""
+        stmt = select(models.Content.status).where(models.Content.file_id == file_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def update_file_status(
-        self, file_id: UUID, status: models.FileStatus
-    ) -> None:
-        """파일 상태 업데이트 (Content만 업데이트)."""
+        self,
+        file_id: UUID,
+        status: models.FileStatus,
+        *,
+        triggered_by: str = "system",
+        validate: bool = True,
+        **metadata,
+    ) -> TransitionResult:
+        """파일 상태 업데이트 (StateMachine 검증 포함).
+
+        Args:
+            file_id: 파일 ID
+            status: 목표 상태
+            triggered_by: 전이를 트리거한 주체 (로깅용)
+            validate: 상태 전이 검증 여부 (기본 True)
+            **metadata: 추가 메타데이터 (로깅용)
+
+        Returns:
+            TransitionResult: 전이 결과
+
+        Raises:
+            InvalidTransitionError: 유효하지 않은 상태 전이 시 (validate=True일 때)
+        """
         now = datetime.now(timezone.utc)
 
+        # 현재 상태 조회
+        current_status = await self.get_content_status(file_id)
+        if current_status is None:
+            return TransitionResult(
+                success=False,
+                old_state=None,
+                new_state=None,
+                reason=f"Content not found for file_id={file_id}",
+            )
+
+        # 같은 상태로의 전이는 no-op
+        if current_status == status:
+            return TransitionResult(
+                success=True,
+                old_state=current_status,
+                new_state=status,
+                reason="Already in target state",
+            )
+
+        # 상태 전이 검증
+        if validate:
+            can_transit, reason = self.state_machine.can_transition(
+                current_status, status
+            )
+            if not can_transit:
+                raise InvalidTransitionError(
+                    current_state=current_status,
+                    target_state=status,
+                    reason=reason,
+                    entity_id=file_id,
+                )
+
+        # DB 업데이트
         content_values = {"status": status, "updated_at": now}
         if status == models.FileStatus.COMPLETED:
             content_values["completed_at"] = now
@@ -124,6 +196,19 @@ class FileRepository:
         )
         await self.session.execute(stmt)
         await self.session.flush()
+
+        # 로깅
+        logger.info(
+            f"[StateMachine] Content({file_id}) "
+            f"{current_status.value} → {status.value} "
+            f"[triggered_by={triggered_by}]"
+        )
+
+        return TransitionResult(
+            success=True,
+            old_state=current_status,
+            new_state=status,
+        )
 
     async def update_object_key(self, file_id: UUID, object_key: str) -> None:
         """파일 object_key 업데이트."""

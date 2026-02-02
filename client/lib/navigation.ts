@@ -1,4 +1,4 @@
-import { MessageSquare, FileText, Activity, Map, ListTodo, GitBranch, Sparkles, ScrollText } from "lucide-react"
+import { FileText, Map, ListTodo, Sparkles, Eye } from "lucide-react"
 import { LucideIcon } from "lucide-react"
 
 export interface NavItem {
@@ -12,10 +12,8 @@ export interface NavItem {
 export const navigationItems: NavItem[] = [
   { href: "/", label: "AI 모드", icon: Sparkles, title: "AI 모드" },
   { href: "/contents", label: "콘텐츠", icon: FileText, title: "콘텐츠" },
-  { href: "/monitoring", label: "모니터링", icon: Activity, title: "시스템 모니터링" },
   { href: "/queue-monitoring", label: "큐 모니터링", icon: ListTodo, title: "큐 모니터링" },
-  { href: "/tracing", label: "분산 추적", icon: GitBranch, title: "분산 추적" },
-  { href: "/logs", label: "로그", icon: ScrollText, title: "로그 탐색" },
+  { href: "/logs", label: "Observability", icon: Eye, title: "Observability" },
   { href: "/roadmap", label: "로드맵", icon: Map, title: "로드맵" },
 ]
 

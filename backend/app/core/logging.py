@@ -19,27 +19,25 @@ def get_trace_id_safe() -> str:
     return "00_00"
 
 
-def trace_id_patcher(record):
-    """모든 로그 레코드에 trace_id를 자동으로 추가."""
-    record["extra"]["trace_id"] = get_trace_id_safe()
+def format_with_trace_id(record):
+    """trace_id를 포함한 로그 포맷 생성."""
+    # 런타임에 trace_id 가져오기
+    trace_id = get_trace_id_safe()
+
+    # 포맷 문자열 반환 (loguru가 나머지 치환을 처리)
+    return (
+        "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+        "<level>{level: <8}</level> | "
+        f"trace_id={trace_id} | "
+        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+        "<level>{message}</level>\n"
+    )
 
 
-# 로그 포맷 설정 (trace_id 포함)
-log_format = (
-    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-    "<level>{level: <8}</level> | "
-    "trace_id={extra[trace_id]} | "
-    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-    "<level>{message}</level>"
-)
-
-# trace_id patcher 적용
-logger = logger.patch(trace_id_patcher)
-
-# 콘솔 출력 설정
+# 콘솔 출력 설정 (동적 포맷 사용)
 logger.add(
     sys.stderr,
-    format=log_format,
+    format=format_with_trace_id,
     level="INFO",
     colorize=True,
     backtrace=True,
@@ -65,7 +63,7 @@ def setup_file_logging(log_dir: Path | None = None, log_level: str = "INFO") -> 
     log_file = log_dir / "app.log"
     logger.add(
         log_file,
-        format=log_format,
+        format=format_with_trace_id,
         level=log_level,
         rotation="10 MB",
         retention="7 days",
@@ -74,12 +72,12 @@ def setup_file_logging(log_dir: Path | None = None, log_level: str = "INFO") -> 
         diagnose=True,
         encoding="utf-8",
     )
-    
+
     # 에러 로그 파일
     error_log_file = log_dir / "error.log"
     logger.add(
         error_log_file,
-        format=log_format,
+        format=format_with_trace_id,
         level="ERROR",
         rotation="10 MB",
         retention="30 days",

@@ -1,18 +1,23 @@
 """Redis Stream Consumer.
 
 워커가 발행한 결과 메시지를 수신하여 DB에 저장합니다.
+
+분산 추적: Worker에서 주입한 traceparent를 복원하여 trace context 연결.
 """
 
 import asyncio
 import json
 import socket
+from contextlib import contextmanager
 from typing import Any
 
 from redis.asyncio import Redis
+from opentelemetry import context as otel_context
 
 from ..core.config import get_settings
 from ..core.logging import logger
 from ..core.storage import download_json, delete_file, delete_files_by_prefix
+from ..core.telemetry import extract_trace_context, get_tracer
 from ..db.models import FileStatus
 from ..db.session import AsyncSessionLocal
 from ..repositories.file_repository import FileRepository
@@ -176,10 +181,6 @@ class StreamConsumer:
         # data는 {"data": json_string} 형태
         message = json.loads(data.get("data", "{}"))
 
-        msg_type = message.get("type")
-        event = message.get("event")
-        file_id = message.get("file_id")
-
         if not message:
             logger.warning(f"Received empty data in message: {entry_id}")
             return
@@ -188,19 +189,52 @@ class StreamConsumer:
         event = message.get("event")
         file_id = message.get("file_id")
 
-        logger.info(
-            f"[StreamConsumer] Handling message {entry_id}: type={msg_type}, event={event}, file_id={file_id}"
-        )
-        logger.debug(f"[StreamConsumer] Message payload: {message}")
+        # 분산 추적: Worker에서 주입한 traceparent 복원
+        with self._restore_trace_context(message):
+            logger.info(
+                f"[StreamConsumer] Handling message {entry_id}: type={msg_type}, event={event}, file_id={file_id}"
+            )
+            logger.debug(f"[StreamConsumer] Message payload: {message}")
 
-        if msg_type == "asr":
-            await self._handle_asr_result(message)
-        elif msg_type == "llm":
-            await self._handle_llm_result(message)
-        elif msg_type == "ocr":
-            await self._handle_ocr_result(message)
-        else:
-            logger.warning(f"Unknown message type: {msg_type}")
+            if msg_type == "asr":
+                await self._handle_asr_result(message)
+            elif msg_type == "llm":
+                await self._handle_llm_result(message)
+            elif msg_type == "ocr":
+                await self._handle_ocr_result(message)
+            else:
+                logger.warning(f"Unknown message type: {msg_type}")
+
+    @contextmanager
+    def _restore_trace_context(self, message: dict[str, Any]):
+        """Worker에서 주입한 traceparent를 복원하여 trace context 연결.
+
+        Redis Stream 메시지에 traceparent가 있으면 해당 context로 전환하여
+        Worker의 trace와 Backend 처리를 연결합니다.
+        """
+        traceparent = message.get("traceparent")
+        if not traceparent:
+            yield
+            return
+
+        # traceparent에서 context 추출
+        carrier = {"traceparent": traceparent}
+        ctx = extract_trace_context(carrier)
+
+        # context 활성화하여 로그 및 span에 trace_id 연결
+        token = otel_context.attach(ctx)
+        try:
+            # 새 span 시작하여 Backend 처리 추적
+            tracer = get_tracer("stream-consumer")
+            with tracer.start_as_current_span(
+                "stream_consumer.handle_message",
+                context=ctx,
+            ) as span:
+                span.set_attribute("message.type", message.get("type", "unknown"))
+                span.set_attribute("file.id", str(message.get("file_id", "")))
+                yield
+        finally:
+            otel_context.detach(token)
 
     async def _handle_asr_result(self, message: dict[str, Any]) -> None:
         """ASR 결과를 처리합니다."""
@@ -445,24 +479,36 @@ class StreamConsumer:
                         )
 
                 else:
-                    # 요약할 텍스트가 없는 경우
-                    logger.info(f"No text to summarize, skipping LLM: file_id={file_id}")
-                    
-                    await file_repo.update_file_status(file_id, FileStatus.COMPLETED)
+                    # 요약할 텍스트가 없는 경우 → 완료 처리 (빈 결과)
+                    logger.info(
+                        f"No text to summarize, completing without summary: file_id={file_id}"
+                    )
+
+                    # 파일명 기반 제목 설정
+                    file = await file_repo.get_file(file_id)
+                    if file:
+                        # 확장자 제거한 파일명 + "- 내용 없음"
+                        base_name = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
+                        empty_title = f"{base_name} - 내용 없음"
+                        await file_repo.update_title(file_id, empty_title)
+
+                    await file_repo.update_file_status(
+                        file_id, FileStatus.COMPLETED, triggered_by="stream_consumer"
+                    )
                     await file_repo.add_llm_log(
                         file_id,
                         log={"event": "llm_skipped", "reason": "empty_text"},
-                        message="LLM skipped: No text to summarize",
+                        message="LLM skipped: No text detected in audio",
                     )
                     await session.commit()
 
-                    # 클라이언트에 이벤트 발행 (완료 처리)
+                    # 클라이언트에 이벤트 발행 (완료 - 빈 결과)
                     publish_file_progress(
                         file_id=file_id,
                         status="completed",
                         step="completed",
                         progress=100.0,
-                        message="텍스트가 없어 요약을 건너뛰고 완료했습니다.",
+                        message="처리 완료 (음성/텍스트가 감지되지 않았습니다)",
                     )
 
                 # ASR 활성 작업 해제
@@ -533,6 +579,15 @@ class StreamConsumer:
                     # 상태 업데이트: COMPLETED (요약 생략)
                     await file_repo.update_file_status(file_id, FileStatus.COMPLETED)
                     await session.commit()
+
+                    # 클라이언트에 이벤트 발행
+                    publish_file_progress(
+                        file_id=file_id,
+                        status="completed",
+                        step="completed",
+                        progress=100.0,
+                        message="처리 완료 (요약 생략)",
+                    )
                     return
 
                 # [Phase 1] Backend에서 응답 파싱
@@ -550,6 +605,15 @@ class StreamConsumer:
                         file_id, FileStatus.SUMMARY_FAILED
                     )
                     await session.commit()
+
+                    # 클라이언트에 이벤트 발행
+                    publish_file_progress(
+                        file_id=file_id,
+                        status="failed",
+                        step="llm_failed",
+                        progress=0.0,
+                        message=f"요약 파싱 실패: {exc}",
+                    )
                     return
 
                 # 제목과 요약 저장
@@ -697,6 +761,37 @@ class StreamConsumer:
                         file_id=file_id, text_to_summarize=ocr_text
                     )
                     logger.info(f"LLM job enqueued: file_id={file_id}")
+                else:
+                    # OCR 결과가 비어있는 경우 → 완료 처리 (빈 결과)
+                    logger.info(
+                        f"No text from OCR, completing without summary: file_id={file_id}"
+                    )
+
+                    # 파일명 기반 제목 설정
+                    file = await file_repo.get_file(file_id)
+                    if file:
+                        base_name = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
+                        empty_title = f"{base_name} - 내용 없음"
+                        await file_repo.update_title(file_id, empty_title)
+
+                    await file_repo.update_file_status(
+                        file_id, FileStatus.COMPLETED, triggered_by="stream_consumer"
+                    )
+                    await file_repo.add_llm_log(
+                        file_id,
+                        log={"event": "llm_skipped", "reason": "empty_ocr_text"},
+                        message="LLM skipped: No text detected in document",
+                    )
+                    await session.commit()
+
+                    # 클라이언트에 이벤트 발행 (완료 - 빈 결과)
+                    publish_file_progress(
+                        file_id=file_id,
+                        status="completed",
+                        step="completed",
+                        progress=100.0,
+                        message="처리 완료 (문서에서 텍스트가 감지되지 않았습니다)",
+                    )
 
                 # OCR 활성 작업 해제
                 task_queue = get_task_queue()
