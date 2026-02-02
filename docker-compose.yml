@@ -128,6 +128,7 @@ services:
       args:
         - NEXT_PUBLIC_ADMIN_USERNAME=${NEXT_PUBLIC_ADMIN_USERNAME}
         - NEXT_PUBLIC_ADMIN_PASSWORD=${NEXT_PUBLIC_ADMIN_PASSWORD}
+        - NEXT_PUBLIC_GRAFANA_LOKI_URL=${NEXT_PUBLIC_GRAFANA_LOKI_URL}
     container_name: asr-frontend
     ports:
       - "3000:3000"
@@ -171,6 +172,8 @@ services:
     depends_on:
       - prometheus
       - jaeger
+      - loki
+      - tempo
     restart: unless-stopped
 
   # Jaeger - 분산 추적 (OpenTelemetry 백엔드)
@@ -194,6 +197,56 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  # Loki - 로그 집계 시스템
+  loki:
+    image: grafana/loki:latest
+    container_name: asr-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/loki/config.yaml:/etc/loki/config.yaml:ro
+    command: -config.file=/etc/loki/config.yaml -config.expand-env=true
+    environment:
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-torchdev-secret}
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Promtail - 로그 수집 에이전트
+  promtail:
+    image: grafana/promtail:latest
+    container_name: asr-promtail
+    volumes:
+      - ./infra/promtail/config.yaml:/etc/promtail/config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./logs:/host-logs:ro  # PM2 로그 수집용
+    command: -config.file=/etc/promtail/config.yaml
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  # Tempo - 분산 추적 백엔드 (Jaeger 대체용, 점진적 전환)
+  tempo:
+    image: grafana/tempo:latest
+    container_name: asr-tempo
+    ports:
+      - "3200:3200"   # Tempo API
+      - "5317:4317"   # OTLP gRPC (외부 5317 → 내부 4317, Jaeger와 충돌 방지)
+      - "5318:4318"   # OTLP HTTP (외부 5318 → 내부 4318, Jaeger와 충돌 방지)
+    volumes:
+      - ./infra/tempo/config.yaml:/etc/tempo/config.yaml:ro
+    command: -config.file=/etc/tempo/config.yaml -config.expand-env=true
+    environment:
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-torchdev-secret}
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
 
   worker:
     build:
