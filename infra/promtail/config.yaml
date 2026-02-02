@@ -23,14 +23,16 @@ scrape_configs:
       # 헬스체크 로그 제외
       - drop:
           expression: 'GET http://localhost:8003/health'
+      - drop:
+          expression: '(GET|POST) /metrics'
       # Python logging 형식 파싱: 2026-02-02 18:59:28,725 [INFO] message
       - regex:
           expression: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}: (?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) \[(?P<level>\w+)\] (?P<message>.*)'
       - labels:
           level:
-      # trace_id 추출 (있는 경우)
+      # trace_id 추출 (32자리 hex 또는 백그라운드 작업용 0)
       - regex:
-          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32})'
+          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32}|0)'
       - labels:
           trace_id:
 
@@ -62,9 +64,11 @@ scrape_configs:
           expression: '(GET|POST) /api/v1/health'
       - drop:
           expression: '(GET|POST) /health'
-      # trace_id 추출 (logfmt 스타일: trace_id=<32자리 hex>)
+      - drop:
+          expression: '(GET|POST) /metrics'
+      # trace_id 추출 (32자리 hex 또는 백그라운드 작업용 0)
       - regex:
-          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32})'
+          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32}|0)'
       # 추출된 trace_id를 라벨로 추가
       - labels:
           trace_id:

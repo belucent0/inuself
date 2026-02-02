@@ -8,12 +8,15 @@ logger.remove()
 
 
 def get_trace_id_safe() -> str:
-    """OpenTelemetry trace_id를 안전하게 가져옴. 없으면 zero trace_id 반환."""
+    """OpenTelemetry trace_id를 안전하게 가져옴. 없으면 0 반환 (백그라운드 작업)."""
     try:
         from app.core.telemetry import get_trace_id
-        return get_trace_id() or "00000000000000000000000000000000"
+        trace_id = get_trace_id()
+        if trace_id and trace_id != "00000000000000000000000000000000":
+            return trace_id
     except Exception:
-        return "00000000000000000000000000000000"
+        pass
+    return "0"
 
 
 def trace_id_patcher(record):
