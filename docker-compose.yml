@@ -384,11 +384,12 @@ services:
     restart: unless-stopped
 
   # Langfuse - LLM Observability (Semantic Observability)
+  # v3는 ClickHouse 필수, v2는 PostgreSQL만 필요
   langfuse:
-    image: langfuse/langfuse:latest
+    image: langfuse/langfuse:2
     container_name: asr-langfuse
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-asr}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/langfuse
       - NEXTAUTH_SECRET=${LANGFUSE_SECRET:-changeme-langfuse-secret-key-32chars}
       - NEXTAUTH_URL=${LANGFUSE_URL:-http://localhost:3001}
       - SALT=${LANGFUSE_SALT:-changeme-langfuse-salt}
