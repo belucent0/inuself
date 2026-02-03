@@ -166,6 +166,9 @@ services:
       - "3002:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      - POSTGRES_USER=${POSTGRES_USER:-asr}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_DB=${POSTGRES_DB:-asr}
     volumes:
       - grafana-data:/var/lib/grafana
       - ./infra/grafana/grafana.ini:/etc/grafana/grafana.ini:ro

@@ -70,6 +70,15 @@
 |----------|------|------|
 | **Grafana** | 대시보드/시각화 | 3002 |
 
+### 5. 데이터소스
+
+| 데이터소스 | 역할 | 연결 대상 |
+|------------|------|-----------|
+| **Prometheus** | 메트릭 쿼리 | prometheus:9090 |
+| **Loki** | 로그 쿼리 | loki:3100 |
+| **Tempo** | 트레이스 쿼리 | tempo:3200 |
+| **PostgreSQL** | 콘텐츠 상태 쿼리 | postgres:5432 |
+
 ---
 
 ## trace_id 연계 로깅
@@ -173,6 +182,30 @@ Grafana Loki에서 로그 조회 시:
 | `$container` | 컨테이너 필터 (다중 선택) |
 | `$search` | 텍스트 검색 |
 
+### Content Pipeline Dashboard
+
+**위치**: Grafana > Dashboards > Content Pipeline
+**URL**: `/grafana/d/content-pipeline/content-pipeline`
+
+콘텐츠 처리 파이프라인(ASR/OCR/LLM 요약) 상태를 실시간으로 모니터링합니다.
+
+| 패널 | 설명 |
+|------|------|
+| 파이프라인 현황 | ASR/OCR/LLM 요약별 대기/처리중/완료/실패 카운트 테이블 |
+| 전체 통계 | 전체 파일 수, 완료 수, 완료율 |
+| 시간대별 처리량 | 24시간 ASR/OCR/요약 처리량 스택 바 차트 |
+| 타입별 분포 | AUDIO/DOCUMENT/PORTRAY 비율 파이 차트 |
+| 최근 실패 작업 | 실패한 작업 목록 (파일명, 상태, 경과시간) |
+| Stuck 작업 | 30분 이상 처리 중인 작업 목록 |
+
+**파이프라인별 상태 매핑:**
+
+| 파이프라인 | ContentType | 처리 상태 | 완료 상태 | 실패 상태 |
+|-----------|-------------|----------|----------|----------|
+| ASR | AUDIO | QUEUED, PULLING, PROCESSING | SUMMARY_QUEUED+ | ASR_FAILED |
+| OCR | DOCUMENT | QUEUED, OCR_PROCESSING | SUMMARY_QUEUED+ | OCR_FAILED |
+| LLM 요약 | ALL | SUMMARY_QUEUED, SUMMARIZING | COMPLETED | SUMMARY_FAILED |
+
 ---
 
 ## 로그 필터링
@@ -242,8 +275,9 @@ location ~ ^/grafana/(login|admin|org|profile|datasources) {
 | `infra/loki/config.yaml` | Loki 설정 (S3 저장소) |
 | `infra/promtail/config.yaml` | Promtail 설정 (Docker SD, PM2) |
 | `infra/tempo/config.yaml` | Tempo 설정 |
-| `infra/grafana/provisioning/datasources/datasource.yml` | Grafana 데이터소스 |
+| `infra/grafana/provisioning/datasources/datasource.yml` | Grafana 데이터소스 (Prometheus, Loki, Tempo, PostgreSQL) |
 | `infra/grafana/dashboards/docker-logs.json` | 로그 대시보드 |
+| `infra/grafana/dashboards/content-pipeline.json` | 콘텐츠 파이프라인 대시보드 |
 
 ---
 
@@ -317,3 +351,4 @@ compactor:
 |------|------|----------|
 | v1.0 | 2026-02-02 | 초기 버전 - Loki, Promtail, Tempo, trace_id 연계 로깅 |
 | v1.1 | 2026-02-02 | LiteLLM trace_id 추가, 00_00 형식, 헬스체크 필터링, Grafana 보안 |
+| v1.2 | 2026-02-03 | Content Pipeline 대시보드 추가 - PostgreSQL 데이터소스, ASR/OCR/LLM 요약 파이프라인 모니터링 |

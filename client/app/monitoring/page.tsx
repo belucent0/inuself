@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ScrollText, GitBranch, Activity, ListTodo } from 'lucide-react';
+import { ScrollText, GitBranch, Activity, ListTodo, BarChart3 } from 'lucide-react';
 
 // 상대 경로 사용 - localhost, asr.timblo.io 모두 동작
 const DASHBOARD_TABS = [
@@ -34,6 +34,13 @@ const DASHBOARD_TABS = [
         icon: ListTodo,
         path: '/flower/',
         description: 'Celery 작업 큐 및 워커 상태 (Flower)',
+    },
+    {
+        id: 'pipeline',
+        label: '작업 현황',
+        icon: BarChart3,
+        path: '/grafana/d/content-pipeline/content-pipeline?kiosk=true&orgId=1&refresh=30s',
+        description: '콘텐츠 처리 파이프라인 (ASR/OCR/요약)',
     },
 ];
 
