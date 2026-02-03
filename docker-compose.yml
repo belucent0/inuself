@@ -47,7 +47,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql
-      - ./infra/postgres:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-asr} -d $${POSTGRES_DB:-asr}" ]
@@ -389,7 +388,7 @@ services:
     image: langfuse/langfuse:latest
     container_name: asr-langfuse
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/langfuse
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-asr}
       - NEXTAUTH_SECRET=${LANGFUSE_SECRET:-changeme-langfuse-secret-key-32chars}
       - NEXTAUTH_URL=${LANGFUSE_URL:-http://localhost:3001}
       - SALT=${LANGFUSE_SALT:-changeme-langfuse-salt}
