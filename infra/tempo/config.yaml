@@ -33,6 +33,46 @@ querier:
   frontend_worker:
     frontend_address: ""
 
+# Metrics Generator - Service Map 및 Span Metrics 활성화
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: asr-cluster
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true
+  traces_storage:
+    path: /var/tempo/generator/traces
+  processor:
+    # Service Graph: 서비스 간 관계 시각화
+    service_graphs:
+      histogram_buckets: [0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8]
+      dimensions:
+        - service.namespace
+        - http.method
+        - http.status_code
+        - messaging.system
+      enable_client_server_prefix: true
+      peer_attributes:
+        - db.name
+        - net.peer.name
+        - rpc.service
+        - peer.service
+        # messaging.destination 제거 - Celery 큐 이름이 서비스로 잘못 표시됨
+        # celery.task_name 제거 - 태스크 이름이 서비스로 잘못 표시됨
+    # Span Metrics: 스팬별 메트릭 생성
+    span_metrics:
+      histogram_buckets: [0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256, 0.512, 1.02, 2.05, 4.1]
+      dimensions:
+        - service.name
+        - span.name
+        - span.kind
+        - status.code
+      enable_target_info: true
+
 storage:
   trace:
     backend: s3
@@ -49,4 +89,4 @@ storage:
 overrides:
   defaults:
     metrics_generator:
-      processors: []
+      processors: [service-graphs, span-metrics]

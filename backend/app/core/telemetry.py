@@ -211,11 +211,20 @@ def _instrument_common_libraries() -> None:
     except Exception as e:
         logger.debug(f"[Telemetry] SQLAlchemy instrumentation skipped: {e}")
 
-    # Celery (Producer side)
+    # Celery (Producer side) - Service Graph 연결을 위해 peer.service 속성 추가
     try:
         from opentelemetry.instrumentation.celery import CeleryInstrumentor
-        CeleryInstrumentor().instrument()
-        logger.debug("[Telemetry] Celery instrumented (Producer)")
+
+        def celery_producer_hook(span, task):
+            """Celery Producer span에 Service Graph용 속성 추가."""
+            span.set_attribute("peer.service", "asr-worker")
+            span.set_attribute("messaging.system", "celery")
+            span.set_attribute("messaging.destination", task.name if task else "unknown")
+
+        CeleryInstrumentor().instrument(
+            request_hook=celery_producer_hook,
+        )
+        logger.debug("[Telemetry] Celery instrumented (Producer) with peer.service")
     except Exception as e:
         logger.debug(f"[Telemetry] Celery instrumentation skipped: {e}")
 

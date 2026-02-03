@@ -1,4 +1,4 @@
-import { FileText, Map, ListTodo, Sparkles, Eye } from "lucide-react"
+import { FileText, Map, Sparkles, Eye } from "lucide-react"
 import { LucideIcon } from "lucide-react"
 
 export interface NavItem {
@@ -12,8 +12,7 @@ export interface NavItem {
 export const navigationItems: NavItem[] = [
   { href: "/", label: "AI 모드", icon: Sparkles, title: "AI 모드" },
   { href: "/contents", label: "콘텐츠", icon: FileText, title: "콘텐츠" },
-  { href: "/queue-monitoring", label: "큐 모니터링", icon: ListTodo, title: "큐 모니터링" },
-  { href: "/logs", label: "Observability", icon: Eye, title: "Observability" },
+  { href: "/monitoring", label: "모니터링", icon: Eye, title: "모니터링" },
   { href: "/roadmap", label: "로드맵", icon: Map, title: "로드맵" },
 ]
 

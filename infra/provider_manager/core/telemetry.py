@@ -22,7 +22,7 @@ try:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource, SERVICE_NAME
-    from opentelemetry.trace import Status, StatusCode, Span
+    from opentelemetry.trace import Status, StatusCode, Span, SpanKind
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
     from opentelemetry.propagate import set_global_textmap, extract
     OTEL_AVAILABLE = True
@@ -206,7 +206,7 @@ def trace_gpu_operation(
     provider: str = None,
     **extra_attributes
 ):
-    """GPU/NPU 작업 추적용 컨텍스트 매니저.
+    """GPU/NPU 작업 추적용 컨텍스트 매니저 (Service Graph 가시성을 위한 SERVER span).
 
     Args:
         operation_name: span 이름 (예: "diarization", "transcription")
@@ -229,7 +229,17 @@ def trace_gpu_operation(
     # 부모 context 추출
     context = extract_trace_context(traceparent) if traceparent else None
 
-    with tracer.start_as_current_span(operation_name, context=context) as span:
+    # SpanKind.SERVER로 Service Graph에 표시 (LiteLLM/Worker → Provider Manager 연결)
+    with tracer.start_as_current_span(
+        operation_name,
+        context=context,
+        kind=SpanKind.SERVER,
+    ) as span:
+        # Service Graph 연결을 위한 peer.service 설정
+        span.set_attribute("peer.service", "asr-litellm")  # 요청 발신자
+        span.set_attribute("messaging.system", "redis-stream")
+        span.set_attribute("messaging.operation", "receive")
+
         # 기본 속성 설정
         if request_id:
             span.set_attribute("request.id", request_id)
@@ -316,7 +326,7 @@ def trace_http_request(
     method: str = "POST",
     **extra_attributes
 ):
-    """HTTP 요청 추적.
+    """HTTP 요청 추적 (Service Graph 가시성을 위한 CLIENT span).
 
     Args:
         provider_name: 프로바이더 이름
@@ -333,10 +343,17 @@ def trace_http_request(
         yield None
         return
 
-    with tracer.start_as_current_span(f"http.{provider_name}") as span:
+    # SpanKind.CLIENT로 Service Graph에 표시
+    with tracer.start_as_current_span(
+        f"http.{provider_name}",
+        kind=SpanKind.CLIENT,
+    ) as span:
         span.set_attribute("http.method", method)
         span.set_attribute("http.url", url)
         span.set_attribute("provider.name", provider_name)
+
+        # Service Graph 연결을 위한 peer.service 설정
+        span.set_attribute("peer.service", provider_name)
 
         for key, value in extra_attributes.items():
             if value is not None:

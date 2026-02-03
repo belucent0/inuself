@@ -149,6 +149,7 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-remote-write-receiver'  # Tempo metrics_generator에서 remote_write 수신
     ports:
       - "9090:9090"
     volumes:
@@ -165,6 +166,9 @@ services:
       - "3002:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      - POSTGRES_USER=${POSTGRES_USER:-asr}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_DB=${POSTGRES_DB:-asr}
     volumes:
       - grafana-data:/var/lib/grafana
       - ./infra/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
@@ -173,12 +177,11 @@ services:
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
-      - jaeger
       - loki
       - tempo
     restart: unless-stopped
 
-  # OpenTelemetry Collector - 트레이스 팬아웃 (Jaeger + Tempo) - 현재 미사용
+  # OpenTelemetry Collector - 트레이스 팬아웃 - 현재 미사용
   # otel-collector:
   #   image: otel/opentelemetry-collector-contrib:latest
   #   container_name: asr-otel-collector
@@ -190,32 +193,27 @@ services:
   #   volumes:
   #     - ./infra/otel-collector/config.yaml:/etc/otel-collector/config.yaml:ro
   #   depends_on:
-  #     - jaeger
   #     - tempo
   #   restart: unless-stopped
 
-  # Jaeger - 분산 추적 UI (메모리 저장) - 현재 미사용, Tempo로 대체
-  # OTEL Collector에서 트레이스 수신
-  jaeger:
-    image: jaegertracing/jaeger:2.14.1
-    container_name: asr-jaeger
-    command: [ "--config", "/etc/jaeger/config.yaml" ]
-    ports:
-      - "16686:16686" # Jaeger UI
-      # OTLP 포트는 내부에서만 사용 (Collector → Jaeger)
-      # - "4317:4317"
-      # - "4318:4318"
-      - "9411:9411" # Zipkin compatible
-      - "13133:13133" # Health check
-    volumes:
-      - ./infra/jaeger/config.yaml:/etc/jaeger/config.yaml:ro
-    restart: unless-stopped
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:13133/status" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+  # Jaeger - 분산 추적 (V8.1에서 Tempo로 완전 대체, 제거됨)
+  # jaeger:
+  #   image: jaegertracing/jaeger:2.14.1
+  #   container_name: asr-jaeger
+  #   command: [ "--config", "/etc/jaeger/config.yaml" ]
+  #   ports:
+  #     - "16686:16686"
+  #     - "9411:9411"
+  #     - "13133:13133"
+  #   volumes:
+  #     - ./infra/jaeger/config.yaml:/etc/jaeger/config.yaml:ro
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: [ "CMD", "wget", "--spider", "-q", "http://localhost:13133/status" ]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 10s
 
   # Loki - 로그 집계 시스템
   loki:
@@ -258,6 +256,7 @@ services:
       - "4318:4318"   # OTLP HTTP
     volumes:
       - ./infra/tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo  # WAL, metrics_generator 데이터
     command: -config.file=/etc/tempo/config.yaml -config.expand-env=true
     environment:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
@@ -265,6 +264,8 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+      prometheus:
+        condition: service_started  # metrics_generator remote_write를 위해
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3200/ready" ]
@@ -401,3 +402,4 @@ volumes:
   postgres-data:
   prometheus-data:
   grafana-data:
+  tempo-data:

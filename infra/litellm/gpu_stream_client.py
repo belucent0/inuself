@@ -25,12 +25,14 @@ logger = logging.getLogger(__name__)
 try:
     from opentelemetry.propagate import inject as otel_inject
     from opentelemetry import trace as otel_trace
+    from opentelemetry.trace import SpanKind
 
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
     otel_inject = None
     otel_trace = None
+    SpanKind = None
 
 import redis
 import redis.asyncio as redis_async
@@ -82,6 +84,24 @@ class GPUStreamClient:
                 f"[GPUStream] OpenTelemetry not available (OTEL_AVAILABLE={OTEL_AVAILABLE})"
             )
         return request_data
+
+    def _create_client_span(self, task_type: str, stream_name: str):
+        """Service Graph용 CLIENT span 생성 (context manager)."""
+        if not OTEL_AVAILABLE or not otel_trace:
+            from contextlib import nullcontext
+            return nullcontext()
+
+        tracer = otel_trace.get_tracer("gpu-stream-client")
+        return tracer.start_as_current_span(
+            f"redis.stream.{task_type}",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "peer.service": "provider-manager",
+                "messaging.system": "redis-stream",
+                "messaging.destination": stream_name,
+                "messaging.operation": "send",
+            },
+        )
 
     def _wait_for_response(self, request_id: str, timeout: float) -> dict:
         """Response Stream에서 결과 대기."""
@@ -155,13 +175,15 @@ class GPUStreamClient:
         if max_speakers is not None:
             request_data["max_speakers"] = str(max_speakers)
 
-        # Trace context 주입 (분산 추적)
-        self._inject_trace_context(request_data)
+        # Service Graph용 CLIENT span 생성
+        with self._create_client_span("diarization", MEDIA_STREAM):
+            # Trace context 주입 (분산 추적)
+            self._inject_trace_context(request_data)
 
-        logger.info(f"[GPUStream] Sending diarization request: request_id={request_id}")
+            logger.info(f"[GPUStream] Sending diarization request: request_id={request_id}")
 
-        # Request Stream에 발행 (Media Stream)
-        self.redis_client.xadd(MEDIA_STREAM, request_data)
+            # Request Stream에 발행 (Media Stream)
+            self.redis_client.xadd(MEDIA_STREAM, request_data)
 
         # 응답 대기
         result = self._wait_for_response(request_id, timeout)
@@ -202,14 +224,17 @@ class GPUStreamClient:
         if language:
             request_data["language"] = language
 
-        # Trace context 주입 (분산 추적)
-        self._inject_trace_context(request_data)
+        # Service Graph용 CLIENT span 생성
+        with self._create_client_span("transcription", MEDIA_STREAM):
+            # Trace context 주입 (분산 추적)
+            self._inject_trace_context(request_data)
 
-        logger.info(
-            f"[GPUStream] Sending transcription request: request_id={request_id}, model={model}"
-        )
+            logger.info(
+                f"[GPUStream] Sending transcription request: request_id={request_id}, model={model}"
+            )
 
-        self.redis_client.xadd(MEDIA_STREAM, request_data)
+            self.redis_client.xadd(MEDIA_STREAM, request_data)
+
         result = self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] Transcription completed: request_id={request_id}")
@@ -250,16 +275,20 @@ class GPUStreamClient:
             "timestamp": str(time.time()),
         }
 
-        # Trace context 주입 (분산 추적)
-        self._inject_trace_context(request_data)
-
-        logger.info(
-            f"[GPUStream] Sending LLM completion request: request_id={request_id}, model={model}"
-        )
-
         # Stream 분기 (Chat vs Recap)
         target_stream = RECAP_STREAM if model == "tier-recap" else CHAT_STREAM
-        self.redis_client.xadd(target_stream, request_data)
+
+        # Service Graph용 CLIENT span 생성
+        with self._create_client_span("llm_completion", target_stream):
+            # Trace context 주입 (분산 추적)
+            self._inject_trace_context(request_data)
+
+            logger.info(
+                f"[GPUStream] Sending LLM completion request: request_id={request_id}, model={model}"
+            )
+
+            self.redis_client.xadd(target_stream, request_data)
+
         result = self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] LLM completion completed: request_id={request_id}")
@@ -297,14 +326,17 @@ class GPUStreamClient:
             "timestamp": str(time.time()),
         }
 
-        # Trace context 주입 (분산 추적)
-        self._inject_trace_context(request_data)
+        # Service Graph용 CLIENT span 생성
+        with self._create_client_span("ocr", MEDIA_STREAM):
+            # Trace context 주입 (분산 추적)
+            self._inject_trace_context(request_data)
 
-        logger.info(
-            f"[GPUStream] Sending OCR request: request_id={request_id}, model={model}, mode={accuracy_mode}"
-        )
+            logger.info(
+                f"[GPUStream] Sending OCR request: request_id={request_id}, model={model}, mode={accuracy_mode}"
+            )
 
-        self.redis_client.xadd(MEDIA_STREAM, request_data)
+            self.redis_client.xadd(MEDIA_STREAM, request_data)
+
         result = self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] OCR completed: request_id={request_id}")
@@ -381,6 +413,24 @@ class AsyncGPUStreamClient:
                 f"[GPUStream/Async] OpenTelemetry not available (OTEL_AVAILABLE={OTEL_AVAILABLE})"
             )
         return request_data
+
+    def _create_client_span(self, task_type: str, stream_name: str):
+        """Service Graph용 CLIENT span 생성 (context manager)."""
+        if not OTEL_AVAILABLE or not otel_trace:
+            from contextlib import nullcontext
+            return nullcontext()
+
+        tracer = otel_trace.get_tracer("gpu-stream-client-async")
+        return tracer.start_as_current_span(
+            f"redis.stream.{task_type}",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "peer.service": "provider-manager",
+                "messaging.system": "redis-stream",
+                "messaging.destination": stream_name,
+                "messaging.operation": "send",
+            },
+        )
 
     async def _wait_for_response(self, request_id: str, timeout: float) -> dict:
         """Response Stream에서 결과 대기 (비동기)."""
@@ -490,16 +540,19 @@ class AsyncGPUStreamClient:
             "timestamp": str(time.time()),
         }
 
-        # Trace context 주입 (분산 추적)
-        self._inject_trace_context(request_data)
-
-        logger.info(
-            f"[GPUStream] Sending LLM completion stream request: request_id={request_id}, model={model}"
-        )
-
         # Stream 분기 (Chat vs Recap)
         target_stream = RECAP_STREAM if model == "tier-recap" else CHAT_STREAM
-        await redis_client.xadd(target_stream, request_data)
+
+        # Service Graph용 CLIENT span 생성
+        with self._create_client_span("llm_completion_stream", target_stream):
+            # Trace context 주입 (분산 추적)
+            self._inject_trace_context(request_data)
+
+            logger.info(
+                f"[GPUStream] Sending LLM completion stream request: request_id={request_id}, model={model}"
+            )
+
+            await redis_client.xadd(target_stream, request_data)
 
         async for chunk in self._wait_for_stream_response(request_id, timeout):
             yield chunk
@@ -535,12 +588,15 @@ class AsyncGPUStreamClient:
         if max_speakers is not None:
             request_data["max_speakers"] = str(max_speakers)
 
-        # Trace context 주입 (분산 추적)
-        self._inject_trace_context(request_data)
+        # Service Graph용 CLIENT span 생성
+        with self._create_client_span("diarization", MEDIA_STREAM):
+            # Trace context 주입 (분산 추적)
+            self._inject_trace_context(request_data)
 
-        logger.info(f"[GPUStream] Sending diarization request: request_id={request_id}")
+            logger.info(f"[GPUStream] Sending diarization request: request_id={request_id}")
 
-        await redis_client.xadd(MEDIA_STREAM, request_data)
+            await redis_client.xadd(MEDIA_STREAM, request_data)
+
         result = await self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] Diarization completed: request_id={request_id}")
@@ -570,14 +626,17 @@ class AsyncGPUStreamClient:
         if language:
             request_data["language"] = language
 
-        # Trace context 주입 (분산 추적)
-        self._inject_trace_context(request_data)
+        # Service Graph용 CLIENT span 생성
+        with self._create_client_span("transcription", MEDIA_STREAM):
+            # Trace context 주입 (분산 추적)
+            self._inject_trace_context(request_data)
 
-        logger.info(
-            f"[GPUStream] Sending transcription request: request_id={request_id}, model={model}"
-        )
+            logger.info(
+                f"[GPUStream] Sending transcription request: request_id={request_id}, model={model}"
+            )
 
-        await redis_client.xadd(MEDIA_STREAM, request_data)
+            await redis_client.xadd(MEDIA_STREAM, request_data)
+
         result = await self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] Transcription completed: request_id={request_id}")
@@ -607,16 +666,20 @@ class AsyncGPUStreamClient:
             "timestamp": str(time.time()),
         }
 
-        # Trace context 주입 (분산 추적)
-        self._inject_trace_context(request_data)
-
-        logger.info(
-            f"[GPUStream] Sending LLM completion request: request_id={request_id}, model={model}"
-        )
-
         # Stream 분기 (Chat vs Recap)
         target_stream = RECAP_STREAM if model == "tier-recap" else CHAT_STREAM
-        await redis_client.xadd(target_stream, request_data)
+
+        # Service Graph용 CLIENT span 생성
+        with self._create_client_span("llm_completion", target_stream):
+            # Trace context 주입 (분산 추적)
+            self._inject_trace_context(request_data)
+
+            logger.info(
+                f"[GPUStream] Sending LLM completion request: request_id={request_id}, model={model}"
+            )
+
+            await redis_client.xadd(target_stream, request_data)
+
         result = await self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] LLM completion completed: request_id={request_id}")
@@ -657,14 +720,17 @@ class AsyncGPUStreamClient:
             "timestamp": str(time.time()),
         }
 
-        # Trace context 주입 (분산 추적)
-        self._inject_trace_context(request_data)
+        # Service Graph용 CLIENT span 생성
+        with self._create_client_span("ocr", MEDIA_STREAM):
+            # Trace context 주입 (분산 추적)
+            self._inject_trace_context(request_data)
 
-        logger.info(
-            f"[GPUStream] Sending OCR request: request_id={request_id}, model={model}, mode={accuracy_mode}"
-        )
+            logger.info(
+                f"[GPUStream] Sending OCR request: request_id={request_id}, model={model}, mode={accuracy_mode}"
+            )
 
-        await redis_client.xadd(MEDIA_STREAM, request_data)
+            await redis_client.xadd(MEDIA_STREAM, request_data)
+
         result = await self._wait_for_response(request_id, timeout)
 
         logger.info(f"[GPUStream] OCR completed: request_id={request_id}")

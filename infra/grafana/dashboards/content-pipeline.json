@@ -1,0 +1,517 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "center",
+            "cellOptions": { "type": "auto" },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "pipeline" },
+            "properties": [
+              { "id": "displayName", "value": "파이프라인" },
+              { "id": "custom.width", "value": 140 },
+              { "id": "custom.align", "value": "left" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "queued" },
+            "properties": [
+              { "id": "displayName", "value": "대기" },
+              { "id": "custom.width", "value": 70 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "yellow", "value": 1 }] } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "processing" },
+            "properties": [
+              { "id": "displayName", "value": "처리중" },
+              { "id": "custom.width", "value": 70 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "blue", "value": 1 }] } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "completed" },
+            "properties": [
+              { "id": "displayName", "value": "완료" },
+              { "id": "custom.width", "value": 70 },
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "failed" },
+            "properties": [
+              { "id": "displayName", "value": "실패" },
+              { "id": "custom.width", "value": 70 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "transparent", "value": null }, { "color": "red", "value": 1 }] } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "avg_min" },
+            "properties": [
+              { "id": "displayName", "value": "평균(분)" },
+              { "id": "custom.width", "value": 80 },
+              { "id": "unit", "value": "none" },
+              { "id": "decimals", "value": 1 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "cellHeight": "md",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT 'ASR (오디오)' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status IN ('QUEUED', 'PULLING') THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'PROCESSING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'ASR_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE f.content_type = 'AUDIO'\nUNION ALL\nSELECT 'OCR (문서)' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status = 'QUEUED' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'OCR_PROCESSING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'OCR_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE f.content_type = 'DOCUMENT'\nUNION ALL\nSELECT 'LLM 요약' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARY_QUEUED' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARIZING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARY_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status = 'COMPLETED' THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nWHERE c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED');",
+          "refId": "A"
+        }
+      ],
+      "title": "파이프라인 현황",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "total_files" },
+            "properties": [
+              { "id": "displayName", "value": "전체" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "completed_files" },
+            "properties": [
+              { "id": "displayName", "value": "완료" },
+              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "completion_rate" },
+            "properties": [
+              { "id": "displayName", "value": "완료율(%)" },
+              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 0 },
+      "id": 8,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  COUNT(*) AS total_files,\n  SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_files,\n  ROUND(SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS completion_rate\nFROM content c;",
+          "refId": "A"
+        }
+      ],
+      "title": "전체 통계",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "asr_count" },
+            "properties": [
+              { "id": "displayName", "value": "ASR" },
+              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ocr_count" },
+            "properties": [
+              { "id": "displayName", "value": "OCR" },
+              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "summary_count" },
+            "properties": [
+              { "id": "displayName", "value": "요약" },
+              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  date_trunc('hour', c.updated_at) AS time,\n  SUM(CASE WHEN f.content_type = 'AUDIO' AND c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END) AS asr_count,\n  SUM(CASE WHEN f.content_type = 'DOCUMENT' AND c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END) AS ocr_count,\n  SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END) AS summary_count\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE c.updated_at >= NOW() - INTERVAL '24 hours'\nGROUP BY 1\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "시간대별 처리량 (24시간)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "id": 5,
+      "options": {
+        "displayLabels": ["name", "percent"],
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true,
+          "values": ["value"]
+        },
+        "pieType": "pie",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  CASE\n    WHEN f.content_type = 'AUDIO' THEN 'AUDIO'\n    WHEN f.content_type = 'DOCUMENT' THEN 'DOCUMENT'\n    WHEN f.content_type = 'PORTRAY' THEN 'PORTRAY'\n    ELSE 'OTHER'\n  END AS content_type,\n  COUNT(*) AS count\nFROM content c\nJOIN file f ON f.id = c.file_id\nGROUP BY 1\nORDER BY 2 DESC;",
+          "refId": "A"
+        }
+      ],
+      "title": "타입별 분포",
+      "type": "piechart"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "filename" },
+            "properties": [
+              { "id": "displayName", "value": "파일명" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "type" },
+            "properties": [
+              { "id": "displayName", "value": "타입" },
+              { "id": "custom.width", "value": 100 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "status" },
+            "properties": [
+              { "id": "displayName", "value": "상태" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "elapsed" },
+            "properties": [
+              { "id": "displayName", "value": "경과" },
+              { "id": "custom.width", "value": 80 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 15 },
+      "id": 6,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          { "desc": true, "displayName": "elapsed" }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  f.name AS filename,\n  f.content_type AS type,\n  c.status,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 86400) || '일 전'\n  END AS elapsed\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE c.status IN ('ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED')\nORDER BY c.updated_at DESC\nLIMIT 10;",
+          "refId": "A"
+        }
+      ],
+      "title": "최근 실패 작업",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 30 },
+              { "color": "red", "value": 60 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "filename" },
+            "properties": [
+              { "id": "displayName", "value": "파일명" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "type" },
+            "properties": [
+              { "id": "displayName", "value": "타입" },
+              { "id": "custom.width", "value": 100 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "status" },
+            "properties": [
+              { "id": "displayName", "value": "상태" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "duration_min" },
+            "properties": [
+              { "id": "displayName", "value": "경과(분)" },
+              { "id": "custom.width", "value": 80 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 15 },
+      "id": 7,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          { "desc": true, "displayName": "duration_min" }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgresql" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  f.name AS filename,\n  f.content_type AS type,\n  c.status,\n  ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) AS duration_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE c.status IN ('PROCESSING', 'PULLING', 'OCR_PROCESSING', 'SUMMARIZING')\n  AND c.updated_at < NOW() - INTERVAL '30 minutes'\nORDER BY c.updated_at ASC\nLIMIT 10;",
+          "refId": "A"
+        }
+      ],
+      "title": "Stuck 작업 (30분+)",
+      "type": "table"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["content", "pipeline", "asr", "ocr", "llm"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Content Pipeline",
+  "uid": "content-pipeline",
+  "version": 2,
+  "weekStart": ""
+}
