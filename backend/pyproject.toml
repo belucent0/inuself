@@ -51,6 +51,11 @@ dependencies = [
     "opentelemetry-instrumentation-sqlalchemy>=0.48b0",
     "opentelemetry-instrumentation-httpx>=0.48b0",
     "opentelemetry-instrumentation-celery>=0.48b0",
+
+    # ========================================
+    # LLM Observability (OpenLLMetry)
+    # ========================================
+    "traceloop-sdk>=0.33.0",
 ]
 
 [project.optional-dependencies]

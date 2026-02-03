@@ -35,6 +35,46 @@ from .logging_config import logger
 
 
 # ============================================
+# OpenLLMetry (LLM Observability)
+# ============================================
+
+def _init_openllmetry(service_name: str) -> bool:
+    """OpenLLMetry 초기화 (LLM 호출 자동 계측).
+
+    traceloop-sdk가 OpenAI, LangChain 등을 자동으로 계측합니다.
+    기존 TracerProvider를 사용하므로 LLM trace도 Tempo로 전송됩니다.
+
+    Returns:
+        초기화 성공 여부
+    """
+    try:
+        from traceloop.sdk import Traceloop
+
+        # OTLP endpoint (기존 Tempo)
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+        if not endpoint:
+            logger.debug("[OpenLLMetry] No OTLP endpoint, skipping")
+            return False
+
+        # Traceloop이 기존 OTEL exporter를 사용하도록 환경변수 설정
+        os.environ.setdefault("TRACELOOP_BASE_URL", endpoint)
+
+        # 기존 TracerProvider 사용 (Tempo로 전송)
+        Traceloop.init(
+            app_name=service_name,
+            disable_batch=True,  # 기존 OTEL exporter 사용
+        )
+        logger.info("[OpenLLMetry] Initialized: LLM calls will be traced")
+        return True
+    except ImportError:
+        logger.debug("[OpenLLMetry] traceloop-sdk not installed, skipping")
+        return False
+    except Exception as e:
+        logger.warning(f"[OpenLLMetry] Failed to initialize: {e}")
+        return False
+
+
+# ============================================
 # 트레이싱 필터 설정 (노이즈 제거)
 # ============================================
 
@@ -142,6 +182,9 @@ def setup_worker_telemetry(service_name: str = None) -> None:
 
         # 공통 라이브러리 계측
         _instrument_common_libraries()
+
+        # OpenLLMetry 초기화 (LLM 호출 자동 계측)
+        _init_openllmetry(service)
 
         _initialized = True
         logger.info(f"[Telemetry] Worker initialized: service={service}, endpoint={endpoint}")
