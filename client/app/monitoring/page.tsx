@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ScrollText, GitBranch, Activity, ListTodo, BarChart3, Bot } from 'lucide-react';
+import { ScrollText, GitBranch, Activity, ListTodo, BarChart3, Bot, Brain } from 'lucide-react';
 
 // 상대 경로 사용 - localhost, asr.timblo.io 모두 동작
 const DASHBOARD_TABS = [
@@ -44,10 +44,17 @@ const DASHBOARD_TABS = [
     },
     {
         id: 'llm',
-        label: 'LLM',
+        label: 'LLM 메트릭',
         icon: Bot,
         path: '/grafana/d/llm-observability/llm-observability?kiosk=true&orgId=1&refresh=30s',
-        description: 'LLM 호출 모니터링 (OpenLLMetry)',
+        description: 'LLM 실시간 메트릭 (OpenLLMetry)',
+    },
+    {
+        id: 'langfuse',
+        label: 'LLM 분석',
+        icon: Brain,
+        path: '/langfuse/',
+        description: 'LLM 프롬프트/응답 분석 (Langfuse)',
     },
 ];
 

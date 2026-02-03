@@ -56,6 +56,11 @@ dependencies = [
     # LLM Observability (OpenLLMetry)
     # ========================================
     "traceloop-sdk>=0.33.0",
+
+    # ========================================
+    # LLM Observability (Langfuse - Semantic)
+    # ========================================
+    "langfuse>=2.0.0",
 ]
 
 [project.optional-dependencies]

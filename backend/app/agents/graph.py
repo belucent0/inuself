@@ -12,6 +12,7 @@ from langgraph.graph import StateGraph, END
 from loguru import logger
 
 from .state import GraphState, AIMode
+from ..core.langfuse import get_langfuse_handler
 from .nodes import (
     IntentParserNode,
     GeneratorNode,
@@ -134,6 +135,7 @@ async def run_ai_agent(
     mode: str | None = None,
     metadata: dict | None = None,
     enable_reflection: bool = False,
+    user_id: str | None = None,
 ) -> dict:
     """AI 에이전트 실행.
 
@@ -144,6 +146,7 @@ async def run_ai_agent(
         mode: 강제 모드 지정 (선택, auto면 자동 감지)
         metadata: 추가 메타데이터
         enable_reflection: Reflector 노드 활성화 여부
+        user_id: 사용자 ID (Langfuse 추적용)
 
     Returns:
         실행 결과 딕셔너리
@@ -173,8 +176,18 @@ async def run_ai_agent(
     # 그래프 실행
     logger.info(f"[AIAgent] Running agent: query='{query[:50]}...', mode={mode}, conversation_id={conversation_id}")
 
+    # Langfuse 콜백 핸들러 설정 (LLM Observability)
+    langfuse_handler = get_langfuse_handler(
+        user_id=user_id,
+        session_id=conversation_id,
+        trace_name="ai-chat",
+        tags=["ai-chat-mode", f"mode:{mode or 'auto'}"],
+        metadata=metadata,
+    )
+    config = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
+
     try:
-        result = await graph.ainvoke(initial_state)
+        result = await graph.ainvoke(initial_state, config=config)
         logger.info(f"[AIAgent] Completed: mode={result['mode']}, response_length={len(result.get('response', ''))}")
         return result
     except Exception as e:
