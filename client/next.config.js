@@ -29,6 +29,20 @@ const nextConfig = {
     }
     return config
   },
+  async redirects() {
+    return [
+      {
+        source: '/logs',
+        destination: '/monitoring',
+        permanent: true,
+      },
+      {
+        source: '/queue-monitoring',
+        destination: '/monitoring?tab=queue',
+        permanent: true,
+      },
+    ]
+  },
   async rewrites() {
     // 프로덕션은 nginx가 처리하므로 불필요
     if (process.env.NODE_ENV === 'production') {
