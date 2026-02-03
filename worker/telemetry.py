@@ -27,7 +27,7 @@ from opentelemetry.sdk.trace import TracerProvider, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
-from opentelemetry.trace import Status, StatusCode, Span
+from opentelemetry.trace import Status, StatusCode, Span, SpanKind
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.propagate import set_global_textmap, inject, extract
 
@@ -152,11 +152,20 @@ def setup_worker_telemetry(service_name: str = None) -> None:
 
 
 def _instrument_celery() -> None:
-    """Celery 자동 계측."""
+    """Celery 자동 계측 - Service Graph 연결을 위해 peer.service 속성 추가."""
     try:
         from opentelemetry.instrumentation.celery import CeleryInstrumentor
-        CeleryInstrumentor().instrument()
-        logger.info("[Telemetry] Celery instrumented")
+
+        def celery_consumer_hook(span, task):
+            """Celery Consumer span에 Service Graph용 속성 추가."""
+            span.set_attribute("peer.service", "asr-backend")
+            span.set_attribute("messaging.system", "celery")
+            span.set_attribute("messaging.destination", task.name if task else "unknown")
+
+        CeleryInstrumentor().instrument(
+            request_hook=celery_consumer_hook,
+        )
+        logger.info("[Telemetry] Celery instrumented with peer.service")
     except Exception as e:
         logger.warning(f"[Telemetry] Failed to instrument Celery: {e}")
 
@@ -268,7 +277,17 @@ def trace_celery_task(
             parent_context = extract_trace_context(headers)
             logger.info(f"[Telemetry] Extracted parent context: {parent_context}")
 
-    with tracer.start_as_current_span(span_name, context=parent_context) as span:
+    # Service Graph용 SERVER span 생성 (Backend → Worker 연결 표시)
+    with tracer.start_as_current_span(
+        span_name,
+        context=parent_context,
+        kind=SpanKind.SERVER,  # CLIENT → SERVER 쌍으로 Service Graph 연결
+    ) as span:
+        # Service Graph 연결 속성
+        span.set_attribute("peer.service", "asr-backend")
+        span.set_attribute("messaging.system", "celery")
+        span.set_attribute("messaging.operation", "receive")
+
         # 디버그: span이 실제로 시작되었는지 확인
         current_span = trace.get_current_span()
         if current_span and current_span.get_span_context().is_valid:
@@ -284,7 +303,7 @@ def trace_celery_task(
 
         # 파이프라인 속성
         if file_id is not None:
-            span.set_attribute(BottleneckAttributes.FILE_ID, file_id)
+            span.set_attribute(BottleneckAttributes.FILE_ID, str(file_id))
         if pipeline_stage:
             span.set_attribute(BottleneckAttributes.PIPELINE_STAGE, pipeline_stage)
 

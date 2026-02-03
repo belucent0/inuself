@@ -3,9 +3,11 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 import redis
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind
 from ..core.config import get_settings
 from ..core.logging import logger
-from ..core.telemetry import inject_trace_context, get_trace_id
+from ..core.telemetry import inject_trace_context, get_trace_id, get_tracer
 
 # 활성 작업 추적 TTL (2시간 - 최대 작업 시간 + 여유분)
 ACTIVE_JOB_TTL = 7200
@@ -154,13 +156,28 @@ class CeleryAdapter(TaskQueueAdapter):
             )
             return None
 
-        # 작업 큐잉
-        result = self.celery.send_task(
-            task_name,
-            kwargs=kwargs,
-            queue=queue,
-            headers=headers or {},
-        )
+        # Service Graph용 CLIENT span 생성 (Backend → Worker 연결 표시)
+        tracer = get_tracer("celery-client")
+        with tracer.start_as_current_span(
+            f"celery.send.{task_type}",
+            kind=SpanKind.CLIENT,
+        ) as span:
+            span.set_attribute("peer.service", "asr-worker")
+            span.set_attribute("messaging.system", "celery")
+            span.set_attribute("messaging.destination", queue)
+            span.set_attribute("messaging.operation", "send")
+            span.set_attribute("celery.task_name", task_name)
+            span.set_attribute("file.id", str(file_id))
+
+            # 작업 큐잉
+            result = self.celery.send_task(
+                task_name,
+                kwargs=kwargs,
+                queue=queue,
+                headers=headers or {},
+            )
+
+            span.set_attribute("celery.task_id", result.id)
 
         # 활성 작업 등록 (TTL 포함)
         self.redis.setex(key, ACTIVE_JOB_TTL, result.id)
