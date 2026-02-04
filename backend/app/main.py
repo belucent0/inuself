@@ -251,6 +251,11 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["system"])
     async def healthcheck():
         return {"status": "ok"}
+
+    # lemonade_experiment 등 외부 프로젝트 호환성을 위한 별칭
+    @app.get("/api/v1/health", tags=["system"])
+    async def healthcheck_v1():
+        return {"status": "ok"}
     
     # Prometheus 메트릭 수집 초기화
     Instrumentator().instrument(app).expose(app, endpoint="/metrics")

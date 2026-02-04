@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from redis.asyncio import Redis
-from opentelemetry import context as otel_context
+from opentelemetry import context as otel_context, trace
 
 from ..core.config import get_settings
 from ..core.logging import logger
@@ -207,34 +207,60 @@ class StreamConsumer:
 
     @contextmanager
     def _restore_trace_context(self, message: dict[str, Any]):
-        """Worker에서 주입한 traceparent를 복원하여 trace context 연결.
+        """Worker에서 주입한 traceparent를 복원하여 Span Link로 연결.
 
-        Redis Stream 메시지에 traceparent가 있으면 해당 context로 전환하여
+        Redis Stream 메시지에 traceparent가 있으면 Span Link를 사용하여
         Worker의 trace와 Backend 처리를 연결합니다.
+
+        Span Link 패턴:
+        - 독립적인 새 trace 생성 (새 trace_id)
+        - 원본 trace와 Link로 연결
+        - Tempo UI에서 "Related Traces"로 추적 가능
         """
+        from opentelemetry.trace import Link, SpanContext, TraceFlags
+
         traceparent = message.get("traceparent")
+        tracer = get_tracer("stream-consumer")
+
         if not traceparent:
-            yield
-            return
-
-        # traceparent에서 context 추출
-        carrier = {"traceparent": traceparent}
-        ctx = extract_trace_context(carrier)
-
-        # context 활성화하여 로그 및 span에 trace_id 연결
-        token = otel_context.attach(ctx)
-        try:
-            # 새 span 시작하여 Backend 처리 추적
-            tracer = get_tracer("stream-consumer")
+            # traceparent 없으면 일반 span 생성
             with tracer.start_as_current_span(
                 "stream_consumer.handle_message",
-                context=ctx,
+                kind=trace.SpanKind.CONSUMER,
             ) as span:
                 span.set_attribute("message.type", message.get("type", "unknown"))
                 span.set_attribute("file.id", str(message.get("file_id", "")))
+                span.set_attribute("messaging.system", "redis-stream")
+                span.set_attribute("messaging.destination", "asr-results")
                 yield
-        finally:
-            otel_context.detach(token)
+            return
+
+        # traceparent에서 원본 trace context 추출
+        carrier = {"traceparent": traceparent}
+        parent_ctx = extract_trace_context(carrier)
+        parent_span_ctx = trace.get_current_span(parent_ctx).get_span_context()
+
+        # Span Link로 연결된 새 독립 trace 생성
+        links = [Link(parent_span_ctx)] if parent_span_ctx.is_valid else []
+
+        with tracer.start_as_current_span(
+            "stream_consumer.process_result",
+            kind=trace.SpanKind.CONSUMER,
+            links=links,  # 원본 trace와 링크!
+        ) as span:
+            # 메타데이터 추가
+            span.set_attribute("message.type", message.get("type", "unknown"))
+            span.set_attribute("file.id", str(message.get("file_id", "")))
+            span.set_attribute("messaging.system", "redis-stream")
+            span.set_attribute("messaging.destination", "asr-results")
+            span.set_attribute("messaging.operation", "process")
+
+            # 원본 trace ID를 attribute로 저장 (검색 용이)
+            if parent_span_ctx.is_valid:
+                span.set_attribute("link.trace_id", format(parent_span_ctx.trace_id, '032x'))
+                span.set_attribute("link.span_id", format(parent_span_ctx.span_id, '016x'))
+
+            yield
 
     async def _handle_asr_result(self, message: dict[str, Any]) -> None:
         """ASR 결과를 처리합니다."""

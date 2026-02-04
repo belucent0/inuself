@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ScrollText, GitBranch, Activity, ListTodo, BarChart3 } from 'lucide-react';
+import { ScrollText, GitBranch, Activity, ListTodo, BarChart3, Bot, Brain, ExternalLink } from 'lucide-react';
 
 // 상대 경로 사용 - localhost, asr.timblo.io 모두 동작
 const DASHBOARD_TABS = [
@@ -42,6 +42,21 @@ const DASHBOARD_TABS = [
         path: '/grafana/d/content-pipeline/content-pipeline?kiosk=true&orgId=1&refresh=30s',
         description: '콘텐츠 처리 파이프라인 (ASR/OCR/요약)',
     },
+    {
+        id: 'llm',
+        label: 'LLM 메트릭',
+        icon: Bot,
+        path: '/grafana/d/llm-observability/llm-observability?kiosk=true&orgId=1&refresh=30s',
+        description: 'LLM 실시간 메트릭 (OpenLLMetry)',
+    },
+    {
+        id: 'langfuse',
+        label: 'LLM 분석',
+        icon: Brain,
+        path: '/langfuse/',
+        description: 'LLM Observability & Prompt Management (Langfuse)',
+        external: true,
+    },
 ];
 
 function MonitoringContent() {
@@ -64,18 +79,31 @@ function MonitoringContent() {
     const activeConfig = DASHBOARD_TABS.find(t => t.id === activeTab);
     const activeUrl = activeConfig?.path || '';
     const activeDescription = activeConfig?.description || '';
+    const isExternal = (activeConfig as typeof DASHBOARD_TABS[0] & { external?: boolean })?.external;
+
+    const handleTabChange = (tabId: string) => {
+        const tab = DASHBOARD_TABS.find(t => t.id === tabId) as typeof DASHBOARD_TABS[0] & { external?: boolean };
+        if (tab?.external) {
+            // 외부 탭은 새 창으로 열기
+            window.open(tab.path, '_blank');
+        } else {
+            setActiveTab(tabId);
+        }
+    };
 
     return (
         <div className="flex flex-col h-screen">
             <div className="p-4 border-b flex items-center gap-6">
-                <Tabs value={activeTab} onValueChange={setActiveTab}>
+                <Tabs value={activeTab} onValueChange={handleTabChange}>
                     <TabsList>
                         {DASHBOARD_TABS.map(tab => {
                             const Icon = tab.icon;
+                            const tabWithExternal = tab as typeof tab & { external?: boolean };
                             return (
                                 <TabsTrigger key={tab.id} value={tab.id} className="gap-2">
                                     <Icon className="h-4 w-4" />
                                     {tab.label}
+                                    {tabWithExternal.external && <ExternalLink className="h-3 w-3 ml-1 opacity-60" />}
                                 </TabsTrigger>
                             );
                         })}
@@ -85,14 +113,16 @@ function MonitoringContent() {
                     {activeDescription}
                 </p>
             </div>
-            <div className="flex-1 relative">
-                <iframe
-                    src={activeUrl}
-                    className="absolute inset-0 w-full h-full border-0"
-                    title={`Dashboard - ${activeTab}`}
-                    allowFullScreen
-                />
-            </div>
+            {!isExternal && (
+                <div className="flex-1 relative">
+                    <iframe
+                        src={activeUrl}
+                        className="absolute inset-0 w-full h-full border-0"
+                        title={`Dashboard - ${activeTab}`}
+                        allowFullScreen
+                    />
+                </div>
+            )}
         </div>
     );
 }

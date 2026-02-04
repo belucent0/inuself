@@ -111,9 +111,15 @@ services:
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
+      # Metrics/Logs SDK 완전 비활성화 (404 에러 방지)
+      - OTEL_SDK_DISABLED_INSTRUMENTATIONS=metrics,logging
       # FLM Model Configuration (Backend용 - 검색 요약)
       - FLM_LLM_MODEL=${FLM_LLM_MODEL:-lfm2:2.6b}
       - FLM_THINKING_MODEL=${FLM_THINKING_MODEL:-lfm2.5-tk:1.2b}
+      # Langfuse LLM Observability
+      - LANGFUSE_HOST=http://langfuse:3000/langfuse
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-pk-lf-torch-dev}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-sk-lf-torch-dev}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
@@ -311,6 +317,8 @@ services:
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
+      # Metrics/Logs SDK 완전 비활성화 (404 에러 방지)
+      - OTEL_SDK_DISABLED_INSTRUMENTATIONS=metrics,logging
       # Note: Worker는 FLM 모델 환경변수 사용 안 함 (Backend에서만 사용)
     depends_on:
       valkey:
@@ -349,12 +357,13 @@ services:
       - DISABLE_SPEND_LOGS=true
       - BACKGROUND_HEALTH_CHECKS=false
       - HEALTH_CHECK_INTERVAL=86400
-      # OpenTelemetry 분산 추적
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
-      - OTEL_SERVICE_NAME=asr-litellm
-      - OTEL_TRACES_EXPORTER=otlp
+      # OpenTelemetry 분산 추적 비활성화 (backend에서 이미 추적 중)
+      # LiteLLM 자체 health check가 필터 없이 Tempo로 전송되는 것을 방지
+      - OTEL_EXPORTER_OTLP_ENDPOINT=
+      - OTEL_TRACES_EXPORTER=none
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
+      - OTEL_SDK_DISABLED=true
     depends_on:
       - prometheus
       - valkey
@@ -378,6 +387,45 @@ services:
       valkey:
         condition: service_healthy
     restart: unless-stopped
+
+  # Langfuse - LLM Observability (Semantic Observability)
+  # 커스텀 base path(/langfuse)로 빌드된 이미지 사용
+  # 빌드: cd infra/langfuse-src && MSYS_NO_PATHCONV=1 docker build -t langfuse-custom:latest --build-arg NEXT_PUBLIC_BASE_PATH=/langfuse -f ./web/Dockerfile .
+  langfuse:
+    image: langfuse-custom:latest
+    container_name: asr-langfuse
+    hostname: langfuse
+    environment:
+      - HOSTNAME=0.0.0.0
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/langfuse
+      - NEXTAUTH_SECRET=${LANGFUSE_SECRET:-changeme-langfuse-secret-key-32chars}
+      # base path 사용 시 NEXTAUTH_URL은 /langfuse/api/auth 포함 필요
+      - NEXTAUTH_URL=${LANGFUSE_URL:-https://asr.timblo.io/langfuse}/api/auth
+      - SALT=${LANGFUSE_SALT:-changeme-langfuse-salt}
+      - ENCRYPTION_KEY=${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      - TELEMETRY_ENABLED=false
+      # 초기 관리자 계정 (Self-hosted 전용)
+      - LANGFUSE_INIT_ORG_ID=torch
+      - LANGFUSE_INIT_ORG_NAME=Torch
+      - LANGFUSE_INIT_PROJECT_ID=ai-chat
+      - LANGFUSE_INIT_PROJECT_NAME=AI Chat Mode
+      - LANGFUSE_INIT_PROJECT_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-pk-lf-torch-dev}
+      - LANGFUSE_INIT_PROJECT_SECRET_KEY=${LANGFUSE_SECRET_KEY:-sk-lf-torch-dev}
+      - LANGFUSE_INIT_USER_EMAIL=${LANGFUSE_ADMIN_EMAIL:-admin@torch.local}
+      - LANGFUSE_INIT_USER_PASSWORD=${LANGFUSE_ADMIN_PASSWORD:-changeme}
+      - LANGFUSE_INIT_USER_NAME=Admin
+    ports:
+      - "3001:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/langfuse/api/public/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # SearXNG - Deep Search용 메타 검색 엔진
   searxng:

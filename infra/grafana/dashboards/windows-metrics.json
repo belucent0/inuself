@@ -307,12 +307,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "100 - ((windows_logical_disk_free_bytes{volume=~\"C:\"} / windows_logical_disk_size_bytes{volume=~\"C:\"}) * 100)",
-          "legendFormat": "Disk Usage - {{volume}}",
+          "expr": "100 - ((windows_logical_disk_free_bytes / windows_logical_disk_size_bytes) * 100)",
+          "legendFormat": "{{volume}} Usage",
           "refId": "A"
         }
       ],
-      "title": "Disk Usage (C:)",
+      "title": "Disk Usage (All Volumes)",
       "type": "timeseries"
     },
     {

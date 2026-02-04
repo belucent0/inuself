@@ -71,7 +71,14 @@ metrics_generator:
         - span.name
         - span.kind
         - status.code
+        # LLM Observability dimensions (OpenLLMetry)
+        - gen_ai.system
+        - gen_ai.request.model
+        - llm.request.type
       enable_target_info: true
+      # LLM 토큰 메트릭을 위한 intrinsic dimensions
+      intrinsic_dimensions:
+        status_message: true
 
 storage:
   trace:

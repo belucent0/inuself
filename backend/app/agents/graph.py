@@ -12,6 +12,7 @@ from langgraph.graph import StateGraph, END
 from loguru import logger
 
 from .state import GraphState, AIMode
+from ..core.langfuse import get_langfuse_handler
 from .nodes import (
     IntentParserNode,
     GeneratorNode,
@@ -134,6 +135,7 @@ async def run_ai_agent(
     mode: str | None = None,
     metadata: dict | None = None,
     enable_reflection: bool = False,
+    user_id: str | None = None,
 ) -> dict:
     """AI 에이전트 실행.
 
@@ -144,6 +146,7 @@ async def run_ai_agent(
         mode: 강제 모드 지정 (선택, auto면 자동 감지)
         metadata: 추가 메타데이터
         enable_reflection: Reflector 노드 활성화 여부
+        user_id: 사용자 ID (Langfuse 추적용)
 
     Returns:
         실행 결과 딕셔너리
@@ -173,8 +176,24 @@ async def run_ai_agent(
     # 그래프 실행
     logger.info(f"[AIAgent] Running agent: query='{query[:50]}...', mode={mode}, conversation_id={conversation_id}")
 
+    # LLM Observability 콜백 핸들러 설정 (Langfuse)
+    callbacks = []
+
+    # Langfuse 핸들러
+    langfuse_handler = get_langfuse_handler(
+        user_id=user_id,
+        session_id=conversation_id,
+        trace_name="ai-chat",
+        tags=["ai-chat-mode", f"mode:{mode or 'auto'}"],
+        metadata=metadata,
+    )
+    if langfuse_handler:
+        callbacks.append(langfuse_handler)
+
+    config = {"callbacks": callbacks} if callbacks else {}
+
     try:
-        result = await graph.ainvoke(initial_state)
+        result = await graph.ainvoke(initial_state, config=config)
         logger.info(f"[AIAgent] Completed: mode={result['mode']}, response_length={len(result.get('response', ''))}")
         return result
     except Exception as e:
@@ -194,6 +213,7 @@ async def stream_ai_agent(
     mode: str | None = None,
     metadata: dict | None = None,
     enable_reflection: bool = False,
+    user_id: str | None = None,
 ) -> AsyncIterator[dict]:
     """AI 에이전트 스트리밍 실행 (토큰 단위 스트리밍).
 
@@ -204,6 +224,7 @@ async def stream_ai_agent(
         mode: 강제 모드 지정 (선택)
         metadata: 추가 메타데이터
         enable_reflection: Reflector 노드 활성화 여부
+        user_id: 사용자 ID (Langfuse 트레이싱용)
 
     Yields:
         스트리밍 이벤트 딕셔너리
@@ -217,6 +238,71 @@ async def stream_ai_agent(
     )
 
     logger.info(f"[AIAgent] Streaming agent: query='{query[:50]}...', mode={mode}")
+
+    # OpenTelemetry Span Link 패턴 적용
+    # - 현재 FastAPI 요청의 trace context를 parent로 추출
+    # - 새 독립 trace 생성하되 Span Link로 연결
+    # - LLM 처리는 독립적인 trace로 추적 (long-running)
+    from ..core.telemetry import get_tracer
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.trace import Link, get_current_span, SpanKind
+    from opentelemetry import context as otel_context
+
+    tracer = get_tracer("ai-agent")
+
+    # 현재 FastAPI 요청의 span context 추출 (parent)
+    parent_span = get_current_span()
+    parent_span_ctx = parent_span.get_span_context() if parent_span else None
+
+    # Span Link 생성 (parent가 유효하면)
+    links = []
+    if parent_span_ctx and parent_span_ctx.is_valid:
+        links = [Link(parent_span_ctx)]
+        logger.debug(f"[AIAgent] Linked to parent trace: {format(parent_span_ctx.trace_id, '032x')}")
+
+    # Langfuse trace 생성 (v2 API)
+    langfuse_trace = None
+    langfuse_client = None
+    try:
+        from ..core.langfuse import get_langfuse_client, is_langfuse_enabled
+        if is_langfuse_enabled():
+            langfuse_client = get_langfuse_client()
+            if langfuse_client:
+                langfuse_trace = langfuse_client.trace(
+                    name="ai-chat-stream",
+                    user_id=user_id,
+                    session_id=conversation_id,
+                    input={"query": query, "mode": mode},
+                    tags=["ai-chat-mode", "streaming", f"mode:{mode or 'auto'}"],
+                    metadata=metadata or {},
+                )
+                logger.debug(f"[Langfuse] Trace created: {langfuse_trace.id if langfuse_trace else 'none'}")
+    except Exception as e:
+        logger.warning(f"[Langfuse] Failed to create trace: {e}")
+
+    # 독립적인 새 trace 시작 (Span Link로 연결)
+    # Async generator에서는 context manager 사용이 복잡하므로 수동 관리
+    otel_span = tracer.start_span(
+        "ai-chat-stream",
+        kind=SpanKind.INTERNAL,
+        links=links,  # Parent trace와 링크!
+        attributes={
+            "ai.query": query[:200],
+            "ai.mode": mode or "auto",
+            "ai.conversation_id": conversation_id or "",
+            "ai.user_id": user_id or "",
+            "ai.operation": "stream",
+        }
+    )
+
+    # Parent trace ID 저장 (검색 용이)
+    if parent_span_ctx and parent_span_ctx.is_valid:
+        otel_span.set_attribute("link.trace_id", format(parent_span_ctx.trace_id, '032x'))
+        otel_span.set_attribute("link.span_id", format(parent_span_ctx.span_id, '016x'))
+
+    # Span을 current context로 활성화 (child span이 제대로 연결되도록)
+    ctx = otel_trace.set_span_in_context(otel_span)
+    token = otel_context.attach(ctx)
 
     # 초기 상태 구성
     state: GraphState = {
@@ -242,13 +328,34 @@ async def stream_ai_agent(
         # 1. Intent 분석
         yield {"type": "thinking", "data": {"step": "intent_analysis", "content": "질문 분석 중..."}}
 
-        intent_parser = IntentParserNode(settings)
-        intent_result = await intent_parser(state)
-        state.update(intent_result)
+        # Langfuse span
+        intent_span = None
+        if langfuse_trace:
+            intent_span = langfuse_trace.span(name="intent_parser", input={"query": query})
 
-        detected_mode = state["mode"]
-        selected_tier = state.get("selected_model", "tier-simple")  # tier명이 selected_model에 저장됨
-        query_analysis = state.get("query_analysis")
+        # OpenTelemetry child span
+        with tracer.start_as_current_span("intent_parser") as intent_otel:
+            intent_otel.set_attribute("ai.query", query[:200])
+
+            intent_parser = IntentParserNode(settings)
+            intent_result = await intent_parser(state)
+            state.update(intent_result)
+
+            detected_mode = state["mode"]
+            selected_tier = state.get("selected_model", "tier-simple")  # tier명이 selected_model에 저장됨
+            query_analysis = state.get("query_analysis")
+
+            intent_otel.set_attribute("ai.detected_mode", str(detected_mode))
+            intent_otel.set_attribute("ai.selected_tier", selected_tier)
+
+        if intent_span:
+            intent_span.end(
+                output={
+                    "mode": str(detected_mode),
+                    "selected_tier": selected_tier,
+                    "query_analysis": query_analysis,
+                }
+            )
 
         yield {
             "type": "thinking",
@@ -277,11 +384,19 @@ async def stream_ai_agent(
         if detected_mode == AIMode.SEARCH:
             # 웹 검색
             yield {"type": "thinking", "data": {"step": "web_search", "content": "웹 검색 중..."}}
+
+            search_span = None
+            if langfuse_trace:
+                search_span = langfuse_trace.span(name="web_search", input={"queries": state.get("search_queries", [])})
+
             searcher = SearcherNode(settings)
             search_result = await searcher(state)
             state.update(search_result)
 
             search_results = state.get("search_results", [])
+            if search_span:
+                search_span.end(output={"results_count": len(search_results)})
+
             if search_results:
                 yield {
                     "type": "thinking",
@@ -292,11 +407,19 @@ async def stream_ai_agent(
         elif detected_mode == AIMode.RAG:
             # RAG 검색
             yield {"type": "thinking", "data": {"step": "rag_search", "content": "내부 문서 검색 중..."}}
+
+            rag_span = None
+            if langfuse_trace:
+                rag_span = langfuse_trace.span(name="rag_retrieval", input={"query": query})
+
             rag_retriever = RAGRetrieverNode(settings)
             rag_result = await rag_retriever(state)
             state.update(rag_result)
 
             search_results = state.get("search_results", [])
+            if rag_span:
+                rag_span.end(output={"results_count": len(search_results)})
+
             if search_results:
                 yield {
                     "type": "thinking",
@@ -307,6 +430,11 @@ async def stream_ai_agent(
         elif detected_mode == AIMode.HYBRID:
             # 웹 + RAG 검색
             yield {"type": "thinking", "data": {"step": "web_search", "content": "웹 검색 중..."}}
+
+            hybrid_span = None
+            if langfuse_trace:
+                hybrid_span = langfuse_trace.span(name="hybrid_search", input={"query": query})
+
             searcher = SearcherNode(settings)
             search_result = await searcher(state)
             state.update(search_result)
@@ -324,6 +452,9 @@ async def stream_ai_agent(
             state.update(rag_result)
 
             all_results = state.get("search_results", [])
+            if hybrid_span:
+                hybrid_span.end(output={"web_results": len(web_results), "total_results": len(all_results)})
+
             if all_results:
                 yield {
                     "type": "thinking",
@@ -334,13 +465,36 @@ async def stream_ai_agent(
         elif detected_mode == AIMode.REASONING:
             # 추론 모드 - Reasoner가 직접 응답 생성
             yield {"type": "thinking", "data": {"step": "reasoning_start", "content": "단계별 분석 중..."}}
+
+            reasoning_span = None
+            if langfuse_trace:
+                reasoning_span = langfuse_trace.span(name="reasoner", input={"query": query})
+
             reasoner = ReasonerNode(settings)
+            reasoning_response = ""
 
             # Reasoner 스트리밍 - content를 token으로 변환하여 점진적 표시
             async for chunk_event in reasoner.stream(state):
                 if chunk_event.get("type") == "content":
-                    # content 이벤트를 token으로 변환 (점진적 축적)
-                    yield {"type": "token", "data": chunk_event.get("data", "")}
+                    # content 이벤트를 token으로 변환
+                    token_data = chunk_event.get("data", "")
+                    reasoning_response += token_data
+                    yield {"type": "token", "data": token_data}
+
+            if reasoning_span:
+                reasoning_span.end(output={"response": reasoning_response})
+
+            # Langfuse trace 완료
+            if langfuse_trace:
+                langfuse_trace.update(
+                    output={
+                        "response": reasoning_response,
+                        "mode": str(detected_mode),
+                        "selected_tier": selected_tier,
+                    }
+                )
+                if langfuse_client:
+                    langfuse_client.flush()
 
             yield {"type": "thinking", "data": {"step": "reasoning_complete", "content": "추론 완료"}}
             yield {"type": "done", "data": None}
@@ -349,6 +503,14 @@ async def stream_ai_agent(
         # 3. Generator로 응답 생성 (토큰 스트리밍)
         yield {"type": "thinking", "data": {"step": "generation_start", "content": "답변 생성 중..."}}
 
+        generation_span = None
+        if langfuse_trace:
+            generation_span = langfuse_trace.span(
+                name="generator",
+                input={"query": query, "context": state.get("search_results", [])},
+            )
+
+        full_response = ""
         generator = GeneratorNode(settings)
         async for chunk_event in generator.stream(state):
             event_type = chunk_event.get("type", "")
@@ -356,6 +518,7 @@ async def stream_ai_agent(
 
             if event_type == "content":
                 # 토큰 단위 스트리밍
+                full_response += event_data
                 yield {"type": "token", "data": event_data}
             elif event_type == "sources":
                 yield {"type": "sources", "data": _convert_sources(event_data)}
@@ -363,10 +526,46 @@ async def stream_ai_agent(
                 # 최종 응답
                 pass
 
+        if generation_span:
+            generation_span.end(output={"response": full_response})
+
+        # Langfuse trace 완료
+        if langfuse_trace:
+            langfuse_trace.update(
+                output={
+                    "response": full_response,
+                    "mode": str(detected_mode),
+                    "selected_tier": selected_tier,
+                }
+            )
+            if langfuse_client:
+                langfuse_client.flush()
+
+        # OpenTelemetry span 완료
+        otel_span.set_attribute("ai.detected_mode", str(detected_mode))
+        otel_span.set_attribute("ai.selected_tier", selected_tier)
+        otel_span.set_attribute("ai.response_length", len(full_response))
+        otel_context.detach(token)
+        otel_span.end()
+
         yield {"type": "done", "data": None}
 
     except Exception as e:
         logger.error(f"[AIAgent] Stream failed: {e}")
+
+        # Langfuse trace 에러 기록
+        if langfuse_trace:
+            langfuse_trace.update(output={"error": str(e)}, level="ERROR")
+            if langfuse_client:
+                langfuse_client.flush()
+
+        # OpenTelemetry span 에러 기록
+        from opentelemetry.trace import Status, StatusCode
+        otel_span.set_status(Status(StatusCode.ERROR, str(e)))
+        otel_span.record_exception(e)
+        otel_context.detach(token)
+        otel_span.end()
+
         yield {"type": "error", "data": str(e)}
 
 

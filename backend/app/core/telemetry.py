@@ -37,6 +37,70 @@ from .logging import logger
 
 
 # ============================================
+# OpenLLMetry (LLM Observability)
+# ============================================
+
+def _init_openllmetry(service_name: str) -> bool:
+    """OpenLLMetry 초기화 (LLM 호출 자동 계측).
+
+    traceloop-sdk가 OpenAI, LangChain, LangGraph 등을 자동으로 계측합니다.
+    기존 TracerProvider를 사용하므로 LLM trace도 Tempo로 전송됩니다.
+
+    Returns:
+        초기화 성공 여부
+    """
+    try:
+        from traceloop.sdk import Traceloop
+
+        # OTLP endpoint (기존 Tempo)
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+        if not endpoint:
+            logger.debug("[OpenLLMetry] No OTLP endpoint, skipping")
+            return False
+
+        # Traceloop이 기존 OTEL exporter를 사용하도록 환경변수 설정
+        # TRACELOOP_BASE_URL을 설정하면 Traceloop 클라우드 대신 지정된 엔드포인트 사용
+        os.environ.setdefault("TRACELOOP_BASE_URL", endpoint)
+
+        # 기존 TracerProvider 사용 (Tempo로 전송)
+        Traceloop.init(
+            app_name=service_name,
+            disable_batch=True,  # 기존 OTEL exporter 사용
+        )
+
+        # Redis instrumentation 명시적으로 비활성화
+        # Traceloop이 자동으로 Redis를 계측하므로 여기서 uninstrument
+        try:
+            from opentelemetry.instrumentation.redis import RedisInstrumentor
+            redis_instrumentor = RedisInstrumentor()
+            if redis_instrumentor.is_instrumented_by_opentelemetry:
+                redis_instrumentor.uninstrument()
+                logger.info("[OpenLLMetry] Redis instrumentation disabled (XREADGROUP noise)")
+        except Exception as redis_err:
+            logger.debug(f"[OpenLLMetry] Could not uninstrument Redis: {redis_err}")
+
+        # urllib3 instrumentation 명시적으로 비활성화
+        # MinIO, 내부 HTTP 호출 등이 orphan trace로 노이즈 생성
+        try:
+            from opentelemetry.instrumentation.urllib3 import URLLib3Instrumentor
+            urllib3_instrumentor = URLLib3Instrumentor()
+            if urllib3_instrumentor.is_instrumented_by_opentelemetry:
+                urllib3_instrumentor.uninstrument()
+                logger.info("[OpenLLMetry] urllib3 instrumentation disabled (internal HTTP noise)")
+        except Exception as urllib3_err:
+            logger.debug(f"[OpenLLMetry] Could not uninstrument urllib3: {urllib3_err}")
+
+        logger.info("[OpenLLMetry] Initialized: LLM calls will be traced")
+        return True
+    except ImportError:
+        logger.debug("[OpenLLMetry] traceloop-sdk not installed, skipping")
+        return False
+    except Exception as e:
+        logger.warning(f"[OpenLLMetry] Failed to initialize: {e}")
+        return False
+
+
+# ============================================
 # 트레이싱 필터 설정 (노이즈 제거)
 # ============================================
 
@@ -65,29 +129,39 @@ class FilteringSpanProcessor(SpanProcessor):
         self._next.on_start(span, parent_context)
     
     def on_end(self, span):
+        from .logging import logger
+
         # 에러 span은 항상 수집
         if span.status.status_code == StatusCode.ERROR:
             self._next.on_end(span)
             return
-        
-        # span 이름에서도 경로 체크 (ex: "GET /health http send")
+
+        # span 이름과 속성 가져오기
         span_name = span.name or ""
-        http_target = span.attributes.get("http.target", "")
-        http_url = span.attributes.get("http.url", "")
-        http_route = span.attributes.get("http.route", "")
-        
+
+        # attributes 안전하게 가져오기
+        try:
+            http_target = span.attributes.get("http.target", "") if span.attributes else ""
+            http_url = span.attributes.get("http.url", "") if span.attributes else ""
+            http_route = span.attributes.get("http.route", "") if span.attributes else ""
+            db_statement = span.attributes.get("db.statement", "") if span.attributes else ""
+        except Exception:
+            # attributes 접근 실패 시 빈 문자열
+            http_target = http_url = http_route = db_statement = ""
+
         # 헬스체크 필터링 - span 이름, target, url, route 모두 체크
         for path in EXCLUDED_PATHS:
             if path in span_name or path in http_target or path in http_url or path in http_route:
+                logger.info(f"[Filter] Dropped health span: name={span_name}, target={http_target}, route={http_route}")
                 return  # span 드롭
-        
+
         # Redis 명령어 필터링
-        db_statement = span.attributes.get("db.statement", "")
         if db_statement:
             cmd = db_statement.split()[0].upper() if db_statement.split() else ""
             if cmd in EXCLUDED_REDIS_COMMANDS:
+                logger.info(f"[Filter] Dropped Redis span: cmd={cmd}, name={span_name}")
                 return  # span 드롭
-        
+
         self._next.on_end(span)
     
     def shutdown(self):
@@ -144,12 +218,12 @@ def setup_telemetry(app=None, service_name: str = None) -> None:
             endpoint=http_endpoint,
         )
 
-        # BatchSpanProcessor를 FilteringSpanProcessor로 감싸서 노이즈 제거
+        # BatchSpanProcessor 설정
+        # 노이즈 필터링은 instrumentation 레벨에서 처리 (FastAPI excluded_urls 등)
         batch_processor = BatchSpanProcessor(exporter)
-        filtering_processor = FilteringSpanProcessor(batch_processor)
-        _tracer_provider.add_span_processor(filtering_processor)
-        
-        logger.info("[Telemetry] Noise filtering enabled: health checks, Redis PING/INFO excluded")
+        _tracer_provider.add_span_processor(batch_processor)
+
+        logger.info("[Telemetry] Span processor configured (filtering via instrumentation)")
 
         # 전역 TracerProvider 설정
         trace.set_tracer_provider(_tracer_provider)
@@ -167,6 +241,9 @@ def setup_telemetry(app=None, service_name: str = None) -> None:
         # run_in_executor 자동 컨텍스트 전파 패치
         patch_run_in_executor()
 
+        # OpenLLMetry 초기화 (LLM 호출 자동 계측)
+        _init_openllmetry(service)
+
         _initialized = True
         logger.info(f"[Telemetry] Initialized: service={service}, endpoint={endpoint}")
 
@@ -179,19 +256,30 @@ def _instrument_fastapi(app) -> None:
     """FastAPI 자동 계측."""
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        FastAPIInstrumentor.instrument_app(app)
-        logger.info("[Telemetry] FastAPI instrumented")
+
+        # 헬스체크 경로 제외 (URL path 매칭, 정규표현식 사용)
+        # Format: comma-separated regex patterns
+        excluded_urls = "health|metrics|healthz|ready|liveliness|favicon.ico"
+
+        FastAPIInstrumentor.instrument_app(
+            app,
+            excluded_urls=excluded_urls,
+        )
+        logger.info(f"[Telemetry] FastAPI instrumented with excluded URLs: {excluded_urls}")
     except Exception as e:
         logger.warning(f"[Telemetry] Failed to instrument FastAPI: {e}")
 
 
 def _instrument_common_libraries() -> None:
     """공통 라이브러리 자동 계측."""
-    # Redis
+    # Redis - 노이즈 명령어는 아예 계측하지 않음
     try:
         from opentelemetry.instrumentation.redis import RedisInstrumentor
-        RedisInstrumentor().instrument()
-        logger.debug("[Telemetry] Redis instrumented")
+
+        # Redis 계측 비활성화 (XREADGROUP 등 폴링 명령어가 너무 많은 노이즈 생성)
+        # 필요시 중요한 Redis 작업만 수동으로 trace 추가
+        # RedisInstrumentor().instrument()
+        logger.debug("[Telemetry] Redis instrumentation disabled (too noisy with XREADGROUP)")
     except Exception as e:
         logger.debug(f"[Telemetry] Redis instrumentation skipped: {e}")
 
