@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 from pydantic import BaseModel, Field
 
 from ..db.models import FileStatus, ContentType
@@ -11,8 +12,8 @@ from .content import SttLogSchema, LlmLogSchema
 class TranscriptionSchema(BaseModel):
     """Transcription 스키마."""
 
-    id: int
-    file_id: int
+    id: UUID
+    content_id: UUID | None = None
     speakers: list[str] = Field(default_factory=list)
     duration_seconds: float = 0.0
     transcription: dict[str, Any]
@@ -24,8 +25,8 @@ class TranscriptionSchema(BaseModel):
 class DocumentSchema(BaseModel):
     """Document 스키마."""
 
-    id: int
-    file_id: int
+    id: UUID
+    content_id: UUID | None = None
     ocr_text: str
     page_count: int = 0
     ocr_metadata: dict[str, Any] = Field(default_factory=dict)

@@ -471,7 +471,7 @@
   "schemaVersion": 39,
   "tags": ["llm", "observability", "openllmetry"],
   "templating": { "list": [] },
-  "time": { "from": "now-1h", "to": "now" },
+  "time": { "from": "now-24h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
   "title": "LLM Observability",

@@ -170,3 +170,90 @@ async def chat_pipeline(input_data):
 3.  **시스템 영향도 (Stability)**
     *   [ ] Langfuse 컨테이너가 다운되어도 메인 비즈니스 로직은 정상 동작하는가? (Fail-safe)
     *   [ ] 로깅으로 인한 Latency 증가폭이 5ms 이하인가?
+
+---
+
+## 10. Implementation Status (구현 완료 상태)
+
+### ✅ 완료된 작업 (2026-02-04)
+
+#### Infrastructure Setup
+*   **Langfuse Container**: Self-hosted v2 커스텀 이미지 (`/langfuse` base path)
+*   **Database**: PostgreSQL 전용 DB (`langfuse`) 생성
+*   **Nginx Proxy**: `/langfuse/` 경로로 프록시 설정
+*   **Healthcheck**: IPv4 바인딩 및 healthcheck 수정 (healthy 상태 달성)
+*   **환경변수**: `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` 설정
+
+#### Backend Integration
+*   **Core Module** (`app/core/langfuse.py`):
+    *   `get_langfuse_handler()` - LangChain/LangGraph 콜백 핸들러
+    *   `get_langfuse_client()` - 직접 API 호출용 클라이언트
+    *   `is_langfuse_enabled()` - 환경변수 기반 활성화 제어
+    *   Fail-safe 설계: Langfuse 장애 시에도 메인 로직 정상 동작
+
+*   **AI Agent Integration** (`app/agents/graph.py`):
+    *   ✅ `run_ai_agent()`: LangGraph callbacks 시스템으로 자동 트레이싱
+    *   ✅ `stream_ai_agent()`: 수동 trace/span 생성으로 스트리밍 트레이싱
+        *   메인 Trace: 요청/응답, 모드, 티어 정보 기록
+        *   Intent Parser Span: 의도 분석 결과
+        *   Search Spans: 웹 검색, RAG 검색, Hybrid 검색 결과
+        *   Reasoner Span: 추론 모드 응답
+        *   Generator Span: 최종 응답 생성
+    *   Session tracking: `conversation_id`를 `session_id`로 매핑
+    *   Metadata: 검색 결과 수, 모드, 티어 등 컨텍스트 정보 포함
+
+#### Frontend Integration
+*   **Monitoring Dashboard** (`client/app/monitoring/page.tsx`):
+    *   "LLM 분석" 탭 추가: `/langfuse/` 경로
+    *   External link로 새 창 열기 (Grafana와 분리)
+    *   Brain 아이콘으로 시각적 구분
+
+#### Access & Authentication
+*   **초기 계정**: `admin@torch.local` / `changeme`
+*   **Project**: `torch` org, `ai-chat` project
+*   **API Keys**: `pk-lf-torch-dev` / `sk-lf-torch-dev`
+
+### 📊 수집되는 데이터
+
+| 항목 | 내용 | 용도 |
+| :--- | :--- | :--- |
+| **Traces** | AI 채팅 요청 전체 실행 흐름 | 워크플로우 전체 추적 |
+| **Spans** | Intent, Search, Generation 각 단계 | 단계별 성능 분석 |
+| **Input** | 사용자 쿼리, 모드 | 쿼리 패턴 분석 |
+| **Output** | AI 응답, 선택된 티어 | 품질 평가 |
+| **Metadata** | 검색 결과 수, 소스 정보 | 컨텍스트 분석 |
+| **Session** | `conversation_id` | 대화별 그룹핑 |
+| **Tags** | `ai-chat-mode`, `streaming`, `mode:search` | 필터링/분류 |
+
+### 🔄 동작 흐름
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant Backend
+    participant LangGraph
+    participant Langfuse
+
+    User->>Frontend: AI 채팅 요청
+    Frontend->>Backend: POST /api/ai/chat/stream
+    Backend->>Langfuse: trace 생성 (session_id, user_id)
+    Backend->>LangGraph: Intent Parser
+    LangGraph-->>Langfuse: span (intent_parser)
+    Backend->>LangGraph: Search/RAG/Reasoning
+    LangGraph-->>Langfuse: span (search/rag/reasoner)
+    Backend->>LangGraph: Generator (streaming)
+    LangGraph-->>Langfuse: span (generator) + tokens
+    Backend->>Langfuse: trace 완료 (output)
+    Backend->>Frontend: SSE 스트리밍 응답
+    Frontend->>User: 실시간 답변 표시
+```
+
+### 🎯 다음 단계 (추후 작업)
+
+*   [ ] 사용자 인증 구현 후 실제 `user_id` 전달
+*   [ ] Langfuse Score API 연동 (사용자 피드백 수집)
+*   [ ] 프롬프트 템플릿 버전 관리 (Langfuse Prompt Management)
+*   [ ] 토큰 비용 추적 및 월별 리포트 생성
+*   [ ] A/B 테스트: 프롬프트/모델 변경 효과 측정
+*   [ ] 품질 저하 알림: Score < 0.5 시 Slack 알림

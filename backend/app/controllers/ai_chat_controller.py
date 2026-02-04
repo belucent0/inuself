@@ -161,6 +161,7 @@ async def ai_chat_stream(
                 conversation_id=conversation.conversation_id,
                 mode=request.mode,
                 metadata=request.context,
+                user_id=None,  # TODO: 인증 구현 후 실제 user_id 전달
             ):
                 event_type = event.get("type", "")
                 event_data = event.get("data")
