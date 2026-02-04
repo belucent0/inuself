@@ -111,6 +111,8 @@ services:
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
+      # Metrics/Logs SDK 완전 비활성화 (404 에러 방지)
+      - OTEL_SDK_DISABLED_INSTRUMENTATIONS=metrics,logging
       # FLM Model Configuration (Backend용 - 검색 요약)
       - FLM_LLM_MODEL=${FLM_LLM_MODEL:-lfm2:2.6b}
       - FLM_THINKING_MODEL=${FLM_THINKING_MODEL:-lfm2.5-tk:1.2b}
@@ -315,6 +317,8 @@ services:
       - OTEL_TRACES_EXPORTER=otlp
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
+      # Metrics/Logs SDK 완전 비활성화 (404 에러 방지)
+      - OTEL_SDK_DISABLED_INSTRUMENTATIONS=metrics,logging
       # Note: Worker는 FLM 모델 환경변수 사용 안 함 (Backend에서만 사용)
     depends_on:
       valkey:
@@ -355,9 +359,11 @@ services:
       - HEALTH_CHECK_INTERVAL=86400
       # OpenTelemetry 분산 추적 비활성화 (backend에서 이미 추적 중)
       # LiteLLM 자체 health check가 필터 없이 Tempo로 전송되는 것을 방지
+      - OTEL_EXPORTER_OTLP_ENDPOINT=
       - OTEL_TRACES_EXPORTER=none
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
+      - OTEL_SDK_DISABLED=true
     depends_on:
       - prometheus
       - valkey
