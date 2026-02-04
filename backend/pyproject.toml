@@ -53,14 +53,10 @@ dependencies = [
     "opentelemetry-instrumentation-celery>=0.48b0",
 
     # ========================================
-    # LLM Observability (OpenLLMetry)
+    # LLM Observability
     # ========================================
-    "traceloop-sdk>=0.33.0",
-
-    # ========================================
-    # LLM Observability (Langfuse - Semantic)
-    # ========================================
-    "langfuse>=2.0.0",
+    "traceloop-sdk>=0.33.0",  # OpenLLMetry
+    "langfuse>=2.0.0,<3.0.0", # Semantic Observability (v2 API)
 ]
 
 [project.optional-dependencies]
