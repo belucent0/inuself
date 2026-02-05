@@ -3,6 +3,7 @@
 웹 검색을 수행하고 결과를 상태에 추가하는 노드입니다.
 Multi-Query 전략과 Reciprocal Rank Fusion(RRF) 리랭킹을 지원합니다.
 V8.1: 키워드 기반 관련성 필터링 추가.
+V8.3 Phase 3: 신뢰도 평가 및 품질 기반 재정렬 추가.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from loguru import logger
 
 from ..state import GraphState, AIMode, ThinkingStep, SearchResult
 from ..tools.web_search import search_web, WebSearchError
+from ...utils.quality_assessor import QualityAssessor
 
 # RRF 상수 (일반적으로 60 사용)
 RRF_K = 60
@@ -33,6 +35,7 @@ class SearcherNode:
             settings: 애플리케이션 설정
         """
         self.settings = settings
+        self.quality_assessor = QualityAssessor()
 
     async def __call__(self, state: GraphState) -> dict:
         """검색 실행.
@@ -130,7 +133,23 @@ class SearcherNode:
                 # 키워드 없으면 RRF 점수만 사용
                 results = [r for _, r in scored_results[:search_options["limit"] * 2]]
 
-            logger.info(f"[Searcher] Found {len(results)} results from {query_count} queries (RRF + relevance ranked)")
+            # [Phase 3] 품질 평가 및 재정렬
+            logger.info(f"[Searcher] Found {len(results)} results, now assessing quality...")
+
+            # 각 결과에 품질 점수 부여
+            for result in results:
+                self.quality_assessor.assess(result)
+
+            # 낮은 품질 결과 필터링 (최소 점수 40)
+            results = self.quality_assessor.filter_low_quality(results, min_score=40.0)
+
+            # 품질 점수 기준 재정렬
+            results = self.quality_assessor.rerank_by_quality(results)
+
+            # 최종 제한
+            results = results[:search_options["limit"]]
+
+            logger.info(f"[Searcher] Final {len(results)} results (quality-filtered and reranked)")
 
             # 결과를 SearchResult 형식으로 변환
             search_results = [
