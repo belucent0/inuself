@@ -237,3 +237,63 @@ class ContentRepository:
 
         await self.session.flush()
         return deleted_ids, object_keys
+
+    async def vector_search_contents(
+        self,
+        query_embedding: list[float],
+        limit: int = 20,
+        similarity_threshold: float = 0.3,
+        content_ids: list[UUID] | None = None,
+    ) -> list[tuple[models.Content, float]]:
+        """벡터 유사도 기반 콘텐츠 검색.
+
+        Args:
+            query_embedding: 쿼리 임베딩 (768차원)
+            limit: 최대 결과 수
+            similarity_threshold: 최소 유사도 (0~1)
+            content_ids: 특정 콘텐츠 ID로 제한
+
+        Returns:
+            (Content, similarity_score) 튜플 리스트
+        """
+        from sqlalchemy import select, text
+
+        # 코사인 유사도: 1 - cosine_distance
+        # pgvector의 <=> 연산자는 cosine_distance를 반환
+        # embedding을 문자열로 변환 (PostgreSQL array 형식)
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        stmt = text("""
+            SELECT
+                content.*,
+                1 - (content.embedding <=> :query_embedding::vector) AS similarity
+            FROM content
+            WHERE content.status = 'COMPLETED'
+              AND content.embedding IS NOT NULL
+              AND (1 - (content.embedding <=> :query_embedding::vector)) >= :threshold
+              {content_filter}
+            ORDER BY similarity DESC
+            LIMIT :limit
+        """.format(
+            content_filter="AND content.file_id = ANY(:content_ids)" if content_ids else ""
+        ))
+
+        params = {
+            "query_embedding": embedding_str,
+            "threshold": similarity_threshold,
+            "limit": limit,
+        }
+        if content_ids:
+            params["content_ids"] = [str(cid) for cid in content_ids]
+
+        result = await self.session.execute(stmt, params)
+        rows = result.fetchall()
+
+        # Content 객체와 similarity 점수를 함께 반환
+        results = []
+        for row in rows:
+            content = await self.session.get(models.Content, row[0])
+            if content:
+                results.append((content, float(row[-1])))
+
+        return results

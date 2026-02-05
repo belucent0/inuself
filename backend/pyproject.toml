@@ -57,6 +57,7 @@ dependencies = [
     # ========================================
     "traceloop-sdk>=0.33.0",  # OpenLLMetry
     "langfuse>=2.0.0,<3.0.0", # Semantic Observability (v2 API)
+    "pgvector (>=0.4.2,<0.5.0)",
 ]
 
 [project.optional-dependencies]
