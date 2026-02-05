@@ -32,12 +32,22 @@ class ChatRequest(BaseModel):
     context: dict | None = Field(default=None, description="추가 컨텍스트 (RAG용 content_ids 등)")
 
 
+class CitationModel(BaseModel):
+    """Citation (출처 표시) 모델 - Phase 4."""
+    id: int = Field(..., description="출처 번호")
+    title: str = Field(..., description="출처 제목")
+    url: str = Field(..., description="출처 URL")
+    snippet: str = Field(default="", description="인용된 부분")
+    verified: bool = Field(default=True, description="검증 여부")
+
+
 class ChatResponse(BaseModel):
     """AI 채팅 응답."""
     response: str = Field(..., description="AI 응답")
     conversation_id: str = Field(..., description="대화 ID")
     mode: str = Field(..., description="사용된 AI 모드")
     sources: list[dict] = Field(default=[], description="참조 소스 목록")
+    citations: list[CitationModel] = Field(default=[], description="출처 표시 목록 (Phase 4)")
     thinking_steps: list[dict] = Field(default=[], description="사고 과정")
 
 
@@ -112,6 +122,7 @@ async def ai_chat(
             conversation_id=conversation.conversation_id,
             mode=str(result.get("mode", "simple")),
             sources=result.get("sources", []),
+            citations=result.get("citations", []),  # Phase 4: Citation 추가
             thinking_steps=result.get("thinking_steps", []),
         )
 
