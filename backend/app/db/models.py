@@ -15,6 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 from .base import Base
 
@@ -133,6 +134,9 @@ class Content(Base):
     )
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     summary_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(768), nullable=True
+    )  # FLM embeddinggemma:300m (768 dimensions)
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
