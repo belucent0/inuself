@@ -151,11 +151,36 @@ async def run_ai_agent(
     Returns:
         실행 결과 딕셔너리
     """
+    from langchain_core.messages import AIMessage
+    from ..services.conversation_service import get_conversation_service
+
     graph = create_ai_graph(settings, enable_reflection=enable_reflection)
+
+    # 대화 히스토리 불러오기 (V8.3: Query Contextualization 지원)
+    messages = [HumanMessage(content=query)]
+    if conversation_id:
+        try:
+            conv_service = get_conversation_service()
+            conversation = await conv_service.get_conversation(conversation_id)
+            if conversation and conversation.messages:
+                # 최근 10개 메시지만 (5턴) - 너무 긴 히스토리는 성능 저하
+                recent_messages = conversation.messages[-10:]
+                messages = []
+                for msg in recent_messages:
+                    if msg.role == "user":
+                        messages.append(HumanMessage(content=msg.content))
+                    elif msg.role == "assistant":
+                        messages.append(AIMessage(content=msg.content))
+                # 현재 쿼리 추가
+                messages.append(HumanMessage(content=query))
+                logger.info(f"[AIAgent] Loaded {len(messages)-1} previous messages for conversation {conversation_id}")
+        except Exception as e:
+            logger.warning(f"[AIAgent] Failed to load conversation history: {e}")
+            messages = [HumanMessage(content=query)]
 
     # 초기 상태 구성
     initial_state: GraphState = {
-        "messages": [HumanMessage(content=query)],
+        "messages": messages,
         "query": query,
         "mode": AIMode(mode) if mode and mode != "auto" else AIMode.SIMPLE,
         "selected_model": None,  # 동적 라우팅으로 IntentParser에서 설정
@@ -304,9 +329,34 @@ async def stream_ai_agent(
     ctx = otel_trace.set_span_in_context(otel_span)
     token = otel_context.attach(ctx)
 
+    # 대화 히스토리 불러오기 (V8.3: Query Contextualization 지원)
+    from langchain_core.messages import AIMessage
+    from ..services.conversation_service import get_conversation_service
+
+    messages = [HumanMessage(content=query)]
+    if conversation_id:
+        try:
+            conv_service = get_conversation_service()
+            conversation = await conv_service.get_conversation(conversation_id)
+            if conversation and conversation.messages:
+                # 최근 10개 메시지만 (5턴)
+                recent_messages = conversation.messages[-10:]
+                messages = []
+                for msg in recent_messages:
+                    if msg.role == "user":
+                        messages.append(HumanMessage(content=msg.content))
+                    elif msg.role == "assistant":
+                        messages.append(AIMessage(content=msg.content))
+                # 현재 쿼리 추가
+                messages.append(HumanMessage(content=query))
+                logger.info(f"[AIAgent] Stream: Loaded {len(messages)-1} previous messages")
+        except Exception as e:
+            logger.warning(f"[AIAgent] Stream: Failed to load conversation history: {e}")
+            messages = [HumanMessage(content=query)]
+
     # 초기 상태 구성
     state: GraphState = {
-        "messages": [HumanMessage(content=query)],
+        "messages": messages,
         "query": query,
         "mode": AIMode(mode) if mode and mode != "auto" else AIMode.SIMPLE,
         "selected_model": None,  # 동적 라우팅으로 IntentParser에서 설정
