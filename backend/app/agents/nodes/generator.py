@@ -1,6 +1,7 @@
 """Generator 노드.
 
 최종 응답을 생성하는 노드입니다.
+V8.3 Phase 4: Citation (출처 표시) 추가
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from langchain_core.messages import AIMessage
 
 from ..state import GraphState, AIMode, ThinkingStep, SearchResult
 from ..tools.llm_client import async_llm_completion_stream
+from ...utils.citation_manager import CitationManager
 
 
 
@@ -53,6 +55,7 @@ class GeneratorNode:
             settings: 애플리케이션 설정
         """
         self.settings = settings
+        self.citation_manager = CitationManager()
 
     async def __call__(self, state: GraphState) -> dict:
         """응답 생성 실행.
@@ -108,9 +111,31 @@ class GeneratorNode:
 
             logger.info(f"[Generator] Response generated: {len(response)} chars")
 
+            # [Phase 4] Citation 처리
+            citations = []
+            if search_results:
+                # 검색 결과를 dict 형식으로 변환
+                sources_for_citation = [
+                    {
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "snippet": r.get("snippet", ""),
+                    }
+                    for r in search_results[:5]
+                ]
+
+                # Citation 추출 및 검증
+                _, citation_objects = self.citation_manager.process(
+                    response, sources_for_citation
+                )
+                citations = [c.to_dict() for c in citation_objects]
+
+                if citations:
+                    logger.info(f"[Generator] Extracted {len(citations)} citations")
+
             thinking_steps.append(ThinkingStep(
                 step="generation_complete",
-                content=f"응답 생성 완료 ({len(response)} 글자)",
+                content=f"응답 생성 완료 ({len(response)} 글자, {len(citations)}개 출처)",
                 timestamp=time.time()
             ))
 
@@ -120,6 +145,7 @@ class GeneratorNode:
             return {
                 "response": response,
                 "sources": sources,
+                "citations": citations,  # Phase 4: Citation 추가
                 "thinking_steps": thinking_steps,
                 "messages": [AIMessage(content=response)],
             }
@@ -179,15 +205,38 @@ class GeneratorNode:
             response_chunks.append(chunk)
             yield {"type": "content", "data": chunk}
 
-        # 완료 시 소스 정보 전송
+        # 완료 시 소스 정보 및 Citation 전송
         sources = self._extract_sources(search_results)
         if sources:
             yield {"type": "sources", "data": sources}
 
-        yield {"type": "done", "data": "".join(response_chunks)}
+        # [Phase 4] Citation 처리
+        full_response = "".join(response_chunks)
+        if search_results:
+            sources_for_citation = [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "snippet": r.get("snippet", ""),
+                }
+                for r in search_results[:5]
+            ]
+
+            _, citation_objects = self.citation_manager.process(
+                full_response, sources_for_citation
+            )
+            citations = [c.to_dict() for c in citation_objects]
+
+            if citations:
+                yield {"type": "citations", "data": citations}
+                logger.info(f"[Generator] Stream: Extracted {len(citations)} citations")
+
+        yield {"type": "done", "data": full_response}
 
     def _build_context(self, mode: AIMode, search_results: list[SearchResult]) -> str:
         """검색 결과로부터 컨텍스트 문자열 생성.
+
+        Phase 4: 출처 번호를 명확히 표시하여 LLM이 인용하도록 유도
 
         Args:
             mode: AI 모드
@@ -202,13 +251,18 @@ class GeneratorNode:
         context_parts = []
         for i, result in enumerate(search_results[:5], 1):  # 최대 5개
             source_type = "웹" if result.get("source") == "web" else "문서"
+            # Phase 4: 출처 번호를 명확히 표시
             context_parts.append(
-                f"[{source_type} {i}] {result.get('title', '제목 없음')}\n"
+                f"출처 [{i}] ({source_type})\n"
+                f"제목: {result.get('title', '제목 없음')}\n"
                 f"URL: {result.get('url', '')}\n"
                 f"내용: {result.get('snippet', '')}\n"
             )
 
-        return "\n---\n".join(context_parts)
+        header = "## 제공된 출처 정보\n\n"
+        header += "답변 시 반드시 [번호] 형식으로 출처를 인용하세요.\n\n"
+
+        return header + "\n---\n".join(context_parts)
 
     def _extract_sources(self, search_results: list[SearchResult]) -> list[SearchResult]:
         """검색 결과에서 출처 정보 추출.

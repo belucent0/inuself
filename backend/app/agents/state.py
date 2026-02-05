@@ -28,6 +28,15 @@ class SearchResult(TypedDict):
     source: str  # "web" | "rag"
 
 
+class CitationInfo(TypedDict):
+    """Citation (출처 표시) 정보 - Phase 4."""
+    id: int
+    title: str
+    url: str
+    snippet: str
+    verified: bool
+
+
 class ThinkingStep(TypedDict):
     """사고 과정 단계."""
     step: str
@@ -64,6 +73,7 @@ class GraphState(TypedDict):
         thinking_steps: 사고 과정 기록
         response: 최종 응답
         sources: 출처 목록
+        citations: Citation (출처 표시) 목록 - Phase 4
         error: 에러 메시지 (있는 경우)
         conversation_id: 대화 ID (Redis 저장용)
         metadata: 추가 메타데이터
@@ -81,6 +91,7 @@ class GraphState(TypedDict):
     thinking_steps: list[ThinkingStep]
     response: str
     sources: list[SearchResult]
+    citations: list[CitationInfo]  # Phase 4: Citation 추가
     error: str | None
     conversation_id: str | None
     metadata: dict
