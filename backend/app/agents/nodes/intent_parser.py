@@ -363,6 +363,141 @@ class DecomposeTransformer(QueryTransformer):
         return items
 
 
+class HyDETransformer(QueryTransformer):
+    """HyDE (Hypothetical Document Embeddings) 기반 쿼리 재작성 transformer.
+
+    핵심 아이디어:
+    - 질문에 대한 "이상적인 답변"을 가설적으로 생성
+    - 그 답변에서 키워드 추출 → 검색 쿼리로 사용
+    - 검색 엔진이 "답변이 포함된 문서"를 찾도록 유도
+
+    예시:
+    질문: "파이썬 웹 프레임워크 비교"
+    가설적 답변: "Django와 Flask는 파이썬의 대표적인 웹 프레임워크입니다.
+                 Django는 Full-stack, Flask는 Micro framework입니다."
+    HyDE 쿼리: "Django Flask 웹 프레임워크 Full-stack Micro"
+    """
+
+    async def transform(
+        self,
+        query: str,
+        state: GraphState,
+        settings: Any
+    ) -> list[str]:
+        """HyDE 기반 쿼리 재작성."""
+
+        hyde_prompt = f"""질문: "{query}"
+
+위 질문에 대한 이상적인 답변을 1-2문장으로 작성하세요.
+(검색 엔진이 찾아야 할 답변의 예시입니다)
+
+답변에는 핵심 사실, 용어, 개념을 포함하되, 간결하게 작성하세요.
+
+답변:"""
+
+        try:
+            # 가설적 답변 생성
+            hypothetical_answer = await async_llm_completion(
+                settings=settings,
+                messages=[{"role": "user", "content": hyde_prompt}],
+                temperature=0.5,  # 약간의 창의성 허용
+                max_tokens=200,
+            )
+
+            # 답변에서 키워드 추출 (Kiwi 형태소 분석 사용)
+            hyde_keywords = self._extract_keywords_from_hyde(hypothetical_answer)
+
+            # 키워드가 너무 적으면 HyDE 적용 안 함
+            if len(hyde_keywords) < 2:
+                logger.info(f"[HyDETransformer] Too few keywords ({len(hyde_keywords)}), skipping")
+                return []
+
+            # 키워드 기반 검색 쿼리 생성 (상위 5개)
+            hyde_query = " ".join(hyde_keywords[:5])
+
+            logger.info(f"[HyDETransformer] '{query}' → HyDE: '{hyde_query}'")
+            return [hyde_query]
+
+        except Exception as e:
+            logger.error(f"[HyDETransformer] Failed: {e}")
+            return []
+
+    def should_apply(self, query: str, state: GraphState) -> bool:
+        """HyDE를 적용해야 하는지 판단.
+
+        HyDE는 사실적 질문(factoid queries)에 효과적입니다.
+        대화 맥락이나 질의 분해보다 낮은 우선순위로 선택적 적용.
+
+        적용 조건:
+        - 검색 쿼리가 아직 3개 미만
+        - 간단한 사실 질문 (정의, 비교, 방법 등)
+        """
+        # 이미 충분한 쿼리가 있으면 적용 안 함
+        existing_queries = state.get("search_queries", [])
+        if len(existing_queries) >= 3:
+            return False
+
+        # HyDE에 적합한 패턴: 정의, 비교, 방법, 특징
+        hyde_patterns = [
+            "이란", "무엇", "어떤", "어떻게", "방법", "비교",
+            "차이", "특징", "장점", "단점", "종류", "예시"
+        ]
+
+        # 질문이 너무 짧거나 길면 제외
+        if len(query) < 10 or len(query) > 100:
+            return False
+
+        return any(pattern in query for pattern in hyde_patterns)
+
+    def _extract_keywords_from_hyde(self, hypothetical_answer: str) -> list[str]:
+        """가설적 답변에서 키워드 추출.
+
+        Kiwi 형태소 분석을 사용하여 명사, 외국어, 고유명사 추출.
+
+        Args:
+            hypothetical_answer: 생성된 가설적 답변
+
+        Returns:
+            키워드 목록
+        """
+        try:
+            kiwi = get_kiwi()
+            result = kiwi.analyze(hypothetical_answer)
+
+            if not result:
+                return []
+
+            tokens = result[0][0]
+            keywords = []
+
+            # 추출할 품사: NNG(일반명사), NNP(고유명사), SL(외국어)
+            target_pos = {'NNG', 'NNP', 'SL', 'SH'}
+
+            for token in tokens:
+                form = token.form
+                tag = token.tag
+
+                # 최소 2글자
+                if len(form) < 2:
+                    continue
+
+                # 불용어 제외
+                stopwords = {'것', '수', '때', '등', '중', '내', '더', '안', '및', '또는', '입니다', '있습니다'}
+                if form in stopwords:
+                    continue
+
+                if tag in target_pos:
+                    if form not in keywords:  # 중복 방지
+                        keywords.append(form)
+
+            return keywords
+
+        except Exception as e:
+            logger.warning(f"[HyDETransformer] Kiwi analysis failed: {e}")
+            # Fallback: 공백으로 단순 분리
+            return [w for w in hypothetical_answer.split() if len(w) >= 2][:10]
+
+
 class IntentParserNode:
     """사용자 쿼리의 의도를 분석하여 적절한 모드를 결정하는 노드.
 
@@ -387,7 +522,7 @@ class IntentParserNode:
         self.transformers: list[QueryTransformer] = [
             ContextualizeTransformer(),  # 1순위: 대화 맥락 반영
             DecomposeTransformer(),       # 2순위: 질의 분해
-            # HyDETransformer(),          # 3순위: HyDE (Phase 1B에서 추가 예정)
+            HyDETransformer(),            # 3순위: HyDE (Phase 1B)
             # StepBackTransformer(),      # 4순위: Step-back (Phase 5+에서 추가 예정)
         ]
 
