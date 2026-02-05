@@ -79,6 +79,17 @@ def _init_openllmetry(service_name: str) -> bool:
         except Exception as redis_err:
             logger.debug(f"[OpenLLMetry] Could not uninstrument Redis: {redis_err}")
 
+        # OpenAI instrumentation 비활성화 (unhashable type 'list' 에러 방지)
+        # OpenTelemetry metrics에서 attributes에 리스트가 있을 때 frozenset 변환 실패
+        try:
+            from opentelemetry.instrumentation.openai import OpenAIInstrumentor
+            openai_instrumentor = OpenAIInstrumentor()
+            if openai_instrumentor.is_instrumented_by_opentelemetry:
+                openai_instrumentor.uninstrument()
+                logger.info("[OpenLLMetry] OpenAI instrumentation disabled (unhashable type error fix)")
+        except Exception as openai_err:
+            logger.debug(f"[OpenLLMetry] Could not uninstrument OpenAI: {openai_err}")
+
         # urllib3 instrumentation 명시적으로 비활성화
         # MinIO, 내부 HTTP 호출 등이 orphan trace로 노이즈 생성
         try:
