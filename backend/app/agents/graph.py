@@ -20,6 +20,9 @@ from .nodes import (
     RAGRetrieverNode,
     ReasonerNode,
     ReflectorNode,
+    SearchEvaluatorNode,
+    QueryRewriterNode,
+    FallbackHandlerNode,
 )
 
 
@@ -127,6 +130,154 @@ def create_ai_graph(settings: Any, enable_reflection: bool = False) -> StateGrap
     return workflow.compile()
 
 
+def create_ai_graph_with_retry(
+    settings: Any,
+    enable_reflection: bool = False,
+    max_retries: int = 3,
+) -> StateGraph:
+    """검색 재시도 기능이 있는 AI 에이전트 그래프 생성.
+
+    V8.4 워크플로우 (SEARCH/HYBRID 모드):
+    - Intent → Searcher → Evaluator
+      → (충분) → Generator
+      → (부족) → QueryRewriter → Searcher (루프)
+      → (한계) → FallbackHandler → Generator
+
+    Args:
+        settings: 애플리케이션 설정
+        enable_reflection: Reflector 노드 활성화 여부
+        max_retries: 최대 재시도 횟수
+
+    Returns:
+        컴파일된 StateGraph
+    """
+    # 노드 인스턴스 생성
+    intent_parser = IntentParserNode(settings)
+    searcher = SearcherNode(settings)
+    search_evaluator = SearchEvaluatorNode(settings)
+    query_rewriter = QueryRewriterNode(settings)
+    fallback_handler = FallbackHandlerNode(settings)
+    rag_retriever = RAGRetrieverNode(settings)
+    reasoner = ReasonerNode(settings)
+    generator = GeneratorNode(settings)
+    reflector = ReflectorNode(settings)
+
+    # 그래프 정의
+    workflow = StateGraph(GraphState)
+
+    # 노드 추가
+    workflow.add_node("intent_parser", intent_parser)
+    workflow.add_node("searcher", searcher)
+    workflow.add_node("search_evaluator", search_evaluator)
+    workflow.add_node("query_rewriter", query_rewriter)
+    workflow.add_node("fallback_handler", fallback_handler)
+    workflow.add_node("rag_retriever", rag_retriever)
+    workflow.add_node("reasoner", reasoner)
+    workflow.add_node("generator", generator)
+    if enable_reflection:
+        workflow.add_node("reflector", reflector)
+
+    # 엔트리 포인트
+    workflow.set_entry_point("intent_parser")
+
+    # IntentParser → 다음 노드
+    def route_by_mode(state: GraphState) -> str:
+        """모드에 따른 라우팅."""
+        mode = state["mode"]
+
+        if mode == AIMode.SEARCH or mode == AIMode.HYBRID:
+            return "searcher"
+        elif mode == AIMode.RAG:
+            return "rag_retriever"
+        elif mode == AIMode.REASONING:
+            return "reasoner"
+        else:  # SIMPLE
+            return "generator"
+
+    workflow.add_conditional_edges(
+        "intent_parser",
+        route_by_mode,
+        {
+            "generator": "generator",
+            "searcher": "searcher",
+            "rag_retriever": "rag_retriever",
+            "reasoner": "reasoner",
+        }
+    )
+
+    # Searcher → SearchEvaluator (항상)
+    workflow.add_edge("searcher", "search_evaluator")
+
+    # SearchEvaluator → 조건부 라우팅
+    def route_after_evaluation(state: GraphState) -> str:
+        """평가 후 라우팅."""
+        needs_retry = state.get("needs_retry", False)
+        retry_count = state.get("search_retry_count", 0)
+        mode = state["mode"]
+
+        # 충분한 결과 → 다음 단계
+        if not needs_retry:
+            if mode == AIMode.HYBRID:
+                return "rag_retriever"  # Hybrid면 RAG도 수행
+            return "generator"
+
+        # 재시도 가능 → QueryRewriter
+        if retry_count < max_retries:
+            return "query_rewriter"
+
+        # 모든 시도 실패 → FallbackHandler
+        return "fallback_handler"
+
+    workflow.add_conditional_edges(
+        "search_evaluator",
+        route_after_evaluation,
+        {
+            "generator": "generator",
+            "rag_retriever": "rag_retriever",
+            "query_rewriter": "query_rewriter",
+            "fallback_handler": "fallback_handler",
+        }
+    )
+
+    # QueryRewriter → Searcher (루프!)
+    workflow.add_edge("query_rewriter", "searcher")
+
+    # FallbackHandler → 조건부 라우팅
+    def route_after_fallback(state: GraphState) -> str:
+        """폴백 후 라우팅."""
+        mode = state.get("mode")
+        if mode == AIMode.RAG:
+            return "rag_retriever"  # RAG로 전환된 경우
+        return "generator"
+
+    workflow.add_conditional_edges(
+        "fallback_handler",
+        route_after_fallback,
+        {
+            "generator": "generator",
+            "rag_retriever": "rag_retriever",
+        }
+    )
+
+    # RAG Retriever → Generator
+    workflow.add_edge("rag_retriever", "generator")
+
+    # Reasoner → END (Reasoner가 직접 응답 생성)
+    if enable_reflection:
+        workflow.add_edge("reasoner", "reflector")
+    else:
+        workflow.add_edge("reasoner", END)
+
+    # Generator → Reflector 또는 END
+    if enable_reflection:
+        workflow.add_edge("generator", "reflector")
+        workflow.add_edge("reflector", END)
+    else:
+        workflow.add_edge("generator", END)
+
+    return workflow.compile()
+
+
 async def run_ai_agent(
     *,
     settings: Any,
@@ -135,6 +286,8 @@ async def run_ai_agent(
     mode: str | None = None,
     metadata: dict | None = None,
     enable_reflection: bool = False,
+    enable_retry: bool = True,
+    max_retries: int = 3,
     user_id: str | None = None,
 ) -> dict:
     """AI 에이전트 실행.
@@ -146,6 +299,8 @@ async def run_ai_agent(
         mode: 강제 모드 지정 (선택, auto면 자동 감지)
         metadata: 추가 메타데이터
         enable_reflection: Reflector 노드 활성화 여부
+        enable_retry: V8.4 검색 재시도 활성화 여부
+        max_retries: 최대 재시도 횟수
         user_id: 사용자 ID (Langfuse 추적용)
 
     Returns:
@@ -154,7 +309,15 @@ async def run_ai_agent(
     from langchain_core.messages import AIMessage
     from ..services.conversation_service import get_conversation_service
 
-    graph = create_ai_graph(settings, enable_reflection=enable_reflection)
+    # V8.4: 재시도 기능 선택
+    if enable_retry:
+        graph = create_ai_graph_with_retry(
+            settings,
+            enable_reflection=enable_reflection,
+            max_retries=max_retries,
+        )
+    else:
+        graph = create_ai_graph(settings, enable_reflection=enable_reflection)
 
     # 대화 히스토리 불러오기 (V8.3: Query Contextualization 지원)
     messages = [HumanMessage(content=query)]
@@ -196,6 +359,13 @@ async def run_ai_agent(
         "error": None,
         "conversation_id": conversation_id,
         "metadata": metadata or {},
+        # V8.4: 검색 재시도 관련
+        "search_retry_count": 0,
+        "search_quality_score": 0.0,
+        "original_search_queries": [],
+        "failed_queries": [],
+        "needs_retry": False,
+        "retry_reason": "",
     }
 
     # 그래프 실행

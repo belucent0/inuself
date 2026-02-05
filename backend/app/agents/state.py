@@ -77,6 +77,14 @@ class GraphState(TypedDict):
         error: 에러 메시지 (있는 경우)
         conversation_id: 대화 ID (Redis 저장용)
         metadata: 추가 메타데이터
+
+        # V8.4: 검색 재시도 관련 필드
+        search_retry_count: int              # 현재 재시도 횟수
+        search_quality_score: float          # 검색 결과 품질 점수 (0-100)
+        original_search_queries: list[str]   # 원본 검색 쿼리 (재작성 참고용)
+        failed_queries: list[str]            # 실패한 쿼리 목록 (중복 방지)
+        needs_retry: bool                    # 재시도 필요 여부
+        retry_reason: str                    # 재시도 이유
     """
     messages: Annotated[list[BaseMessage], add_messages]
     query: str
@@ -95,3 +103,11 @@ class GraphState(TypedDict):
     error: str | None
     conversation_id: str | None
     metadata: dict
+
+    # V8.4: 검색 재시도 관련
+    search_retry_count: int
+    search_quality_score: float
+    original_search_queries: list[str]
+    failed_queries: list[str]
+    needs_retry: bool
+    retry_reason: str
