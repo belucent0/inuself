@@ -31,12 +31,27 @@ def _get_async_client(base_url: str, api_key: str) -> AsyncOpenAI:
 def _build_messages(raw_messages: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
     """메시지 시퀀스를 리스트로 변환."""
     converted: list[dict[str, str]] = []
-    for message in raw_messages:
+    for idx, message in enumerate(raw_messages):
+        # 디버깅: 메시지 타입 로깅
+        logger.debug(f"[_build_messages] Message {idx}: type={type(message)}, value={message}")
+
         role = message.get("role")
         content = message.get("content")
+
+        # content가 리스트인 경우 문자열로 변환
+        if isinstance(content, list):
+            logger.warning(f"[_build_messages] Message {idx} has list content, converting to string")
+            # OpenAI multimodal format: [{"type": "text", "text": "..."}, ...]
+            if content and isinstance(content[0], dict) and "text" in content[0]:
+                content = content[0]["text"]
+            else:
+                content = str(content)
+
         if not role or not content:
-            raise LLMClientError("LLM API 메시지에 role/content가 필요합니다.")
+            raise LLMClientError(f"LLM API 메시지 {idx}에 role/content가 필요합니다. role={role}, content type={type(content)}")
+
         converted.append({"role": role, "content": content})
+
     if not converted:
         raise LLMClientError("LLM API 요청 메시지가 비어 있습니다.")
     return converted
@@ -103,8 +118,9 @@ async def async_llm_completion(
         raise LLMClientError(error_msg) from exc
 
     except Exception as exc:
+        import traceback
         error_msg = f"LLM request failed: {exc}"
-        logger.error(error_msg)
+        logger.error(f"{error_msg}\nTraceback:\n{traceback.format_exc()}")
         raise LLMClientError(error_msg) from exc
 
 
@@ -166,6 +182,7 @@ async def async_llm_completion_stream(
         raise LLMClientError(error_msg) from exc
 
     except Exception as exc:
+        import traceback
         error_msg = f"LLM request failed: {exc}"
-        logger.error(error_msg)
+        logger.error(f"{error_msg}\nTraceback:\n{traceback.format_exc()}")
         raise LLMClientError(error_msg) from exc

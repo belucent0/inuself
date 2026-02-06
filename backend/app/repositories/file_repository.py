@@ -324,3 +324,22 @@ class FileRepository:
         self.session.add(entry)
         await self.session.flush()
         return entry
+
+    async def update_embedding(self, file_id: UUID, embedding: list[float]) -> None:
+        """파일 임베딩 업데이트 (Content 테이블).
+
+        Args:
+            file_id: 파일 ID
+            embedding: 임베딩 벡터 (768차원)
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        stmt = (
+            update(models.Content)
+            .where(models.Content.file_id == file_id)
+            .values(embedding=embedding, updated_at=now)
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()

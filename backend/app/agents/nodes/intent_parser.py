@@ -11,17 +11,24 @@ V8.1: 형태소 분석(kiwi) + 임베딩 하이브리드 쿼리 추출
 - LLM 기반 쿼리 생성 대신 형태소 분석으로 키워드 추출
 - 코드/에러 쿼리 자동 감지
 - 임베딩 기반 의미적 확장 (선택적)
+
+V8.3: 플러그인 기반 Query Transformation 아키텍처
+- QueryTransformer 추상 인터페이스
+- 대화 맥락 기반 쿼리 재작성 (ContextualizeTransformer)
+- 질의 분해 (DecomposeTransformer)
+- 모듈형 설계로 새 기법 추가 용이
 """
 from __future__ import annotations
 
 import json
 import re
 import time
+from abc import ABC, abstractmethod
 from typing import Any
 
 import httpx
 from kiwipiepy import Kiwi
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from loguru import logger
 
 from ..state import GraphState, AIMode, ThinkingStep, QueryAnalysis
@@ -95,11 +102,411 @@ MULTI_QUERY_PROMPT = """다음 질문에 대해 웹 검색에 효과적인 검�
 검색어:"""
 
 
+# =============================================================================
+# Query Transformation Plugin Architecture (V8.3)
+# =============================================================================
+
+class QueryTransformer(ABC):
+    """쿼리 변환 기법의 추상 인터페이스.
+
+    새로운 쿼리 변환 기법을 추가하려면 이 클래스를 상속하고
+    transform()과 should_apply() 메서드를 구현하세요.
+    """
+
+    @abstractmethod
+    async def transform(
+        self,
+        query: str,
+        state: GraphState,
+        settings: Any
+    ) -> list[str]:
+        """쿼리를 변환하여 새 쿼리 목록 반환.
+
+        Args:
+            query: 원본 사용자 쿼리
+            state: 현재 그래프 상태 (대화 히스토리 등)
+            settings: 애플리케이션 설정
+
+        Returns:
+            변환된 쿼리 목록
+        """
+        pass
+
+    @abstractmethod
+    def should_apply(self, query: str, state: GraphState) -> bool:
+        """이 기법을 적용해야 하는지 판단.
+
+        Args:
+            query: 원본 사용자 쿼리
+            state: 현재 그래프 상태
+
+        Returns:
+            True면 이 transformer 적용
+        """
+        pass
+
+
+class ContextualizeTransformer(QueryTransformer):
+    """대화 맥락을 고려하여 쿼리를 독립적으로 재작성하는 transformer.
+
+    문제:
+    - User: "파이썬이란?"
+    - AI: "파이썬은 고수준 프로그래밍 언어입니다..."
+    - User: "그것의 주요 용도는?" ← 맥락 없이 검색하면 무의미
+
+    해결:
+    - 대화 히스토리 참조 → "파이썬의 주요 용도는?" 로 재작성
+    """
+
+    async def transform(
+        self,
+        query: str,
+        state: GraphState,
+        settings: Any
+    ) -> list[str]:
+        """대화 맥락을 반영하여 쿼리 재작성."""
+        messages = state.get("messages", [])
+
+        if len(messages) < 2:
+            # 첫 질문이면 그대로 반환
+            return [query]
+
+        # 최근 3턴(User+AI 3쌍)만 사용 (너무 긴 히스토리는 노이즈)
+        recent_messages = messages[-6:]
+
+        # 대화 히스토리 포맷팅
+        conversation_context = self._format_conversation(recent_messages)
+
+        context_prompt = f"""이전 대화:
+{conversation_context}
+
+현재 질문: "{query}"
+
+현재 질문이 이전 대화를 참조하고 있다면 (예: "그것", "그거", "그 사람", "더 자세히" 등),
+독립적으로 이해 가능한 완전한 질문으로 재작성하세요.
+참조가 없다면 원본 질문을 그대로 반환하세요.
+
+예시:
+- "그것의 장점은?" → "파이썬의 장점은?"
+- "더 자세히" → "파이썬에 대해 더 자세히 설명해줘"
+- "최신 버전은?" → "최신 파이썬 버전은?"
+- "파이썬이란?" → "파이썬이란?" (참조 없음, 그대로)
+
+재작성된 질문만 출력하세요 (추가 설명 없이):"""
+
+        try:
+            response = await async_llm_completion(
+                settings=settings,
+                messages=[{"role": "user", "content": context_prompt}],
+                temperature=0.1,
+                max_tokens=200,
+            )
+
+            contextualized = response.strip()
+
+            # 유효성 검사: 너무 길거나 이상하면 원본 사용
+            if len(contextualized) > 200 or len(contextualized) < 3:
+                logger.warning(f"[ContextualizeTransformer] Invalid output, using original: {contextualized[:50]}")
+                return [query]
+
+            logger.info(f"[ContextualizeTransformer] '{query}' → '{contextualized}'")
+            return [contextualized]
+
+        except Exception as e:
+            logger.error(f"[ContextualizeTransformer] Failed: {e}")
+            return [query]
+
+    def should_apply(self, query: str, state: GraphState) -> bool:
+        """대화 히스토리가 있을 때만 적용."""
+        messages = state.get("messages", [])
+        # 최소 2개 메시지 (User 1개 + AI 1개) 있어야 맥락 참조 가능
+        return len(messages) >= 2
+
+    def _format_conversation(self, messages: list[BaseMessage]) -> str:
+        """대화 히스토리 포맷팅.
+
+        Args:
+            messages: 대화 메시지 목록
+
+        Returns:
+            포맷팅된 대화 문자열
+        """
+        formatted = []
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                role = "사용자"
+            elif isinstance(msg, AIMessage):
+                role = "AI"
+            else:
+                role = msg.type
+
+            # 최대 200자로 제한 (너무 긴 응답은 요약)
+            content = msg.content[:200]
+            if len(msg.content) > 200:
+                content += "..."
+
+            formatted.append(f"{role}: {content}")
+
+        return "\n".join(formatted)
+
+
+class DecomposeTransformer(QueryTransformer):
+    """복잡한 질문을 하위 질문으로 분해하는 transformer.
+
+    예시:
+    질문: "2024년 AI 트렌드와 미래 산업 영향은?"
+    분해:
+    1. 2024 AI breakthrough technologies
+    2. Generative AI trends 2024
+    3. AI impact on industries future
+    4. AI market forecast 2024-2025
+    """
+
+    async def transform(
+        self,
+        query: str,
+        state: GraphState,
+        settings: Any
+    ) -> list[str]:
+        """복잡한 질문을 3-5개 하위 질문으로 분해."""
+
+        decomposition_prompt = f"""다음 질문을 3-5개의 독립적인 하위 질문으로 분해하세요.
+각 하위 질문은 웹 검색에 적합한 형태여야 합니다.
+
+질문: "{query}"
+
+예시:
+질문: "2024년 AI 트렌드와 미래 산업 영향은?"
+분해:
+1. 2024 AI breakthrough technologies
+2. Generative AI trends 2024
+3. AI impact on industries future
+4. AI market forecast 2024-2025
+
+간단한 질문(한 문장, 팩트 조회)이면 분해하지 말고 원본 반환하세요.
+
+분해된 질문 (각 줄에 번호 없이 하나씩):"""
+
+        try:
+            response = await async_llm_completion(
+                settings=settings,
+                messages=[{"role": "user", "content": decomposition_prompt}],
+                temperature=0.3,
+                max_tokens=300,
+            )
+
+            # 줄바꿈으로 분리된 쿼리 파싱
+            sub_queries = self._parse_numbered_list(response)
+
+            # 유효성 검사: 너무 많거나 적으면 원본 사용
+            if len(sub_queries) < 2 or len(sub_queries) > 7:
+                logger.info(f"[DecomposeTransformer] Not decomposed (count={len(sub_queries)}), using original")
+                return [query]
+
+            logger.info(f"[DecomposeTransformer] Decomposed into {len(sub_queries)} sub-queries")
+            return sub_queries[:5]  # 최대 5개로 제한
+
+        except Exception as e:
+            logger.error(f"[DecomposeTransformer] Failed: {e}")
+            return [query]
+
+    def should_apply(self, query: str, state: GraphState) -> bool:
+        """복잡한 질문인지 판단."""
+        return self._is_complex_query(query)
+
+    def _is_complex_query(self, query: str) -> bool:
+        """복잡한 질문인지 판단.
+
+        여러 절이 있거나, "와/과", "영향", "비교" 등 키워드 포함.
+
+        Args:
+            query: 사용자 쿼리
+
+        Returns:
+            True면 복잡한 질문
+        """
+        # 길이 체크
+        if len(query) < 20:
+            return False
+
+        # 복잡도 마커
+        complexity_markers = [
+            "와", "과", "영향", "비교", "차이", "관계", "트렌드",
+            "분석", "전망", "미래", "변화", "발전", "역사",
+            "장단점", "장점과 단점", "어떻게 다른", "무엇이 다른"
+        ]
+
+        return any(marker in query for marker in complexity_markers)
+
+    def _parse_numbered_list(self, text: str) -> list[str]:
+        """번호 매겨진 목록 파싱.
+
+        Args:
+            text: LLM 응답 텍스트
+
+        Returns:
+            파싱된 항목 목록
+        """
+        lines = text.strip().split('\n')
+        items = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 번호 제거: "1. ", "1) ", "- " 등
+            cleaned = re.sub(r'^[\d\-\*\•]+[\.\)]\s*', '', line)
+            if cleaned and len(cleaned) >= 5:  # 최소 5자
+                items.append(cleaned)
+
+        return items
+
+
+class HyDETransformer(QueryTransformer):
+    """HyDE (Hypothetical Document Embeddings) 기반 쿼리 재작성 transformer.
+
+    핵심 아이디어:
+    - 질문에 대한 "이상적인 답변"을 가설적으로 생성
+    - 그 답변에서 키워드 추출 → 검색 쿼리로 사용
+    - 검색 엔진이 "답변이 포함된 문서"를 찾도록 유도
+
+    예시:
+    질문: "파이썬 웹 프레임워크 비교"
+    가설적 답변: "Django와 Flask는 파이썬의 대표적인 웹 프레임워크입니다.
+                 Django는 Full-stack, Flask는 Micro framework입니다."
+    HyDE 쿼리: "Django Flask 웹 프레임워크 Full-stack Micro"
+    """
+
+    async def transform(
+        self,
+        query: str,
+        state: GraphState,
+        settings: Any
+    ) -> list[str]:
+        """HyDE 기반 쿼리 재작성."""
+
+        hyde_prompt = f"""질문: "{query}"
+
+위 질문에 대한 이상적인 답변을 1-2문장으로 작성하세요.
+(검색 엔진이 찾아야 할 답변의 예시입니다)
+
+답변에는 핵심 사실, 용어, 개념을 포함하되, 간결하게 작성하세요.
+
+답변:"""
+
+        try:
+            # 가설적 답변 생성
+            hypothetical_answer = await async_llm_completion(
+                settings=settings,
+                messages=[{"role": "user", "content": hyde_prompt}],
+                temperature=0.5,  # 약간의 창의성 허용
+                max_tokens=200,
+            )
+
+            # 답변에서 키워드 추출 (Kiwi 형태소 분석 사용)
+            hyde_keywords = self._extract_keywords_from_hyde(hypothetical_answer)
+
+            # 키워드가 너무 적으면 HyDE 적용 안 함
+            if len(hyde_keywords) < 2:
+                logger.info(f"[HyDETransformer] Too few keywords ({len(hyde_keywords)}), skipping")
+                return []
+
+            # 키워드 기반 검색 쿼리 생성 (상위 5개)
+            hyde_query = " ".join(hyde_keywords[:5])
+
+            logger.info(f"[HyDETransformer] '{query}' → HyDE: '{hyde_query}'")
+            return [hyde_query]
+
+        except Exception as e:
+            logger.error(f"[HyDETransformer] Failed: {e}")
+            return []
+
+    def should_apply(self, query: str, state: GraphState) -> bool:
+        """HyDE를 적용해야 하는지 판단.
+
+        HyDE는 사실적 질문(factoid queries)에 효과적입니다.
+        대화 맥락이나 질의 분해보다 낮은 우선순위로 선택적 적용.
+
+        적용 조건:
+        - 검색 쿼리가 아직 3개 미만
+        - 간단한 사실 질문 (정의, 비교, 방법 등)
+        """
+        # 이미 충분한 쿼리가 있으면 적용 안 함
+        existing_queries = state.get("search_queries", [])
+        if len(existing_queries) >= 3:
+            return False
+
+        # HyDE에 적합한 패턴: 정의, 비교, 방법, 특징
+        hyde_patterns = [
+            "이란", "무엇", "어떤", "어떻게", "방법", "비교",
+            "차이", "특징", "장점", "단점", "종류", "예시"
+        ]
+
+        # 질문이 너무 짧거나 길면 제외
+        if len(query) < 10 or len(query) > 100:
+            return False
+
+        return any(pattern in query for pattern in hyde_patterns)
+
+    def _extract_keywords_from_hyde(self, hypothetical_answer: str) -> list[str]:
+        """가설적 답변에서 키워드 추출.
+
+        Kiwi 형태소 분석을 사용하여 명사, 외국어, 고유명사 추출.
+
+        Args:
+            hypothetical_answer: 생성된 가설적 답변
+
+        Returns:
+            키워드 목록
+        """
+        try:
+            kiwi = get_kiwi()
+            result = kiwi.analyze(hypothetical_answer)
+
+            if not result:
+                return []
+
+            tokens = result[0][0]
+            keywords = []
+
+            # 추출할 품사: NNG(일반명사), NNP(고유명사), SL(외국어)
+            target_pos = {'NNG', 'NNP', 'SL', 'SH'}
+
+            for token in tokens:
+                form = token.form
+                tag = token.tag
+
+                # 최소 2글자
+                if len(form) < 2:
+                    continue
+
+                # 불용어 제외
+                stopwords = {'것', '수', '때', '등', '중', '내', '더', '안', '및', '또는', '입니다', '있습니다'}
+                if form in stopwords:
+                    continue
+
+                if tag in target_pos:
+                    if form not in keywords:  # 중복 방지
+                        keywords.append(form)
+
+            return keywords
+
+        except Exception as e:
+            logger.warning(f"[HyDETransformer] Kiwi analysis failed: {e}")
+            # Fallback: 공백으로 단순 분리
+            return [w for w in hypothetical_answer.split() if len(w) >= 2][:10]
+
+
 class IntentParserNode:
     """사용자 쿼리의 의도를 분석하여 적절한 모드를 결정하는 노드.
 
     또한 임베딩 기반 Tier 라우팅을 수행합니다.
     선택된 tier는 인프라 레이어(StreamProcessor)에서 실제 모델로 매핑됩니다.
+
+    V8.3: 플러그인 기반 Query Transformation
+    - QueryTransformer 플러그인들을 순차 적용
+    - 대화 맥락 반영, 질의 분해 등
     """
 
     def __init__(self, settings: Any):
@@ -110,6 +517,16 @@ class IntentParserNode:
         """
         self.settings = settings
         self.tier_router = TierRouter(settings)
+
+        # Query Transformation 플러그인 등록 (순서대로 실행)
+        self.transformers: list[QueryTransformer] = [
+            ContextualizeTransformer(),  # 1순위: 대화 맥락 반영
+            DecomposeTransformer(),       # 2순위: 질의 분해
+            HyDETransformer(),            # 3순위: HyDE (Phase 1B)
+            # StepBackTransformer(),      # 4순위: Step-back (Phase 5+에서 추가 예정)
+        ]
+
+        logger.info(f"[IntentParser] Initialized with {len(self.transformers)} query transformers")
 
     async def __call__(self, state: GraphState) -> dict:
         """의도 분석 실행.
@@ -146,7 +563,7 @@ class IntentParserNode:
             query_analysis = None
             search_queries = [query]  # 기본값: 원본 쿼리
             if current_mode in (AIMode.SEARCH, AIMode.HYBRID):
-                query_analysis = await self.reformulate_query(query)
+                query_analysis = await self.reformulate_query(query, state)
                 if query_analysis:
                     search_queries = query_analysis.get("sub_queries", [query])
                     thinking_steps.append(ThinkingStep(
@@ -194,7 +611,7 @@ class IntentParserNode:
             query_analysis = None
             search_queries = [query]
             if quick_mode in (AIMode.SEARCH, AIMode.HYBRID):
-                query_analysis = await self.reformulate_query(query)
+                query_analysis = await self.reformulate_query(query, state)
                 if query_analysis:
                     search_queries = query_analysis.get("sub_queries", [query])
                     thinking_steps.append(ThinkingStep(
@@ -248,7 +665,7 @@ class IntentParserNode:
             query_analysis = None
             search_queries = [query]
             if mode in (AIMode.SEARCH, AIMode.HYBRID):
-                query_analysis = await self.reformulate_query(query)
+                query_analysis = await self.reformulate_query(query, state)
                 if query_analysis:
                     search_queries = query_analysis.get("sub_queries", [query])
                     thinking_steps.append(ThinkingStep(
@@ -353,14 +770,17 @@ class IntentParserNode:
             logger.warning(f"[IntentParser] Failed to parse JSON: {response[:100]}")
             return {"mode": "simple", "confidence": 0.5, "reason": "파싱 실패"}
 
-    async def reformulate_query(self, query: str) -> QueryAnalysis | None:
-        """형태소 분석 + 임베딩 하이브리드 쿼리 추출.
+    async def reformulate_query(self, query: str, state: GraphState | None = None) -> QueryAnalysis | None:
+        """플러그인 기반 Query Transformation + 형태소 분석 하이브리드 쿼리 추출.
 
-        LLM 의존 없이 형태소 분석으로 키워드를 추출하고,
-        코드/에러 쿼리는 원본을 유지합니다.
+        V8.3: 플러그인 아키텍처 적용
+        1. QueryTransformer 플러그인들을 순차 적용 (대화 맥락, 질의 분해 등)
+        2. 기존 형태소 분석으로 키워드 추출
+        3. 최종 검색 쿼리 목록 생성
 
         Args:
             query: 원본 사용자 쿼리
+            state: 현재 그래프 상태 (대화 히스토리 등)
 
         Returns:
             QueryAnalysis
@@ -368,6 +788,19 @@ class IntentParserNode:
         search_queries = []
         keywords = []
 
+        # ===== Phase 1: Query Transformation Plugins =====
+        if state:
+            logger.info(f"[IntentParser] Applying {len(self.transformers)} query transformers...")
+            for transformer in self.transformers:
+                if transformer.should_apply(query, state):
+                    try:
+                        transformed = await transformer.transform(query, state, self.settings)
+                        search_queries.extend(transformed)
+                        logger.info(f"[IntentParser] {transformer.__class__.__name__} applied: {len(transformed)} queries")
+                    except Exception as e:
+                        logger.error(f"[IntentParser] {transformer.__class__.__name__} failed: {e}")
+
+        # ===== Phase 2: 기존 형태소 분석 기반 키워드 추출 =====
         # 1. 쿼리 타입 감지
         query_type = self._detect_query_type(query)
         logger.info(f"[IntentParser] Query type detected: {query_type}")
@@ -422,7 +855,7 @@ class IntentParserNode:
         #     except Exception as e:
         #         logger.debug(f"[IntentParser] Embedding expansion failed: {e}")
 
-        # 4. 중복 제거 및 정리
+        # ===== Phase 3: 중복 제거 및 최종 쿼리 목록 생성 =====
         seen = set()
         unique_queries = []
         for q in search_queries:
@@ -436,10 +869,13 @@ class IntentParserNode:
         if not unique_queries:
             unique_queries = [query[:100] if len(query) > 100 else query]
 
+        # 최대 5개로 제한 (너무 많으면 검색 시간 증가)
+        unique_queries = unique_queries[:5]
+
         query_analysis = QueryAnalysis(
             original_query=query,
             reformulated_query=unique_queries[0],
-            sub_queries=unique_queries[:4],
+            sub_queries=unique_queries,
             keywords=keywords[:10],
             search_focus=f"키워드: {', '.join(keywords[:3])}" if keywords else "원본 쿼리 검색",
         )

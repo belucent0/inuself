@@ -918,6 +918,25 @@ class LlmSummaryService:
 
         await self.file_repo.update_title(file_id, title)
         await self.file_repo.update_summary_markdown(file_id, summary_md)
+
+        # [Phase 2] 임베딩 자동 생성
+        logger.info(f"[Embedding] Generating embedding for file_id={file_id}")
+        try:
+            from ..utils.embedding import create_embedding
+
+            embedding = await create_embedding(summary_md)
+            if embedding and len(embedding) == 768:
+                await self.file_repo.update_embedding(file_id, embedding)
+                logger.info(f"[Embedding] Successfully stored embedding for file_id={file_id}")
+            else:
+                logger.warning(
+                    f"[Embedding] Invalid embedding dimension for file_id={file_id}: "
+                    f"expected 768, got {len(embedding) if embedding else 0}"
+                )
+        except Exception as e:
+            logger.error(f"[Embedding] Failed to generate embedding for file_id={file_id}: {e}")
+            # 임베딩 실패는 치명적이지 않으므로 계속 진행
+
         await self.file_repo.update_file_status(file_id, FileStatus.COMPLETED)
         await self.file_repo.add_llm_log(
             file_id,

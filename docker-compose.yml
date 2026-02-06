@@ -112,7 +112,7 @@ services:
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
       # Metrics/Logs SDK 완전 비활성화 (404 에러 방지)
-      - OTEL_SDK_DISABLED_INSTRUMENTATIONS=metrics,logging
+      - OTEL_SDK_DISABLED_INSTRUMENTATIONS=metrics,logging,openai
       # FLM Model Configuration (Backend용 - 검색 요약)
       - FLM_LLM_MODEL=${FLM_LLM_MODEL:-lfm2:2.6b}
       - FLM_THINKING_MODEL=${FLM_THINKING_MODEL:-lfm2.5-tk:1.2b}
@@ -318,7 +318,7 @@ services:
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none
       # Metrics/Logs SDK 완전 비활성화 (404 에러 방지)
-      - OTEL_SDK_DISABLED_INSTRUMENTATIONS=metrics,logging
+      - OTEL_SDK_DISABLED_INSTRUMENTATIONS=metrics,logging,openai
       # Note: Worker는 FLM 모델 환경변수 사용 안 함 (Backend에서만 사용)
     depends_on:
       valkey:
