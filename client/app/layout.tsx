@@ -13,6 +13,14 @@ import { Separator } from '@/components/ui/separator'
 import { getPageTitle } from '@/lib/navigation'
 import { Toaster } from 'sonner'
 import { initTelemetry } from '@/lib/telemetry'
+import { ThreadTitleProvider, useThreadTitle } from '@/lib/contexts/ThreadTitleContext'
+import { MoreVertical, Edit2, Trash2 } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 // 클라이언트 환경변수에서 관리자 계정 정보 읽기
 const ADMIN_USERNAME = process.env.NEXT_PUBLIC_ADMIN_USERNAME || 'admin'
@@ -118,23 +126,60 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="ko">
       <body>
-        <SidebarProvider defaultOpen={!isDetailPage}>
-          <AppSidebar />
-          <SidebarInset>
-            <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
-              <SidebarTrigger className="-ml-1" />
-              <Separator orientation="vertical" className="mr-2 h-4" />
-              <h1 className="text-lg font-semibold">
-                {getPageTitle(pathname)}
-              </h1>
-            </header>
-            <main className="flex-1 p-4 md:p-8">
-              {children}
-            </main>
-          </SidebarInset>
-        </SidebarProvider>
-        <Toaster richColors position="top-center" />
+        <ThreadTitleProvider>
+          <SidebarProvider defaultOpen={!isDetailPage}>
+            <AppSidebar />
+            <SidebarInset>
+              {/* 상단바 - viewport 상단에 고정 */}
+              <DynamicHeader pathname={pathname} />
+              <main className="flex-1 p-4 md:p-8">
+                {children}
+              </main>
+            </SidebarInset>
+          </SidebarProvider>
+          <Toaster richColors position="top-center" />
+        </ThreadTitleProvider>
       </body>
     </html>
+  )
+}
+
+// 동적 헤더 컴포넌트 (Context 사용)
+function DynamicHeader({ pathname }: { pathname: string | null }) {
+  const { threadTitle, onEditTitle, onDeleteThread } = useThreadTitle()
+  const isThreadPage = pathname?.startsWith('/chat/')
+
+  return (
+    <header className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-2 border-b px-4 bg-background">
+      <SidebarTrigger className="-ml-1" />
+      <Separator orientation="vertical" className="mr-2 h-4" />
+      <h1 className="text-lg font-semibold flex-1">
+        {isThreadPage ? threadTitle : getPageTitle(pathname)}
+      </h1>
+      {/* 스레드 페이지에서만 메뉴 표시 */}
+      {isThreadPage && (onEditTitle || onDeleteThread) && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon">
+              <MoreVertical className="h-5 w-5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {onEditTitle && (
+              <DropdownMenuItem onClick={onEditTitle}>
+                <Edit2 className="h-4 w-4 mr-2" />
+                제목 변경
+              </DropdownMenuItem>
+            )}
+            {onDeleteThread && (
+              <DropdownMenuItem onClick={onDeleteThread}>
+                <Trash2 className="h-4 w-4 mr-2" />
+                삭제
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </header>
   )
 }
