@@ -17,6 +17,7 @@ from loguru import logger
 from ..state import GraphState, AIMode, ThinkingStep, SearchResult
 from ..tools.web_search import search_web, WebSearchError
 from ...utils.quality_assessor import QualityAssessor
+from .entity_disambiguator import EntityDisambiguator
 
 # RRF 상수 (일반적으로 60 사용)
 RRF_K = 60
@@ -36,6 +37,7 @@ class SearcherNode:
         """
         self.settings = settings
         self.quality_assessor = QualityAssessor()
+        self.entity_disambiguator = EntityDisambiguator()  # V9.0: Entity Disambiguation
 
     async def __call__(self, state: GraphState) -> dict:
         """검색 실행.
@@ -74,8 +76,11 @@ class SearcherNode:
 
         try:
             for sq in search_queries:
+                # V9.0 Phase 3: 쿼리 명확화 적용
+                clarified_query = self.entity_disambiguator.clarify_query(sq)
+
                 results = await search_web(
-                    sq,
+                    clarified_query,  # 명확화된 쿼리 사용
                     settings=self.settings,
                     limit=search_options["limit"],
                     categories=search_options["categories"],
@@ -146,10 +151,16 @@ class SearcherNode:
             # 품질 점수 기준 재정렬
             results = self.quality_assessor.rerank_by_quality(results)
 
+            # V9.0: Entity Disambiguation 적용
+            results = await self.entity_disambiguator.disambiguate(
+                query=original_query,
+                search_results=results
+            )
+
             # 최종 제한
             results = results[:search_options["limit"]]
 
-            logger.info(f"[Searcher] Final {len(results)} results (quality-filtered and reranked)")
+            logger.info(f"[Searcher] Final {len(results)} results (quality-filtered, disambiguated, and reranked)")
 
             # 결과를 SearchResult 형식으로 변환
             search_results = [

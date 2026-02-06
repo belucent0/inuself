@@ -408,6 +408,8 @@ async def stream_ai_agent(
     mode: str | None = None,
     metadata: dict | None = None,
     enable_reflection: bool = False,
+    enable_retry: bool = True,
+    max_retries: int = 3,
     user_id: str | None = None,
 ) -> AsyncIterator[dict]:
     """AI 에이전트 스트리밍 실행 (토큰 단위 스트리밍).
@@ -419,6 +421,8 @@ async def stream_ai_agent(
         mode: 강제 모드 지정 (선택)
         metadata: 추가 메타데이터
         enable_reflection: Reflector 노드 활성화 여부
+        enable_retry: 검색 재시도 활성화 여부 (V8.4)
+        max_retries: 최대 재시도 횟수 (V8.4)
         user_id: 사용자 ID (Langfuse 트레이싱용)
 
     Yields:
@@ -542,6 +546,13 @@ async def stream_ai_agent(
         "error": None,
         "conversation_id": conversation_id,
         "metadata": metadata or {},
+        # V8.4: 검색 재시도 관련
+        "search_retry_count": 0,
+        "search_quality_score": 0.0,
+        "original_search_queries": [],
+        "failed_queries": [],
+        "needs_retry": False,
+        "retry_reason": "",
     }
 
     try:
@@ -600,29 +611,115 @@ async def stream_ai_agent(
                 }
             }
 
+        # IntentParser가 생성한 search_queries 전송 (메타데이터 저장용)
+        search_queries_from_intent = state.get("search_queries", [])
+        if search_queries_from_intent:
+            yield {
+                "type": "search_queries",
+                "data": search_queries_from_intent
+            }
+
         # 2. 모드별 처리
         if detected_mode == AIMode.SEARCH:
-            # 웹 검색
-            yield {"type": "thinking", "data": {"step": "web_search", "content": "웹 검색 중..."}}
+            # V8.4: 재시도 활성화 시 루프 구조
+            if enable_retry:
+                from .nodes import SearchEvaluatorNode, QueryRewriterNode, FallbackHandlerNode
 
-            search_span = None
-            if langfuse_trace:
-                search_span = langfuse_trace.span(name="web_search", input={"queries": state.get("search_queries", [])})
+                # 원본 쿼리 저장
+                state["original_search_queries"] = state.get("search_queries", [query])
 
-            searcher = SearcherNode(settings)
-            search_result = await searcher(state)
-            state.update(search_result)
+                # 재시도 루프
+                while state["search_retry_count"] < max_retries:
+                    # 웹 검색
+                    retry_count = state["search_retry_count"]
+                    if retry_count == 0:
+                        yield {"type": "thinking", "data": {"step": "web_search", "content": "웹 검색 중..."}}
+                    else:
+                        yield {"type": "thinking", "data": {"step": f"web_search_retry_{retry_count}", "content": f"재검색 중... ({retry_count}/{max_retries})"}}
 
-            search_results = state.get("search_results", [])
-            if search_span:
-                search_span.end(output={"results_count": len(search_results)})
+                    search_span = None
+                    if langfuse_trace:
+                        search_span = langfuse_trace.span(name=f"web_search_attempt_{retry_count}", input={"queries": state.get("search_queries", [])})
 
-            if search_results:
-                yield {
-                    "type": "thinking",
-                    "data": {"step": "web_search_complete", "content": f"웹 검색 완료: {len(search_results)}개 결과"}
-                }
-                yield {"type": "sources", "data": _convert_sources(search_results)}
+                    searcher = SearcherNode(settings)
+                    search_result = await searcher(state)
+                    state.update(search_result)
+
+                    search_results = state.get("search_results", [])
+                    if search_span:
+                        search_span.end(output={"results_count": len(search_results)})
+
+                    # 품질 평가
+                    evaluator = SearchEvaluatorNode(settings)
+                    eval_result = await evaluator(state)
+                    state.update(eval_result)
+
+                    quality_score = state.get("search_quality_score", 0.0)
+                    needs_retry = state.get("needs_retry", False)
+                    retry_reason = state.get("retry_reason", "")
+
+                    # 재시도 정보 전송
+                    if retry_count > 0 or needs_retry:
+                        yield {
+                            "type": "search_retry",
+                            "data": {
+                                "retry_count": retry_count,
+                                "quality_score": quality_score,
+                                "reason": retry_reason,
+                                "results_count": len(search_results),
+                            }
+                        }
+
+                    # 성공하면 루프 종료
+                    if not needs_retry:
+                        if search_results:
+                            yield {
+                                "type": "thinking",
+                                "data": {"step": "web_search_complete", "content": f"웹 검색 완료: {len(search_results)}개 결과"}
+                            }
+                            yield {"type": "sources", "data": _convert_sources(search_results)}
+                            # 검색 결과 전송 (메타데이터 저장용)
+                            yield {"type": "search_results", "data": search_results}
+                        break
+
+                    # 최대 재시도 도달 시 폴백
+                    if retry_count >= max_retries - 1:
+                        fallback = FallbackHandlerNode(settings)
+                        fallback_result = await fallback(state)
+                        state.update(fallback_result)
+                        break
+
+                    # 쿼리 재작성
+                    rewriter = QueryRewriterNode(settings)
+                    rewrite_result = await rewriter(state)
+                    state.update(rewrite_result)
+
+                    # 재시도 카운트 증가
+                    state["search_retry_count"] = retry_count + 1
+            else:
+                # 재시도 비활성화 - 기존 로직
+                yield {"type": "thinking", "data": {"step": "web_search", "content": "웹 검색 중..."}}
+
+                search_span = None
+                if langfuse_trace:
+                    search_span = langfuse_trace.span(name="web_search", input={"queries": state.get("search_queries", [])})
+
+                searcher = SearcherNode(settings)
+                search_result = await searcher(state)
+                state.update(search_result)
+
+                search_results = state.get("search_results", [])
+                if search_span:
+                    search_span.end(output={"results_count": len(search_results)})
+
+                if search_results:
+                    yield {
+                        "type": "thinking",
+                        "data": {"step": "web_search_complete", "content": f"웹 검색 완료: {len(search_results)}개 결과"}
+                    }
+                    yield {"type": "sources", "data": _convert_sources(search_results)}
+                    # 검색 결과 전송 (메타데이터 저장용)
+                    yield {"type": "search_results", "data": search_results}
 
         elif detected_mode == AIMode.RAG:
             # RAG 검색
@@ -646,6 +743,8 @@ async def stream_ai_agent(
                     "data": {"step": "rag_search_complete", "content": f"문서 검색 완료: {len(search_results)}개 결과"}
                 }
                 yield {"type": "sources", "data": _convert_sources(search_results)}
+                # 검색 결과 전송 (메타데이터 저장용)
+                yield {"type": "search_results", "data": search_results}
 
         elif detected_mode == AIMode.HYBRID:
             # 웹 + RAG 검색
@@ -681,6 +780,8 @@ async def stream_ai_agent(
                     "data": {"step": "search_complete", "content": f"통합 검색 완료: {len(all_results)}개 결과"}
                 }
                 yield {"type": "sources", "data": _convert_sources(all_results)}
+                # 검색 결과 전송 (메타데이터 저장용)
+                yield {"type": "search_results", "data": all_results}
 
         elif detected_mode == AIMode.REASONING:
             # 추론 모드 - Reasoner가 직접 응답 생성
