@@ -5,6 +5,9 @@ from .searcher import SearcherNode
 from .rag_retriever import RAGRetrieverNode
 from .reasoner import ReasonerNode
 from .reflector import ReflectorNode
+from .search_evaluator import SearchEvaluatorNode
+from .query_rewriter import QueryRewriterNode
+from .fallback_handler import FallbackHandlerNode
 
 __all__ = [
     "IntentParserNode",
@@ -13,4 +16,7 @@ __all__ = [
     "RAGRetrieverNode",
     "ReasonerNode",
     "ReflectorNode",
+    "SearchEvaluatorNode",
+    "QueryRewriterNode",
+    "FallbackHandlerNode",
 ]

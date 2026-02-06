@@ -770,6 +770,60 @@ class IntentParserNode:
             logger.warning(f"[IntentParser] Failed to parse JSON: {response[:100]}")
             return {"mode": "simple", "confidence": 0.5, "reason": "파싱 실패"}
 
+    def _clean_imperative_forms(self, query: str) -> str:
+        """명령형/요청형 표현 제거 (V8.5: Query Refinement).
+
+        "안내바람", "알려줘", "조사해" 등의 표현을 제거하여
+        검색 쿼리 품질을 향상시킵니다.
+
+        Args:
+            query: 원본 쿼리
+
+        Returns:
+            정제된 쿼리
+
+        Examples:
+            >>> _clean_imperative_forms("2030년까지의 투자계획을 안내바람")
+            "2030년까지의 투자계획"
+            >>> _clean_imperative_forms("파이썬 웹 프레임워크 비교해줘")
+            "파이썬 웹 프레임워크 비교"
+        """
+        # 명령형/요청형 패턴 (순서 중요: 긴 패턴부터 매칭)
+        patterns = [
+            # "-해주세요" 계열
+            (r"(을|를|에|에서|로|과|와)\s*(알려주세요|설명해주세요|안내해주세요|조사해주세요|찾아주세요|검색해주세요|분석해주세요|비교해주세요)", ""),
+            (r"\s*(알려주세요|설명해주세요|안내해주세요|조사해주세요|찾아주세요|검색해주세요|분석해주세요|비교해주세요)", ""),
+
+            # "-해줘" 계열
+            (r"(을|를|에|에서|로|과|와)\s*(알려줘|설명해줘|안내해줘|조사해줘|찾아줘|검색해줘|분석해줘|비교해줘)", ""),
+            (r"\s*(알려줘|설명해줘|안내해줘|조사해줘|찾아줘|검색해줘|분석해줘|비교해줘)", ""),
+
+            # "-해달라" 계열
+            (r"(을|를|에|에서|로|과|와)\s*(알려달라|설명해달라|안내해달라|조사해달라|찾아달라|검색해달라|분석해달라|비교해달라)", ""),
+            (r"\s*(알려달라|설명해달라|안내해달라|조사해달라|찾아달라|검색해달라|분석해달라|비교해달라)", ""),
+
+            # "-바람" 계열 (가장 문제되는 패턴)
+            (r"(을|를|에|에서|로|과|와)\s*(안내바람|알림바람|조사바람|검색바람)", ""),
+            (r"\s*(안내바람|알림바람|조사바람|검색바람)", ""),
+
+            # "-해" 단순 명령형
+            (r"(을|를|에|에서|로|과|와)\s*(알려|설명해|안내해|조사해|찾아|검색해|분석해|비교해)$", ""),
+        ]
+
+        cleaned = query
+        for pattern, replacement in patterns:
+            cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+
+        # 연속 공백 제거 및 trim
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+        # 결과가 너무 짧아지면 원본 반환
+        if len(cleaned) < 2:
+            return query
+
+        logger.debug(f"[IntentParser] Query cleaned: '{query}' → '{cleaned}'")
+        return cleaned
+
     async def reformulate_query(self, query: str, state: GraphState | None = None) -> QueryAnalysis | None:
         """플러그인 기반 Query Transformation + 형태소 분석 하이브리드 쿼리 추출.
 
@@ -778,6 +832,9 @@ class IntentParserNode:
         2. 기존 형태소 분석으로 키워드 추출
         3. 최종 검색 쿼리 목록 생성
 
+        V8.5: Query Refinement 추가
+        0. 명령형/요청형 표현 제거 (전처리)
+
         Args:
             query: 원본 사용자 쿼리
             state: 현재 그래프 상태 (대화 히스토리 등)
@@ -785,6 +842,9 @@ class IntentParserNode:
         Returns:
             QueryAnalysis
         """
+        # ===== Phase 0: Query Refinement (V8.5) =====
+        refined_query = self._clean_imperative_forms(query)
+
         search_queries = []
         keywords = []
 
@@ -792,6 +852,7 @@ class IntentParserNode:
         if state:
             logger.info(f"[IntentParser] Applying {len(self.transformers)} query transformers...")
             for transformer in self.transformers:
+                # Transformer는 원본 쿼리 사용 (컨텍스트 이해 위해)
                 if transformer.should_apply(query, state):
                     try:
                         transformed = await transformer.transform(query, state, self.settings)
@@ -801,34 +862,34 @@ class IntentParserNode:
                         logger.error(f"[IntentParser] {transformer.__class__.__name__} failed: {e}")
 
         # ===== Phase 2: 기존 형태소 분석 기반 키워드 추출 =====
-        # 1. 쿼리 타입 감지
-        query_type = self._detect_query_type(query)
+        # 1. 쿼리 타입 감지 (정제된 쿼리 사용)
+        query_type = self._detect_query_type(refined_query)
         logger.info(f"[IntentParser] Query type detected: {query_type}")
 
-        # 2. 타입별 처리
+        # 2. 타입별 처리 (정제된 쿼리 사용)
         if query_type == "code_error":
             # 코드/에러: 원본 쿼리 앞부분 사용 (에러 메시지 핵심 부분)
-            truncated = self._extract_error_core(query)
+            truncated = self._extract_error_core(refined_query)
             if truncated:
                 search_queries.append(truncated)
-            keywords = self._extract_code_keywords(query)
+            keywords = self._extract_code_keywords(refined_query)
 
         elif query_type == "natural":
-            # 자연어 질문: 형태소 분석으로 키워드 추출
-            keywords, pos_map = self._extract_keywords_with_pos(query)
+            # 자연어 질문: 형태소 분석으로 키워드 추출 (정제된 쿼리)
+            keywords, pos_map = self._extract_keywords_with_pos(refined_query)
             if keywords:
                 # 키워드 조합으로 검색 쿼리 생성 (고유명사/외국어는 따옴표)
                 keyword_query = self._build_search_query(keywords, pos_map)
                 search_queries.append(keyword_query)
 
-            # 원본 쿼리도 추가 (적절한 길이면)
-            if len(query) <= 80:
-                search_queries.insert(0, query)
+            # 정제된 쿼리 추가 (적절한 길이면)
+            if len(refined_query) <= 80:
+                search_queries.insert(0, refined_query)
 
         else:  # mixed
-            # 혼합: 둘 다 시도
-            keywords, pos_map = self._extract_keywords_with_pos(query)
-            code_keywords = self._extract_code_keywords(query)
+            # 혼합: 둘 다 시도 (정제된 쿼리)
+            keywords, pos_map = self._extract_keywords_with_pos(refined_query)
+            code_keywords = self._extract_code_keywords(refined_query)
             # 코드 키워드 추가 (품사는 SL로 처리 - 정확한 매칭 필요)
             for ck in code_keywords:
                 if ck not in pos_map:
@@ -839,11 +900,11 @@ class IntentParserNode:
                 keyword_query = self._build_search_query(keywords, pos_map)
                 search_queries.append(keyword_query)
 
-            # 원본 쿼리 앞부분
-            if len(query) <= 120:
-                search_queries.insert(0, query)
+            # 정제된 쿼리 앞부분
+            if len(refined_query) <= 120:
+                search_queries.insert(0, refined_query)
             else:
-                search_queries.insert(0, query[:120] + "...")
+                search_queries.insert(0, refined_query[:120] + "...")
 
         # 3. 임베딩 기반 의미 확장 (현재 비활성화 - 지연 방지)
         # TODO: 임베딩 서버가 안정화되면 다시 활성화
@@ -865,16 +926,16 @@ class IntentParserNode:
                 seen.add(q_normalized)
                 unique_queries.append(q_clean)
 
-        # 최소 1개 쿼리 보장
+        # 최소 1개 쿼리 보장 (정제된 쿼리 사용)
         if not unique_queries:
-            unique_queries = [query[:100] if len(query) > 100 else query]
+            unique_queries = [refined_query[:100] if len(refined_query) > 100 else refined_query]
 
         # 최대 5개로 제한 (너무 많으면 검색 시간 증가)
         unique_queries = unique_queries[:5]
 
         query_analysis = QueryAnalysis(
             original_query=query,
-            reformulated_query=unique_queries[0],
+            reformulated_query=refined_query if refined_query != query else unique_queries[0],  # V8.5: 정제된 쿼리 표시
             sub_queries=unique_queries,
             keywords=keywords[:10],
             search_focus=f"키워드: {', '.join(keywords[:3])}" if keywords else "원본 쿼리 검색",
