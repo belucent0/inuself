@@ -1,0 +1,97 @@
+{
+  "test_run_id": "d7159a03-57bd-4843-9a72-3682107c77a3",
+  "timestamp": 1770346662.761415,
+  "conversations_tested": 1,
+  "evaluations": [
+    {
+      "conversation_id": "e5a2fee1-92ce-4e8d-a7a6-ac2d5229e47d",
+      "evaluator_name": "Intent",
+      "score": 70.0,
+      "metrics": {
+        "total_messages": 2,
+        "messages_with_intent": 2,
+        "intent_coverage": 100.0,
+        "avg_confidence": 0.0,
+        "mode_distribution": {
+          "unknown": 2
+        }
+      },
+      "passed": true,
+      "issues": [],
+      "timestamp": 1770346662.761415
+    },
+    {
+      "conversation_id": "e5a2fee1-92ce-4e8d-a7a6-ac2d5229e47d",
+      "evaluator_name": "Citation",
+      "score": 100.0,
+      "metrics": {
+        "note": "No citations required"
+      },
+      "passed": true,
+      "issues": [],
+      "timestamp": 1770346662.761415
+    },
+    {
+      "conversation_id": "e5a2fee1-92ce-4e8d-a7a6-ac2d5229e47d",
+      "evaluator_name": "QualityScore",
+      "score": 0.0,
+      "metrics": {
+        "avg_quality_score": 0.0,
+        "min_quality_score": 0.0,
+        "max_quality_score": 0.0,
+        "total_evaluated": 2
+      },
+      "passed": false,
+      "issues": [
+        "매우 낮은 품질 응답 존재: 최소 0.0점",
+        "전체적으로 낮은 품질: 평균 0.0점"
+      ],
+      "timestamp": 1770346662.761415
+    }
+  ],
+  "summary": {
+    "total_evaluations": 3,
+    "passed": 2,
+    "failed": 1,
+    "pass_rate": 66.66666666666666,
+    "by_evaluator": {
+      "Intent": {
+        "total": 1,
+        "passed": 1,
+        "avg_score": 70.0,
+        "pass_rate": 100.0
+      },
+      "Citation": {
+        "total": 1,
+        "passed": 1,
+        "avg_score": 100.0,
+        "pass_rate": 100.0
+      },
+      "QualityScore": {
+        "total": 1,
+        "passed": 0,
+        "avg_score": 0.0,
+        "pass_rate": 0.0
+      }
+    }
+  },
+  "config": {
+    "max_conversations": 1,
+    "evaluators_enabled": [
+      "intent",
+      "search",
+      "citation",
+      "quality"
+    ],
+    "masking_enabled": false,
+    "report_formats": [
+      "json",
+      "markdown"
+    ],
+    "report_output_dir": "./quality_test_reports",
+    "redis_host": "localhost",
+    "redis_port": 6379,
+    "redis_db": 0,
+    "verbose": true
+  }
+}
