@@ -139,7 +139,7 @@ class GeneratorNode:
                         "url": r.get("url", ""),
                         "snippet": r.get("snippet", ""),
                     }
-                    for r in search_results[:5]
+                    for r in search_results  # 모든 출처 사용
                 ]
 
                 # Citation 추출 및 검증
@@ -214,6 +214,16 @@ class GeneratorNode:
 
         # 스트리밍 응답 생성 - 동적 모델 라우팅
         selected_model = state.get("selected_model")
+
+        yield {
+            "type": "thinking",
+            "data": {
+                "step": "generation_start",
+                "content": f"응답 생성 시작 (모델: {selected_model or 'auto'})",
+                "timestamp": time.time()
+            }
+        }
+
         response_chunks = []
         async for chunk in async_llm_completion_stream(
             settings=self.settings,
@@ -222,6 +232,15 @@ class GeneratorNode:
         ):
             response_chunks.append(chunk)
             yield {"type": "content", "data": chunk}
+
+        yield {
+            "type": "thinking",
+            "data": {
+                "step": "generation_complete",
+                "content": "응답 생성 완료",
+                "timestamp": time.time()
+            }
+        }
 
         # 완료 시 소스 정보 및 Citation 전송
         sources = self._extract_sources(search_results)
@@ -237,7 +256,7 @@ class GeneratorNode:
                     "url": r.get("url", ""),
                     "snippet": r.get("snippet", ""),
                 }
-                for r in search_results[:5]
+                for r in search_results  # 모든 출처 사용
             ]
 
             _, citation_objects = self.citation_manager.process(
@@ -267,7 +286,7 @@ class GeneratorNode:
             return ""
 
         context_parts = []
-        for i, result in enumerate(search_results[:5], 1):  # 최대 5개
+        for i, result in enumerate(search_results[:10], 1):  # 최대 10개 (LLM 컨텍스트 효율성)
             source_type = "웹" if result.get("source") == "web" else "문서"
             # Phase 4: 출처 번호를 명확히 표시
             context_parts.append(
@@ -301,5 +320,5 @@ class GeneratorNode:
                 snippet=r.get("snippet", "")[:200],  # 요약 제한
                 source=r.get("source", "web"),
             )
-            for r in search_results[:5]
+            for r in search_results  # 모든 출처 사용
         ]

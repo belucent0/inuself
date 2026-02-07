@@ -220,17 +220,17 @@ class SearcherNode:
         Returns:
             검색 옵션 딕셔너리
         """
-        # 기본 옵션
+        # 기본 옵션 - 검색 결과는 충분히 수집하고 LLM 컨텍스트에서 제한
         options = {
-            "limit": 10,
+            "limit": 15,  # 검색 결과 최대 15개 수집
             "categories": "general",
             "language": "ko-KR",
         }
 
         # 모드별 조정
         if mode == AIMode.HYBRID:
-            # 하이브리드 모드에서는 더 많은 결과
-            options["limit"] = 5  # 웹 검색 5개 + RAG 5개로 분배
+            # 하이브리드 모드에서는 웹 + RAG 분배
+            options["limit"] = 8  # 웹 검색 8개 + RAG 8개로 분배
 
         # 쿼리 기반 카테고리 자동 감지
         query_lower = query.lower()
