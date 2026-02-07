@@ -13,10 +13,14 @@ export function dispatchContentsRefresh() {
   window.dispatchEvent(new Event(CONTENTS_REFRESH_EVENT))
 }
 
-const PROCESSING_STATUSES: ContentStatus[] = [
-  'QUEUED', 'PULLING', 'PROCESSING', 'OCR_PROCESSING', 'SUMMARY_QUEUED', 'SUMMARIZING',
-]
-const POLL_INTERVAL = 5000
+const POLL_INTERVALS: Partial<Record<ContentStatus, number>> = {
+  QUEUED: 5000,
+  PULLING: 5000,
+  PROCESSING: 10000,
+  OCR_PROCESSING: 10000,
+  SUMMARY_QUEUED: 20000,
+  SUMMARIZING: 20000,
+}
 
 interface UseContentsResult {
   contents: ContentSummary[]
@@ -80,12 +84,23 @@ export function useContents(params?: ContentListParams): UseContentsResult {
     return () => window.removeEventListener(CONTENTS_REFRESH_EVENT, handler)
   }, [fetchContents])
 
-  // 처리 중 콘텐츠가 있으면 자동 폴링
-  const hasProcessing = data?.contents?.some((c) => PROCESSING_STATUSES.includes(c.status)) ?? false
+  // 처리 중 콘텐츠의 가장 짧은 폴링 간격 계산
+  const pollInterval = (() => {
+    const contents = data?.contents
+    if (!contents?.length) return 0
+    let shortest = 0
+    for (const c of contents) {
+      const interval = POLL_INTERVALS[c.status]
+      if (interval && (!shortest || interval < shortest)) {
+        shortest = interval
+      }
+    }
+    return shortest
+  })()
 
   useEffect(() => {
-    if (hasProcessing) {
-      pollRef.current = setInterval(() => fetchContents(), POLL_INTERVAL)
+    if (pollInterval > 0) {
+      pollRef.current = setInterval(() => fetchContents(), pollInterval)
     } else if (pollRef.current) {
       clearInterval(pollRef.current)
       pollRef.current = null
@@ -96,7 +111,7 @@ export function useContents(params?: ContentListParams): UseContentsResult {
         pollRef.current = null
       }
     }
-  }, [hasProcessing, fetchContents])
+  }, [pollInterval, fetchContents])
 
   return {
     contents: data?.contents || [],
