@@ -81,13 +81,17 @@ def get_langfuse_handler(
 
     Args:
         user_id: 사용자 식별자
-        session_id: 대화 세션 ID (conversation_id)
+        session_id: 대화 세션 ID (thread_id를 Langfuse session_id로 매핑)
         trace_name: 트레이스 이름 (기본: ai-chat)
         tags: 추가 태그
         metadata: 추가 메타데이터
 
     Returns:
         CallbackHandler 또는 None (비활성화 시)
+
+    Note:
+        - Langfuse에서는 session_id가 표준 용어
+        - 우리 시스템의 thread_id를 session_id로 매핑하여 전달
     """
     if not is_langfuse_enabled():
         return None
