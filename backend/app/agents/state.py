@@ -75,7 +75,7 @@ class GraphState(TypedDict):
         sources: 출처 목록
         citations: Citation (출처 표시) 목록 - Phase 4
         error: 에러 메시지 (있는 경우)
-        conversation_id: 대화 ID (Redis 저장용)
+        thread_id: 대화 ID (Redis 저장용)
         metadata: 추가 메타데이터
 
         # V8.4: 검색 재시도 관련 필드
@@ -101,7 +101,7 @@ class GraphState(TypedDict):
     sources: list[SearchResult]
     citations: list[CitationInfo]  # Phase 4: Citation 추가
     error: str | None
-    conversation_id: str | None
+    thread_id: str | None
     metadata: dict
 
     # V8.4: 검색 재시도 관련

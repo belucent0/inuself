@@ -26,6 +26,22 @@ from .nodes import (
 )
 
 
+# 상태 표기용 모드/티어 한글 표시명 매핑
+MODE_DISPLAY_MAP = {
+    AIMode.SEARCH: "웹 검색",
+    AIMode.REASONING: "추론",
+    AIMode.RAG: "문서 검색",
+    AIMode.HYBRID: "하이브리드",
+    AIMode.SIMPLE: "일반"
+}
+
+TIER_DISPLAY_MAP = {
+    "tier-simple": "간단",
+    "tier-medium": "보통",
+    "tier-complex": "복잡"
+}
+
+
 def create_ai_graph(settings: Any, enable_reflection: bool = False) -> StateGraph:
     """AI 에이전트 그래프 생성.
 
@@ -282,7 +298,7 @@ async def run_ai_agent(
     *,
     settings: Any,
     query: str,
-    conversation_id: str | None = None,
+    thread_id: str | None = None,
     mode: str | None = None,
     metadata: dict | None = None,
     enable_reflection: bool = False,
@@ -295,7 +311,7 @@ async def run_ai_agent(
     Args:
         settings: 애플리케이션 설정
         query: 사용자 쿼리
-        conversation_id: 대화 ID (선택)
+        thread_id: 대화 ID (선택)
         mode: 강제 모드 지정 (선택, auto면 자동 감지)
         metadata: 추가 메타데이터
         enable_reflection: Reflector 노드 활성화 여부
@@ -307,7 +323,7 @@ async def run_ai_agent(
         실행 결과 딕셔너리
     """
     from langchain_core.messages import AIMessage
-    from ..services.conversation_service import get_conversation_service
+    from ..services.thread_service import get_thread_service
 
     # V8.4: 재시도 기능 선택
     if enable_retry:
@@ -321,13 +337,13 @@ async def run_ai_agent(
 
     # 대화 히스토리 불러오기 (V8.3: Query Contextualization 지원)
     messages = [HumanMessage(content=query)]
-    if conversation_id:
+    if thread_id:
         try:
-            conv_service = get_conversation_service()
-            conversation = await conv_service.get_conversation(conversation_id)
-            if conversation and conversation.messages:
+            thread_svc = get_thread_service()
+            thread = await thread_svc.get_thread(thread_id)
+            if thread and thread.messages:
                 # 최근 10개 메시지만 (5턴) - 너무 긴 히스토리는 성능 저하
-                recent_messages = conversation.messages[-10:]
+                recent_messages = thread.messages[-10:]
                 messages = []
                 for msg in recent_messages:
                     if msg.role == "user":
@@ -336,9 +352,9 @@ async def run_ai_agent(
                         messages.append(AIMessage(content=msg.content))
                 # 현재 쿼리 추가
                 messages.append(HumanMessage(content=query))
-                logger.info(f"[AIAgent] Loaded {len(messages)-1} previous messages for conversation {conversation_id}")
+                logger.info(f"[AIAgent] Loaded {len(messages)-1} previous messages for thread {thread_id}")
         except Exception as e:
-            logger.warning(f"[AIAgent] Failed to load conversation history: {e}")
+            logger.warning(f"[AIAgent] Failed to load thread history: {e}")
             messages = [HumanMessage(content=query)]
 
     # 초기 상태 구성
@@ -357,7 +373,7 @@ async def run_ai_agent(
         "response": "",
         "sources": [],
         "error": None,
-        "conversation_id": conversation_id,
+        "thread_id": thread_id,
         "metadata": metadata or {},
         # V8.4: 검색 재시도 관련
         "search_retry_count": 0,
@@ -369,7 +385,7 @@ async def run_ai_agent(
     }
 
     # 그래프 실행
-    logger.info(f"[AIAgent] Running agent: query='{query[:50]}...', mode={mode}, conversation_id={conversation_id}")
+    logger.info(f"[AIAgent] Running agent: query='{query[:50]}...', mode={mode}, thread_id={thread_id}")
 
     # LLM Observability 콜백 핸들러 설정 (Langfuse)
     callbacks = []
@@ -377,7 +393,7 @@ async def run_ai_agent(
     # Langfuse 핸들러
     langfuse_handler = get_langfuse_handler(
         user_id=user_id,
-        session_id=conversation_id,
+        session_id=thread_id,
         trace_name="ai-chat",
         tags=["ai-chat-mode", f"mode:{mode or 'auto'}"],
         metadata=metadata,
@@ -404,7 +420,7 @@ async def stream_ai_agent(
     *,
     settings: Any,
     query: str,
-    conversation_id: str | None = None,
+    thread_id: str | None = None,
     mode: str | None = None,
     metadata: dict | None = None,
     enable_reflection: bool = False,
@@ -417,7 +433,7 @@ async def stream_ai_agent(
     Args:
         settings: 애플리케이션 설정
         query: 사용자 쿼리
-        conversation_id: 대화 ID (선택)
+        thread_id: 대화 ID (선택)
         mode: 강제 모드 지정 (선택)
         metadata: 추가 메타데이터
         enable_reflection: Reflector 노드 활성화 여부
@@ -470,7 +486,7 @@ async def stream_ai_agent(
                 langfuse_trace = langfuse_client.trace(
                     name="ai-chat-stream",
                     user_id=user_id,
-                    session_id=conversation_id,
+                    session_id=thread_id,
                     input={"query": query, "mode": mode},
                     tags=["ai-chat-mode", "streaming", f"mode:{mode or 'auto'}"],
                     metadata=metadata or {},
@@ -488,7 +504,7 @@ async def stream_ai_agent(
         attributes={
             "ai.query": query[:200],
             "ai.mode": mode or "auto",
-            "ai.conversation_id": conversation_id or "",
+            "ai.thread_id": thread_id or "",
             "ai.user_id": user_id or "",
             "ai.operation": "stream",
         }
@@ -505,16 +521,16 @@ async def stream_ai_agent(
 
     # 대화 히스토리 불러오기 (V8.3: Query Contextualization 지원)
     from langchain_core.messages import AIMessage
-    from ..services.conversation_service import get_conversation_service
+    from ..services.thread_service import get_thread_service
 
     messages = [HumanMessage(content=query)]
-    if conversation_id:
+    if thread_id:
         try:
-            conv_service = get_conversation_service()
-            conversation = await conv_service.get_conversation(conversation_id)
-            if conversation and conversation.messages:
+            thread_svc = get_thread_service()
+            thread = await thread_svc.get_thread(thread_id)
+            if thread and thread.messages:
                 # 최근 10개 메시지만 (5턴)
-                recent_messages = conversation.messages[-10:]
+                recent_messages = thread.messages[-10:]
                 messages = []
                 for msg in recent_messages:
                     if msg.role == "user":
@@ -525,7 +541,7 @@ async def stream_ai_agent(
                 messages.append(HumanMessage(content=query))
                 logger.info(f"[AIAgent] Stream: Loaded {len(messages)-1} previous messages")
         except Exception as e:
-            logger.warning(f"[AIAgent] Stream: Failed to load conversation history: {e}")
+            logger.warning(f"[AIAgent] Stream: Failed to load thread history: {e}")
             messages = [HumanMessage(content=query)]
 
     # 초기 상태 구성
@@ -544,7 +560,7 @@ async def stream_ai_agent(
         "response": "",
         "sources": [],
         "error": None,
-        "conversation_id": conversation_id,
+        "thread_id": thread_id,
         "metadata": metadata or {},
         # V8.4: 검색 재시도 관련
         "search_retry_count": 0,
@@ -588,11 +604,15 @@ async def stream_ai_agent(
                 }
             )
 
+        # 모드/티어 한글 표시명 가져오기
+        mode_display = MODE_DISPLAY_MAP.get(detected_mode, str(detected_mode))
+        tier_display = TIER_DISPLAY_MAP.get(selected_tier, selected_tier)
+
         yield {
             "type": "thinking",
             "data": {
                 "step": "intent_result",
-                "content": f"모드: {detected_mode}, 티어: {selected_tier}",
+                "content": f"모드 선택 완료 ({mode_display} / {tier_display})",
                 "mode": str(detected_mode),
                 "selected_tier": selected_tier,
             }
@@ -610,6 +630,18 @@ async def stream_ai_agent(
                     "search_focus": query_analysis.get("search_focus", ""),
                 }
             }
+
+            # 쿼리 생성 후 상태 표시
+            search_queries = query_analysis.get("sub_queries", [])
+            if search_queries:
+                queries_text = "\n".join([f"- {q}" for q in search_queries])
+                yield {
+                    "type": "thinking",
+                    "data": {
+                        "step": "query_generated",
+                        "content": f"검색 쿼리 {len(search_queries)}개 생성:\n{queries_text}"
+                    }
+                }
 
         # IntentParser가 생성한 search_queries 전송 (메타데이터 저장용)
         search_queries_from_intent = state.get("search_queries", [])
@@ -673,13 +705,17 @@ async def stream_ai_agent(
                     # 성공하면 루프 종료
                     if not needs_retry:
                         if search_results:
-                            yield {
-                                "type": "thinking",
-                                "data": {"step": "web_search_complete", "content": f"웹 검색 완료: {len(search_results)}개 결과"}
-                            }
                             yield {"type": "sources", "data": _convert_sources(search_results)}
                             # 검색 결과 전송 (메타데이터 저장용)
                             yield {"type": "search_results", "data": search_results}
+                            # 출처 분석 상태 표시
+                            yield {
+                                "type": "thinking",
+                                "data": {
+                                    "step": "source_analysis",
+                                    "content": f"답변 준비 중 (출처 {len(search_results)}개 분석)"
+                                }
+                            }
                         break
 
                     # 최대 재시도 도달 시 폴백
@@ -698,7 +734,7 @@ async def stream_ai_agent(
                     state["search_retry_count"] = retry_count + 1
             else:
                 # 재시도 비활성화 - 기존 로직
-                yield {"type": "thinking", "data": {"step": "web_search", "content": "웹 검색 중..."}}
+                # "웹 검색 중..." 메시지는 쿼리 생성 후 이미 표시되므로 제거
 
                 search_span = None
                 if langfuse_trace:
@@ -713,13 +749,17 @@ async def stream_ai_agent(
                     search_span.end(output={"results_count": len(search_results)})
 
                 if search_results:
-                    yield {
-                        "type": "thinking",
-                        "data": {"step": "web_search_complete", "content": f"웹 검색 완료: {len(search_results)}개 결과"}
-                    }
                     yield {"type": "sources", "data": _convert_sources(search_results)}
                     # 검색 결과 전송 (메타데이터 저장용)
                     yield {"type": "search_results", "data": search_results}
+                    # 출처 분석 상태 표시
+                    yield {
+                        "type": "thinking",
+                        "data": {
+                            "step": "source_analysis",
+                            "content": f"답변 준비 중 (출처 {len(search_results)}개 분석)"
+                        }
+                    }
 
         elif detected_mode == AIMode.RAG:
             # RAG 검색
@@ -837,12 +877,18 @@ async def stream_ai_agent(
             event_type = chunk_event.get("type", "")
             event_data = chunk_event.get("data")
 
-            if event_type == "content":
+            if event_type == "thinking":
+                # 사고 과정 전달
+                yield chunk_event
+            elif event_type == "content":
                 # 토큰 단위 스트리밍
                 full_response += event_data
                 yield {"type": "token", "data": event_data}
             elif event_type == "sources":
                 yield {"type": "sources", "data": _convert_sources(event_data)}
+            elif event_type == "citations":
+                # Citation 정보 전달
+                yield chunk_event
             elif event_type == "done":
                 # 최종 응답
                 pass

@@ -23,8 +23,11 @@ from pathlib import Path
 
 # 패키지 경로 추가 (상대 임포트 지원)
 _THIS_DIR = Path(__file__).parent
+_INFRA_DIR = _THIS_DIR.parent  # infra/ 디렉토리 (shared 모듈 접근용)
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
+if str(_INFRA_DIR) not in sys.path:
+    sys.path.insert(0, str(_INFRA_DIR))
 
 import signal
 import asyncio

@@ -37,13 +37,12 @@ from services.job_tracker import JobTracker, JobStatus
 from services.provider_service import ProviderService
 
 # Tier 라우팅 설정 (공통 모듈에서 import)
-try:
-    from shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
-except ImportError:
-    import sys
-
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-    from infra.shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
+# infra/ 디렉토리를 path에 추가하여 shared 모듈 접근
+import sys
+_infra_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+if _infra_dir not in sys.path:
+    sys.path.insert(0, _infra_dir)
+from shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
 
 # TYPE_CHECKING으로 순환 임포트 방지
 from typing import TYPE_CHECKING
