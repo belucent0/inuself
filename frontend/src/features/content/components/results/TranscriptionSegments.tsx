@@ -20,9 +20,10 @@ interface TranscriptionSegmentsProps {
 }
 
 function formatTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60)
+  const hrs = Math.floor(seconds / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
   const secs = Math.floor(seconds % 60)
-  return `${mins}:${secs.toString().padStart(2, '0')}`
+  return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
 }
 
 const SPEAKER_COLORS = [
@@ -112,7 +113,7 @@ export function TranscriptionSegments({
               className="flex gap-1"
             >
               {/* 타임라인: 시간 + 세로선 */}
-              <div className="flex flex-col items-center shrink-0 w-10">
+              <div className="flex flex-col items-center shrink-0 w-14">
                 <div className="h-1.5 w-px bg-border" />
                 <button
                   onClick={() => handleSeek(segment.start)}
