@@ -1,4 +1,8 @@
-# AI 채팅 워크플로우 (V8.3)
+# AI 채팅 워크플로우 (V8.5)
+
+> **V8.5 변경사항**: `conversation_id` → `thread_id` 용어 통일
+> - API 파라미터/응답, Redis 키, 프론트엔드 상태 모두 `thread_id` 사용
+> - Langfuse에서는 `session_id`로 매핑
 
 ## 개요
 
@@ -16,7 +20,7 @@ AI 채팅 시스템의 전체 데이터 플로우와 각 컴포넌트의 역할�
 ┌─────────────────────────────────────────────────────────────┐
 │ 2. Controller Layer                                          │
 │    - 비즈니스 로직 조율                                        │
-│    - 대화 히스토리 관리 (Redis)                               │
+│    - 스레드 히스토리 관리 (Redis)                               │
 └─────────────────────────────────────────────────────────────┘
                           ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -61,7 +65,7 @@ workflow.compile()
 **NOT 담당**:
 - ❌ 비즈니스 로직 (검색, 추론 등은 Node에서 처리)
 - ❌ LLM 호출 (llm_client.py가 담당)
-- ❌ 대화 히스토리 관리 (conversation_service.py가 담당)
+- ❌ 스레드 히스토리 관리 (thread_service.py가 담당)
 
 ### LangChain Core가 담당하는 것 (메시지 타입)
 
@@ -74,7 +78,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 - ✅ **타입 안정성**: TypedDict로 메시지 구조 정의
 
 **사용 위치**:
-- `GraphState.messages`: 대화 히스토리 저장
+- `GraphState.messages`: 스레드 히스토리 저장
 - `ContextualizeTransformer`: 대화 맥락 분석 시 메시지 타입 체크
 
 ---
@@ -94,10 +98,10 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 ┌─────────────────────────────────────────────────────────────┐
 │ ai_chat_controller.py:ai_chat()                              │
 │                                                              │
-│ 1. conversation_service.get_or_create_conversation()         │
+│ 1. thread_service.get_or_create_thread()         │
 │    - Redis에서 기존 대화 조회 또는 새 대화 생성               │
 │                                                              │
-│ 2. conversation_service.add_message(role="user")             │
+│ 2. thread_service.add_message(role="user")             │
 │    - 사용자 메시지를 Redis에 저장                            │
 │                                                              │
 │ 3. run_ai_agent() 호출                                       │
@@ -106,8 +110,8 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
 **주요 파일**:
 - `app/controllers/ai_chat_controller.py:70-120`
-- `app/services/conversation_service.py:154-173` (대화 조회)
-- `app/services/conversation_service.py:223-247` (메시지 추가)
+- `app/services/thread_service.py:154-173` (대화 조회)
+- `app/services/thread_service.py:223-247` (메시지 추가)
 
 ---
 
@@ -117,13 +121,13 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 ┌─────────────────────────────────────────────────────────────┐
 │ graph.py:run_ai_agent()                                      │
 │                                                              │
-│ A. 대화 히스토리 로드 (V8.3 추가)                             │
+│ A. 스레드 히스토리 로드 (V8.3 추가)                             │
 │    ┌──────────────────────────────────────────────┐         │
-│    │ conversation_service.get_conversation()       │         │
+│    │ thread_service.get_thread()       │         │
 │    │ → Redis에서 최근 10개 메시지 로드             │         │
 │    │                                               │         │
 │    │ messages = []                                 │         │
-│    │ for msg in conversation.messages[-10:]:       │         │
+│    │ for msg in thread.messages[-10:]:       │         │
 │    │     if msg.role == "user":                    │         │
 │    │         messages.append(HumanMessage(...))    │         │
 │    │     elif msg.role == "assistant":             │         │
@@ -134,7 +138,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 │                                                              │
 │ B. 초기 상태 구성                                            │
 │    initial_state = {                                         │
-│        "messages": messages,  # ← 대화 히스토리!            │
+│        "messages": messages,  # ← 스레드 히스토리!            │
 │        "query": "그것의 용도는?",                            │
 │        "mode": AIMode.SEARCH,                                │
 │        ...                                                   │
@@ -147,7 +151,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 ```
 
 **주요 파일**:
-- `app/agents/graph.py:159-176` (대화 히스토리 로드)
+- `app/agents/graph.py:159-176` (스레드 히스토리 로드)
 - `app/agents/graph.py:178-202` (초기 상태 구성 및 실행)
 
 **LangGraph 역할**:
@@ -182,7 +186,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 │    │                                               │         │
 │    │   ┌─────────────────────────────────────┐    │         │
 │    │   │ ContextualizeTransformer            │    │         │
-│    │   │ - 대화 히스토리 분석                │    │         │
+│    │   │ - 스레드 히스토리 분석                │    │         │
 │    │   │ - LLM으로 쿼리 재작성               │    │         │
 │    │   │ "그것" → "파이썬"                   │    │         │
 │    │   └─────────────────────────────────────┘    │         │
@@ -263,7 +267,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 │                                                              │
 │ 1. 컨텍스트 구성                                             │
 │    - search_results (검색 결과)                              │
-│    - messages (대화 히스토리)                                │
+│    - messages (스레드 히스토리)                                │
 │                                                              │
 │ 2. 프롬프트 생성                                             │
 │    system_prompt = """검색 결과를 바탕으로 답변..."""         │
@@ -302,7 +306,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 │                                                              │
 │ # AI 응답 저장 (Redis)                                       │
 │ await conv_service.add_message(                              │
-│     conversation_id,                                         │
+│     thread_id,                                         │
 │     role="assistant",                                        │
 │     content=result["response"],                              │
 │     metadata={                                               │
@@ -314,7 +318,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 │ # 클라이언트에 응답 반환                                      │
 │ return ChatResponse(                                         │
 │     response=result["response"],                             │
-│     conversation_id=conversation_id,                         │
+│     thread_id=thread_id,                         │
 │     sources=result["sources"],                               │
 │     thinking_steps=result["thinking_steps"]                  │
 │ )                                                            │
@@ -373,7 +377,7 @@ async def transform(self, query, state, settings):
     recent_messages = messages[-6:]
 
     # 대화 맥락 포맷팅
-    conversation_context = """
+    thread_context = """
     사용자: 파이썬이란?
     AI: 파이썬은 고수준 프로그래밍 언어입니다...
     """
@@ -381,7 +385,7 @@ async def transform(self, query, state, settings):
     # LLM에 재작성 요청
     prompt = f"""
     이전 대화:
-    {conversation_context}
+    {thread_context}
 
     현재 질문: "{query}"
 
@@ -398,13 +402,13 @@ async def transform(self, query, state, settings):
 
 ## 데이터 저장 위치
 
-### Redis (대화 히스토리)
+### Redis (스레드 히스토리)
 
 ```
-키: "ai:conversation:{conversation_id}"
+키: "ai:thread:{thread_id}"
 TTL: 7일
 값: JSON {
-    "conversation_id": "...",
+    "thread_id": "...",
     "messages": [
         {"role": "user", "content": "...", "timestamp": 123},
         {"role": "assistant", "content": "...", "timestamp": 456}
@@ -415,8 +419,8 @@ TTL: 7일
 ```
 
 **사용 위치**:
-- `conversation_service.py:142-143` (저장)
-- `conversation_service.py:164` (조회)
+- `thread_service.py:142-143` (저장)
+- `thread_service.py:164` (조회)
 - `graph.py:165-175` (로드 → LangChain messages 변환)
 
 ### PostgreSQL (사용자 콘텐츠, 문서)
@@ -426,7 +430,7 @@ TTL: 7일
 
 ### 없는 것
 
-- ❌ 대화 히스토리 영구 저장 (Redis만, 7일 후 삭제)
+- ❌ 스레드 히스토리 영구 저장 (Redis만, 7일 후 삭제)
 - ❌ LLM 응답 캐싱 (매번 새로 생성)
 
 ---
@@ -447,7 +451,7 @@ TTL: 7일
 ```
 ✅ 비즈니스 로직 (Intent 분석, 검색, RAG, 추론, 생성)
 ✅ LLM 호출 (llm_client.py → LiteLLM → OpenAI/Anthropic)
-✅ 대화 히스토리 관리 (Redis)
+✅ 스레드 히스토리 관리 (Redis)
 ✅ 웹 검색 (SearXNG)
 ✅ Query Transformation (V8.3 플러그인)
 ✅ Tier 라우팅 (모델 선택)
@@ -467,7 +471,7 @@ TTL: 7일
 |-----|------|------|
 | **API** | `app/main.py` | FastAPI 앱 진입점 |
 | **Controller** | `app/controllers/ai_chat_controller.py` | 요청 처리 및 조율 |
-| **Service** | `app/services/conversation_service.py` | 대화 히스토리 관리 (Redis) |
+| **Service** | `app/services/thread_service.py` | 스레드 히스토리 관리 (Redis) |
 | **Agent** | `app/agents/graph.py` | LangGraph 워크플로우 정의 |
 | **Node** | `app/agents/nodes/intent_parser.py` | Intent 분석 + Query Transformation (V8.3) |
 | **Node** | `app/agents/nodes/searcher.py` | 웹 검색 |
@@ -482,7 +486,7 @@ TTL: 7일
 
 1. **LangGraph 역할**: 워크플로우 오케스트레이션 (노드 간 상태 전달 및 라우팅)
 2. **전체 로직에서 비중**: ~10% (대부분은 자체 구현)
-3. **대화 히스토리**: Redis에 저장 (7일 TTL)
+3. **스레드 히스토리**: Redis에 저장 (7일 TTL)
 4. **V8.3 핵심**: 대화 맥락 기반 쿼리 재작성 (ContextualizeTransformer)
 5. **데이터 플로우**: API → Controller → LangGraph → Nodes → Tools → LLM/Search
 

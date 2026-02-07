@@ -88,7 +88,7 @@ services:
       minio:
         condition: service_healthy
       litellm:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -127,25 +127,28 @@ services:
       retries: 5
       start_period: 30s
 
+  # Vite 기반 프론트엔드 (React + Vite)
   frontend:
     build:
-      context: ./client
+      context: ./frontend
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_ADMIN_USERNAME=${NEXT_PUBLIC_ADMIN_USERNAME}
-        - NEXT_PUBLIC_ADMIN_PASSWORD=${NEXT_PUBLIC_ADMIN_PASSWORD}
-        - NEXT_PUBLIC_GRAFANA_LOKI_URL=${NEXT_PUBLIC_GRAFANA_LOKI_URL}
+        - VITE_ADMIN_USERNAME=${VITE_ADMIN_USERNAME:-${NEXT_PUBLIC_ADMIN_USERNAME}}
+        - VITE_ADMIN_PASSWORD=${VITE_ADMIN_PASSWORD:-${NEXT_PUBLIC_ADMIN_PASSWORD}}
+        - VITE_GRAFANA_DASHBOARD_URL=${VITE_GRAFANA_DASHBOARD_URL:-${NEXT_PUBLIC_GRAFANA_DASHBOARD_URL}}
+        - VITE_GRAFANA_LOKI_URL=${VITE_GRAFANA_LOKI_URL:-${NEXT_PUBLIC_GRAFANA_LOKI_URL}}
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-}
+    image: asr-frontend:latest
     container_name: asr-frontend
     ports:
       - "3000:3000"
-    environment:
-      API_BASE_URL: http://asr-backend:8000/api
-      NEXT_PUBLIC_GRAFANA_DASHBOARD_URL: ${NEXT_PUBLIC_GRAFANA_DASHBOARD_URL:-}
-      NEXT_PUBLIC_FLOWER_URL: ${NEXT_PUBLIC_FLOWER_URL:-}
-    depends_on:
-      backend:
-        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3000/health" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   prometheus:
     image: prom/prometheus:latest
@@ -155,7 +158,7 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
-      - '--web.enable-remote-write-receiver'  # Tempo metrics_generator에서 remote_write 수신
+      - '--web.enable-remote-write-receiver' # Tempo metrics_generator에서 remote_write 수신
     ports:
       - "9090:9090"
     volumes:
@@ -187,40 +190,6 @@ services:
       - tempo
     restart: unless-stopped
 
-  # OpenTelemetry Collector - 트레이스 팬아웃 - 현재 미사용
-  # otel-collector:
-  #   image: otel/opentelemetry-collector-contrib:latest
-  #   container_name: asr-otel-collector
-  #   command: [ "--config", "/etc/otel-collector/config.yaml" ]
-  #   ports:
-  #     - "4317:4317"
-  #     - "4318:4318"
-  #     - "8889:8888"
-  #   volumes:
-  #     - ./infra/otel-collector/config.yaml:/etc/otel-collector/config.yaml:ro
-  #   depends_on:
-  #     - tempo
-  #   restart: unless-stopped
-
-  # Jaeger - 분산 추적 (V8.1에서 Tempo로 완전 대체, 제거됨)
-  # jaeger:
-  #   image: jaegertracing/jaeger:2.14.1
-  #   container_name: asr-jaeger
-  #   command: [ "--config", "/etc/jaeger/config.yaml" ]
-  #   ports:
-  #     - "16686:16686"
-  #     - "9411:9411"
-  #     - "13133:13133"
-  #   volumes:
-  #     - ./infra/jaeger/config.yaml:/etc/jaeger/config.yaml:ro
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test: [ "CMD", "wget", "--spider", "-q", "http://localhost:13133/status" ]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 10s
-
   # Loki - 로그 집계 시스템
   loki:
     image: grafana/loki:latest
@@ -246,7 +215,7 @@ services:
       - ./infra/promtail/config.yaml:/etc/promtail/config.yaml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./logs:/host-logs:ro  # PM2 로그 수집용
+      - ./logs:/host-logs:ro # PM2 로그 수집용
     command: -config.file=/etc/promtail/config.yaml
     depends_on:
       - loki
@@ -257,12 +226,12 @@ services:
     image: grafana/tempo:2.4.2
     container_name: asr-tempo
     ports:
-      - "3200:3200"   # Tempo API
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
+      - "3200:3200" # Tempo API
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
     volumes:
       - ./infra/tempo/config.yaml:/etc/tempo/config.yaml:ro
-      - tempo-data:/var/tempo  # WAL, metrics_generator 데이터
+      - tempo-data:/var/tempo # WAL, metrics_generator 데이터
     command: -config.file=/etc/tempo/config.yaml -config.expand-env=true
     environment:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
@@ -271,7 +240,7 @@ services:
       minio:
         condition: service_healthy
       prometheus:
-        condition: service_started  # metrics_generator remote_write를 위해
+        condition: service_started # metrics_generator remote_write를 위해
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3200/ready" ]
@@ -340,7 +309,7 @@ services:
     volumes:
       # config.yaml은 이미지에 포함됨 (볼륨 마운트 제거 - Windows 동기화 문제 방지)
       - ./infra/litellm:/app/custom:ro
-      - ./infra/shared:/app/infra/shared:ro  # 공통 tier_config 모듈
+      - ./infra/shared:/app/infra/shared:ro # 공통 tier_config 모듈
     env_file:
       - .env
     environment:
@@ -421,7 +390,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/langfuse/api/public/health"]
+      test: [ "CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/langfuse/api/public/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
