@@ -38,8 +38,10 @@ export interface ContentSummary {
 
 export interface ContentDetail extends ContentSummary {
   file_url?: string
+  media_url?: string
   summary?: string
   summary_html?: string
+  summary_md?: string
   transcription?: TranscriptionData
   document?: DocumentData
   ocr_logs?: string[]
@@ -67,6 +69,7 @@ export interface DocumentData {
   page_count: number
   text_content?: string
   ocr_text?: string
+  html_content?: string
 }
 
 // 상태 레이블 매핑

@@ -224,7 +224,7 @@ function StreamingMessage({
   const hasContent = content && content.trim().length > 0
 
   return (
-    <div className="px-2 py-1 min-h-[50vh] animate-in fade-in duration-300">
+    <div className="px-2 py-1 animate-in fade-in duration-300">
       {/* 로딩 인디케이터 - 답변 생성 전에만 표시 */}
       {!hasContent && thinkingSteps.length === 0 && (
         <div className="flex flex-col gap-4 py-4">
@@ -433,9 +433,12 @@ export function ChatArea({
         style={{ paddingBottom: `calc(${inputHeight}px + 2rem)` }}
       >
         {/* 중앙 정렬 래퍼 추가 */}
-        <div className="max-w-3xl mx-auto px-4 py-6">
+        <div className={cn(
+          "max-w-3xl mx-auto px-4 py-6",
+          messages.length === 0 && !isStreaming && "flex items-center justify-center h-full"
+        )}>
           {messages.length === 0 && !isStreaming && (
-            <div className="flex flex-col items-center justify-center min-h-[calc(100vh-250px)] text-center text-muted-foreground">
+            <div className="flex flex-col items-center justify-center text-center text-muted-foreground">
               <Bot className="h-10 w-10 sm:h-12 sm:w-12 mb-3 opacity-50" />
               <p className="text-sm sm:text-base">대화를 시작해보세요</p>
             </div>
