@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react'
-import { ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, Upload } from 'lucide-react'
 import { Button } from '@/shared/components/ui/button'
 import { Card, CardContent } from '@/shared/components/ui/card'
 import {
@@ -31,9 +31,10 @@ interface ContentListProps {
   pagination?: PaginationProps
   onDelete?: (ids: string[]) => Promise<void>
   onRetry?: (id: string, type: 'asr' | 'ocr' | 'summary') => Promise<void>
+  onUpload?: () => void
 }
 
-export function ContentList({ contents, pagination, onDelete, onRetry }: ContentListProps) {
+export function ContentList({ contents, pagination, onDelete, onRetry, onUpload }: ContentListProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isDeleting, setIsDeleting] = useState(false)
   const [message, setMessage] = useState('')
@@ -105,7 +106,7 @@ export function ContentList({ contents, pagination, onDelete, onRetry }: Content
     return (
       <Card>
         <CardContent className="pt-6">
-          <p className="text-muted-foreground">
+          <p className="text-base text-muted-foreground">
             아직 처리된 콘텐츠가 없습니다. 파일을 업로드해 보세요.
           </p>
         </CardContent>
@@ -118,8 +119,8 @@ export function ContentList({ contents, pagination, onDelete, onRetry }: Content
 
   return (
     <div className="space-y-2 md:space-y-4 pt-2 md:pt-0">
-      {/* 액션 버튼 */}
-      <div className="flex gap-2 flex-wrap">
+      {/* 액션 바 */}
+      <div className="flex items-center gap-2 flex-wrap">
         <Button
           type="button"
           variant={allSelected ? 'secondary' : 'outline'}
@@ -138,13 +139,39 @@ export function ContentList({ contents, pagination, onDelete, onRetry }: Content
             {isDeleting ? '삭제 중...' : `선택 삭제 (${selectedIds.size}개)`}
           </Button>
         )}
+        {pagination && (
+          <div className="flex items-center gap-2 ml-auto">
+            <Select
+              value={pagination.pageSize.toString()}
+              onValueChange={(value) => {
+                pagination.onPageSizeChange?.(parseInt(value, 10))
+              }}
+            >
+              <SelectTrigger className="h-8 w-[70px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="12">12</SelectItem>
+                <SelectItem value="24">24</SelectItem>
+                <SelectItem value="48">48</SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="hidden md:inline text-sm text-muted-foreground">개</span>
+          </div>
+        )}
+        {onUpload && (
+          <Button type="button" onClick={onUpload}>
+            <Upload className="h-4 w-4 mr-2" />
+            업로드
+          </Button>
+        )}
       </div>
 
       {/* 메시지 */}
       {message && (
         <div
           className={cn(
-            'p-3 rounded-md text-sm',
+            'p-3 rounded-md text-base',
             message.includes('실패')
               ? 'bg-destructive/10 text-destructive'
               : 'bg-primary/10 text-primary'
@@ -155,7 +182,7 @@ export function ContentList({ contents, pagination, onDelete, onRetry }: Content
       )}
 
       {/* 콘텐츠 목록 */}
-      <div className="space-y-2.5 md:space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
         {contents.map((item) => (
           <ContentCard
             key={item.id}
@@ -169,28 +196,8 @@ export function ContentList({ contents, pagination, onDelete, onRetry }: Content
 
       {/* 페이지네이션 */}
       {pagination && (
-        <div className="relative flex items-center justify-between px-2 py-4">
-          <div className="flex items-center gap-2">
-            <Select
-              value={pagination.pageSize.toString()}
-              onValueChange={(value) => {
-                pagination.onPageSizeChange?.(parseInt(value, 10))
-              }}
-            >
-              <SelectTrigger className="h-8 w-[70px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="5">5</SelectItem>
-                <SelectItem value="10">10</SelectItem>
-                <SelectItem value="20">20</SelectItem>
-                <SelectItem value="50">50</SelectItem>
-              </SelectContent>
-            </Select>
-            <span className="hidden md:inline text-sm text-muted-foreground">개 행</span>
-          </div>
-
-          <div className="absolute left-1/2 transform -translate-x-1/2 flex items-center gap-1 md:gap-2">
+        <div className="flex items-center justify-center px-2 py-4">
+          <div className="flex items-center gap-1 md:gap-2">
             <Button
               variant="outline"
               size="icon"
@@ -211,7 +218,7 @@ export function ContentList({ contents, pagination, onDelete, onRetry }: Content
             </Button>
 
             <div className="flex items-center justify-center min-w-[45px]">
-              <span className="text-sm font-medium">
+              <span className="text-base font-medium">
                 {pagination.currentPage} / {pagination.totalPages}
               </span>
             </div>

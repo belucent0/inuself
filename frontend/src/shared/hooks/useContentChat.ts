@@ -8,23 +8,23 @@
 import { useState, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 import { httpClient } from '@/shared/services'
-import type { Source, ThinkingStep } from '@/shared/types'
+import type { SearchSource, ThinkingStep, AIMode } from '@/features/chat/types'
 
 interface ContentMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp?: number
   metadata?: {
-    sources?: Source[]
+    sources?: SearchSource[]
     thinking_steps?: ThinkingStep[]
-    mode?: string
+    mode?: AIMode
   }
 }
 
 interface StreamingMetadata {
   currentMessage: string
   thinkingSteps: ThinkingStep[]
-  sources: Source[]
+  sources: SearchSource[]
 }
 
 interface SSEChunk {
@@ -60,7 +60,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
       const decoder = new TextDecoder()
       let buffer = ''
       let fullContent = ''
-      let sources: Source[] = []
+      let sources: SearchSource[] = []
       let thinkingSteps: ThinkingStep[] = []
 
       while (true) {
@@ -89,7 +89,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
               }))
               break
             case 'source':
-              sources.push(chunk.data as Source)
+              sources.push(chunk.data as SearchSource)
               setStreamingMetadata((prev) => ({
                 ...prev,
                 sources: [...sources],
@@ -97,7 +97,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
               break
             case 'sources':
               sources = Array.isArray(chunk.data)
-                ? (chunk.data as Source[])
+                ? (chunk.data as SearchSource[])
                 : []
               setStreamingMetadata((prev) => ({
                 ...prev,
@@ -132,7 +132,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
                 role: 'assistant',
                 content: fullContent,
                 timestamp: Date.now() / 1000,
-                metadata: { sources, thinking_steps: thinkingSteps, mode },
+                metadata: { sources, thinking_steps: thinkingSteps, mode: mode as AIMode },
               }
               setMessages((prev) => [...prev, assistantMessage])
               setIsLoading(false)

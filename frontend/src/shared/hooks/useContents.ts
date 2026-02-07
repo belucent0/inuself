@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { contentsApi, type ContentListResponse, type ContentListParams } from '@/shared/services/endpoints/contents'
 import type { ContentSummary, ContentDetail } from '@/features/content/types'
 
@@ -20,11 +21,28 @@ interface UseContentsResult {
 }
 
 export function useContents(params?: ContentListParams): UseContentsResult {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [data, setData] = useState<ContentListResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
-  const [page, setPage] = useState(params?.page || 1)
-  const [pageSize, setPageSize] = useState(params?.pageSize || 10)
+
+  const page = Number(searchParams.get('page')) || params?.page || 1
+  const pageSize = Number(searchParams.get('pageSize')) || params?.pageSize || 12
+
+  const setPage = (p: number) => {
+    setSearchParams((prev) => {
+      prev.set('page', String(p))
+      return prev
+    })
+  }
+
+  const setPageSize = (size: number) => {
+    setSearchParams((prev) => {
+      prev.set('pageSize', String(size))
+      prev.set('page', '1')
+      return prev
+    })
+  }
 
   const fetchContents = useCallback(async () => {
     setIsLoading(true)
