@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { uploadApi } from '@/shared/services/endpoints/upload'
+import { dispatchContentsRefresh } from '@/shared/hooks/useContents'
 import { Button } from '@/shared/components/ui/button'
 import {
   Dialog,
@@ -153,13 +154,12 @@ export default function UploadForm() {
         fileInputRef.current.value = ''
       }
 
-      // 토스트 알림
       toast.success('파일이 처리 대기열에 추가되었습니다', {
         description: filename,
       })
 
-      // 목록 페이지로 이동하고 자동 새로고침
-      navigate('/contents?refresh=' + Date.now())
+      navigate('/contents')
+      dispatchContentsRefresh()
     } catch (error) {
       setStatus('')
       toast.error('업로드 실패', {
@@ -222,13 +222,12 @@ export default function UploadForm() {
         fileInputRef.current.value = ''
       }
 
-      // 토스트 알림
       toast.success('파일이 처리 대기열에 추가되었습니다', {
         description: filename,
       })
 
-      // 목록 페이지로 이동하고 자동 새로고침 (쿼리 파라미터로 강제 새로고침)
-      navigate('/contents?refresh=' + Date.now())
+      navigate('/contents')
+      dispatchContentsRefresh()
     } catch (error) {
       setStatus('')
       toast.error('업로드 실패', {

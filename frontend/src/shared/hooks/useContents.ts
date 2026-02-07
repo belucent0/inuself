@@ -2,10 +2,21 @@
  * Contents 관련 훅
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { contentsApi, type ContentListResponse, type ContentListParams } from '@/shared/services/endpoints/contents'
-import type { ContentSummary, ContentDetail } from '@/features/content/types'
+import type { ContentSummary, ContentDetail, ContentStatus } from '@/features/content/types'
+
+/** 업로드 완료 후 목록 갱신을 트리거하는 이벤트 */
+export const CONTENTS_REFRESH_EVENT = 'contents:refresh'
+export function dispatchContentsRefresh() {
+  window.dispatchEvent(new Event(CONTENTS_REFRESH_EVENT))
+}
+
+const PROCESSING_STATUSES: ContentStatus[] = [
+  'QUEUED', 'PULLING', 'PROCESSING', 'OCR_PROCESSING', 'SUMMARY_QUEUED', 'SUMMARIZING',
+]
+const POLL_INTERVAL = 5000
 
 interface UseContentsResult {
   contents: ContentSummary[]
@@ -25,6 +36,7 @@ export function useContents(params?: ContentListParams): UseContentsResult {
   const [data, setData] = useState<ContentListResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const page = Number(searchParams.get('page')) || params?.page || 1
   const pageSize = Number(searchParams.get('pageSize')) || params?.pageSize || 12
@@ -60,6 +72,31 @@ export function useContents(params?: ContentListParams): UseContentsResult {
   useEffect(() => {
     fetchContents()
   }, [fetchContents])
+
+  // 커스텀 이벤트로 즉시 갱신
+  useEffect(() => {
+    const handler = () => fetchContents()
+    window.addEventListener(CONTENTS_REFRESH_EVENT, handler)
+    return () => window.removeEventListener(CONTENTS_REFRESH_EVENT, handler)
+  }, [fetchContents])
+
+  // 처리 중 콘텐츠가 있으면 자동 폴링
+  const hasProcessing = data?.contents?.some((c) => PROCESSING_STATUSES.includes(c.status)) ?? false
+
+  useEffect(() => {
+    if (hasProcessing) {
+      pollRef.current = setInterval(() => fetchContents(), POLL_INTERVAL)
+    } else if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [hasProcessing, fetchContents])
 
   return {
     contents: data?.contents || [],
