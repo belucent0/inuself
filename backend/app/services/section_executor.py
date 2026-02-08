@@ -10,7 +10,7 @@ Send API와 조건부 엣지를 활용한 병렬 섹션 생성을 제공합니�
 import asyncio
 import json
 import re
-from typing import List, Dict, Tuple, Any, Optional
+from typing import List, Dict, Tuple, Any, Optional, Callable
 from dataclasses import dataclass
 import time
 
@@ -61,17 +61,28 @@ class SectionGraphExecutor:
         ... )
     """
 
-    def __init__(self, settings: Settings = None):
+    def __init__(
+        self,
+        settings: Settings = None,
+        on_progress: Optional[Callable[[float, str], None]] = None,
+    ):
         """Executor를 초기화합니다.
 
         Args:
             settings: 설정 객체. None이면 기본 설정 사용.
+            on_progress: 진행률 콜백 (progress: 0-100, message: str)
         """
         self.settings = settings or get_settings()
         self.graph = get_section_graph(self.settings)
         self.max_retries = 3
         self.retry_delay = 1.0  # 고정 1초
+        self._on_progress = on_progress
         logger.info("[SectionGraphExecutor] 초기화 완료")
+
+    def _emit(self, progress: float, message: str):
+        """진행률 콜백이 있으면 호출합니다."""
+        if self._on_progress:
+            self._on_progress(progress, message)
 
     async def execute(self, text: str) -> Tuple[str, str]:
         """전체 2단계 요약 실행 (PhaseExecutor 호환).
@@ -89,6 +100,7 @@ class SectionGraphExecutor:
             PhaseExecutionError: 모든 재시도 실패 시
         """
         logger.info("[SectionGraphExecutor] 2단계 요약 시작")
+        self._emit(5, "메타데이터 추출 중...")
 
         # Phase 1: 메타데이터 추출
         phase1_result = await self._execute_phase_1(text)
@@ -103,8 +115,13 @@ class SectionGraphExecutor:
             f"[SectionGraphExecutor] Phase 1 완료: "
             f"title='{title[:50]}...', keywords={len(keywords)}, toc={len(toc)}"
         )
+        self._emit(20, f"구조 분석 완료, 섹션 생성 시작 ({len(toc)}개)")
 
         # Phase 2: 병렬 섹션 생성
+        def _section_progress(completed: int, total: int):
+            progress = 20 + (completed / total) * 70
+            self._emit(round(progress, 1), f"섹션 생성 중 ({completed}/{total})")
+
         if toc:
             sections, detailed_md, logs = await self.generate_sections(
                 toc=toc,
@@ -112,6 +129,7 @@ class SectionGraphExecutor:
                 keywords=keywords,
                 title=title,
                 max_retries=self.max_retries,
+                progress_callback=_section_progress,
             )
         else:
             sections = {}
@@ -119,6 +137,8 @@ class SectionGraphExecutor:
             logger.warning(
                 "[SectionGraphExecutor] TOC가 비어있어 섹션 생성을 건너뜁니다"
             )
+
+        self._emit(92, "요약 조합 중...")
 
         # 핵심 요약 생성 (상세 섹션 내용에서 추출)
         core_summary = self._generate_core_summary(metadata, sections)
@@ -352,6 +372,7 @@ class SectionGraphExecutor:
         keywords: List[str],
         title: str,
         max_retries: int = 3,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> Tuple[Dict[str, str], str, List[Dict[str, Any]]]:
         """상세 섹션을 병렬로 생성합니다.
 
@@ -361,6 +382,7 @@ class SectionGraphExecutor:
             keywords: 키워드 리스트
             title: 콘텐츠 제목
             max_retries: 최대 재시도 횟수 (기본 3)
+            progress_callback: 섹션 완료 콜백 (completed, total)
 
         Returns:
             (sections, detailed_content_md, logs) 튜플
@@ -385,6 +407,7 @@ class SectionGraphExecutor:
             keywords=keywords,
             title=title,
             max_retries=max_retries,
+            progress_callback=progress_callback,
         )
 
         try:
