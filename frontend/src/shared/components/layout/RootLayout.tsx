@@ -80,7 +80,7 @@ function AuthenticatedLayout() {
         <AppSidebar />
         <SidebarInset>
           <DynamicHeader pathname={pathname} />
-          <main className={cn("flex-1 overflow-hidden", isChatPage ? "" : "p-4 md:p-8")}>
+          <main className={cn("flex-1", (isChatPage || isDetailPage) ? "overflow-hidden" : "overflow-y-auto p-4 md:p-8")}>
             <Outlet />
           </main>
         </SidebarInset>

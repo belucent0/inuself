@@ -11,7 +11,7 @@ import {
 } from '@/shared/components/ui/dialog'
 import { Input } from '@/shared/components/ui/input'
 import { Button } from '@/shared/components/ui/button'
-import { Loader2, Youtube } from 'lucide-react'
+import { Youtube } from 'lucide-react'
 
 interface YouTubeLinkModalProps {
   open: boolean
@@ -25,7 +25,6 @@ export function YouTubeLinkModal({
   onSubmit,
 }: YouTubeLinkModalProps) {
   const [url, setUrl] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const isValidYouTubeUrl = (url: string) => {
@@ -38,7 +37,7 @@ export function YouTubeLinkModal({
     return patterns.some((p) => p.test(url))
   }
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
     if (!url.trim()) return
 
     if (!isValidYouTubeUrl(url)) {
@@ -46,22 +45,14 @@ export function YouTubeLinkModal({
       return
     }
 
-    setIsLoading(true)
-    setError(null)
-
-    try {
-      await onSubmit(url)
-      setUrl('')
-      onOpenChange(false)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '업로드에 실패했습니다')
-    } finally {
-      setIsLoading(false)
-    }
+    const submittedUrl = url
+    setUrl('')
+    onOpenChange(false)
+    onSubmit(submittedUrl).catch(() => {})
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !isLoading) {
+    if (e.key === 'Enter') {
       handleSubmit()
     }
   }
@@ -93,7 +84,6 @@ export function YouTubeLinkModal({
               setError(null)
             }}
             onKeyDown={handleKeyDown}
-            disabled={isLoading}
             className="font-mono text-sm"
           />
 
@@ -101,17 +91,10 @@ export function YouTubeLinkModal({
 
           <Button
             onClick={handleSubmit}
-            disabled={!url.trim() || isLoading}
+            disabled={!url.trim()}
             className="w-full"
           >
-            {isLoading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                처리 중...
-              </>
-            ) : (
-              '콘텐츠 생성 시작'
-            )}
+            콘텐츠 생성 시작
           </Button>
 
           <p className="text-xs text-muted-foreground text-center">

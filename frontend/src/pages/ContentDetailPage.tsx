@@ -3,7 +3,7 @@
  */
 
 import { useParams } from 'react-router-dom'
-import { ContentDetailView } from '@/features/content'
+import { ContentDetailLayout } from '@/features/content/components/ContentDetailLayout'
 import { useContent } from '@/shared/hooks/useContents'
 import { contentsApi } from '@/shared/services/endpoints/contents'
 
@@ -16,9 +16,17 @@ export function ContentDetailPage() {
     await contentsApi.deleteContents([id])
   }
 
-  const handleRetry = async (type: 'asr' | 'ocr' | 'summary') => {
+  const handleRetry = async (
+    type: 'asr' | 'ocr' | 'summary',
+    options?: {
+      minSpeakers?: number
+      maxSpeakers?: number
+      ocrMode?: string
+      accuracyMode?: string
+    }
+  ) => {
     if (!id) return
-    await contentsApi.retryProcessing(id, type)
+    await contentsApi.retryProcessing(id, type, options)
     refetch()
   }
 
@@ -32,7 +40,7 @@ export function ContentDetailPage() {
 
   if (error || !content) {
     return (
-      <div className="container mx-auto py-6 px-4">
+      <div className="flex items-center justify-center h-full">
         <div className="text-center text-muted-foreground">
           콘텐츠를 찾을 수 없습니다.
         </div>
@@ -41,12 +49,11 @@ export function ContentDetailPage() {
   }
 
   return (
-    <div className="container mx-auto py-6 px-4">
-      <ContentDetailView
-        content={content}
-        onDelete={handleDelete}
-        onRetry={handleRetry}
-      />
-    </div>
+    <ContentDetailLayout
+      content={content}
+      onDelete={handleDelete}
+      onRetry={handleRetry}
+      refetch={refetch}
+    />
   )
 }

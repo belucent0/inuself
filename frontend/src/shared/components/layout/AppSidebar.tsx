@@ -32,7 +32,6 @@ import {
   SidebarInput,
 } from '@/shared/components/ui/sidebar'
 import { Button } from '@/shared/components/ui/button'
-import { Separator } from '@/shared/components/ui/separator'
 import {
   Tooltip,
   TooltipContent,
@@ -47,6 +46,7 @@ import UploadForm from './UploadForm'
 import { uploadApi } from '@/shared/services/endpoints/upload'
 import { toast } from 'sonner'
 import { useThreads } from '@/shared/hooks/useThreads'
+import { dispatchContentsRefresh } from '@/shared/hooks/useContents'
 import type { Thread } from '@/shared/types'
 
 function groupThreadsByDate(threads: Thread[]) {
@@ -97,10 +97,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }, [pathname, loadThreads])
 
   const handleYouTubeSubmit = async (url: string) => {
-    await uploadApi.uploadYouTubeContent(url)
     toast.success('YouTube 영상 다운로드가 시작되었습니다', {
-      description: '다운로드 진행 상황은 콘텐츠 목록에서 확인할 수 있습니다.',
+      description: '콘텐츠 목록에서 진행 상황을 확인할 수 있습니다.',
     })
+    try {
+      await uploadApi.uploadYouTubeContent(url)
+      dispatchContentsRefresh()
+    } catch {
+      toast.error('YouTube 다운로드 실패', {
+        description: '링크를 확인하고 다시 시도해주세요.',
+      })
+    }
   }
 
   const handleFileUploadClick = () => {
@@ -172,9 +179,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <UploadForm />
         </div>
 
-        <Separator className="my-2" />
-
-        <SidebarGroup>
+        <SidebarGroup className="pt-0">
           <SidebarGroupLabel className="group-data-[collapsible=icon]:hidden">메뉴</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -199,9 +204,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <Separator className="my-2" />
-
-        <SidebarGroup>
+        <SidebarGroup className="pt-0">
           <SidebarGroupLabel className="group-data-[collapsible=icon]:hidden">
             <div className="flex items-center justify-between w-full">
               <span>대화 목록</span>
