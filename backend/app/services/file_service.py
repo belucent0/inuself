@@ -29,6 +29,7 @@ from ..repositories.content_repository import ContentRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
 from ..utils.event_publisher import publish_file_progress
+from ..utils.progress_tracker import ProgressTracker, Phase
 from ..schemas.content import (
     ContentDetail,
     ContentListItem,
@@ -87,6 +88,7 @@ class FileService:
                 "summary_md": content.summary_md,
                 "title": content.title,
                 "created_at": row.created_at,
+                "updated_at": content.updated_at,
                 "speakers": transcription.speakers if transcription else [],
                 "duration_seconds": transcription.duration_seconds
                 if transcription
@@ -669,7 +671,7 @@ class FileService:
             raise
 
     async def prepare_youtube_placeholder(
-        self, title: str, video_id: str
+        self, title: str, video_id: str, source_url: str | None = None
     ) -> models.File:
         """
         YouTube 업로드를 위한 플레이스홀더 파일 레코드 생성.
@@ -689,6 +691,7 @@ class FileService:
             object_key=object_key,
             content_type=ContentType.AUDIO,
             status=FileStatus.PULLING,  # 다운로드 상태로 시작
+            source_url=source_url,
         )
         await self.session.commit()
         return file_obj
@@ -699,6 +702,7 @@ class FileService:
         url: str,
         video_id: str,
         title: str,
+        trace_id: str | None = None,
     ) -> None:
         """
         [Background Task] YouTube 다운로드 수행 및 ASR 큐잉.
@@ -726,48 +730,39 @@ class FileService:
             # 1. YouTube 다운로드 (with Progress)
             logger.info("[YouTube] 백그라운드 다운로드 시작: file_id=%s", file_id)
 
-            # 진행률 상태 관리 (Closure)
-            progress_state = {
-                "last_published": 0.0, 
-                "last_update_time": 0.0,
-                "max_progress": 0.0
-            }
-            import time
+            # 진행률 추적기: 2-stream 다운로드를 연속 구간으로 매핑
+            #   메타데이터: 0-5% | 영상: 5-55% | 음성: 55-95% | S3 업로드: 95-100%
+            def emit_progress(progress: float, step: str, message: str):
+                publish_file_progress(
+                    file_id=file_id,
+                    status="PULLING",
+                    step=step,
+                    progress=progress,
+                    message=message,
+                    metadata={"filename": filename},
+                    trace_id=trace_id,
+                )
+
+            tracker = ProgressTracker(
+                phases=[
+                    Phase("youtube_download_video", 5, 55),
+                    Phase("youtube_download_audio", 55, 95),
+                ],
+                on_progress=emit_progress,
+            )
+
+            tracker.set(3.0, "YouTube 영상 정보 분석 중...", step="youtube_metadata")
 
             def progress_hook(d):
+                if d["status"] == "finished":
+                    tracker.advance_phase()
+                    return
                 if d["status"] == "downloading":
                     try:
-                        p = d.get("_percent_str", "0%").replace("%", "")
-                        current_progress = float(p)
-                    except:
-                        current_progress = 0.0
-
-                    # 1. Monotonic Progress: 진행률이 감소하지 않도록 보정
-                    if current_progress < progress_state["max_progress"]:
-                         current_progress = progress_state["max_progress"]
-                    else:
-                         progress_state["max_progress"] = current_progress
-
-                    # 2. Throttling: 1초에 한 번만 업데이트 (단, 100%이거나 5% 이상 변화 시 즉시 전송)
-                    now = time.time()
-                    should_update = (
-                        current_progress >= 100.0
-                        or (now - progress_state["last_update_time"] >= 1.0)
-                        or (current_progress - progress_state["last_published"] >= 5.0)
-                    )
-
-                    if should_update:
-                        progress_state["last_update_time"] = now
-                        progress_state["last_published"] = current_progress
-                        
-                        publish_file_progress(
-                            file_id=file_id,
-                            status="PULLING",
-                            step="youtube_download",
-                            progress=current_progress,
-                            message=f"YouTube 다운로드 중... {current_progress:.1f}%",
-                            metadata={"filename": filename},
-                        )
+                        raw = float(d.get("_percent_str", "0%").replace("%", ""))
+                    except Exception:
+                        raw = 0.0
+                    tracker.update(raw, f"YouTube 다운로드 중... {tracker.progress:.0f}%")
 
             from functools import partial
 
@@ -788,13 +783,7 @@ class FileService:
 
             # 2. S3 업로드
             logger.info("[YouTube] S3 업로드 시작: %s", object_key)
-            publish_file_progress(
-                file_id=file_id,
-                status="PULLING",  # 업로드 중에도 PULLING 상태 유지
-                step="uploading",
-                progress=0.0,
-                message="클라우드 저장소로 업로드 중...",
-            )
+            tracker.set(95.0, "클라우드 저장소로 업로드 중...", step="uploading")
 
             with open(downloaded_file, "rb") as f:
                 upload_fileobj(f, key=object_key, content_type="video/mp4")
@@ -848,17 +837,18 @@ class FileService:
             logger.info("[YouTube] 완료 및 ASR 큐잉: job_id=%s", job_id)
             publish_file_progress(
                 file_id=file_id,
-                status="queued",
+                status="QUEUED",
                 step="asr_queued",
                 progress=0.0,
                 message="음성 인식 대기 중...",
+                trace_id=trace_id,
             )
 
         except Exception as exc:
             logger.exception("[YouTube] 백그라운드 처리 실패: %s", exc)
             await self.file_repo.update_file_status(
-                file_id, FileStatus.ASR_FAILED
-            )  # 일단 ASR 실패로 처리
+                file_id, FileStatus.DOWNLOAD_FAILED
+            )
             await self.file_repo.add_log(
                 file_id=file_id,
                 log={"event": "youtube_failed", "error": str(exc)},
@@ -868,10 +858,11 @@ class FileService:
 
             publish_file_progress(
                 file_id=file_id,
-                status="failed",
+                status="FAILED",
                 step="youtube_failed",
                 progress=0.0,
                 message=f"YouTube 처리 실패: {str(exc)}",
+                trace_id=trace_id,
             )
         finally:
             if downloaded_file and downloaded_file.exists():

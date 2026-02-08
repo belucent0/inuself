@@ -248,6 +248,11 @@ def create_app() -> FastAPI:
     app.include_router(ai_chat_controller.router)
     logger.info("[FastAPI] AI Chat routes registered at /api/ai")
 
+    # SSE 이벤트 라우터 추가
+    from .controllers import events_controller
+    app.include_router(events_controller.router)
+    logger.info("[FastAPI] SSE events routes registered at /api/events")
+
     @app.get("/health", tags=["system"])
     async def healthcheck():
         return {"status": "ok"}

@@ -14,6 +14,16 @@ from .litellm_client import request_litellm_completion
 from .section_state import SectionGenerationState
 
 
+def _emit_section_progress(state: SectionGenerationState) -> None:
+    """섹션 완료 시 진행률 콜백을 호출합니다."""
+    cb = state.get("progress_callback")
+    if cb:
+        completed = len(state.get("sections", {}))
+        total = len(state.get("toc", []))
+        if total > 0:
+            cb(completed, total)
+
+
 def extract_fallback_content(topic: str, transcript: str) -> str:
     """JSON 파싱 실패 시 원문에서 주제와 관련된 내용을 추출합니다.
 
@@ -302,6 +312,7 @@ def validate_and_route(state: SectionGenerationState) -> str:
     if is_valid:
         # 성공: sections에 저장
         state["sections"][topic] = content
+        _emit_section_progress(state)
         logger.info(f"[LangGraph] 검증 통과: {topic}")
         return "success"
 
@@ -374,6 +385,7 @@ def fallback_section_node(
 
         if is_valid:
             state["sections"][failed_topic] = content
+            _emit_section_progress(state)
             logger.info(
                 f"[LangGraph] 대체 주제 성공: {failed_topic} ({len(content)}자)"
             )
@@ -381,6 +393,7 @@ def fallback_section_node(
             # 그래도 실패하면 기본 메시지
             state["failed_sections"].append(failed_topic)
             state["sections"][failed_topic] = "해당 내용 생성 실패"
+            _emit_section_progress(state)
             logger.warning(f"[LangGraph] 대체 주제도 실패: {failed_topic}")
 
         state["logs"].append(

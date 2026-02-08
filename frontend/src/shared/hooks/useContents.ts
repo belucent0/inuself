@@ -6,6 +6,29 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { contentsApi, type ContentListResponse, type ContentListParams } from '@/shared/services/endpoints/contents'
 import type { ContentSummary, ContentDetail, ContentStatus } from '@/features/content/types'
+import type { FileProgressEvent } from '@/features/upload/types'
+import { useFileProgressSSE } from './useFileProgressSSE'
+
+/** API 재조회 시 클라이언트 측 ephemeral 필드(progress, updated_at)를 보존 */
+function mergeEphemeralState(
+  fresh: ContentListResponse,
+  prev: ContentListResponse | null,
+): ContentListResponse {
+  if (!prev) return fresh
+  const prevMap = new Map(prev.contents.map((c: ContentSummary) => [c.id, c]))
+  return {
+    ...fresh,
+    contents: fresh.contents.map((item) => {
+      const existing = prevMap.get(item.id)
+      if (!existing) return item
+      // 같은 상태이면 SSE로 설정된 progress/updated_at 보존
+      if (existing.status === item.status && existing.progress != null) {
+        return { ...item, progress: existing.progress, updated_at: existing.updated_at || item.updated_at }
+      }
+      return item
+    }),
+  }
+}
 
 /** 업로드 완료 후 목록 갱신을 트리거하는 이벤트 */
 export const CONTENTS_REFRESH_EVENT = 'contents:refresh'
@@ -13,13 +36,21 @@ export function dispatchContentsRefresh() {
   window.dispatchEvent(new Event(CONTENTS_REFRESH_EVENT))
 }
 
-const POLL_INTERVALS: Partial<Record<ContentStatus, number>> = {
-  QUEUED: 5000,
-  PULLING: 5000,
-  PROCESSING: 10000,
-  OCR_PROCESSING: 10000,
-  SUMMARY_QUEUED: 20000,
-  SUMMARIZING: 20000,
+/**
+ * 상태 전환 감지 시 콘텐츠 상세 정보를 갱신할지 판단하는 함수
+ *
+ * 다음과 같은 상태 전환은 메타데이터 변경을 포함할 수 있으므로
+ * 개별 콘텐츠를 다시 조회합니다.
+ */
+const isSignificantStatusChange = (oldStatus: ContentStatus, newStatus: ContentStatus): boolean => {
+  // 처리 시작 또는 완료 단계의 전환은 항상 갱신
+  const startingStates = ['QUEUED', 'PULLING']
+  const completingStates = ['COMPLETED', 'FAILED', 'DOWNLOAD_FAILED']
+
+  const isStart = startingStates.includes(newStatus)
+  const isEnd = completingStates.includes(newStatus)
+
+  return oldStatus !== newStatus && (isStart || isEnd)
 }
 
 interface UseContentsResult {
@@ -40,7 +71,8 @@ export function useContents(params?: ContentListParams): UseContentsResult {
   const [data, setData] = useState<ContentListResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const { addListener, removeListener } = useFileProgressSSE()
+  const updateTaskRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const page = Number(searchParams.get('page')) || params?.page || 1
   const pageSize = Number(searchParams.get('pageSize')) || params?.pageSize || 12
@@ -65,7 +97,7 @@ export function useContents(params?: ContentListParams): UseContentsResult {
     setError(null)
     try {
       const result = await contentsApi.getContents({ ...params, page, pageSize })
-      setData(result)
+      setData((prev) => mergeEphemeralState(result, prev))
     } catch (err) {
       setError(err as Error)
     } finally {
@@ -73,45 +105,97 @@ export function useContents(params?: ContentListParams): UseContentsResult {
     }
   }, [params, page, pageSize])
 
+  // 초기 로드 및 페이지/페이지사이즈 변경 시에만 호출
   useEffect(() => {
     fetchContents()
-  }, [fetchContents])
+  }, [page, pageSize])
 
   // 커스텀 이벤트로 즉시 갱신
   useEffect(() => {
-    const handler = () => fetchContents()
+    const handler = () => {
+      setIsLoading(true)
+      setError(null)
+      contentsApi.getContents({ ...params, page, pageSize }).then((result) => {
+        setData((prev) => mergeEphemeralState(result, prev))
+      }).catch((err) => {
+        setError(err as Error)
+      }).finally(() => {
+        setIsLoading(false)
+      })
+    }
     window.addEventListener(CONTENTS_REFRESH_EVENT, handler)
     return () => window.removeEventListener(CONTENTS_REFRESH_EVENT, handler)
-  }, [fetchContents])
+  }, [params, page, pageSize])
 
-  // 처리 중 콘텐츠의 가장 짧은 폴링 간격 계산
-  const pollInterval = (() => {
-    const contents = data?.contents
-    if (!contents?.length) return 0
-    let shortest = 0
-    for (const c of contents) {
-      const interval = POLL_INTERVALS[c.status]
-      if (interval && (!shortest || interval < shortest)) {
-        shortest = interval
-      }
-    }
-    return shortest
-  })()
+  /**
+   * SSE 이벤트 핸들러: 개별 콘텐츠 상태 업데이트
+   */
+  const handleFileProgress = useCallback((event: FileProgressEvent) => {
+    setData((prev) => {
+      if (!prev) return prev
 
+      const updatedContents = prev.contents.map((item) => {
+        if (item.id !== event.file_id && item.id !== event.content_id) {
+          return item
+        }
+
+        const oldStatus = item.status
+        const newStatus = (event.status ? event.status.toUpperCase() : event.status) as ContentStatus
+
+        // 상태 변경 감지
+        if (isSignificantStatusChange(oldStatus, newStatus)) {
+          // 상태 전환 감지 → 개별 콘텐츠 상세 조회 (약간의 지연 후)
+          if (updateTaskRef.current) {
+            clearTimeout(updateTaskRef.current)
+          }
+          updateTaskRef.current = setTimeout(async () => {
+            try {
+              const updated = await contentsApi.getContent(item.id)
+              // 목록의 해당 항목 업데이트
+              setData((current) => {
+                if (!current) return current
+                return {
+                  ...current,
+                  contents: current.contents.map((c) =>
+                    c.id === item.id ? (updated as ContentSummary) : c
+                  ),
+                }
+              })
+            } catch (err) {
+              console.error(`Failed to update content ${item.id}:`, err)
+            }
+          }, 500)
+        }
+
+        // 즉시 상태 + progress 업데이트 (같은 상태 내에서는 단조증가)
+        const newProgress = (newStatus === oldStatus)
+          ? Math.max(event.progress ?? 0, item.progress ?? 0)
+          : event.progress
+
+        return {
+          ...item,
+          status: newStatus,
+          progress: newProgress,
+          ...(oldStatus !== newStatus ? { updated_at: new Date().toISOString() } : {}),
+        }
+      })
+
+      return { ...prev, contents: updatedContents }
+    })
+  }, [])
+
+  /**
+   * SSE 리스너 등록/제거
+   */
   useEffect(() => {
-    if (pollInterval > 0) {
-      pollRef.current = setInterval(() => fetchContents(), pollInterval)
-    } else if (pollRef.current) {
-      clearInterval(pollRef.current)
-      pollRef.current = null
-    }
+    addListener(handleFileProgress)
     return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current)
-        pollRef.current = null
+      removeListener(handleFileProgress)
+      if (updateTaskRef.current) {
+        clearTimeout(updateTaskRef.current)
       }
     }
-  }, [pollInterval, fetchContents])
+  }, [addListener, removeListener, handleFileProgress])
 
   return {
     contents: data?.contents || [],

@@ -24,7 +24,7 @@ from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
 from ..utils.task_queue_adapter import get_task_queue
-from ..utils.event_publisher import publish_file_progress
+from ..utils.progress_tracker import PipelineProgress
 from .transcription_postprocess import (
     segments_to_text_with_metadata,
     split_long_segments,
@@ -266,25 +266,17 @@ class StreamConsumer:
         """ASR 결과를 처리합니다."""
         file_id = message.get("file_id")
         event = message.get("event")
+        progress = PipelineProgress(file_id)
 
         async with AsyncSessionLocal() as session:
             file_repo = FileRepository(session)
             transcription_repo = TranscriptionRepository(session)
 
             if event == "started":
-                # 상태 업데이트: PROCESSING
                 await file_repo.update_file_status(file_id, FileStatus.PROCESSING)
                 await session.commit()
                 logger.info(f"ASR started: file_id={file_id}")
-
-                # 클라이언트에 이벤트 발행
-                publish_file_progress(
-                    file_id=file_id,
-                    status="processing",
-                    step="asr",
-                    progress=10.0,
-                    message="음성 인식 처리 중...",
-                )
+                progress.asr_started()
 
             elif event == "completed":
                 result_s3_key = message.get("result_s3_key")
@@ -296,10 +288,7 @@ class StreamConsumer:
                 result_data = download_json(result_s3_key)
                 transcription_data = result_data.get("transcription", {})
 
-                # =========================================================
-                # [Phase 1] Worker 역할 축소: 후처리 로직을 Backend로 이관
-                # =========================================================
-                # Worker는 이제 Raw Segment만 반환하므로, 여기서 후처리(분할/병합)를 수행합니다.
+                # Worker Raw Segment 후처리 (분할/병합)
                 original_segments = transcription_data.get("segments", [])
 
                 if original_segments:
@@ -307,29 +296,22 @@ class StreamConsumer:
                         f"Applying post-processing for file_id={file_id} (segments: {len(original_segments)})"
                     )
 
-                    # 1. 긴 세그먼트 분할 (>30s)
                     split_segments = split_long_segments(
                         original_segments, max_duration=30.0
                     )
-
-                    # 2. 연속된 화자 세그먼트 병합
                     processed_segments = merge_consecutive_speaker_segments(
                         split_segments, max_duration=30.0
                     )
 
-                    # 3. 데이터 갱신
                     transcription_data["segments"] = processed_segments
                     transcription_data["text"] = rebuild_transcription_text(
                         processed_segments
                     )
 
-                    # 4. 화자 통계 재계산
                     new_speaker_stats = rebuild_speaker_stats(processed_segments)
 
-                    # 5. 메타데이터 업데이트
                     if "diarization_metadata" not in transcription_data:
                         transcription_data["diarization_metadata"] = {}
-
                     transcription_data["diarization_metadata"].update(
                         {
                             "num_speakers": len(new_speaker_stats),
@@ -337,7 +319,6 @@ class StreamConsumer:
                         }
                     )
 
-                    # duration/speaker 정보도 갱신된 통계 기반으로 업데이트
                     num_speakers = len(new_speaker_stats)
                     speaker_labels = sorted(new_speaker_stats.keys())
 
@@ -362,7 +343,6 @@ class StreamConsumer:
                         transcription=transcription_data,
                     )
 
-                # 상태 업데이트: SUMMARY_QUEUED
                 await file_repo.update_file_status(file_id, FileStatus.SUMMARY_QUEUED)
                 await file_repo.add_log(
                     file_id,
@@ -378,21 +358,11 @@ class StreamConsumer:
                 logger.info(
                     f"ASR completed: file_id={file_id}, duration={duration_seconds}s"
                 )
-
-                # 클라이언트에 이벤트 발행
-                publish_file_progress(
-                    file_id=file_id,
-                    status="summary_queued",
-                    step="asr_completed",
-                    progress=50.0,
-                    message="음성 인식 완료, 요약 대기 중...",
-                    metadata={
-                        "duration_seconds": duration_seconds,
-                        "speakers": speaker_labels,
-                    },
+                progress.asr_completed(
+                    duration_seconds=duration_seconds, speakers=speaker_labels,
                 )
 
-                # LLM 요약 실행 - SectionGraphExecutor 사용 (직접 실행)
+                # LLM 요약 실행
                 segments = transcription_data.get("segments", [])
                 if segments:
                     text_to_summarize = segments_to_text_with_metadata(segments)
@@ -404,32 +374,22 @@ class StreamConsumer:
 
                 if text_to_summarize:
                     try:
-                        # 상태 업데이트: SUMMARIZING
                         await file_repo.update_file_status(
                             file_id, FileStatus.SUMMARIZING
                         )
                         await session.commit()
+                        progress.llm_started()
 
-                        # 클라이언트에 이벤트 발행
-                        publish_file_progress(
-                            file_id=file_id,
-                            status="summarizing",
-                            step="llm",
-                            progress=60.0,
-                            message="요약 생성 중...",
+                        executor = SectionGraphExecutor(
+                            on_progress=progress.llm_progress,
                         )
-
-                        # SectionGraphExecutor로 직접 요약 실행
-                        executor = SectionGraphExecutor()
                         title, summary_md = await executor.execute(text_to_summarize)
 
-                        # 제목과 요약 저장
                         if title:
                             await file_repo.update_title(file_id, title)
                         if summary_md:
                             await file_repo.update_summary_markdown(file_id, summary_md)
 
-                        # 상태 업데이트: COMPLETED
                         await file_repo.update_file_status(
                             file_id, FileStatus.COMPLETED
                         )
@@ -447,20 +407,13 @@ class StreamConsumer:
                         logger.info(
                             f"LLM completed (direct): file_id={file_id}, title={title[:50]}..."
                         )
-
-                        # 클라이언트에 이벤트 발행
-                        publish_file_progress(
-                            file_id=file_id,
-                            status="completed",
-                            step="completed",
-                            progress=100.0,
-                            message="모든 처리가 완료되었습니다.",
-                            metadata={"title": title} if title else None,
+                        progress.llm_completed(
+                            **({"title": title} if title else {}),
                         )
 
-                    except PhaseExecutionError as exc:
+                    except (PhaseExecutionError, Exception) as exc:
                         logger.error(
-                            f"LLM summarization failed (PhaseExecutionError): file_id={file_id}, error={exc}"
+                            f"LLM summarization failed: file_id={file_id}, error={exc}"
                         )
                         await file_repo.update_file_status(
                             file_id, FileStatus.SUMMARY_FAILED
@@ -471,49 +424,15 @@ class StreamConsumer:
                             message=f"LLM failed: {exc}",
                         )
                         await session.commit()
-
-                        # 클라이언트에 이벤트 발행
-                        publish_file_progress(
-                            file_id=file_id,
-                            status="failed",
-                            step="llm_failed",
-                            progress=0.0,
-                            message=f"요약 생성 실패: {exc}",
-                        )
-
-                    except Exception as exc:
-                        logger.error(
-                            f"LLM summarization failed (unexpected): file_id={file_id}, error={exc}"
-                        )
-                        await file_repo.update_file_status(
-                            file_id, FileStatus.SUMMARY_FAILED
-                        )
-                        await file_repo.add_llm_log(
-                            file_id,
-                            log={"event": "llm_failed", "error": str(exc)},
-                            message=f"LLM failed: {exc}",
-                        )
-                        await session.commit()
-
-                        # 클라이언트에 이벤트 발행
-                        publish_file_progress(
-                            file_id=file_id,
-                            status="failed",
-                            step="llm_failed",
-                            progress=0.0,
-                            message=f"요약 생성 실패: {exc}",
-                        )
+                        progress.llm_failed(str(exc))
 
                 else:
-                    # 요약할 텍스트가 없는 경우 → 완료 처리 (빈 결과)
                     logger.info(
                         f"No text to summarize, completing without summary: file_id={file_id}"
                     )
 
-                    # 파일명 기반 제목 설정
                     file = await file_repo.get_file(file_id)
                     if file:
-                        # 확장자 제거한 파일명 + "- 내용 없음"
                         base_name = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
                         empty_title = f"{base_name} - 내용 없음"
                         await file_repo.update_title(file_id, empty_title)
@@ -527,15 +446,7 @@ class StreamConsumer:
                         message="LLM skipped: No text detected in audio",
                     )
                     await session.commit()
-
-                    # 클라이언트에 이벤트 발행 (완료 - 빈 결과)
-                    publish_file_progress(
-                        file_id=file_id,
-                        status="completed",
-                        step="completed",
-                        progress=100.0,
-                        message="처리 완료 (음성/텍스트가 감지되지 않았습니다)",
-                    )
+                    progress.completed_empty("처리 완료 (음성/텍스트가 감지되지 않았습니다)")
 
                 # ASR 활성 작업 해제
                 task_queue = get_task_queue()
@@ -553,17 +464,8 @@ class StreamConsumer:
                 await session.commit()
 
                 logger.error(f"ASR failed: file_id={file_id}, error={error}")
+                progress.asr_failed(error)
 
-                # 클라이언트에 이벤트 발행
-                publish_file_progress(
-                    file_id=file_id,
-                    status="failed",
-                    step="asr_failed",
-                    progress=0.0,
-                    message=f"음성 인식 실패: {error}",
-                )
-
-                # ASR 활성 작업 해제
                 task_queue = get_task_queue()
                 task_queue.clear_active_job("asr", file_id)
 
@@ -571,6 +473,7 @@ class StreamConsumer:
         """LLM 결과를 처리합니다."""
         file_id = message.get("file_id")
         event = message.get("event")
+        progress = PipelineProgress(file_id)
 
         async with AsyncSessionLocal() as session:
             file_repo = FileRepository(session)
@@ -579,76 +482,42 @@ class StreamConsumer:
                 await file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
                 await session.commit()
                 logger.info(f"LLM started: file_id={file_id}")
-
-                # 클라이언트에 이벤트 발행
-                publish_file_progress(
-                    file_id=file_id,
-                    status="summarizing",
-                    step="llm",
-                    progress=60.0,
-                    message="요약 생성 중...",
-                )
+                progress.llm_started()
 
             elif event == "completed":
                 result_s3_key = message.get("result_s3_key")
 
-                # S3에서 결과 다운로드
                 result_data = download_json(result_s3_key)
-                raw_response = result_data.get(
-                    "raw_response", ""
-                )  # [Phase 1] Worker는 Raw 응답만 반환
+                raw_response = result_data.get("raw_response", "")
                 skipped = result_data.get("skipped", False)
 
                 if skipped:
                     logger.info(f"LLM skipped (empty text): file_id={file_id}")
-
-                    # 상태 업데이트: COMPLETED (요약 생략)
                     await file_repo.update_file_status(file_id, FileStatus.COMPLETED)
                     await session.commit()
-
-                    # 클라이언트에 이벤트 발행
-                    publish_file_progress(
-                        file_id=file_id,
-                        status="completed",
-                        step="completed",
-                        progress=100.0,
-                        message="처리 완료 (요약 생략)",
-                    )
+                    progress.completed_empty("처리 완료 (요약 생략)")
                     return
 
-                # [Phase 1] Backend에서 응답 파싱
                 from .llm_summary_service import parse_llm_response
 
-                # Raw 응답 파싱
                 try:
                     title, summary_md = parse_llm_response(raw_response)
                 except Exception as exc:
                     logger.error(
                         f"Failed to parse LLM response: file_id={file_id}, error={exc}"
                     )
-                    # 파싱 실패 시 실패 처리
                     await file_repo.update_file_status(
                         file_id, FileStatus.SUMMARY_FAILED
                     )
                     await session.commit()
-
-                    # 클라이언트에 이벤트 발행
-                    publish_file_progress(
-                        file_id=file_id,
-                        status="failed",
-                        step="llm_failed",
-                        progress=0.0,
-                        message=f"요약 파싱 실패: {exc}",
-                    )
+                    progress.llm_failed(str(exc))
                     return
 
-                # 제목과 요약 저장
                 if title:
                     await file_repo.update_title(file_id, title)
                 if summary_md:
                     await file_repo.update_summary_markdown(file_id, summary_md)
 
-                # 상태 업데이트: COMPLETED
                 await file_repo.update_file_status(file_id, FileStatus.COMPLETED)
                 await file_repo.add_llm_log(
                     file_id,
@@ -662,20 +531,12 @@ class StreamConsumer:
                 await session.commit()
 
                 logger.info(
-                    f"LLM completed (Prompt Injection): file_id={file_id}, title={title[:50]}..."
+                    f"LLM completed: file_id={file_id}, title={title[:50]}..."
+                )
+                progress.llm_completed(
+                    **({"title": title} if title else {}),
                 )
 
-                # 클라이언트에 이벤트 발행
-                publish_file_progress(
-                    file_id=file_id,
-                    status="completed",
-                    step="completed",
-                    progress=100.0,
-                    message="모든 처리가 완료되었습니다.",
-                    metadata={"title": title} if title else None,
-                )
-
-                # LLM 활성 작업 해제
                 task_queue = get_task_queue()
                 task_queue.clear_active_job("llm", file_id)
 
@@ -691,17 +552,8 @@ class StreamConsumer:
                 await session.commit()
 
                 logger.error(f"LLM failed: file_id={file_id}, error={error}")
+                progress.llm_failed(error)
 
-                # 클라이언트에 이벤트 발행
-                publish_file_progress(
-                    file_id=file_id,
-                    status="failed",
-                    step="llm_failed",
-                    progress=0.0,
-                    message=f"요약 생성 실패: {error}",
-                )
-
-                # LLM 활성 작업 해제
                 task_queue = get_task_queue()
                 task_queue.clear_active_job("llm", file_id)
 
@@ -709,6 +561,7 @@ class StreamConsumer:
         """OCR 결과를 처리합니다."""
         file_id = message.get("file_id")
         event = message.get("event")
+        progress = PipelineProgress(file_id)
 
         async with AsyncSessionLocal() as session:
             file_repo = FileRepository(session)
@@ -718,27 +571,17 @@ class StreamConsumer:
                 await file_repo.update_file_status(file_id, FileStatus.OCR_PROCESSING)
                 await session.commit()
                 logger.info(f"OCR started: file_id={file_id}")
-
-                # 클라이언트에 이벤트 발행
-                publish_file_progress(
-                    file_id=file_id,
-                    status="processing",
-                    step="ocr",
-                    progress=10.0,
-                    message="문서 인식 처리 중...",
-                )
+                progress.ocr_started()
 
             elif event == "completed":
                 result_s3_key = message.get("result_s3_key")
                 page_count = message.get("page_count", 0)
                 text_length = message.get("text_length", 0)
 
-                # S3에서 결과 다운로드
                 result_data = download_json(result_s3_key)
                 ocr_text = result_data.get("ocr_text", "")
                 ocr_metadata = result_data.get("ocr_metadata", {})
 
-                # Document 저장/업데이트
                 existing_doc = await document_repo.get_by_file_id(file_id)
                 if existing_doc:
                     await document_repo.update_document(
@@ -755,7 +598,6 @@ class StreamConsumer:
                         ocr_metadata=ocr_metadata,
                     )
 
-                # 상태 업데이트: SUMMARY_QUEUED
                 await file_repo.update_file_status(file_id, FileStatus.SUMMARY_QUEUED)
                 await file_repo.add_log(
                     file_id,
@@ -769,18 +611,8 @@ class StreamConsumer:
                 await session.commit()
 
                 logger.info(f"OCR completed: file_id={file_id}, pages={page_count}")
+                progress.ocr_completed(page_count=page_count)
 
-                # 클라이언트에 이벤트 발행
-                publish_file_progress(
-                    file_id=file_id,
-                    status="summary_queued",
-                    step="ocr_completed",
-                    progress=50.0,
-                    message="문서 인식 완료, 요약 대기 중...",
-                    metadata={"page_count": page_count},
-                )
-
-                # LLM 요약 큐잉
                 if ocr_text:
                     task_queue = get_task_queue()
                     task_queue.enqueue_llm_job(
@@ -788,12 +620,10 @@ class StreamConsumer:
                     )
                     logger.info(f"LLM job enqueued: file_id={file_id}")
                 else:
-                    # OCR 결과가 비어있는 경우 → 완료 처리 (빈 결과)
                     logger.info(
                         f"No text from OCR, completing without summary: file_id={file_id}"
                     )
 
-                    # 파일명 기반 제목 설정
                     file = await file_repo.get_file(file_id)
                     if file:
                         base_name = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
@@ -809,17 +639,8 @@ class StreamConsumer:
                         message="LLM skipped: No text detected in document",
                     )
                     await session.commit()
+                    progress.completed_empty("처리 완료 (문서에서 텍스트가 감지되지 않았습니다)")
 
-                    # 클라이언트에 이벤트 발행 (완료 - 빈 결과)
-                    publish_file_progress(
-                        file_id=file_id,
-                        status="completed",
-                        step="completed",
-                        progress=100.0,
-                        message="처리 완료 (문서에서 텍스트가 감지되지 않았습니다)",
-                    )
-
-                # OCR 활성 작업 해제
                 task_queue = get_task_queue()
                 task_queue.clear_active_job("ocr", file_id)
 
@@ -835,21 +656,11 @@ class StreamConsumer:
                 await session.commit()
 
                 logger.error(f"OCR failed: file_id={file_id}, error={error}")
+                progress.ocr_failed(error)
 
-                # 클라이언트에 이벤트 발행
-                publish_file_progress(
-                    file_id=file_id,
-                    status="failed",
-                    step="ocr_failed",
-                    progress=0.0,
-                    message=f"문서 인식 실패: {error}",
-                )
-
-                # OCR 활성 작업 해제
                 task_queue = get_task_queue()
                 task_queue.clear_active_job("ocr", file_id)
 
-                # 임시 이미지 삭제 (실패 시)
                 try:
                     await self._delete_temp_ocr_images(file_id)
                 except Exception as e:

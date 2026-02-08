@@ -12,6 +12,7 @@ export type ContentStatus =
   | 'SUMMARY_QUEUED'
   | 'SUMMARIZING'
   | 'COMPLETED'
+  | 'DOWNLOAD_FAILED'
   | 'ASR_FAILED'
   | 'OCR_FAILED'
   | 'SUMMARY_FAILED'
@@ -27,6 +28,8 @@ export interface ContentSummary {
   updated_at: string
   speakers: string[]
   duration_seconds: number
+  /** SSE 전용 ephemeral 필드 (API 응답에는 없음) */
+  progress?: number
   transcription?: {
     duration_seconds?: number
     speakers?: string[]
@@ -81,6 +84,7 @@ export const STATUS_LABELS: Record<ContentStatus, string> = {
   SUMMARY_QUEUED: '요약 대기',
   SUMMARIZING: '요약중',
   COMPLETED: '완료',
+  DOWNLOAD_FAILED: '다운로드 실패',
   ASR_FAILED: 'ASR 실패',
   OCR_FAILED: 'OCR 실패',
   SUMMARY_FAILED: '요약 실패',
@@ -94,6 +98,7 @@ export const getStatusVariant = (status: ContentStatus): BadgeVariant => {
   switch (status) {
     case 'COMPLETED':
       return 'success'
+    case 'DOWNLOAD_FAILED':
     case 'ASR_FAILED':
     case 'OCR_FAILED':
       return 'destructive'

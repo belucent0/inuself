@@ -7,7 +7,7 @@
 https://langchain-ai.github.io/langgraph/how-tos/map-reduce/
 """
 
-from typing import TypedDict, Dict, List, Optional, Any, Annotated
+from typing import TypedDict, Dict, List, Optional, Any, Annotated, Callable
 
 
 # 병렬 업데이트용 reducer 함수들
@@ -69,6 +69,9 @@ class SectionGenerationState(TypedDict):
     logs: Annotated[List[Dict[str, Any]], _append_unique]
     start_time: Annotated[Optional[float], _replace]
 
+    # 진행률 콜백 (completed_sections, total_sections) → SSE 발행
+    progress_callback: Annotated[Optional[Callable[[int, int], None]], _replace]
+
 
 def create_initial_state(
     toc: List[str],
@@ -76,6 +79,7 @@ def create_initial_state(
     keywords: List[str],
     title: str,
     max_retries: int = 3,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> SectionGenerationState:
     """초기 상태를 생성합니다.
 
@@ -105,4 +109,5 @@ def create_initial_state(
         "current_content": None,
         "logs": [],
         "start_time": time.time(),
+        "progress_callback": progress_callback,
     }

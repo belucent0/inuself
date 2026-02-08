@@ -51,6 +51,7 @@ class FileStatus(str, enum.Enum):
     COMPLETED = "COMPLETED"  # 전체 파이프라인 완료
 
     # 실패 상태
+    DOWNLOAD_FAILED = "DOWNLOAD_FAILED"  # 외부 소스 다운로드 실패
     ASR_FAILED = "ASR_FAILED"  # ASR/화자분리 단계 실패
     OCR_FAILED = "OCR_FAILED"  # OCR 처리 실패
     SUMMARY_FAILED = "SUMMARY_FAILED"  # LLM 요약 실패
@@ -89,6 +90,7 @@ class File(Base):
     )
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         default=lambda: datetime.now(timezone.utc),

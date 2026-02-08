@@ -11,14 +11,21 @@ export type OcrMode = 'portray' | 'document' | null
 // 정확도 모드
 export type AccuracyMode = 'speed' | 'accuracy'
 
-// 파일 처리 상태 (WebSocket)
+// 파일 처리 상태 (SSE)
 export type FileStatus =
-  | 'queued'
-  | 'processing'
-  | 'summary_queued'
-  | 'summarizing'
-  | 'completed'
-  | 'failed'
+  | 'QUEUED'
+  | 'PULLING'
+  | 'PROCESSING'
+  | 'OCR_PROCESSING'
+  | 'SUMMARY_QUEUED'
+  | 'SUMMARIZING'
+  | 'COMPLETED'
+  | 'DOWNLOAD_FAILED'
+  | 'ASR_FAILED'
+  | 'OCR_FAILED'
+  | 'SUMMARY_FAILED'
+  | 'FAILED'
+  | 'CANCELLED'
 
 // 파일 처리 단계 (WebSocket)
 export type FileProgressStep =
@@ -45,6 +52,7 @@ export interface FileProgressEvent {
   type: 'file_progress' | 'connection' | 'pong' | 'content_created'
   file_id?: string
   content_id?: string
+  trace_id?: string
   filename?: string
   content_type?: string
   status?: FileStatus | string

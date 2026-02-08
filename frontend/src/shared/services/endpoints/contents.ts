@@ -64,7 +64,7 @@ export async function getContent(id: string): Promise<ContentDetail> {
  * 콘텐츠 삭제 (벌크)
  */
 export async function deleteContents(ids: string[]): Promise<{ message: string }> {
-  return httpClient.delete<{ message: string }>('/contents', { ids })
+  return httpClient.post<{ message: string }>('/contents/bulk-delete', { content_ids: ids })
 }
 
 /**
@@ -72,7 +72,7 @@ export async function deleteContents(ids: string[]): Promise<{ message: string }
  */
 export async function retryProcessing(
   id: string,
-  type: 'asr' | 'ocr' | 'summary',
+  type: 'download' | 'asr' | 'ocr' | 'summary',
   options?: {
     minSpeakers?: number
     maxSpeakers?: number

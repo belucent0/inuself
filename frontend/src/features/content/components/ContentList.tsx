@@ -30,7 +30,7 @@ interface ContentListProps {
   contents: ContentSummary[]
   pagination?: PaginationProps
   onDelete?: (ids: string[]) => Promise<void>
-  onRetry?: (id: string, type: 'asr' | 'ocr' | 'summary') => Promise<void>
+  onRetry?: (id: string, type: 'download' | 'asr' | 'ocr' | 'summary') => Promise<void>
   onUpload?: () => void
 }
 
@@ -91,7 +91,7 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
     }
   }
 
-  const handleRetry = async (id: string, type: 'asr' | 'ocr' | 'summary') => {
+  const handleRetry = async (id: string, type: 'download' | 'asr' | 'ocr' | 'summary') => {
     if (!onRetry) return
     try {
       await onRetry(id, type)

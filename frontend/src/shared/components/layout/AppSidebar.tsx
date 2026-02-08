@@ -47,6 +47,7 @@ import { uploadApi } from '@/shared/services/endpoints/upload'
 import { toast } from 'sonner'
 import { useThreads } from '@/shared/hooks/useThreads'
 import { dispatchContentsRefresh } from '@/shared/hooks/useContents'
+import { DownloadProgressToast } from '@/shared/components/DownloadProgressToast'
 import type { Thread } from '@/shared/types'
 
 function groupThreadsByDate(threads: Thread[]) {
@@ -97,16 +98,19 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }, [pathname, loadThreads])
 
   const handleYouTubeSubmit = async (url: string) => {
-    toast.success('YouTube 영상 다운로드가 시작되었습니다', {
-      description: '콘텐츠 목록에서 진행 상황을 확인할 수 있습니다.',
-    })
+    const toastId = toast.loading('YouTube 영상 정보 확인 중...')
     try {
-      await uploadApi.uploadYouTubeContent(url)
+      const result = await uploadApi.uploadYouTubeContent(url)
       dispatchContentsRefresh()
+
+      // 커스텀 진행 상태 토스트 표시
+      toast.dismiss(toastId)
+      toast.custom(
+        (customToastId) => <DownloadProgressToast fileId={result.content_id} toastId={customToastId} />,
+        { duration: Infinity }
+      )
     } catch {
-      toast.error('YouTube 다운로드 실패', {
-        description: '링크를 확인하고 다시 시도해주세요.',
-      })
+      toast.error('YouTube 요청 실패. 링크를 확인해주세요.', { id: toastId })
     }
   }
 

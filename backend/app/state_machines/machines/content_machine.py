@@ -37,7 +37,8 @@ class ContentStateMachine(BaseStateMachine[FileStatus]):
         FileStatus.PULLING: [
             FileStatus.QUEUED,  # 다운로드 완료 → ASR 대기 (YouTube)
             FileStatus.PROCESSING,  # 다운로드 완료 → ASR 시작
-            FileStatus.ASR_FAILED,  # 다운로드 실패
+            FileStatus.DOWNLOAD_FAILED,  # 다운로드 실패
+            FileStatus.ASR_FAILED,  # 다운로드 실패 (하위 호환)
             FileStatus.CANCELLED,
         ],
         FileStatus.PROCESSING: [
@@ -63,6 +64,7 @@ class ContentStateMachine(BaseStateMachine[FileStatus]):
         ],
         # 터미널 상태 (전이 불가)
         FileStatus.COMPLETED: [],
+        FileStatus.DOWNLOAD_FAILED: [],
         FileStatus.ASR_FAILED: [],
         FileStatus.OCR_FAILED: [],
         FileStatus.SUMMARY_FAILED: [],
@@ -128,6 +130,11 @@ class ContentStateMachine(BaseStateMachine[FileStatus]):
             description="처리 완료",
             is_terminal=True,
         ),
+        FileStatus.DOWNLOAD_FAILED: StateInfo(
+            name="다운로드실패",
+            description="외부 소스 다운로드 실패",
+            is_terminal=True,
+        ),
         FileStatus.ASR_FAILED: StateInfo(
             name="ASR실패",
             description="ASR 처리 실패",
@@ -152,6 +159,7 @@ class ContentStateMachine(BaseStateMachine[FileStatus]):
 
     # 재시도 가능한 실패 상태 → 재시도 시작 상태 매핑
     RETRY_MAPPING: dict[FileStatus, FileStatus] = {
+        FileStatus.DOWNLOAD_FAILED: FileStatus.PULLING,
         FileStatus.ASR_FAILED: FileStatus.QUEUED,
         FileStatus.OCR_FAILED: FileStatus.QUEUED,
         FileStatus.SUMMARY_FAILED: FileStatus.SUMMARY_QUEUED,
@@ -160,6 +168,7 @@ class ContentStateMachine(BaseStateMachine[FileStatus]):
     def is_failed_state(self, state: FileStatus) -> bool:
         """실패 상태인지 확인."""
         return state in (
+            FileStatus.DOWNLOAD_FAILED,
             FileStatus.ASR_FAILED,
             FileStatus.OCR_FAILED,
             FileStatus.SUMMARY_FAILED,
@@ -184,7 +193,7 @@ class ContentStateMachine(BaseStateMachine[FileStatus]):
         """처리 상태에 대응하는 실패 상태 반환."""
         mapping = {
             FileStatus.QUEUED: FileStatus.ASR_FAILED,
-            FileStatus.PULLING: FileStatus.ASR_FAILED,
+            FileStatus.PULLING: FileStatus.DOWNLOAD_FAILED,
             FileStatus.PROCESSING: FileStatus.ASR_FAILED,
             FileStatus.OCR_PROCESSING: FileStatus.OCR_FAILED,
             FileStatus.SUMMARY_QUEUED: FileStatus.SUMMARY_FAILED,

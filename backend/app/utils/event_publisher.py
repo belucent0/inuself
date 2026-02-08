@@ -44,6 +44,7 @@ def publish_file_progress(
     progress: float,
     message: str,
     metadata: dict[str, Any] | None = None,
+    trace_id: str | None = None,
 ) -> None:
     """파일 처리 진행 상태를 Redis Pub/Sub으로 발행합니다.
 
@@ -54,6 +55,7 @@ def publish_file_progress(
         progress: 진행률 (0-100)
         message: 사용자에게 표시할 메시지
         metadata: 추가 메타데이터 (선택사항)
+        trace_id: 프론트엔드 요청 추적 ID (선택사항)
 
     채널: events:file_progress:{file_id}
 
@@ -66,6 +68,7 @@ def publish_file_progress(
             "progress": 20.0,
             "message": "파일 다운로드 완료",
             "metadata": {...},
+            "trace_id": "...",
             "timestamp": "2024-01-01T12:00:00.000000"
         }
     """
@@ -82,6 +85,9 @@ def publish_file_progress(
 
         if metadata:
             event["metadata"] = metadata
+
+        if trace_id:
+            event["trace_id"] = trace_id
 
         redis = _get_redis()
         event_json = json.dumps(event, cls=UUIDEncoder)
