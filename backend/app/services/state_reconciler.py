@@ -287,7 +287,10 @@ class StateReconciler:
         )
 
     async def _requeue_llm_job(self, file: File, retry_count: int) -> ReconcileAction:
-        """LLM 작업을 재큐잉합니다."""
+        """LLM 작업을 직접 실행합니다 (직접 실행 패턴)."""
+        from .section_executor import SectionGraphExecutor, PhaseExecutionError
+        from ..utils.progress_tracker import PipelineProgress
+
         # 텍스트 소스 찾기 (Transcription 또는 Document)
         text_to_summarize = None
 
@@ -303,32 +306,56 @@ class StateReconciler:
         if not text_to_summarize:
             return await self._mark_as_failed(
                 file,
-                "Cannot requeue LLM job: no text found",
+                "Cannot run LLM job: no text found",
             )
 
         try:
-            job_id = self.task_queue.enqueue_llm_job(
-                file_id=file.id,
-                text_to_summarize=text_to_summarize,
-            )
+            progress = PipelineProgress(file.id)
 
+            await self.file_repo.update_file_status(file.id, FileStatus.SUMMARIZING)
+            await self.session.commit()
+            progress.llm_started()
+
+            executor = SectionGraphExecutor(on_progress=progress.llm_progress)
+            title, summary_md = await executor.execute(text_to_summarize)
+
+            if title:
+                await self.file_repo.update_title(file.id, title)
+            if summary_md:
+                await self.file_repo.update_summary_markdown(file.id, summary_md)
+
+            await self.file_repo.update_file_status(file.id, FileStatus.COMPLETED)
             await self.file_repo.add_llm_log(
                 file.id,
-                log={"event": "reconciler_requeued", "job_id": job_id, "retry_count": retry_count + 1},
-                message=f"[Reconciler] LLM job requeued (retry {retry_count + 1})",
+                log={
+                    "event": "reconciler_llm_completed",
+                    "retry_count": retry_count + 1,
+                    "title_length": len(title),
+                    "summary_length": len(summary_md),
+                },
+                message=f"[Reconciler] LLM completed (direct execution, retry {retry_count + 1})",
             )
+            await self.session.commit()
 
-            logger.info(f"[StateReconciler] Requeued LLM job for file {file.id}: job_id={job_id}")
+            logger.info(f"[StateReconciler] LLM completed (direct) for file {file.id}")
+            progress.llm_completed(**({"title": title} if title else {}))
 
             return ReconcileAction(
                 file_id=file.id,
                 action="requeued",
-                details=f"LLM job requeued: job_id={job_id} (retry {retry_count + 1})",
+                details=f"LLM executed directly (retry {retry_count + 1})",
                 success=True,
             )
-        except Exception as e:
-            logger.error(f"[StateReconciler] Failed to requeue LLM job for file {file.id}: {e}")
-            return await self._mark_as_failed(file, f"Failed to requeue LLM job: {e}")
+        except (PhaseExecutionError, Exception) as e:
+            logger.error(f"[StateReconciler] LLM failed for file {file.id}: {e}")
+            await self.file_repo.update_file_status(file.id, FileStatus.SUMMARY_FAILED)
+            await self.file_repo.add_llm_log(
+                file.id,
+                log={"event": "reconciler_llm_failed", "error": str(e)},
+                message=f"[Reconciler] LLM failed: {e}",
+            )
+            await self.session.commit()
+            return await self._mark_as_failed(file, f"LLM execution failed: {e}")
 
     async def _requeue_initial_job(self, file: File, retry_count: int) -> ReconcileAction:
         """초기 작업을 재큐잉합니다 (ASR 또는 OCR)."""
