@@ -19,6 +19,7 @@ import {
   getStatusVariant,
   getFileExtension,
 } from '../types'
+import { useDisplayProgress } from '../hooks/useDisplayProgress'
 
 const PROCESSING_STATUSES: ContentStatus[] = [
   'QUEUED', 'PULLING', 'PROCESSING', 'OCR_PROCESSING', 'SUMMARY_QUEUED', 'SUMMARIZING',
@@ -27,15 +28,6 @@ const PROCESSING_STATUSES: ContentStatus[] = [
 const FAILED_STATUSES: ContentStatus[] = [
   'DOWNLOAD_FAILED', 'ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED',
 ]
-
-const PROGRESS_MAP: Partial<Record<ContentStatus, number>> = {
-  QUEUED: 10,
-  PULLING: 25,
-  PROCESSING: 50,
-  OCR_PROCESSING: 50,
-  SUMMARY_QUEUED: 70,
-  SUMMARIZING: 85,
-}
 
 function getStatusIcon(status: ContentStatus) {
   if (PROCESSING_STATUSES.includes(status)) {
@@ -95,6 +87,7 @@ export function ContentCard({ content, selected, onToggle, onRetry }: ContentCar
   const status = content.status
   const isProcessing = PROCESSING_STATUSES.includes(status)
   const isFailed = FAILED_STATUSES.includes(status)
+  const displayProgress = useDisplayProgress(content)
 
   return (
     <Card className="hover:shadow-md transition-shadow h-full flex flex-col relative">
@@ -134,9 +127,9 @@ export function ContentCard({ content, selected, onToggle, onRetry }: ContentCar
                 {getStatusIcon(status)}
                 {STATUS_LABELS[status]}
               </Badge>
-              <Progress value={PROGRESS_MAP[status] || 0} className="h-1.5 flex-1" />
+              <Progress value={displayProgress} className="h-1.5 flex-1" />
               <span className="text-xs text-muted-foreground shrink-0">
-                {PROGRESS_MAP[status] || 0}%
+                {displayProgress}%
               </span>
             </div>
           ) : (
