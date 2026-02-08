@@ -614,11 +614,59 @@ class StreamConsumer:
                 progress.ocr_completed(page_count=page_count)
 
                 if ocr_text:
-                    task_queue = get_task_queue()
-                    task_queue.enqueue_llm_job(
-                        file_id=file_id, text_to_summarize=ocr_text
-                    )
-                    logger.info(f"LLM job enqueued: file_id={file_id}")
+                    try:
+                        await file_repo.update_file_status(
+                            file_id, FileStatus.SUMMARIZING
+                        )
+                        await session.commit()
+                        progress.llm_started()
+
+                        executor = SectionGraphExecutor(
+                            on_progress=progress.llm_progress,
+                        )
+                        title, summary_md = await executor.execute(ocr_text)
+
+                        if title:
+                            await file_repo.update_title(file_id, title)
+                        if summary_md:
+                            await file_repo.update_summary_markdown(file_id, summary_md)
+
+                        await file_repo.update_file_status(
+                            file_id, FileStatus.COMPLETED
+                        )
+                        await file_repo.add_llm_log(
+                            file_id,
+                            log={
+                                "event": "llm_completed",
+                                "title_length": len(title),
+                                "summary_length": len(summary_md),
+                            },
+                            message="LLM summarization completed (direct execution, OCR)",
+                        )
+                        await session.commit()
+
+                        logger.info(
+                            f"LLM completed (direct/OCR): file_id={file_id}, title={title[:50]}..."
+                        )
+                        progress.llm_completed(
+                            **({"title": title} if title else {}),
+                        )
+
+                    except (PhaseExecutionError, Exception) as exc:
+                        logger.error(
+                            f"LLM summarization failed (OCR): file_id={file_id}, error={exc}"
+                        )
+                        await file_repo.update_file_status(
+                            file_id, FileStatus.SUMMARY_FAILED
+                        )
+                        await file_repo.add_llm_log(
+                            file_id,
+                            log={"event": "llm_failed", "error": str(exc)},
+                            message=f"LLM failed (OCR): {exc}",
+                        )
+                        await session.commit()
+                        progress.llm_failed(str(exc))
+
                 else:
                     logger.info(
                         f"No text from OCR, completing without summary: file_id={file_id}"

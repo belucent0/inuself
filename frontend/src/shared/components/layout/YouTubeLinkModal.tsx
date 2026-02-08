@@ -48,7 +48,10 @@ export function YouTubeLinkModal({
     const submittedUrl = url
     setUrl('')
     onOpenChange(false)
-    onSubmit(submittedUrl).catch(() => {})
+    // 모달 닫힘 애니메이션(~150ms) 완료 후 토스트 표시
+    setTimeout(() => {
+      onSubmit(submittedUrl).catch(() => {})
+    }, 150)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

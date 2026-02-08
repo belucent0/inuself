@@ -620,37 +620,77 @@ class ContentService:
             )
             await self.session.commit()
 
-            # 큐에 작업 등록
-            loop = asyncio.get_running_loop()
-            from functools import partial
-            from ..utils.task_queue_adapter import get_task_queue
-
-            task_queue = get_task_queue()
-            enqueue_func = partial(
-                task_queue.enqueue_llm_job,
-                file_id=content_id,
-                text_to_summarize=text_to_summarize,
-            )
-            job_id = await loop.run_in_executor(
-                None, preserve_otel_context(enqueue_func)
+            # 백그라운드에서 직접 LLM 실행
+            asyncio.create_task(
+                self._run_llm_summary_background(content_id, text_to_summarize)
             )
 
             logger.info(
-                "Manual LLM retry enqueued: content_id=%s, job_id=%s, text_length=%d",
+                "Manual LLM retry started (direct): content_id=%s, text_length=%d",
                 content_id,
-                job_id,
                 len(text_to_summarize),
             )
             return {
                 "success": True,
                 "message": "LLM summary reprocessing started",
-                "job_id": job_id,
             }
 
         else:
             raise ValueError(
                 f"Invalid retry_type: {retry_type}. Must be 'asr' or 'summary'"
             )
+
+    async def _run_llm_summary_background(
+        self, file_id: int, text_to_summarize: str
+    ) -> None:
+        """백그라운드에서 LLM 요약을 직접 실행합니다."""
+        from ..db.session import AsyncSessionLocal
+        from ..db.models import FileStatus
+        from ..repositories.file_repository import FileRepository
+        from ..utils.progress_tracker import PipelineProgress
+
+        async with AsyncSessionLocal() as session:
+            file_repo = FileRepository(session)
+            progress = PipelineProgress(file_id)
+
+            try:
+                await file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
+                await session.commit()
+                progress.llm_started()
+
+                executor = SectionGraphExecutor(on_progress=progress.llm_progress)
+                title, summary_md = await executor.execute(text_to_summarize)
+
+                if title:
+                    await file_repo.update_title(file_id, title)
+                if summary_md:
+                    await file_repo.update_summary_markdown(file_id, summary_md)
+
+                await file_repo.update_file_status(file_id, FileStatus.COMPLETED)
+                await file_repo.add_llm_log(
+                    file_id,
+                    log={
+                        "event": "llm_completed",
+                        "title_length": len(title),
+                        "summary_length": len(summary_md),
+                    },
+                    message="LLM summarization completed (manual retry, direct execution)",
+                )
+                await session.commit()
+
+                logger.info(f"LLM completed (manual retry): file_id={file_id}")
+                progress.llm_completed(**({"title": title} if title else {}))
+
+            except (PhaseExecutionError, Exception) as exc:
+                logger.error(f"LLM failed (manual retry): file_id={file_id}, error={exc}")
+                await file_repo.update_file_status(file_id, FileStatus.SUMMARY_FAILED)
+                await file_repo.add_llm_log(
+                    file_id,
+                    log={"event": "llm_failed", "error": str(exc)},
+                    message=f"LLM failed (manual retry): {exc}",
+                )
+                await session.commit()
+                progress.llm_failed(str(exc))
 
     async def recluster_speakers(
         self,

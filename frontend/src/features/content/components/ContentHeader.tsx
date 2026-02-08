@@ -15,8 +15,10 @@ import {
   Music,
   Image as ImageIcon,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/shared/components/ui/button'
 import { Badge } from '@/shared/components/ui/badge'
+import { DeleteConfirmDialog } from '@/shared/components/DeleteConfirmDialog'
 import { cn } from '@/shared/utils/cn'
 import type { ContentDetail } from '../types'
 import { STATUS_LABELS, getStatusVariant, getFileExtension } from '../types'
@@ -44,17 +46,21 @@ const CONTENT_TYPE_ICONS = {
 export function ContentHeader({ content, onDelete, onRetryClick }: ContentHeaderProps) {
   const navigate = useNavigate()
   const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
-  const handleDelete = async () => {
+  const handleDeleteConfirm = async () => {
     if (!onDelete) return
-    if (!confirm(`"${content.filename}"을(를) 삭제하시겠습니까?`)) return
 
     setIsDeleting(true)
     try {
       await onDelete()
+      toast.success(`"${content.filename}" 삭제 완료`)
       navigate('/contents')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '삭제에 실패했습니다.')
     } finally {
       setIsDeleting(false)
+      setDeleteDialogOpen(false)
     }
   }
 
@@ -119,7 +125,7 @@ export function ContentHeader({ content, onDelete, onRetryClick }: ContentHeader
               variant="ghost"
               size="icon"
               className={cn('h-8 w-8', 'text-destructive hover:text-destructive')}
-              onClick={handleDelete}
+              onClick={() => setDeleteDialogOpen(true)}
               disabled={isDeleting}
               title="삭제"
             >
@@ -146,6 +152,14 @@ export function ContentHeader({ content, onDelete, onRetryClick }: ContentHeader
           </span>
         ))}
       </div>
+
+      <DeleteConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        onConfirm={handleDeleteConfirm}
+        description={`"${content.filename}"을(를) 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`}
+        isDeleting={isDeleting}
+      />
     </div>
   )
 }
