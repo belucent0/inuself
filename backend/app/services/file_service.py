@@ -669,7 +669,7 @@ class FileService:
             raise
 
     async def prepare_youtube_placeholder(
-        self, title: str, video_id: str
+        self, title: str, video_id: str, source_url: str | None = None
     ) -> models.File:
         """
         YouTube 업로드를 위한 플레이스홀더 파일 레코드 생성.
@@ -689,6 +689,7 @@ class FileService:
             object_key=object_key,
             content_type=ContentType.AUDIO,
             status=FileStatus.PULLING,  # 다운로드 상태로 시작
+            source_url=source_url,
         )
         await self.session.commit()
         return file_obj
@@ -699,6 +700,7 @@ class FileService:
         url: str,
         video_id: str,
         title: str,
+        trace_id: str | None = None,
     ) -> None:
         """
         [Background Task] YouTube 다운로드 수행 및 ASR 큐잉.
@@ -767,6 +769,7 @@ class FileService:
                             progress=current_progress,
                             message=f"YouTube 다운로드 중... {current_progress:.1f}%",
                             metadata={"filename": filename},
+                            trace_id=trace_id,
                         )
 
             from functools import partial
@@ -794,6 +797,7 @@ class FileService:
                 step="uploading",
                 progress=0.0,
                 message="클라우드 저장소로 업로드 중...",
+                trace_id=trace_id,
             )
 
             with open(downloaded_file, "rb") as f:
@@ -852,13 +856,14 @@ class FileService:
                 step="asr_queued",
                 progress=0.0,
                 message="음성 인식 대기 중...",
+                trace_id=trace_id,
             )
 
         except Exception as exc:
             logger.exception("[YouTube] 백그라운드 처리 실패: %s", exc)
             await self.file_repo.update_file_status(
-                file_id, FileStatus.ASR_FAILED
-            )  # 일단 ASR 실패로 처리
+                file_id, FileStatus.DOWNLOAD_FAILED
+            )
             await self.file_repo.add_log(
                 file_id=file_id,
                 log={"event": "youtube_failed", "error": str(exc)},
@@ -872,6 +877,7 @@ class FileService:
                 step="youtube_failed",
                 progress=0.0,
                 message=f"YouTube 처리 실패: {str(exc)}",
+                trace_id=trace_id,
             )
         finally:
             if downloaded_file and downloaded_file.exists():

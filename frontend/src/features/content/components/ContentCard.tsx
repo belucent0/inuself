@@ -25,7 +25,7 @@ const PROCESSING_STATUSES: ContentStatus[] = [
 ]
 
 const FAILED_STATUSES: ContentStatus[] = [
-  'ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED',
+  'DOWNLOAD_FAILED', 'ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED',
 ]
 
 const PROGRESS_MAP: Partial<Record<ContentStatus, number>> = {
@@ -88,7 +88,7 @@ interface ContentCardProps {
   content: ContentSummary
   selected?: boolean
   onToggle?: (id: string) => void
-  onRetry?: (id: string, type: 'asr' | 'ocr' | 'summary') => void
+  onRetry?: (id: string, type: 'download' | 'asr' | 'ocr' | 'summary') => void
 }
 
 export function ContentCard({ content, selected, onToggle, onRetry }: ContentCardProps) {
@@ -171,12 +171,17 @@ export function ContentCard({ content, selected, onToggle, onRetry }: ContentCar
             onClick={() =>
               onRetry(
                 content.id,
-                status === 'ASR_FAILED' ? 'asr' : status === 'OCR_FAILED' ? 'ocr' : 'summary'
+                status === 'DOWNLOAD_FAILED' ? 'download'
+                  : status === 'ASR_FAILED' ? 'asr'
+                  : status === 'OCR_FAILED' ? 'ocr'
+                  : 'summary'
               )
             }
             className="w-full h-9 text-sm"
           >
-            {status === 'ASR_FAILED'
+            {status === 'DOWNLOAD_FAILED'
+              ? '다운로드 재시도'
+              : status === 'ASR_FAILED'
               ? 'ASR 재처리'
               : status === 'OCR_FAILED'
               ? 'OCR 재처리'

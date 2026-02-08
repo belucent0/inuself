@@ -97,16 +97,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }, [pathname, loadThreads])
 
   const handleYouTubeSubmit = async (url: string) => {
-    toast.promise(
-      uploadApi.uploadYouTubeContent(url).then(() => {
-        dispatchContentsRefresh()
-      }),
-      {
-        loading: 'YouTube 영상 정보 확인 중...',
-        success: '다운로드가 시작되었습니다. 목록에서 확인하세요.',
-        error: '다운로드 실패. 링크를 확인해주세요.',
-      }
-    )
+    const toastId = toast.loading('YouTube 영상 정보 확인 중...')
+    try {
+      await uploadApi.uploadYouTubeContent(url)
+      toast.success('YouTube 다운로드가 시작되었습니다.', { id: toastId })
+      dispatchContentsRefresh()
+    } catch {
+      toast.error('YouTube 요청 실패. 링크를 확인해주세요.', { id: toastId })
+    }
   }
 
   const handleFileUploadClick = () => {

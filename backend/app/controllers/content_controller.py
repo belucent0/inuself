@@ -161,20 +161,21 @@ async def upload_content(
 
 
 async def process_youtube_download_task(
-    file_id: UUID, url: str, video_id: str, title: str
+    file_id: UUID, url: str, video_id: str, title: str, trace_id: str | None = None
 ):
     """백그라운드에서 실행되는 YouTube 다운로드 작업."""
     from ..db.session import AsyncSessionLocal
 
     async with AsyncSessionLocal() as session:
         file_service = FileService(session)
-        await file_service.perform_youtube_download(file_id, url, video_id, title)
+        await file_service.perform_youtube_download(file_id, url, video_id, title, trace_id=trace_id)
 
 
 @router.post("/upload-youtube", response_model=YouTubeUploadResponse)
 async def upload_from_youtube(
     request: YouTubeUploadRequest,
     background_tasks: BackgroundTasks,
+    http_request: Request,
     file_service: FileService = Depends(get_file_service),
 ):
     """
@@ -185,6 +186,7 @@ async def upload_from_youtube(
     """
     from ..core.logging import logger
 
+    trace_id = http_request.headers.get("x-trace-id")
     youtube_service = YouTubeService()
 
     # URL 유효성 검증
@@ -193,9 +195,12 @@ async def upload_from_youtube(
     except InvalidYouTubeURLError:
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
 
-    # 영상 정보 조회 (길이 확인)
+    # 영상 정보 조회 (길이 확인) — 동기 yt-dlp 호출을 executor로 감싸서 이벤트 루프 비차단
+    import asyncio
+    loop = asyncio.get_running_loop()
+
     try:
-        info = youtube_service.get_video_info(request.url)
+        info = await loop.run_in_executor(None, youtube_service.get_video_info, request.url)
         duration = info.get("duration", 0)
 
         if duration > 3600:  # 1시간 = 3600초
@@ -228,7 +233,7 @@ async def upload_from_youtube(
     try:
         # 1. 플레이스홀더 파일 생성 (PROCESSING 상태)
         file_obj = await file_service.prepare_youtube_placeholder(
-            title=title, video_id=video_id
+            title=title, video_id=video_id, source_url=request.url
         )
 
         # 2. 백그라운드 태스크 등록
@@ -238,6 +243,7 @@ async def upload_from_youtube(
             url=request.url,
             video_id=video_id,
             title=title,
+            trace_id=trace_id,
         )
 
         logger.info(
@@ -313,7 +319,7 @@ async def retry_processing(
     content_id: UUID,
     type: str = Query(
         ...,
-        description="재처리 타입: 'asr' (ASR 재처리) 또는 'summary' (LLM 요약 재처리)",
+        description="재처리 타입: 'download', 'asr', 'summary', 또는 'ocr'",
     ),
     min_speakers: int | None = Query(
         None, ge=1, description="최소 화자 수 (ASR 재처리 시에만 사용)"
@@ -330,19 +336,54 @@ async def retry_processing(
     accuracy_mode: str = Query(
         "speed", description="전사 모드 ('speed' 또는 'accuracy')"
     ),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     service: ContentService = Depends(get_service),
+    file_service: FileService = Depends(get_file_service),
 ):
     """
     실패한 콘텐츠를 재처리합니다.
 
     Query Parameters:
-        type: "asr" (ASR 재처리), "summary" (LLM 요약 재처리), 또는 "ocr" (OCR 재처리)
+        type: "download" (다운로드 재시도), "asr" (ASR 재처리), "summary" (LLM 요약 재처리), 또는 "ocr" (OCR 재처리)
         min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
         max_speakers: 최대 화자 수 (선택사항, ASR 재처리 시에만 사용)
         ocr_mode: OCR 처리 모드 (선택사항, OCR 재처리 시에만 사용: "document", "portray")
         accuracy_mode: 전사 모드 (선택사항, ASR 재처리 시에만 사용: "speed", "accuracy")
     """
     try:
+        # 다운로드 재시도는 백그라운드 태스크가 필요하므로 컨트롤러에서 처리
+        if type.lower() == "download":
+            from ..db.models import FileStatus
+
+            file_obj = await file_service.file_repo.get_file(content_id)
+            if not file_obj:
+                raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
+            if not file_obj.source_url:
+                raise HTTPException(status_code=400, detail="다운로드 재시도 불가: 원본 URL 없음")
+
+            await file_service.file_repo.update_file_status(
+                content_id, FileStatus.PULLING, triggered_by="manual_retry", validate=False
+            )
+            await file_service.file_repo.add_log(
+                file_id=content_id,
+                log={"event": "manual_retry", "type": "download"},
+                message="Manual download retry requested by user",
+            )
+            await file_service.session.commit()
+
+            youtube_service = YouTubeService()
+            video_id = youtube_service.validate_youtube_url(file_obj.source_url)
+
+            background_tasks.add_task(
+                process_youtube_download_task,
+                file_id=file_obj.id,
+                url=file_obj.source_url,
+                video_id=video_id,
+                title=file_obj.filename.replace(".mp4", ""),
+            )
+
+            return {"success": True, "message": "다운로드 재시도가 시작되었습니다"}
+
         result = await service.retry_processing(
             content_id,
             type,

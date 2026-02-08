@@ -24,7 +24,7 @@ export function ContentsPage() {
     refetch()
   }
 
-  const handleRetry = async (id: string, type: 'asr' | 'ocr' | 'summary') => {
+  const handleRetry = async (id: string, type: 'download' | 'asr' | 'ocr' | 'summary') => {
     await contentsApi.retryProcessing(id, type)
     refetch()
   }

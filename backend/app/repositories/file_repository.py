@@ -92,6 +92,7 @@ class FileRepository:
         status: models.FileStatus | None = None,
         size_bytes: int | None = None,
         mime_type: str | None = None,
+        source_url: str | None = None,
     ) -> models.File:
         """파일 생성 (Content도 함께 생성)."""
         effective_status = status or models.FileStatus.QUEUED
@@ -103,6 +104,7 @@ class FileRepository:
             content_type=content_type,
             size_bytes=size_bytes,
             mime_type=mime_type,
+            source_url=source_url,
             created_at=now,
         )
         self.session.add(file)

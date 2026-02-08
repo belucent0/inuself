@@ -72,7 +72,7 @@ export async function deleteContents(ids: string[]): Promise<{ message: string }
  */
 export async function retryProcessing(
   id: string,
-  type: 'asr' | 'ocr' | 'summary',
+  type: 'download' | 'asr' | 'ocr' | 'summary',
   options?: {
     minSpeakers?: number
     maxSpeakers?: number

@@ -45,6 +45,7 @@ export interface FileProgressEvent {
   type: 'file_progress' | 'connection' | 'pong' | 'content_created'
   file_id?: string
   content_id?: string
+  trace_id?: string
   filename?: string
   content_type?: string
   status?: FileStatus | string
