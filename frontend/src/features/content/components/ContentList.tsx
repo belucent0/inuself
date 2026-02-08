@@ -2,8 +2,9 @@
  * 콘텐츠 목록 컴포넌트
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, Upload } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/shared/components/ui/button'
 import { Card, CardContent } from '@/shared/components/ui/card'
 import {
@@ -13,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
-import { cn } from '@/shared/utils/cn'
+import { DeleteConfirmDialog } from '@/shared/components/DeleteConfirmDialog'
 import type { ContentSummary } from '../types'
 import { ContentCard } from './ContentCard'
 
@@ -36,8 +37,8 @@ interface ContentListProps {
 
 export function ContentList({ contents, pagination, onDelete, onRetry, onUpload }: ContentListProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [isDeleting, setIsDeleting] = useState(false)
-  const [message, setMessage] = useState('')
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [optimisticallyHidden, setOptimisticallyHidden] = useState<Set<string>>(new Set())
 
   const selectableIds = useMemo(() => contents.map((c) => c.id), [contents])
 
@@ -72,35 +73,46 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
     })
   }
 
-  const handleBulkDelete = async () => {
+  const handleBulkDeleteClick = () => {
     if (!selectedIds.size || !onDelete) return
-    if (!confirm('선택한 콘텐츠를 삭제하시겠습니까?')) return
+    setDeleteDialogOpen(true)
+  }
 
-    setIsDeleting(true)
-    setMessage('')
+  const handleBulkDeleteConfirm = useCallback(async () => {
+    if (!onDelete) return
+
+    const idsToDelete = Array.from(selectedIds)
+    setDeleteDialogOpen(false)
+    setOptimisticallyHidden(new Set(idsToDelete))
+    setSelectedIds(new Set())
 
     try {
-      await onDelete(Array.from(selectedIds))
-      setMessage('삭제되었습니다.')
-      setSelectedIds(new Set())
-      setTimeout(() => setMessage(''), 3000)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '삭제 실패')
+      await toast.promise(onDelete(idsToDelete), {
+        loading: `${idsToDelete.length}개 콘텐츠 삭제 중...`,
+        success: `${idsToDelete.length}개 콘텐츠가 삭제되었습니다.`,
+        error: '삭제에 실패했습니다.',
+      })
+    } catch {
+      // toast.promise가 에러를 표시하므로 롤백만 수행
     } finally {
-      setIsDeleting(false)
+      setOptimisticallyHidden(new Set())
     }
-  }
+  }, [selectedIds, onDelete])
 
   const handleRetry = async (id: string, type: 'download' | 'asr' | 'ocr' | 'summary') => {
     if (!onRetry) return
     try {
       await onRetry(id, type)
-      setMessage('재처리 요청 완료')
-      setTimeout(() => setMessage(''), 3000)
+      toast.success('재처리 요청 완료')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '재처리 실패')
+      toast.error(error instanceof Error ? error.message : '재처리 실패')
     }
   }
+
+  const visibleContents = useMemo(
+    () => contents.filter((c) => !optimisticallyHidden.has(c.id)),
+    [contents, optimisticallyHidden]
+  )
 
   if (!contents.length) {
     return (
@@ -133,10 +145,10 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
           <Button
             type="button"
             variant="destructive"
-            onClick={handleBulkDelete}
-            disabled={isDeleting || selectedIds.size === 0}
+            onClick={handleBulkDeleteClick}
+            disabled={selectedIds.size === 0}
           >
-            {isDeleting ? '삭제 중...' : `선택 삭제 (${selectedIds.size}개)`}
+            선택 삭제 ({selectedIds.size}개)
           </Button>
         )}
         {pagination && (
@@ -167,23 +179,9 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
         )}
       </div>
 
-      {/* 메시지 */}
-      {message && (
-        <div
-          className={cn(
-            'p-3 rounded-md text-base',
-            message.includes('실패')
-              ? 'bg-destructive/10 text-destructive'
-              : 'bg-primary/10 text-primary'
-          )}
-        >
-          {message}
-        </div>
-      )}
-
       {/* 콘텐츠 목록 */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
-        {contents.map((item) => (
+        {visibleContents.map((item) => (
           <ContentCard
             key={item.id}
             content={item}
@@ -193,6 +191,13 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
           />
         ))}
       </div>
+
+      <DeleteConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        onConfirm={handleBulkDeleteConfirm}
+        description={`선택한 ${selectedIds.size}개 콘텐츠를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`}
+      />
 
       {/* 페이지네이션 */}
       {pagination && (

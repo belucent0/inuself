@@ -17,14 +17,16 @@ export function AudioVideoPlayer({ src, filename, mediaRef }: AudioVideoPlayerPr
 
   if (isVideo) {
     return (
-      <video
-        ref={mediaRef as RefObject<HTMLVideoElement | null>}
-        controls
-        className="w-full rounded-lg"
-        preload="metadata"
-      >
-        <source src={src} />
-      </video>
+      <div className="flex justify-center">
+        <video
+          ref={mediaRef as RefObject<HTMLVideoElement | null>}
+          controls
+          className="max-w-full max-h-[25vh] rounded-lg"
+          preload="metadata"
+        >
+          <source src={src} />
+        </video>
+      </div>
     )
   }
 

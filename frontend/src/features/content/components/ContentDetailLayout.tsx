@@ -220,9 +220,7 @@ export function ContentDetailLayout({
               />
             )}
             {hasDocument && content.document && (
-              <div className="flex-1 overflow-y-auto p-3">
-                <OcrTextDisplay document={content.document} />
-              </div>
+              <OcrTextDisplay document={content.document} />
             )}
           </div>
         </div>

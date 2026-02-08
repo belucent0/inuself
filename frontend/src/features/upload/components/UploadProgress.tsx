@@ -34,14 +34,20 @@ interface UploadProgressProps {
 export function UploadProgress({ progress }: UploadProgressProps) {
   const getStatusIcon = () => {
     switch (progress.status) {
-      case 'queued':
-      case 'processing':
-      case 'summary_queued':
-      case 'summarizing':
+      case 'QUEUED':
+      case 'PULLING':
+      case 'PROCESSING':
+      case 'OCR_PROCESSING':
+      case 'SUMMARY_QUEUED':
+      case 'SUMMARIZING':
         return <Loader2 className="h-5 w-5 animate-spin text-primary" />
-      case 'completed':
+      case 'COMPLETED':
         return <CheckCircle2 className="h-5 w-5 text-green-500" />
-      case 'failed':
+      case 'FAILED':
+      case 'DOWNLOAD_FAILED':
+      case 'ASR_FAILED':
+      case 'OCR_FAILED':
+      case 'SUMMARY_FAILED':
         return <XCircle className="h-5 w-5 text-destructive" />
       default:
         return <AlertCircle className="h-5 w-5 text-muted-foreground" />
