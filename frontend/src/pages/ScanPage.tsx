@@ -20,7 +20,7 @@ import {
   AlertDialogTitle,
 } from "@/shared/components/ui/alert-dialog"
 import { useWpiStatus, useDeleteWpiInProgress } from "@/features/scan"
-import { Sparkles, Play, RotateCcw, CheckCircle2, ScanHeart, AlertTriangle } from "lucide-react"
+import { Sparkles, Play, CheckCircle2, ScanHeart, AlertTriangle } from "lucide-react"
 
 export function ScanPage() {
   const navigate = useNavigate()
@@ -28,21 +28,6 @@ export function ScanPage() {
   const { deleteInProgress, deleting } = useDeleteWpiInProgress()
 
   const [showIncompleteDialog, setShowIncompleteDialog] = useState(false)
-
-  // WPI 버튼 텍스트/아이콘 결정
-  const getWpiButtonInfo = () => {
-    if (!status) return { text: "검사 시작", icon: <Play className="h-4 w-4" /> }
-    if (status.in_progress_id) {
-      const text = status.i_test_completed ? "타인평가 이어하기" : "자기평가 이어하기"
-      return { text, icon: <RotateCcw className="h-4 w-4" /> }
-    }
-    if (status.has_profile) {
-      return { text: "다시 검사하기", icon: <Play className="h-4 w-4" /> }
-    }
-    return { text: "검사 시작", icon: <Play className="h-4 w-4" /> }
-  }
-
-  const wpiButtonInfo = getWpiButtonInfo()
 
   // WPI 버튼 클릭 핸들러
   const handleWpiClick = () => {

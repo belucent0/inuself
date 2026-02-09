@@ -9,22 +9,11 @@ import { useState, useMemo, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card"
 import { Button } from "@/shared/components/ui/button"
-import { Badge } from "@/shared/components/ui/badge"
 import { Skeleton } from "@/shared/components/ui/skeleton"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/shared/components/ui/alert-dialog"
-import { useWpiStatus, useWpiQuestions, useWpiSubmit, useDeleteWpiInProgress } from "@/features/scan"
+import { useWpiStatus, useWpiQuestions, useWpiSubmit } from "@/features/scan"
 import type { WpiQuestion } from "@/features/scan"
 import { cn } from "@/shared/utils/cn"
-import { X, Check, AlertTriangle } from "lucide-react"
+import { X, Check } from "lucide-react"
 
 // 순위별 설정
 const RANK_CONFIG = {
@@ -53,7 +42,6 @@ export function WpiTestPage() {
   const navigate = useNavigate()
   const { status, loading: statusLoading, refetch: refetchStatus } = useWpiStatus()
   const { submit, submitting } = useWpiSubmit()
-  const { deleteInProgress, deleting } = useDeleteWpiInProgress()
 
   // 현재 테스트 타입을 로컬 상태로 관리 (제출 후 명시적으로 전환)
   const [currentTestType, setCurrentTestType] = useState<"i_test" | "me_test">("i_test")
