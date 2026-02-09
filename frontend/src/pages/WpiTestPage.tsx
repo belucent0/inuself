@@ -28,9 +28,9 @@ import { X, Check, AlertTriangle } from "lucide-react"
 
 // 순위별 설정
 const RANK_CONFIG = {
-  rank_1: { label: "1순위", max: 3, color: "bg-indigo-600", textColor: "text-indigo-600", borderColor: "border-indigo-600", hoverColor: "hover:bg-indigo-600" },
-  rank_2: { label: "2순위", max: 4, color: "bg-violet-600", textColor: "text-violet-600", borderColor: "border-violet-600", hoverColor: "hover:bg-violet-600" },
-  rank_3: { label: "3순위", max: 5, color: "bg-rose-600", textColor: "text-rose-600", borderColor: "border-rose-600", hoverColor: "hover:bg-rose-600" },
+  rank_1: { label: "1순위", max: 3, color: "bg-gray-900", textColor: "text-gray-900", borderColor: "border-gray-900", hoverColor: "hover:bg-gray-600" },
+  rank_2: { label: "2순위", max: 4, color: "bg-gray-700", textColor: "text-gray-700", borderColor: "border-gray-700", hoverColor: "hover:bg-gray-600" },
+  rank_3: { label: "3순위", max: 5, color: "bg-gray-500", textColor: "text-gray-500", borderColor: "border-gray-500", hoverColor: "hover:bg-gray-600" },
 } as const
 
 type RankKey = keyof typeof RANK_CONFIG
@@ -58,28 +58,8 @@ export function WpiTestPage() {
   // 현재 테스트 타입을 로컬 상태로 관리 (제출 후 명시적으로 전환)
   const [currentTestType, setCurrentTestType] = useState<"i_test" | "me_test">("i_test")
 
-  // 미완료 검사 확인 모달 상태
-  const [showIncompleteDialog, setShowIncompleteDialog] = useState(false)
-  const [hasCheckedIncomplete, setHasCheckedIncomplete] = useState(false)
-  // 새로 시작하기를 선택한 경우 리다이렉트 방지
-  const [isStartingNew, setIsStartingNew] = useState(false)
-
-  // 미완료 검사 확인 (페이지 진입 시 한번만)
-  useEffect(() => {
-    if (status && !hasCheckedIncomplete) {
-      setHasCheckedIncomplete(true)
-      // 미완료 검사가 있고, 아직 모달을 보여주지 않았으면
-      if (status.in_progress_id) {
-        setShowIncompleteDialog(true)
-      }
-    }
-  }, [status, hasCheckedIncomplete])
-
   // 초기 테스트 타입 설정
   useEffect(() => {
-    // 새로 시작하기를 선택한 경우 리다이렉트 하지 않음
-    if (isStartingNew) return
-
     if (status) {
       if (!status.i_test_completed) {
         setCurrentTestType("i_test")
@@ -87,31 +67,11 @@ export function WpiTestPage() {
         setCurrentTestType("me_test")
       }
       // 진행 중인 검사가 없고, 둘 다 완료 상태이면 결과 페이지로 (has_profile인 경우)
-      // 단, 새 검사 시작 직후에는 리다이렉트하지 않음
       if (status.has_profile && !status.in_progress_id && !status.has_incomplete) {
         navigate("/scan/wpi/result")
       }
     }
-  }, [status, navigate, isStartingNew])
-
-  // 새로 시작하기 핸들러
-  const handleStartNew = async () => {
-    setIsStartingNew(true)
-    setShowIncompleteDialog(false)
-    await deleteInProgress()
-    setCurrentTestType("i_test")
-  }
-
-  // 이어하기 핸들러
-  const handleContinue = () => {
-    setShowIncompleteDialog(false)
-    // 현재 상태에 맞게 테스트 타입 설정
-    if (status?.i_test_completed && !status?.me_test_completed) {
-      setCurrentTestType("me_test")
-    } else {
-      setCurrentTestType("i_test")
-    }
-  }
+  }, [status, navigate])
 
   // 문항을 ID 순으로 정렬하여 가져옴 (shuffle=false)
   const { questions, loading: questionsLoading } = useWpiQuestions(currentTestType, false)
@@ -174,9 +134,9 @@ export function WpiTestPage() {
   const handleDeselect = (questionId: number) => {
     setResponses((prev) => {
       const newResponses = { ...prev }
-      ;(Object.keys(newResponses) as RankKey[]).forEach((key) => {
-        newResponses[key] = newResponses[key].filter((id) => id !== questionId)
-      })
+        ; (Object.keys(newResponses) as RankKey[]).forEach((key) => {
+          newResponses[key] = newResponses[key].filter((id) => id !== questionId)
+        })
       return newResponses
     })
   }
@@ -229,45 +189,6 @@ export function WpiTestPage() {
 
   const guide = GUIDE_TEXT[currentTestType]
 
-  // 미완료 검사 확인 모달을 표시 중이면 검사 UI를 숨김
-  if (showIncompleteDialog) {
-    return (
-      <AlertDialog open={showIncompleteDialog} onOpenChange={setShowIncompleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-500" />
-              이전에 검사하던 내역이 있습니다
-            </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              <p>
-                {status?.i_test_completed
-                  ? "자기평가를 완료하고 타인평가를 진행 중이었습니다."
-                  : "자기평가를 진행 중이었습니다."}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                <strong>이어하기</strong>: 이전에 하던 검사를 이어서 진행합니다.<br />
-                <strong>새로하기</strong>: 이전 검사를 삭제하고 처음부터 다시 시작합니다.
-              </p>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleContinue} disabled={deleting}>
-              이어하기
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleStartNew}
-              disabled={deleting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleting ? "삭제 중..." : "새로하기"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    )
-  }
-
   return (
     <div className="container mx-auto py-6 px-4">
       {/* 안내 문구 */}
@@ -275,9 +196,9 @@ export function WpiTestPage() {
         <h1 className="text-2xl font-bold mb-2">{guide.title}</h1>
         <p className="text-muted-foreground">{guide.description}</p>
         <div className="mt-3 flex gap-4 text-sm">
-          <span className="text-indigo-600 font-medium">● 1순위: 3개</span>
-          <span className="text-violet-600 font-medium">● 2순위: 4개</span>
-          <span className="text-rose-600 font-medium">● 3순위: 5개</span>
+          <span className="text-gray-600 font-medium">● 1순위: 3개</span>
+          <span className="text-gray-600 font-medium">● 2순위: 4개</span>
+          <span className="text-gray-600 font-medium">● 3순위: 5개</span>
         </div>
       </div>
 
@@ -369,12 +290,15 @@ function QuestionCard({
           const config = RANK_CONFIG[rank]
           const rankNumber = rank === "rank_1" ? "1" : rank === "rank_2" ? "2" : "3"
 
+          const borderWidth = rank === "rank_1" ? "border-2" : rank === "rank_2" ? "border-2" : "border"
+
           return (
             <button
               key={rank}
               disabled={isDisabled}
               className={cn(
-                "flex-1 h-10 rounded-md border-2 font-semibold text-base flex items-center justify-center gap-1",
+                "flex-1 h-10 rounded-md font-semibold text-base flex items-center justify-center gap-1",
+                borderWidth,
                 "transition-all duration-200 cursor-pointer",
                 // 선택된 경우: 해당 순위의 배경색 + 투명도 호버 효과만
                 isSelected && config.color,
@@ -424,11 +348,14 @@ function MobileSelectionBar({ responses }: { responses: Record<RankKey, number[]
               {/* 2행: 선택된 문항 뱃지 */}
               <div className="flex flex-wrap gap-1 justify-center min-h-[26px]">
                 {selected.length > 0
-                  ? selected.sort((a, b) => a - b).map(id => (
+                  ? selected.sort((a, b) => a - b).map(id => {
+                    const borderWidth = rank === "rank_1" ? "border-2" : rank === "rank_2" ? "border-2" : "border"
+                    return (
                       <div
                         key={id}
                         className={cn(
-                          "w-6 h-6 flex items-center justify-center rounded border-2 text-xs font-semibold",
+                          "w-6 h-6 flex items-center justify-center rounded text-xs font-semibold",
+                          borderWidth,
                           config.borderColor,
                           config.textColor,
                           "bg-white"
@@ -436,7 +363,8 @@ function MobileSelectionBar({ responses }: { responses: Record<RankKey, number[]
                       >
                         {id}
                       </div>
-                    ))
+                    )
+                  })
                   : <span className="text-muted-foreground text-xs">-</span>
                 }
               </div>
@@ -480,22 +408,26 @@ function SelectionPanel({
                 {config.label} ({selected.length}/{config.max})
               </p>
               <div className="flex flex-wrap gap-2">
-                {selected.map((id) => (
-                  <div
-                    key={id}
-                    className={cn(
-                      "px-2 py-1 rounded border-2 flex items-center gap-1 cursor-pointer transition-opacity hover:opacity-80",
-                      config.borderColor,
-                      config.textColor,
-                      "bg-white text-sm font-semibold"
-                    )}
-                    onClick={() => onRemove(id)}
-                    title={getQuestionText(id)}
-                  >
-                    #{id}
-                    <X className="h-4 w-4" />
-                  </div>
-                ))}
+                {selected.map((id) => {
+                  const borderWidth = rank === "rank_1" ? "border-2" : rank === "rank_2" ? "border-2" : "border"
+                  return (
+                    <div
+                      key={id}
+                      className={cn(
+                        "px-2 py-1 rounded flex items-center gap-1 cursor-pointer transition-opacity hover:opacity-80",
+                        borderWidth,
+                        config.borderColor,
+                        config.textColor,
+                        "bg-white text-sm font-semibold"
+                      )}
+                      onClick={() => onRemove(id)}
+                      title={getQuestionText(id)}
+                    >
+                      #{id}
+                      <X className="h-4 w-4" />
+                    </div>
+                  )
+                })}
                 {Array(emptySlots)
                   .fill(0)
                   .map((_, i) => (
