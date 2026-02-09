@@ -12,7 +12,12 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 async def get_session() -> AsyncSession:
     """FastAPI 의존성에서 사용할 세션 생성기."""
     async with AsyncSessionLocal() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 async def init_db() -> None:

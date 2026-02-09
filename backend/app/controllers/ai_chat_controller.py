@@ -3,6 +3,7 @@
 V8.0: LangGraph 워크플로우를 사용한 AI 모드 채팅 API.
 V8.5: conversation_id → thread_id 용어 통일
 V8.6: RESTful API 구조 개선 - /api/threads로 통일
+V9.0: Phase 1 - user_id 기반 스레드 관리, DB 영속화
 
 기존 chat_controller.py와 별도로 동작합니다.
 """
@@ -10,13 +11,16 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings, Settings
+from ..db.session import get_session
 from ..agents import run_ai_agent
 from ..agents.graph import stream_ai_agent
 from ..services.thread_service import (
@@ -81,9 +85,18 @@ class ThreadDetailResponse(BaseModel):
     updated_at: float
 
 
-def get_svc() -> ThreadService:
-    """스레드 서비스 의존성."""
-    return get_thread_service()
+# === 의존성 ===
+
+
+async def get_svc(session: AsyncSession = Depends(get_session)) -> ThreadService:
+    """스레드 서비스 의존성 (DB 세션 포함)."""
+    return get_thread_service(session)
+
+
+# TODO: 실제 인증 구현 시 교체
+async def get_current_user_id() -> UUID:
+    """현재 사용자 ID 반환 (임시 구현)."""
+    return UUID("01234567-89ab-cdef-0123-456789abcdef")
 
 
 @router.post("", response_model=ThreadResponse)
@@ -91,20 +104,22 @@ async def create_thread(
     request: CreateThreadRequest,
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
 ):
     """새 스레드 생성 (첫 메시지 포함, 비스트리밍).
 
     POST /api/threads - 새 대화 시작
     """
-    logger.info(f"[Thread] Create: query='{request.query[:50]}...', mode={request.mode}")
+    logger.info(f"[Thread] Create: user={user_id}, query='{request.query[:50]}...', mode={request.mode}")
 
     try:
-        # 새 스레드 생성
-        thread = await svc.create_thread(metadata=request.context)
+        # 새 스레드 생성 (user_id 포함)
+        thread = await svc.create_thread(user_id=user_id, metadata=request.context)
 
         # 사용자 메시지 저장
         await svc.add_message(
             thread.thread_id,
+            user_id=user_id,
             role="user",
             content=request.query,
         )
@@ -123,6 +138,7 @@ async def create_thread(
         # AI 응답 저장 (V8.4: 재시도 메타데이터 포함)
         await svc.add_message(
             thread.thread_id,
+            user_id=user_id,
             role="assistant",
             content=result.get("response", ""),
             metadata={
@@ -160,17 +176,21 @@ async def create_thread_stream(
     request: CreateThreadRequest,
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
 ):
     """새 스레드 생성 (첫 메시지 포함, SSE 스트리밍).
 
     POST /api/threads/stream - 새 대화 시작 (스트리밍)
     """
-    logger.info(f"[Thread] Create stream: query='{request.query[:50]}...', mode={request.mode}")
+    logger.info(f"[Thread] Create stream: user={user_id}, query='{request.query[:50]}...', mode={request.mode}")
+
+    # 클로저에서 사용할 변수 캡처
+    captured_user_id = user_id
 
     async def generate():
         try:
-            # 새 스레드 생성
-            thread = await svc.create_thread(metadata=request.context)
+            # 새 스레드 생성 (user_id 포함)
+            thread = await svc.create_thread(user_id=captured_user_id, metadata=request.context)
 
             # 스레드 ID 먼저 전송
             yield f"data: {json.dumps({'type': 'thread_id', 'data': thread.thread_id})}\n\n"
@@ -178,6 +198,7 @@ async def create_thread_stream(
             # 사용자 메시지 저장
             await svc.add_message(
                 thread.thread_id,
+                user_id=captured_user_id,
                 role="user",
                 content=request.query,
             )
@@ -205,7 +226,7 @@ async def create_thread_stream(
                 metadata=request.context,
                 enable_retry=True,  # V8.4: 재시도 활성화
                 max_retries=3,
-                user_id=None,  # TODO: 인증 구현 후 실제 user_id 전달
+                user_id=str(captured_user_id),
             ):
                 event_type = event.get("type", "")
                 event_data = event.get("data")
@@ -272,6 +293,7 @@ async def create_thread_stream(
                     if full_response:
                         await svc.add_message(
                             thread.thread_id,
+                            user_id=captured_user_id,
                             role="assistant",
                             content=full_response,
                             metadata={
@@ -314,12 +336,13 @@ async def list_threads(
     limit: int = 20,
     offset: int = 0,
     svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
 ):
     """스레드 목록 조회.
 
     GET /api/threads
     """
-    threads = await svc.list_threads(limit=limit, offset=offset)
+    threads = await svc.list_threads(user_id=user_id, limit=limit, offset=offset)
     return ThreadListResponse(
         threads=threads,
         total=len(threads),
@@ -330,12 +353,13 @@ async def list_threads(
 async def get_thread(
     thread_id: str,
     svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
 ):
     """스레드 상세 조회.
 
     GET /api/threads/{thread_id}
     """
-    thread = await svc.get_thread(thread_id)
+    thread = await svc.get_thread(thread_id, user_id=user_id)
     if not thread:
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
 
@@ -352,12 +376,13 @@ async def get_thread(
 async def delete_thread(
     thread_id: str,
     svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
 ):
     """스레드 삭제.
 
     DELETE /api/threads/{thread_id}
     """
-    deleted = await svc.delete_thread(thread_id)
+    deleted = await svc.delete_thread(thread_id, user_id=user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
 
@@ -370,15 +395,16 @@ async def add_message(
     request: AddMessageRequest,
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
 ):
     """기존 스레드에 메시지 추가 (비스트리밍).
 
     POST /api/threads/{thread_id}/messages
     """
-    logger.info(f"[Thread] Add message: thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}")
+    logger.info(f"[Thread] Add message: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}")
 
-    # 스레드 존재 확인
-    thread = await svc.get_thread(thread_id)
+    # 스레드 존재 확인 (권한 검증 포함)
+    thread = await svc.get_thread(thread_id, user_id=user_id)
     if not thread:
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
 
@@ -386,6 +412,7 @@ async def add_message(
         # 사용자 메시지 저장
         await svc.add_message(
             thread_id,
+            user_id=user_id,
             role="user",
             content=request.query,
         )
@@ -404,6 +431,7 @@ async def add_message(
         # AI 응답 저장
         await svc.add_message(
             thread_id,
+            user_id=user_id,
             role="assistant",
             content=result.get("response", ""),
             metadata={
@@ -441,17 +469,21 @@ async def add_message_stream(
     request: AddMessageRequest,
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
 ):
     """기존 스레드에 메시지 추가 (SSE 스트리밍).
 
     POST /api/threads/{thread_id}/messages/stream
     """
-    logger.info(f"[Thread] Add message stream: thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}")
+    logger.info(f"[Thread] Add message stream: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}")
 
-    # 스레드 존재 확인
-    thread = await svc.get_thread(thread_id)
+    # 스레드 존재 확인 (권한 검증 포함)
+    thread = await svc.get_thread(thread_id, user_id=user_id)
     if not thread:
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
+
+    # 클로저에서 사용할 변수 캡처
+    captured_user_id = user_id
 
     async def generate():
         try:
@@ -461,6 +493,7 @@ async def add_message_stream(
             # 사용자 메시지 저장
             await svc.add_message(
                 thread_id,
+                user_id=captured_user_id,
                 role="user",
                 content=request.query,
             )
@@ -487,7 +520,7 @@ async def add_message_stream(
                 metadata=request.context,
                 enable_retry=True,
                 max_retries=3,
-                user_id=None,
+                user_id=str(captured_user_id),
             ):
                 event_type = event.get("type", "")
                 event_data = event.get("data")
@@ -546,6 +579,7 @@ async def add_message_stream(
                     if full_response:
                         await svc.add_message(
                             thread_id,
+                            user_id=captured_user_id,
                             role="assistant",
                             content=full_response,
                             metadata={
@@ -588,6 +622,7 @@ async def regenerate_response(
     request: RegenerateRequest,
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
 ):
     """마지막 AI 답변 재생성 (SSE 스트리밍).
 
@@ -596,20 +631,23 @@ async def regenerate_response(
     1. 마지막 assistant 메시지 삭제
     2. 마지막 user 메시지로 AI 재요청
     """
-    logger.info(f"[Thread] Regenerate: thread_id={thread_id}, mode={request.mode}")
+    logger.info(f"[Thread] Regenerate: user={user_id}, thread_id={thread_id}, mode={request.mode}")
 
-    # 스레드 존재 확인
-    thread = await svc.get_thread(thread_id)
+    # 스레드 존재 확인 (권한 검증 포함)
+    thread = await svc.get_thread(thread_id, user_id=user_id)
     if not thread:
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
 
     # 마지막 assistant 메시지 삭제하고 user 쿼리 가져오기
-    last_user_query = await svc.remove_last_assistant_message(thread_id)
+    last_user_query = await svc.remove_last_assistant_message(thread_id, user_id=user_id)
     if not last_user_query:
         raise HTTPException(
             status_code=400,
             detail="재생성할 답변이 없습니다 (마지막 메시지가 assistant가 아님)"
         )
+
+    # 클로저에서 사용할 변수 캡처
+    captured_user_id = user_id
 
     async def generate():
         try:
@@ -635,7 +673,7 @@ async def regenerate_response(
                 metadata=request.context,
                 enable_retry=True,
                 max_retries=3,
-                user_id=None,
+                user_id=str(captured_user_id),
             ):
                 event_type = event.get("type", "")
                 event_data = event.get("data")
@@ -694,6 +732,7 @@ async def regenerate_response(
                     if full_response:
                         await svc.add_message(
                             thread_id,
+                            user_id=captured_user_id,
                             role="assistant",
                             content=full_response,
                             metadata={
