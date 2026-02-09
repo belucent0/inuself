@@ -13,6 +13,7 @@ import {
   Plus,
   Search,
   Trash2,
+  ChevronRight,
 } from 'lucide-react'
 
 import {
@@ -26,6 +27,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubItem,
+  SidebarMenuSubButton,
   SidebarRail,
   SidebarMenuAction,
   SidebarMenuBadge,
@@ -39,6 +43,7 @@ import {
   TooltipTrigger,
 } from '@/shared/components/ui/tooltip'
 import { ScrollArea } from '@/shared/components/ui/scroll-area'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/shared/components/ui/collapsible'
 import { navigationItems } from '@/shared/config/navigation'
 import { YouTubeLinkModal } from './YouTubeLinkModal'
 import { StreamingASRModal } from './StreamingASRModal'
@@ -185,6 +190,44 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 const Icon = item.icon
                 const isActive = pathname === item.href || pathname?.startsWith(item.href + '/')
                 const isAIMode = item.label === 'AI 채팅'
+                const hasSubItems = item.subItems && item.subItems.length > 0
+
+                // 서브메뉴가 있는 경우
+                if (hasSubItems) {
+                  return (
+                    <Collapsible key={item.href} defaultOpen={isActive} className="group/collapsible">
+                      <SidebarMenuItem>
+                        <CollapsibleTrigger asChild>
+                          <SidebarMenuButton isActive={isActive}>
+                            <Icon />
+                            <span>{item.label}</span>
+                            <ChevronRight className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-90" />
+                          </SidebarMenuButton>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <SidebarMenuSub>
+                            {item.subItems?.map((subItem) => {
+                              const SubIcon = subItem.icon
+                              const isSubActive = pathname === subItem.href
+                              return (
+                                <SidebarMenuSubItem key={subItem.href}>
+                                  <SidebarMenuSubButton asChild isActive={isSubActive}>
+                                    <Link to={subItem.href}>
+                                      {SubIcon && <SubIcon className="h-4 w-4" />}
+                                      <span>{subItem.label}</span>
+                                    </Link>
+                                  </SidebarMenuSubButton>
+                                </SidebarMenuSubItem>
+                              )
+                            })}
+                          </SidebarMenuSub>
+                        </CollapsibleContent>
+                      </SidebarMenuItem>
+                    </Collapsible>
+                  )
+                }
+
+                // 일반 메뉴
                 return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild isActive={isActive}>
