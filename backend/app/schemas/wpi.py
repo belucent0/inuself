@@ -140,6 +140,7 @@ class WpiProfileStatus(BaseModel):
 
     has_incomplete: bool = Field(False, description="미완료 검사 존재 여부")
     in_progress_id: str | None = Field(None, description="진행 중인 검사 ID (이어하기용)")
+    created_at: datetime | None = Field(None, description="진행 중인 검사 생성 시간")
     i_test_completed: bool = False
     me_test_completed: bool = False
     has_profile: bool = False

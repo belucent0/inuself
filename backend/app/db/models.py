@@ -324,3 +324,72 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+
+    # 검사 결과 관계 (1:N - 검사 이력 누적)
+    scan_results: Mapped[list["ScanResult"]] = relationship(
+        "ScanResult", back_populates="user", cascade="all, delete-orphan", order_by="ScanResult.created_at.desc()"
+    )
+
+
+class ScanResult(Base):
+    """범용 심리검사 결과 테이블.
+
+    다양한 검사 유형(WPI, WSI, MCDC 등)의 결과를 단일 테이블에서 관리.
+    검사별 상세 데이터는 JSONB(data) 컬럼에 저장.
+
+    WPI 예시:
+      scan_type: "wpi"
+      status: "completed"
+      data: {
+        "version": 1,
+        "i_test": {"scores": {...}, "dominant_type": "...", "raw_responses": {...}},
+        "me_test": {"scores": {...}, "dominant_type": "...", "raw_responses": {...}},
+        "gap_analysis": {"axis_gaps": {...}}
+      }
+
+    WSI 예시 (향후):
+      scan_type: "wsi"
+      status: "completed"
+      data: {
+        "version": 1,
+        "scores": {...},
+        "raw_responses": {...}
+      }
+    """
+
+    __tablename__ = "scan_result"
+
+    # UUID v7 Primary Key
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
+    )
+
+    # User FK (1:N - 검사 이력 누적)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # 검사 유형 (wpi, wsi, mcdc 등)
+    scan_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    # 검사 상태 (in_progress, completed)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
+
+    # 검사 데이터 (JSONB) - 검사별 구조 상이, version 필드로 관리
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # 타임스탬프
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    # 관계
+    user: Mapped["User"] = relationship("User", back_populates="scan_results")
