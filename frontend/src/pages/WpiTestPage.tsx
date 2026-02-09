@@ -370,34 +370,34 @@ function QuestionCard({
           const rankNumber = rank === "rank_1" ? "1" : rank === "rank_2" ? "2" : "3"
 
           return (
-            <Button
+            <button
               key={rank}
-              size="sm"
-              variant="outline"
               disabled={isDisabled}
               className={cn(
-                "flex-1 h-10 relative transition-all font-semibold text-base",
-                // 선택된 경우: 해당 순위의 배경색으로 진하게
+                "flex-1 h-10 rounded-md border-2 font-semibold text-base flex items-center justify-center gap-1",
+                "transition-all duration-200 cursor-pointer",
+                // 선택된 경우: 해당 순위의 배경색 + 투명도 호버 효과만
                 isSelected && config.color,
-                isSelected && "text-white border-transparent",
-                // 선택 가능한 경우: 테두리와 텍스트만 색상 적용
+                isSelected && "text-white border-transparent hover:opacity-85 active:opacity-95",
+                // 선택 가능한 경우: 테두리와 텍스트만 색상 (호버 없음)
                 !isSelected && !isDisabled && config.textColor,
                 !isSelected && !isDisabled && config.borderColor,
-                !isSelected && !isDisabled && "bg-transparent",
+                !isSelected && !isDisabled && "bg-white hover:bg-gray-50",
                 // 비활성화된 경우 (순위 가득 참)
-                isDisabled && "!bg-gray-100 !text-gray-300 !border-gray-200 cursor-not-allowed opacity-50"
+                isDisabled && "bg-gray-100 text-gray-300 border-gray-200 cursor-not-allowed opacity-50"
               )}
               onClick={() => onSelect(question.id, rank)}
+              type="button"
             >
               {isSelected ? (
-                <span className="flex items-center gap-1">
+                <>
                   <Check className="h-4 w-4" />
                   {rankNumber}
-                </span>
+                </>
               ) : (
                 rankNumber
               )}
-            </Button>
+            </button>
           )
         })}
       </div>
