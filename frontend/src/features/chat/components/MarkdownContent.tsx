@@ -132,12 +132,9 @@ export function MarkdownContent({
   sources,
   isStreaming,
 }: MarkdownContentProps) {
-  if (!content || !content.trim()) {
-    return null
-  }
-
+  // 훅은 항상 같은 순서로 호출되어야 함 (조건부 early return 전에)
   const { thinking, mainContent, isThinkingComplete } = useMemo(
-    () => parseThinkingContent(content),
+    () => parseThinkingContent(content || ''),
     [content]
   )
 
@@ -152,6 +149,11 @@ export function MarkdownContent({
       return match
     })
   }, [mainContent, sources])
+
+  // 내용이 없으면 null 반환 (훅 호출 이후)
+  if (!content || !content.trim()) {
+    return null
+  }
 
   return (
     <div className={cn('space-y-4', className)}>
