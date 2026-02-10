@@ -16,7 +16,7 @@ from ..core.telemetry import preserve_otel_context
 from ..core.storage import (
     delete_file,
     upload_fileobj,
-    get_public_media_url,
+    get_secure_media_url,
     wait_for_file,
     wait_for_files,
     download_file,
@@ -82,7 +82,7 @@ class FileService:
                 "id": row.id,  # File.id (UUID v7) - 이벤트의 file_id와 일치
                 "filename": row.filename,
                 "object_key": row.object_key,
-                "media_url": get_public_media_url(row.object_key),
+                "media_url": get_secure_media_url(row.id),
                 "content_type": row.content_type,
                 "status": content.status or FileStatus.QUEUED,  # None이면 기본값
                 "summary_md": content.summary_md,
@@ -135,7 +135,7 @@ class FileService:
             "id": file_obj.id,  # File.id (UUID v7) - 이벤트의 file_id와 일치
             "filename": file_obj.filename,
             "object_key": file_obj.object_key,
-            "media_url": get_public_media_url(file_obj.object_key),
+            "media_url": get_secure_media_url(file_obj.id),
             "content_type": file_obj.content_type,
             "status": content.status or FileStatus.QUEUED,  # None이면 기본값
             "summary_md": content.summary_md,
@@ -177,7 +177,7 @@ class FileService:
             "id": file_obj.id,  # File.id (UUID v7) - 이벤트의 file_id와 일치
             "filename": file_obj.filename,
             "object_key": file_obj.object_key,
-            "media_url": get_public_media_url(file_obj.object_key),
+            "media_url": get_secure_media_url(file_obj.id),
             "content_type": file_obj.content_type,
             "status": content.status,  # Content의 status 사용
             "summary_md": content.summary_md,
