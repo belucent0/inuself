@@ -1,34 +1,14 @@
 /**
- * Contents 관련 훅
+ * Contents 관련 훅 (TanStack Query 기반)
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { contentsApi, type ContentListResponse, type ContentListParams } from '@/shared/services/endpoints/contents'
 import type { ContentSummary, ContentDetail, ContentStatus } from '@/features/content/types'
 import type { FileProgressEvent } from '@/features/upload/types'
 import { useFileProgressSSE } from './useFileProgressSSE'
-
-/** API 재조회 시 클라이언트 측 ephemeral 필드(progress, updated_at)를 보존 */
-function mergeEphemeralState(
-  fresh: ContentListResponse,
-  prev: ContentListResponse | null,
-): ContentListResponse {
-  if (!prev) return fresh
-  const prevMap = new Map(prev.contents.map((c: ContentSummary) => [c.id, c]))
-  return {
-    ...fresh,
-    contents: fresh.contents.map((item) => {
-      const existing = prevMap.get(item.id)
-      if (!existing) return item
-      // 같은 상태이면 SSE로 설정된 progress/updated_at 보존
-      if (existing.status === item.status && existing.progress != null) {
-        return { ...item, progress: existing.progress, updated_at: existing.updated_at || item.updated_at }
-      }
-      return item
-    }),
-  }
-}
 
 /** 업로드 완료 후 목록 갱신을 트리거하는 이벤트 */
 export const CONTENTS_REFRESH_EVENT = 'contents:refresh'
@@ -38,12 +18,8 @@ export function dispatchContentsRefresh() {
 
 /**
  * 상태 전환 감지 시 콘텐츠 상세 정보를 갱신할지 판단하는 함수
- *
- * 다음과 같은 상태 전환은 메타데이터 변경을 포함할 수 있으므로
- * 개별 콘텐츠를 다시 조회합니다.
  */
 const isSignificantStatusChange = (oldStatus: ContentStatus, newStatus: ContentStatus): boolean => {
-  // 처리 시작 또는 완료 단계의 전환은 항상 갱신
   const startingStates = ['QUEUED', 'PULLING']
   const completingStates = ['COMPLETED', 'FAILED', 'DOWNLOAD_FAILED']
 
@@ -51,6 +27,15 @@ const isSignificantStatusChange = (oldStatus: ContentStatus, newStatus: ContentS
   const isEnd = completingStates.includes(newStatus)
 
   return oldStatus !== newStatus && (isStart || isEnd)
+}
+
+// Query Keys
+export const contentKeys = {
+  all: ['contents'] as const,
+  lists: () => [...contentKeys.all, 'list'] as const,
+  list: (params: { page: number; pageSize: number }) => [...contentKeys.lists(), params] as const,
+  details: () => [...contentKeys.all, 'detail'] as const,
+  detail: (id: string) => [...contentKeys.details(), id] as const,
 }
 
 interface UseContentsResult {
@@ -68,9 +53,7 @@ interface UseContentsResult {
 
 export function useContents(params?: ContentListParams): UseContentsResult {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [data, setData] = useState<ContentListResponse | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<Error | null>(null)
+  const queryClient = useQueryClient()
   const { addListener, removeListener } = useFileProgressSSE()
   const updateTaskRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -92,97 +75,92 @@ export function useContents(params?: ContentListParams): UseContentsResult {
     })
   }
 
-  const fetchContents = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      const result = await contentsApi.getContents({ ...params, page, pageSize })
-      setData((prev) => mergeEphemeralState(result, prev))
-    } catch (err) {
-      setError(err as Error)
-    } finally {
-      setIsLoading(false)
-    }
-  }, [params, page, pageSize])
-
-  // 초기 로드 및 페이지/페이지사이즈 변경 시에만 호출
-  useEffect(() => {
-    fetchContents()
-  }, [page, pageSize])
+  // TanStack Query로 데이터 페칭
+  const {
+    data,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: contentKeys.list({ page, pageSize }),
+    queryFn: () => contentsApi.getContents({ ...params, page, pageSize }),
+    staleTime: 30 * 1000, // 30초
+    placeholderData: (previousData) => previousData, // 페이지 전환 시 이전 데이터 유지
+  })
 
   // 커스텀 이벤트로 즉시 갱신
   useEffect(() => {
     const handler = () => {
-      setIsLoading(true)
-      setError(null)
-      contentsApi.getContents({ ...params, page, pageSize }).then((result) => {
-        setData((prev) => mergeEphemeralState(result, prev))
-      }).catch((err) => {
-        setError(err as Error)
-      }).finally(() => {
-        setIsLoading(false)
-      })
+      queryClient.invalidateQueries({ queryKey: contentKeys.lists() })
     }
     window.addEventListener(CONTENTS_REFRESH_EVENT, handler)
     return () => window.removeEventListener(CONTENTS_REFRESH_EVENT, handler)
-  }, [params, page, pageSize])
+  }, [queryClient])
 
   /**
    * SSE 이벤트 핸들러: 개별 콘텐츠 상태 업데이트
    */
   const handleFileProgress = useCallback((event: FileProgressEvent) => {
-    setData((prev) => {
-      if (!prev) return prev
+    // 캐시된 데이터 직접 업데이트
+    queryClient.setQueryData<ContentListResponse>(
+      contentKeys.list({ page, pageSize }),
+      (prev) => {
+        if (!prev) return prev
 
-      const updatedContents = prev.contents.map((item) => {
-        if (item.id !== event.file_id && item.id !== event.content_id) {
-          return item
-        }
-
-        const oldStatus = item.status
-        const newStatus = (event.status ? event.status.toUpperCase() : event.status) as ContentStatus
-
-        // 상태 변경 감지
-        if (isSignificantStatusChange(oldStatus, newStatus)) {
-          // 상태 전환 감지 → 개별 콘텐츠 상세 조회 (약간의 지연 후)
-          if (updateTaskRef.current) {
-            clearTimeout(updateTaskRef.current)
+        const updatedContents = prev.contents.map((item) => {
+          if (item.id !== event.file_id && item.id !== event.content_id) {
+            return item
           }
-          updateTaskRef.current = setTimeout(async () => {
-            try {
-              const updated = await contentsApi.getContent(item.id)
-              // 목록의 해당 항목 업데이트
-              setData((current) => {
-                if (!current) return current
-                return {
-                  ...current,
-                  contents: current.contents.map((c) =>
-                    c.id === item.id ? (updated as ContentSummary) : c
-                  ),
-                }
-              })
-            } catch (err) {
-              console.error(`Failed to update content ${item.id}:`, err)
+
+          const oldStatus = item.status
+          const newStatus = (event.status ? event.status.toUpperCase() : event.status) as ContentStatus
+
+          // 상태 변경 감지 → 개별 콘텐츠 상세 조회
+          if (isSignificantStatusChange(oldStatus, newStatus)) {
+            if (updateTaskRef.current) {
+              clearTimeout(updateTaskRef.current)
             }
-          }, 500)
-        }
+            updateTaskRef.current = setTimeout(async () => {
+              try {
+                const updated = await contentsApi.getContent(item.id)
+                // 상세 캐시 업데이트
+                queryClient.setQueryData(contentKeys.detail(item.id), updated)
+                // 목록 캐시도 업데이트
+                queryClient.setQueryData<ContentListResponse>(
+                  contentKeys.list({ page, pageSize }),
+                  (current) => {
+                    if (!current) return current
+                    return {
+                      ...current,
+                      contents: current.contents.map((c) =>
+                        c.id === item.id ? (updated as ContentSummary) : c
+                      ),
+                    }
+                  }
+                )
+              } catch (err) {
+                console.error(`Failed to update content ${item.id}:`, err)
+              }
+            }, 500)
+          }
 
-        // 즉시 상태 + progress 업데이트 (같은 상태 내에서는 단조증가)
-        const newProgress = (newStatus === oldStatus)
-          ? Math.max(event.progress ?? 0, item.progress ?? 0)
-          : event.progress
+          // 즉시 상태 + progress 업데이트
+          const newProgress = (newStatus === oldStatus)
+            ? Math.max(event.progress ?? 0, item.progress ?? 0)
+            : event.progress
 
-        return {
-          ...item,
-          status: newStatus,
-          progress: newProgress,
-          ...(oldStatus !== newStatus ? { updated_at: new Date().toISOString() } : {}),
-        }
-      })
+          return {
+            ...item,
+            status: newStatus,
+            progress: newProgress,
+            ...(oldStatus !== newStatus ? { updated_at: new Date().toISOString() } : {}),
+          }
+        })
 
-      return { ...prev, contents: updatedContents }
-    })
-  }, [])
+        return { ...prev, contents: updatedContents }
+      }
+    )
+  }, [queryClient, page, pageSize])
 
   /**
    * SSE 리스너 등록/제거
@@ -204,8 +182,8 @@ export function useContents(params?: ContentListParams): UseContentsResult {
     pageSize: data?.page_size || pageSize,
     totalPages: data?.total_pages || 0,
     isLoading,
-    error,
-    refetch: fetchContents,
+    error: error as Error | null,
+    refetch,
     setPage,
     setPageSize,
   }
@@ -219,32 +197,22 @@ interface UseContentResult {
 }
 
 export function useContent(id: string): UseContentResult {
-  const [content, setContent] = useState<ContentDetail | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<Error | null>(null)
-
-  const fetchContent = useCallback(async () => {
-    if (!id) return
-    setIsLoading(true)
-    setError(null)
-    try {
-      const result = await contentsApi.getContent(id)
-      setContent(result)
-    } catch (err) {
-      setError(err as Error)
-    } finally {
-      setIsLoading(false)
-    }
-  }, [id])
-
-  useEffect(() => {
-    fetchContent()
-  }, [fetchContent])
-
-  return {
-    content,
+  const {
+    data: content,
     isLoading,
     error,
-    refetch: fetchContent,
+    refetch,
+  } = useQuery({
+    queryKey: contentKeys.detail(id),
+    queryFn: () => contentsApi.getContent(id),
+    enabled: !!id,
+    staleTime: 30 * 1000, // 30초
+  })
+
+  return {
+    content: content || null,
+    isLoading,
+    error: error as Error | null,
+    refetch,
   }
 }

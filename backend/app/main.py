@@ -258,6 +258,11 @@ def create_app() -> FastAPI:
     app.include_router(scan_controller.router, prefix=settings.api_prefix)
     logger.info("[FastAPI] Scan routes registered at /api/scan")
 
+    # 미디어 프록시 라우터 추가 (인증 기반 스트리밍)
+    from .controllers import media_controller
+    app.include_router(media_controller.router)
+    logger.info("[FastAPI] Media proxy routes registered at /api/media")
+
     @app.get("/health", tags=["system"])
     async def healthcheck():
         return {"status": "ok"}

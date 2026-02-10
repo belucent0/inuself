@@ -176,6 +176,16 @@ class Content(Base):
         "LlmLog", back_populates="content", cascade="all, delete-orphan"
     )
 
+    # AI 대화 스레드 관계 (1:N - 콘텐츠에 대한 대화들)
+    threads: Mapped[list["AiThread"]] = relationship(
+        "AiThread", back_populates="content"
+    )
+
+    # 사용자 이벤트 관계 (1:N)
+    events: Mapped[list["UserEvent"]] = relationship(
+        "UserEvent", back_populates="content"
+    )
+
 
 class Transcription(Base):
     """오디오 전사 및 화자분리 결과 저장 테이블."""
@@ -330,6 +340,16 @@ class User(Base):
         "ScanResult", back_populates="user", cascade="all, delete-orphan", order_by="ScanResult.created_at.desc()"
     )
 
+    # AI 대화 스레드 관계 (1:N)
+    threads: Mapped[list["AiThread"]] = relationship(
+        "AiThread", back_populates="user", cascade="all, delete-orphan", order_by="AiThread.updated_at.desc()"
+    )
+
+    # 사용자 행동 이벤트 관계 (1:N)
+    events: Mapped[list["UserEvent"]] = relationship(
+        "UserEvent", back_populates="user", cascade="all, delete-orphan"
+    )
+
 
 class ScanResult(Base):
     """범용 심리검사 결과 테이블.
@@ -393,3 +413,162 @@ class ScanResult(Base):
 
     # 관계
     user: Mapped["User"] = relationship("User", back_populates="scan_results")
+
+
+class AiThread(Base):
+    """AI 대화 스레드.
+
+    사용자의 대화 세션 (사이드바에 표시되는 단위).
+    Redis 캐시 + PostgreSQL 영속 저장 구조.
+    """
+
+    __tablename__ = "ai_thread"
+
+    # UUID v7 Primary Key
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
+    )
+
+    # User FK (필수)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Content FK (선택 - 특정 콘텐츠에 대한 대화)
+    content_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("content.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # 대화 제목 (첫 메시지 기반 자동 생성)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    # 메타데이터 (mode, model 등)
+    metadata_: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # 아카이브 여부 (삭제 대신 아카이브)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # 타임스탬프
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    # 관계
+    user: Mapped["User"] = relationship("User", back_populates="threads")
+    content: Mapped["Content | None"] = relationship("Content", back_populates="threads")
+    messages: Mapped[list["AiMessage"]] = relationship(
+        "AiMessage",
+        back_populates="thread",
+        cascade="all, delete-orphan",
+        order_by="AiMessage.created_at",
+    )
+    events: Mapped[list["UserEvent"]] = relationship(
+        "UserEvent", back_populates="thread"
+    )
+
+
+class AiMessage(Base):
+    """AI 대화 메시지.
+
+    개별 대화 턴 (user/assistant).
+    """
+
+    __tablename__ = "ai_message"
+
+    # UUID v7 Primary Key
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
+    )
+
+    # Thread FK (필수)
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("ai_thread.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # 메시지 역할 ("user" | "assistant")
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    # 메시지 내용
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # 메타데이터 (sources, thinking_steps, mode, model 등)
+    metadata_: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # 타임스탬프
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    # 관계
+    thread: Mapped["AiThread"] = relationship("AiThread", back_populates="messages")
+
+
+class UserEvent(Base):
+    """사용자 행동 이벤트 추적.
+
+    개인화/분석을 위한 행동 데이터 수집.
+    event_type: chat_message, content_upload, content_view, feedback, search_query 등
+    """
+
+    __tablename__ = "user_event"
+
+    # UUID v7 Primary Key
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
+    )
+
+    # User FK (필수)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # 이벤트 유형
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+
+    # Content FK (선택)
+    content_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("content.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Thread FK (선택)
+    thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("ai_thread.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # 이벤트 페이로드 (상세 데이터)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # 타임스탬프
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    # 관계
+    user: Mapped["User"] = relationship("User", back_populates="events")
+    content: Mapped["Content | None"] = relationship("Content", back_populates="events")
+    thread: Mapped["AiThread | None"] = relationship("AiThread", back_populates="events")

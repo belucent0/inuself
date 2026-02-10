@@ -288,6 +288,8 @@ def get_public_media_url(key: str) -> str:
     """
     파일의 public URL을 반환.
     복잡한 확인 로직 없이 설정된 Base URL 또는 기본값(/media)을 사용하여 URL을 생성합니다.
+
+    DEPRECATED: 새 코드에서는 get_secure_media_url()을 사용하세요.
     """
     settings = get_settings()
     # 설정된 값이 없으면 기본값 "/media" 사용 (로컬/Docker 공통)
@@ -295,6 +297,23 @@ def get_public_media_url(key: str) -> str:
     # 경로 끝에 /가 있으면 제거하여 중복 방지
     base_url = base_url.rstrip("/")
     return f"{base_url}/{key}"
+
+
+def get_secure_media_url(content_id: str | "UUID") -> str:
+    """
+    보안 미디어 URL을 반환 (백엔드 프록시 경유).
+
+    인증 기반 접근 제어를 위해 /api/media/{content_id} 형식으로 반환합니다.
+    - JWT 인증 확인 후에만 접근 가능
+    - Range 요청 지원 (영상 탐색)
+
+    Args:
+        content_id: Content의 file_id (UUID)
+
+    Returns:
+        /api/media/{content_id} 형식의 URL
+    """
+    return f"/api/media/{content_id}"
 
 
 def download_json(key: str) -> dict[str, Any]:

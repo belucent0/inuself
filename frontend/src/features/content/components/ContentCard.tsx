@@ -12,6 +12,7 @@ import { Checkbox } from '@/shared/components/ui/checkbox'
 import { Badge } from '@/shared/components/ui/badge'
 import { Button } from '@/shared/components/ui/button'
 import { Progress } from '@/shared/components/ui/progress'
+import { usePrefetchOnView } from '@/shared/hooks/usePrefetchOnView'
 import {
   type ContentSummary,
   type ContentStatus,
@@ -89,8 +90,15 @@ export function ContentCard({ content, selected, onToggle, onRetry }: ContentCar
   const isFailed = FAILED_STATUSES.includes(status)
   const displayProgress = useDisplayProgress(content)
 
+  // 뷰포트 진입 시 상세 데이터 prefetch (COMPLETED 상태만)
+  const prefetchRef = usePrefetchOnView({
+    contentId: content.id,
+    delay: 300,
+    enabled: status === 'COMPLETED',
+  })
+
   return (
-    <Card className="hover:shadow-md transition-shadow h-full flex flex-col relative">
+    <Card ref={prefetchRef} className="hover:shadow-md transition-shadow h-full flex flex-col relative">
       {onToggle && (
         <Checkbox
           checked={selected}

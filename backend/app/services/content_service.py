@@ -10,7 +10,7 @@ from ..core.config import get_settings
 from ..core.logging import logger
 from ..core.storage import (
     delete_file,
-    get_public_media_url,
+    get_secure_media_url,
     delete_files_by_prefix,
 )
 from ..core.telemetry import preserve_otel_context
@@ -54,8 +54,8 @@ class ContentService:
         items = []
         for row in rows:
             item = ContentListItem.model_validate(row)
-            # media_url 추가
-            item.media_url = get_public_media_url(row.object_key)
+            # media_url: 보안 프록시 URL (인증 기반 접근)
+            item.media_url = get_secure_media_url(row.file_id)
             items.append(item)
 
         total_pages = (total + page_size - 1) // page_size if total > 0 else 0
@@ -76,9 +76,8 @@ class ContentService:
         # lazy load logs
         await self.session.refresh(content)
         detail = ContentDetail.model_validate(content)
-        # media_url 추가 (File에서 object_key 조회)
-        object_key = content.file.object_key if content.file else None
-        detail.media_url = get_public_media_url(object_key) if object_key else None
+        # media_url: 보안 프록시 URL (인증 기반 접근)
+        detail.media_url = get_secure_media_url(content.file_id) if content.file_id else None
         return detail
 
     async def delete_queued_contents(self) -> int:

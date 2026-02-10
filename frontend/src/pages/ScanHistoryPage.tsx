@@ -39,7 +39,7 @@ export function ScanHistoryPage() {
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
+    <div className="container mx-auto py-4 px-2 md:px-4 md:py-6 space-y-4 md:space-y-6">
       {/* 헤더 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -57,7 +57,7 @@ export function ScanHistoryPage() {
 
       {/* 필터 */}
       <Card>
-        <CardContent className="pt-4">
+        <CardContent className="p-3 md:pt-4 md:px-6">
           <div className="flex gap-4">
             <Select
               value={scanType || "all"}
@@ -97,7 +97,7 @@ export function ScanHistoryPage() {
 
       {/* 목록 */}
       <Card>
-        <CardContent className="pt-4">
+        <CardContent className="p-3 md:pt-4 md:px-6">
           {loading ? (
             <div className="space-y-3">
               {[1, 2, 3, 4, 5].map((i) => (
@@ -114,7 +114,7 @@ export function ScanHistoryPage() {
                 <Link
                   key={item.id}
                   to={`/scan/history/${item.id}`}
-                  className="block p-4 rounded-lg border hover:bg-accent transition-colors"
+                  className="block p-3 md:p-4 rounded-lg border hover:bg-accent transition-colors"
                 >
                   <div className="flex items-center justify-between">
                     <div>
@@ -183,7 +183,7 @@ export function ScanDetailPage() {
 
   if (loading) {
     return (
-      <div className="container mx-auto py-6 space-y-6 max-w-4xl">
+      <div className="container mx-auto py-4 px-2 md:px-4 md:py-6 space-y-4 md:space-y-6 max-w-4xl">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-[400px] w-full" />
       </div>
@@ -192,7 +192,7 @@ export function ScanDetailPage() {
 
   if (error || !detail) {
     return (
-      <div className="container mx-auto py-6 space-y-6 max-w-4xl">
+      <div className="container mx-auto py-4 px-2 md:px-4 md:py-6 space-y-4 md:space-y-6 max-w-4xl">
         <Card>
           <CardContent className="py-12 text-center">
             <p className="text-muted-foreground mb-4">
@@ -212,7 +212,7 @@ export function ScanDetailPage() {
     const data = detail.data as WpiData
 
     return (
-      <div className="container mx-auto py-6 space-y-6 max-w-4xl">
+      <div className="container mx-auto py-4 px-2 md:px-4 md:py-6 space-y-4 md:space-y-6 max-w-4xl">
         {/* 헤더 */}
         <div className="flex items-center justify-between">
           <div className="space-y-1">
@@ -222,9 +222,9 @@ export function ScanDetailPage() {
                   <ArrowLeft className="h-4 w-4" />
                 </Link>
               </Button>
-              <h1 className="text-2xl font-bold">WPI 검사 결과</h1>
+              <h1 className="text-xl md:text-2xl font-bold">WPI 검사 결과</h1>
             </div>
-            <p className="text-sm text-muted-foreground pl-10">
+            <p className="text-xs md:text-sm text-muted-foreground pl-10">
               검사일: {formatToKST(detail.created_at)}
             </p>
           </div>
@@ -259,24 +259,24 @@ export function ScanDetailPage() {
         {/* Gap 분석 */}
         {data.gap_analysis && (
           <Card>
-            <CardHeader>
-              <CardTitle>Gap 분석</CardTitle>
+            <CardHeader className="px-3 md:px-6 py-3 md:py-4">
+              <CardTitle className="text-base md:text-lg">Gap 분석</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
+            <CardContent className="px-3 md:px-6 py-2 md:py-4">
+              <div className="space-y-2">
                 {Object.entries(data.gap_analysis.axis_gaps).map(([key, axis]) => (
                   <div
                     key={key}
-                    className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                    className="flex items-center justify-between p-2 md:p-3 rounded-lg bg-muted/50"
                   >
-                    <div>
-                      <span className="font-medium">{axis.i_type}</span>
-                      <span className="text-muted-foreground mx-2">↔</span>
-                      <span className="font-medium">{axis.me_type}</span>
+                    <div className="flex items-center gap-1 md:gap-2 text-sm md:text-base">
+                      <span className="font-medium text-red-600">{axis.i_type}</span>
+                      <span className="text-muted-foreground text-xs md:text-sm">↔</span>
+                      <span className="font-medium text-blue-600">{axis.me_type}</span>
                     </div>
                     <div className="text-right">
-                      <span className="font-mono">
-                        Gap: {axis.gap > 0 ? "+" : ""}{axis.gap.toFixed(1)}
+                      <span className="font-mono text-sm md:text-base">
+                        {axis.gap > 0 ? "+" : ""}{axis.gap.toFixed(1)}
                       </span>
                     </div>
                   </div>
@@ -291,7 +291,7 @@ export function ScanDetailPage() {
 
   // 기타 검사 유형 (향후 확장)
   return (
-    <div className="container mx-auto py-6 space-y-6 max-w-4xl">
+    <div className="container mx-auto py-4 px-2 md:px-4 md:py-6 space-y-4 md:space-y-6 max-w-4xl">
       <Card>
         <CardContent className="py-12 text-center">
           <p className="text-muted-foreground">
