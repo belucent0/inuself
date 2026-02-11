@@ -44,6 +44,7 @@ interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp?: number
+  status?: 'pending' | 'generating' | 'completed' | 'failed' | 'cancelled'  // F-1: status 추가
   metadata?: {
     sources?: SearchSource[]
     thinking_steps?: ThinkingStep[]
@@ -155,6 +156,9 @@ function MessageItem({
   const thinkingSteps = message.metadata?.thinking_steps || []
   const mode = message.metadata?.mode
 
+  // F-2: DB에서 로드된 generating 상태 감지
+  const isGenerating = message.status === 'generating'
+
   // 사용자 메시지: 오른쪽 정렬 말풍선
   if (isUser) {
     return (
@@ -164,6 +168,51 @@ function MessageItem({
             <p className="text-sm whitespace-pre-wrap">{message.content}</p>
           </div>
         </div>
+      </div>
+    )
+  }
+
+  // F-2 + H: AI 메시지 - generating 상태이고 content 없으면 로딩 표시
+  // H 개선: metadata (thinking_steps, sources)가 있으면 함께 표시
+  if (isGenerating && !message.content) {
+    return (
+      <div className="px-2 py-4">
+        {/* 모드 표시 */}
+        {mode && (
+          <div className="mb-2">
+            <Badge variant="outline" className="text-xs">
+              {mode}
+            </Badge>
+          </div>
+        )}
+
+        {/* H: generating 중에도 thinking_steps 표시 (DB에서 로드됨) */}
+        {thinkingSteps.length > 0 && (
+          <ThinkingProcessAccordion steps={thinkingSteps} isStreaming={true} />
+        )}
+
+        {/* H: generating 중에도 sources 표시 (DB에서 로드됨) */}
+        {sources.length > 0 && (
+          <div className="mb-2">
+            <StreamingSourcesToggle sources={sources} hasContent={false} />
+          </div>
+        )}
+
+        {/* 로딩 인디케이터 */}
+        <div className="flex items-center gap-2">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">
+            {thinkingSteps.length > 0 || sources.length > 0 ? '답변 작성 중...' : '답변 생성 중...'}
+          </span>
+        </div>
+
+        {/* 스켈레톤 UI - thinking_steps도 sources도 없을 때만 표시 */}
+        {thinkingSteps.length === 0 && sources.length === 0 && (
+          <div className="mt-3 space-y-2 opacity-50">
+            <div className="h-4 bg-muted/50 rounded w-3/4 animate-pulse" />
+            <div className="h-4 bg-muted/50 rounded w-1/2 animate-pulse" />
+          </div>
+        )}
       </div>
     )
   }
@@ -195,8 +244,8 @@ function MessageItem({
         {/* 출처 버튼 */}
         {sources.length > 0 && <SourcesModal sources={sources} />}
 
-        {/* 재생성 버튼 - 마지막 AI 메시지에만 표시 */}
-        {isLastAssistant && onRegenerate && !isStreaming && (
+        {/* F-3: 재생성 버튼 - 마지막 AI 메시지에만 표시 (generating이 아닐 때만) */}
+        {isLastAssistant && onRegenerate && !isStreaming && !isGenerating && (
           <Button
             variant="ghost"
             size="sm"

@@ -20,5 +20,6 @@ export const apiService = {
 export { httpClient }
 export { threadsApi }
 export { contentsApi }
+export * from './chatStreamService'
 
 export default apiService

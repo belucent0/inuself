@@ -137,17 +137,108 @@ class ThreadRepository:
         role: str,
         content: str,
         metadata: dict | None = None,
+        status: str = "completed",
     ) -> AiMessage:
-        """메시지 추가."""
+        """메시지 추가.
+
+        Args:
+            status: 메시지 상태 (pending, generating, completed, failed, cancelled)
+                - user 메시지: 일반적으로 "completed"
+                - assistant 메시지: 생성 시작 시 "generating", 완료 시 "completed"
+        """
         message = AiMessage(
             thread_id=thread_id,
             role=role,
             content=content,
             metadata_=metadata or {},
+            status=status,
         )
         self.session.add(message)
         await self.session.flush()
         return message
+
+    async def get_message(self, message_id: UUID) -> AiMessage | None:
+        """메시지 단일 조회."""
+        stmt = select(AiMessage).where(AiMessage.id == message_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def update_message_status(
+        self,
+        message_id: UUID,
+        status: str,
+        content: str | None = None,
+        metadata: dict | None = None,
+    ) -> AiMessage | None:
+        """메시지 상태 업데이트.
+
+        Args:
+            message_id: 메시지 ID
+            status: 새 상태 (generating, completed, failed, cancelled)
+            content: 내용 업데이트 (선택, generating → completed 시 전체 내용)
+            metadata: 메타데이터 업데이트 (선택, sources, thinking_steps 등)
+
+        Returns:
+            업데이트된 메시지 또는 None
+        """
+        message = await self.get_message(message_id)
+        if not message:
+            return None
+
+        message.status = status
+        if content is not None:
+            message.content = content
+        if metadata is not None:
+            message.metadata_ = metadata
+
+        await self.session.flush()
+        return message
+
+    async def update_message_metadata(
+        self,
+        message_id: UUID,
+        **metadata_updates,
+    ) -> AiMessage | None:
+        """메시지 메타데이터 부분 업데이트 (병합).
+
+        기존 메타데이터와 새 값을 병합합니다. 연결 끊김에도 메타데이터가
+        보존되도록 이벤트 수신 즉시 호출합니다.
+
+        Args:
+            message_id: 메시지 ID
+            **metadata_updates: 업데이트할 메타데이터 키-값 쌍
+                (sources=..., thinking_steps=..., mode=..., etc.)
+
+        Returns:
+            업데이트된 메시지 또는 None
+        """
+        message = await self.get_message(message_id)
+        if not message:
+            return None
+
+        # 기존 metadata와 병합 (새 값이 우선)
+        current = message.metadata_ or {}
+        current.update(metadata_updates)
+        message.metadata_ = current
+
+        await self.session.flush()
+        return message
+
+    async def get_generating_messages(self, thread_id: UUID) -> list[AiMessage]:
+        """generating 상태의 메시지 조회.
+
+        스트림 재연결 시 사용.
+        """
+        stmt = (
+            select(AiMessage)
+            .where(
+                AiMessage.thread_id == thread_id,
+                AiMessage.status == "generating",
+            )
+            .order_by(AiMessage.created_at)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
     async def get_messages(
         self, thread_id: UUID, limit: int = 100, offset: int = 0
