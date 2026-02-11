@@ -89,11 +89,11 @@ export function ScanPage() {
               </p>
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="flex justify-between">
-            <AlertDialogCancel disabled={deleting} className="mr-auto">
+          <AlertDialogFooter className="flex-row gap-2 sm:justify-between">
+            <AlertDialogCancel disabled={deleting}>
               닫기
             </AlertDialogCancel>
-            <div className="flex gap-2">
+            <div className="flex gap-2 ml-auto">
               <Button
                 variant="outline"
                 onClick={handleModalCancel}
