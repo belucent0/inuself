@@ -19,75 +19,16 @@ export function HomePage() {
   const navigate = useNavigate()
   const [input, setInput] = useState('')
   const [mode, setMode] = useState<AIMode>('search')
-  const [isLoading, setIsLoading] = useState(false)
+  const [isLoading] = useState(false)
 
   const handleSendMessage = async (text: string) => {
     if (!text.trim() || isLoading) return
 
-    setIsLoading(true)
-    try {
-      // SSE 스트림으로 새 스레드 생성 (Next.js 버전과 동일)
-      const response = await fetch('/api/threads/stream', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query: text,
-          mode,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`Failed to create thread: ${response.statusText}`)
-      }
-
-      if (!response.body) {
-        throw new Error('Response body is null')
-      }
-
-      // SSE 스트림에서 thread_id 추출
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let threadId: string | null = null
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        const chunk = decoder.decode(value)
-        const lines = chunk.split('\n')
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (data.type === 'thread_id') {
-                threadId = data.data
-                break
-              }
-            } catch (e) {
-              // JSON 파싱 실패 무시
-            }
-          }
-        }
-
-        if (threadId) break
-      }
-
-      // 스트림 취소 (사용자 메시지는 이미 저장됨)
-      reader.cancel()
-
-      if (!threadId) {
-        throw new Error('Failed to get thread ID')
-      }
-
-      // 스레드 페이지로 이동 - autoRequest로 AI 응답 자동 요청
-      navigate(`/chat/${threadId}?autoRequest=true&mode=${mode}`)
-    } catch (error) {
-      console.error('Failed to create thread:', error)
-      setIsLoading(false)
-    }
+    // V10: 낙관적 라우팅 - 즉시 ChatPage로 이동
+    // 스트림 시작/취소/재연결 복잡성 제거
+    // ChatPage에서 직접 스레드 생성 + 스트리밍 처리
+    const query = encodeURIComponent(text)
+    navigate(`/chat/new?query=${query}&mode=${mode}`)
   }
 
   const handleSuggestedQuery = (query: string, queryMode: AIMode) => {
