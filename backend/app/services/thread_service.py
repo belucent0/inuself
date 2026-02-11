@@ -43,12 +43,14 @@ class Message:
         content: str = "",
         timestamp: float | None = None,
         metadata: dict | None = None,
+        status: str = "completed",
     ):
         self.message_id = message_id
         self.role = role
         self.content = content
         self.timestamp = timestamp or datetime.now(timezone.utc).timestamp()
         self.metadata = metadata or {}
+        self.status = status
 
     def to_dict(self) -> dict:
         """딕셔너리로 변환."""
@@ -58,6 +60,7 @@ class Message:
             "content": self.content,
             "timestamp": self.timestamp,
             "metadata": self.metadata,
+            "status": self.status,
         }
 
     @classmethod
@@ -69,6 +72,7 @@ class Message:
             content=data["content"],
             timestamp=data.get("timestamp"),
             metadata=data.get("metadata", {}),
+            status=data.get("status", "completed"),
         )
 
     @classmethod
@@ -80,6 +84,7 @@ class Message:
             content=model.content,
             timestamp=model.created_at.timestamp(),
             metadata=model.metadata_,
+            status=model.status,
         )
 
 
@@ -478,6 +483,7 @@ class ThreadService:
         role: str,
         content: str,
         metadata: dict | None = None,
+        status: str = "completed",
     ) -> Message:
         """스레드에 메시지 추가.
 
@@ -487,6 +493,9 @@ class ThreadService:
             role: 메시지 역할 (user/assistant)
             content: 메시지 내용
             metadata: 추가 메타데이터
+            status: 메시지 상태 (pending, generating, completed, failed, cancelled)
+                - user 메시지: 일반적으로 "completed"
+                - assistant 메시지: 생성 시작 시 "generating", 완료 시 "completed"
 
         Returns:
             추가된 메시지
@@ -507,7 +516,7 @@ class ThreadService:
 
         # 메시지 추가
         db_message = await self.repo.add_message(
-            thread_uuid, role, content, metadata
+            thread_uuid, role, content, metadata, status=status
         )
 
         # 스레드 updated_at 갱신 + 제목 자동 설정
@@ -521,6 +530,94 @@ class ThreadService:
         await self._invalidate_cache(str(thread_id), str(user_id))
 
         return Message.from_db_model(db_message)
+
+    async def update_message_status(
+        self,
+        message_id: str | UUID,
+        status: str,
+        content: str | None = None,
+        metadata: dict | None = None,
+    ) -> Message | None:
+        """메시지 상태 업데이트.
+
+        Args:
+            message_id: 메시지 ID
+            status: 새 상태 (generating, completed, failed, cancelled)
+            content: 내용 업데이트 (선택, generating → completed 시 전체 내용)
+            metadata: 메타데이터 업데이트 (선택, sources, thinking_steps 등)
+
+        Returns:
+            업데이트된 메시지 또는 None
+        """
+        if not self.repo:
+            raise RuntimeError("Database session not available")
+
+        message_uuid = UUID(str(message_id))
+        db_message = await self.repo.update_message_status(
+            message_uuid, status, content, metadata
+        )
+
+        if not db_message:
+            return None
+
+        # 캐시 무효화 (스레드 캐시 갱신)
+        await self._invalidate_cache(str(db_message.thread_id))
+
+        return Message.from_db_model(db_message)
+
+    async def update_message_metadata(
+        self,
+        message_id: str | UUID,
+        **metadata_updates,
+    ) -> Message | None:
+        """메시지 메타데이터 부분 업데이트 (병합).
+
+        스트리밍 중 sources, thinking_steps 등을 이벤트 수신 즉시 저장합니다.
+        클라이언트 연결이 끊겨도 메타데이터가 보존됩니다.
+
+        Args:
+            message_id: 메시지 ID
+            **metadata_updates: 업데이트할 메타데이터 키-값 쌍
+                (sources=..., thinking_steps=..., mode=..., etc.)
+
+        Returns:
+            업데이트된 메시지 또는 None
+        """
+        if not self.repo:
+            raise RuntimeError("Database session not available")
+
+        message_uuid = UUID(str(message_id))
+        db_message = await self.repo.update_message_metadata(
+            message_uuid, **metadata_updates
+        )
+
+        if not db_message:
+            return None
+
+        # 캐시 무효화 (스레드 캐시 갱신)
+        await self._invalidate_cache(str(db_message.thread_id))
+
+        return Message.from_db_model(db_message)
+
+    async def get_generating_messages(
+        self, thread_id: str | UUID
+    ) -> list[Message]:
+        """generating 상태의 메시지 조회.
+
+        스트림 재연결 시 사용. 해당 스레드에서 생성 중인 메시지가 있는지 확인.
+
+        Args:
+            thread_id: 스레드 ID
+
+        Returns:
+            generating 상태의 메시지 목록
+        """
+        if not self.repo:
+            raise RuntimeError("Database session not available")
+
+        thread_uuid = UUID(str(thread_id))
+        db_messages = await self.repo.get_generating_messages(thread_uuid)
+        return [Message.from_db_model(m) for m in db_messages]
 
     async def remove_last_assistant_message(
         self, thread_id: str | UUID, user_id: str | UUID

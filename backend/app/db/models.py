@@ -482,6 +482,13 @@ class AiMessage(Base):
     """AI 대화 메시지.
 
     개별 대화 턴 (user/assistant).
+
+    V9.2: status 필드 추가 - 메시지 상태 관리
+    - pending: 사용자 메시지 전송 대기 (큐잉된 상태)
+    - generating: AI 응답 생성 중
+    - completed: 완료 (사용자 메시지 저장됨 / AI 응답 완료)
+    - failed: 생성 실패
+    - cancelled: 사용자에 의해 취소됨
     """
 
     __tablename__ = "ai_message"
@@ -504,6 +511,14 @@ class AiMessage(Base):
 
     # 메시지 내용
     content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # 메시지 상태 (pending | generating | completed | failed | cancelled)
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="completed",  # 기존 메시지 호환성
+        nullable=False,
+        index=True,
+    )
 
     # 메타데이터 (sources, thinking_steps, mode, model 등)
     metadata_: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
