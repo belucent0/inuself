@@ -4,23 +4,25 @@ V8.0: LangGraph 워크플로우를 사용한 AI 모드 채팅 API.
 V8.5: conversation_id → thread_id 용어 통일
 V8.6: RESTful API 구조 개선 - /api/threads로 통일
 V9.0: Phase 1 - user_id 기반 스레드 관리, DB 영속화
+V9.1: 백그라운드 AI 응답 생성 - 클라이언트 연결 끊김에도 서버에서 계속 생성
 
 기존 chat_controller.py와 별도로 동작합니다.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings, Settings
-from ..db.session import get_session
+from ..db.session import get_session, async_session_factory
 from ..agents import run_ai_agent
 from ..agents.graph import stream_ai_agent
 from ..services.thread_service import (
@@ -99,6 +101,85 @@ async def get_current_user_id() -> UUID:
     return UUID("01234567-89ab-cdef-0123-456789abcdef")
 
 
+# === 백그라운드 AI 응답 생성 ===
+
+
+async def generate_ai_response_background(
+    thread_id: str,
+    user_id: UUID,
+    query: str,
+    mode: str,
+    context: dict | None,
+    settings: Settings,
+) -> None:
+    """백그라운드에서 AI 응답을 생성하고 저장합니다.
+
+    클라이언트 연결이 끊어져도 서버에서 AI 응답 생성을 계속하고,
+    완료되면 DB에 저장합니다. 나중에 스레드를 조회하면 생성된 응답을 볼 수 있습니다.
+    """
+    logger.info(f"[Thread] Background generation started: thread_id={thread_id}, query='{query[:50]}...'")
+
+    try:
+        # 새로운 DB 세션 생성 (백그라운드 태스크는 별도 세션 필요)
+        async with async_session_factory() as session:
+            svc = get_thread_service(session)
+
+            # AI Agent 실행 (비스트리밍)
+            result = await run_ai_agent(
+                settings=settings,
+                query=query,
+                thread_id=thread_id,
+                mode=mode,
+                metadata=context,
+                enable_retry=True,
+                max_retries=3,
+            )
+
+            # AI 응답 저장
+            await svc.add_message(
+                thread_id,
+                user_id=user_id,
+                role="assistant",
+                content=result.get("response", ""),
+                metadata={
+                    "mode": str(result.get("mode", "simple")),
+                    "sources": result.get("sources", []),
+                    "citations": result.get("citations", []),
+                    "intent": result.get("query_analysis"),
+                    "search_queries": result.get("search_queries", []),
+                    "search_results": result.get("search_results", []),
+                    "thinking_steps": result.get("thinking_steps", []),
+                    "search_retry_count": result.get("search_retry_count", 0),
+                    "search_quality_score": result.get("search_quality_score", 0.0),
+                    "failed_queries": result.get("failed_queries", []),
+                    "retry_reason": result.get("retry_reason", ""),
+                    "background_generated": True,  # 백그라운드 생성 플래그
+                },
+            )
+
+            logger.info(f"[Thread] Background generation completed: thread_id={thread_id}")
+
+    except Exception as e:
+        logger.exception(f"[Thread] Background generation failed: thread_id={thread_id}, error={e}")
+        # 에러 발생 시에도 에러 메시지를 저장하여 사용자에게 알림
+        try:
+            async with async_session_factory() as session:
+                svc = get_thread_service(session)
+                await svc.add_message(
+                    thread_id,
+                    user_id=user_id,
+                    role="assistant",
+                    content=f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}",
+                    metadata={
+                        "error": True,
+                        "error_message": str(e),
+                        "background_generated": True,
+                    },
+                )
+        except Exception as save_error:
+            logger.exception(f"[Thread] Failed to save error message: {save_error}")
+
+
 @router.post("", response_model=ThreadResponse)
 async def create_thread(
     request: CreateThreadRequest,
@@ -174,6 +255,7 @@ async def create_thread(
 @router.post("/stream")
 async def create_thread_stream(
     request: CreateThreadRequest,
+    background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
@@ -181,27 +263,38 @@ async def create_thread_stream(
     """새 스레드 생성 (첫 메시지 포함, SSE 스트리밍).
 
     POST /api/threads/stream - 새 대화 시작 (스트리밍)
+
+    V9.1: 클라이언트 연결 끊김 시 백그라운드에서 응답 생성 계속
     """
     logger.info(f"[Thread] Create stream: user={user_id}, query='{request.query[:50]}...', mode={request.mode}")
 
+    # 스레드 먼저 생성 (generate 함수 밖에서)
+    thread = await svc.create_thread(user_id=user_id, metadata=request.context)
+
+    # 사용자 메시지 저장
+    await svc.add_message(
+        thread.thread_id,
+        user_id=user_id,
+        role="user",
+        content=request.query,
+    )
+
     # 클로저에서 사용할 변수 캡처
     captured_user_id = user_id
+    captured_thread_id = thread.thread_id
+    captured_query = request.query
+    captured_mode = request.mode
+    captured_context = request.context
+    captured_settings = settings
+
+    # 응답 완료 여부 추적
+    response_completed = {"value": False}
 
     async def generate():
+        nonlocal response_completed
         try:
-            # 새 스레드 생성 (user_id 포함)
-            thread = await svc.create_thread(user_id=captured_user_id, metadata=request.context)
-
             # 스레드 ID 먼저 전송
-            yield f"data: {json.dumps({'type': 'thread_id', 'data': thread.thread_id})}\n\n"
-
-            # 사용자 메시지 저장
-            await svc.add_message(
-                thread.thread_id,
-                user_id=captured_user_id,
-                role="user",
-                content=request.query,
-            )
+            yield f"data: {json.dumps({'type': 'thread_id', 'data': captured_thread_id})}\n\n"
 
             # AI Agent 스트리밍 실행 (V8.4: 재시도 메타데이터 수집)
             full_response = ""
@@ -219,11 +312,11 @@ async def create_thread_stream(
             retry_reason = ""
 
             async for event in stream_ai_agent(
-                settings=settings,
-                query=request.query,
-                thread_id=thread.thread_id,
-                mode=request.mode,
-                metadata=request.context,
+                settings=captured_settings,
+                query=captured_query,
+                thread_id=captured_thread_id,
+                mode=captured_mode,
+                metadata=captured_context,
                 enable_retry=True,  # V8.4: 재시도 활성화
                 max_retries=3,
                 user_id=str(captured_user_id),
@@ -292,7 +385,7 @@ async def create_thread_stream(
                     # AI 응답 저장 (V8.4: 재시도 메타데이터 포함)
                     if full_response:
                         await svc.add_message(
-                            thread.thread_id,
+                            captured_thread_id,
                             user_id=captured_user_id,
                             role="assistant",
                             content=full_response,
@@ -311,10 +404,28 @@ async def create_thread_stream(
                                 "retry_reason": retry_reason,
                             },
                         )
+                    response_completed["value"] = True
                     yield f"data: {json.dumps({'type': 'done', 'data': None})}\n\n"
 
                 elif event_type == "error":
                     yield f"data: {json.dumps({'type': 'error', 'data': str(event_data)})}\n\n"
+
+        except asyncio.CancelledError:
+            # 클라이언트 연결 끊김 - 백그라운드에서 계속 생성
+            logger.info(f"[Thread] Client disconnected, continuing in background: thread_id={captured_thread_id}")
+            if not response_completed["value"]:
+                # 백그라운드 태스크로 응답 생성 계속
+                asyncio.create_task(
+                    generate_ai_response_background(
+                        thread_id=captured_thread_id,
+                        user_id=captured_user_id,
+                        query=captured_query,
+                        mode=captured_mode,
+                        context=captured_context,
+                        settings=captured_settings,
+                    )
+                )
+            raise  # CancelledError 다시 발생시켜 정상 종료
 
         except Exception as e:
             logger.exception(f"[Thread] Create stream error: {e}")
@@ -467,6 +578,7 @@ async def add_message(
 async def add_message_stream(
     thread_id: str,
     request: AddMessageRequest,
+    background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
@@ -474,6 +586,8 @@ async def add_message_stream(
     """기존 스레드에 메시지 추가 (SSE 스트리밍).
 
     POST /api/threads/{thread_id}/messages/stream
+
+    V9.1: 클라이언트 연결 끊김 시 백그라운드에서 응답 생성 계속
     """
     logger.info(f"[Thread] Add message stream: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}")
 
@@ -482,21 +596,30 @@ async def add_message_stream(
     if not thread:
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
 
+    # 사용자 메시지 먼저 저장 (generate 함수 밖에서)
+    await svc.add_message(
+        thread_id,
+        user_id=user_id,
+        role="user",
+        content=request.query,
+    )
+
     # 클로저에서 사용할 변수 캡처
     captured_user_id = user_id
+    captured_thread_id = thread_id
+    captured_query = request.query
+    captured_mode = request.mode
+    captured_context = request.context
+    captured_settings = settings
+
+    # 응답 완료 여부 추적
+    response_completed = {"value": False}
 
     async def generate():
+        nonlocal response_completed
         try:
             # 스레드 ID 전송
-            yield f"data: {json.dumps({'type': 'thread_id', 'data': thread_id})}\n\n"
-
-            # 사용자 메시지 저장
-            await svc.add_message(
-                thread_id,
-                user_id=captured_user_id,
-                role="user",
-                content=request.query,
-            )
+            yield f"data: {json.dumps({'type': 'thread_id', 'data': captured_thread_id})}\n\n"
 
             # AI Agent 스트리밍 실행
             full_response = ""
@@ -513,11 +636,11 @@ async def add_message_stream(
             retry_reason = ""
 
             async for event in stream_ai_agent(
-                settings=settings,
-                query=request.query,
-                thread_id=thread_id,
-                mode=request.mode,
-                metadata=request.context,
+                settings=captured_settings,
+                query=captured_query,
+                thread_id=captured_thread_id,
+                mode=captured_mode,
+                metadata=captured_context,
                 enable_retry=True,
                 max_retries=3,
                 user_id=str(captured_user_id),
@@ -578,7 +701,7 @@ async def add_message_stream(
                 elif event_type == "done":
                     if full_response:
                         await svc.add_message(
-                            thread_id,
+                            captured_thread_id,
                             user_id=captured_user_id,
                             role="assistant",
                             content=full_response,
@@ -596,10 +719,28 @@ async def add_message_stream(
                                 "retry_reason": retry_reason,
                             },
                         )
+                    response_completed["value"] = True
                     yield f"data: {json.dumps({'type': 'done', 'data': None})}\n\n"
 
                 elif event_type == "error":
                     yield f"data: {json.dumps({'type': 'error', 'data': str(event_data)})}\n\n"
+
+        except asyncio.CancelledError:
+            # 클라이언트 연결 끊김 - 백그라운드에서 계속 생성
+            logger.info(f"[Thread] Client disconnected, continuing in background: thread_id={captured_thread_id}")
+            if not response_completed["value"]:
+                # 백그라운드 태스크로 응답 생성 계속
+                asyncio.create_task(
+                    generate_ai_response_background(
+                        thread_id=captured_thread_id,
+                        user_id=captured_user_id,
+                        query=captured_query,
+                        mode=captured_mode,
+                        context=captured_context,
+                        settings=captured_settings,
+                    )
+                )
+            raise  # CancelledError 다시 발생시켜 정상 종료
 
         except Exception as e:
             logger.exception(f"[Thread] Add message stream error: {e}")

@@ -278,16 +278,30 @@ export function ChatArea({
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const inputContainerRef = useRef<HTMLDivElement>(null)
-  const isNearBottomRef = useRef(true)
 
-  // 스크롤 이벤트 핸들러
+  // 사용자 스크롤 의도 감지 - 스트리밍 중 자동 스크롤 차단 여부 결정
+  const userHasScrolledUpRef = useRef(false)
+  const lastScrollTopRef = useRef(0)
+
+  // 스크롤 이벤트 핸들러 - 사용자 스크롤 의도 감지
   const handleScroll = () => {
     if (!scrollRef.current) return
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
 
     const isAtBottom = scrollHeight - scrollTop - clientHeight < 100
-    isNearBottomRef.current = isAtBottom
     setShowScrollBottom(!isAtBottom)
+
+    // 사용자가 위로 스크롤했는지 감지 (10px 이상 위로 이동)
+    if (scrollTop < lastScrollTopRef.current - 10) {
+      userHasScrolledUpRef.current = true
+    }
+
+    // 하단 근처로 돌아오면 자동 스크롤 재활성화
+    if (isAtBottom) {
+      userHasScrolledUpRef.current = false
+    }
+
+    lastScrollTopRef.current = scrollTop
   }
 
   // 하단으로 스크롤 이동
@@ -297,36 +311,39 @@ export function ChatArea({
         top: scrollRef.current.scrollHeight,
         behavior: 'smooth'
       })
-      isNearBottomRef.current = true
+      userHasScrolledUpRef.current = false
       setShowScrollBottom(false)
     }
   }
 
-  // 스트리밍 시작 시 하단으로 스크롤
+  // 스트리밍 시작 시 한 번만 하단으로 스크롤 (사용자 메시지 전송 직후)
   const prevStreamingRef = useRef(false)
   useEffect(() => {
     if (isStreaming && !prevStreamingRef.current && scrollRef.current) {
+      // 스트리밍 시작 시 사용자 스크롤 상태 초기화 & 하단으로 이동
+      userHasScrolledUpRef.current = false
       requestAnimationFrame(() => {
         if (scrollRef.current) {
           scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+          lastScrollTopRef.current = scrollRef.current.scrollTop
         }
       })
     }
     prevStreamingRef.current = isStreaming
   }, [isStreaming])
 
-  // 스트리밍 중 하단 근처에 있을 때만 자동 스크롤
+  // 스트리밍 중 자동 스크롤 - 사용자가 위로 스크롤하지 않았을 때만
   useEffect(() => {
-    if (isStreaming && scrollRef.current) {
-      const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
-      const isAtBottom = scrollHeight - scrollTop - clientHeight < 50
+    // 사용자가 위로 스크롤했으면 자동 스크롤하지 않음
+    if (userHasScrolledUpRef.current) return
 
-      if (isAtBottom) {
-        scrollRef.current.scrollTo({
-          top: scrollRef.current.scrollHeight,
-          behavior: 'smooth'
-        })
-      }
+    if (isStreaming && scrollRef.current) {
+      requestAnimationFrame(() => {
+        if (scrollRef.current && !userHasScrolledUpRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+          lastScrollTopRef.current = scrollRef.current.scrollTop
+        }
+      })
     }
   }, [currentStreamingMessage, isStreaming, currentThinkingSteps])
 

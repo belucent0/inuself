@@ -572,3 +572,171 @@ class UserEvent(Base):
     user: Mapped["User"] = relationship("User", back_populates="events")
     content: Mapped["Content | None"] = relationship("Content", back_populates="events")
     thread: Mapped["AiThread | None"] = relationship("AiThread", back_populates="events")
+
+
+class SpeakerProfile(Base):
+    """상담자 음성 프로필 저장 테이블.
+
+    Pyannote embedding 기반 화자 매칭을 위한 음성 프로필 저장.
+    """
+
+    __tablename__ = "speaker_profile"
+
+    # UUID v7 Primary Key
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
+    )
+
+    # 화자 유형 (counselor / client)
+    speaker_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, index=True
+    )
+
+    # 화자 이름
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # 음성 embedding (Pyannote, 512차원)
+    voice_embedding: Mapped[list[float]] = mapped_column(
+        Vector(512), nullable=False
+    )
+
+    # 활성 여부
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # 타임스탬프
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    # 관계
+    counseling_sessions: Mapped[list["CounselingSession"]] = relationship(
+        "CounselingSession",
+        back_populates="counselor_profile",
+        foreign_keys="CounselingSession.counselor_profile_id",
+    )
+
+
+class Client(Base):
+    """내담자 프로필 테이블.
+
+    상담 세션의 내담자 정보 및 누적된 자기표현 프로필.
+    """
+
+    __tablename__ = "client"
+
+    # UUID v7 Primary Key
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
+    )
+
+    # 내담자 이름
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # 최신 자기표현 프로필 (JSONB)
+    # 구조: { "정체성": [...], "의미/목적": [...], ... }
+    latest_profile: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+
+    # 프로필 embedding (768차원 - 최신 세션 기반)
+    profile_embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(768), nullable=True
+    )
+
+    # WPI 검사 결과 FK (선택)
+    wpi_scan_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("scan_result.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # 타임스탬프
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    # 관계
+    sessions: Mapped[list["CounselingSession"]] = relationship(
+        "CounselingSession", back_populates="client", cascade="all, delete-orphan"
+    )
+
+
+class CounselingSession(Base):
+    """상담 세션 기본 정보 및 분석 결과.
+
+    상담 녹취 분석 결과를 저장하는 테이블.
+    """
+
+    __tablename__ = "counseling_session"
+
+    # UUID v7 Primary Key
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
+    )
+
+    # Client FK (필수)
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("client.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # SpeakerProfile FK (상담자, 선택)
+    counselor_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("speaker_profile.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # 전사 파일 FK (선택)
+    transcription_file_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("content.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # 세션 번호 (회차)
+    session_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+
+    # 분석 결과 데이터 (JSONB)
+    # 구조:
+    # {
+    #   "self_expressions": [...],
+    #   "situation_awareness": "...",
+    #   "problem_recognition": "...",
+    #   "quality_score": 85.5,
+    #   "speaker_embeddings": {"SPEAKER_00": [...], ...}
+    # }
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # 세션 embedding (768차원 - Content embedding 기반)
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(768), nullable=True
+    )
+
+    # 타임스탬프
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    # 관계
+    client: Mapped["Client"] = relationship("Client", back_populates="sessions")
+    counselor_profile: Mapped["SpeakerProfile | None"] = relationship(
+        "SpeakerProfile", back_populates="counseling_sessions", foreign_keys=[counselor_profile_id]
+    )

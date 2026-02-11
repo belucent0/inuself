@@ -178,20 +178,22 @@ export function WpiTestPage() {
   const guide = GUIDE_TEXT[currentTestType]
 
   return (
-    <div className="container mx-auto py-6 px-4">
-      {/* 안내 문구 */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2">{guide.title}</h1>
-        <p className="text-muted-foreground">{guide.description}</p>
-        <div className="mt-3 flex gap-4 text-sm">
-          <span className="text-gray-600 font-medium">● 1순위: 3개</span>
-          <span className="text-gray-600 font-medium">● 2순위: 4개</span>
-          <span className="text-gray-600 font-medium">● 3순위: 5개</span>
-        </div>
-      </div>
-
-      {/* 모바일: sticky 선택 현황 바 */}
+    <div className="h-full overflow-y-auto">
+      {/* 모바일: fixed 선택 현황 바 (헤더 바로 아래 고정) */}
       <MobileSelectionBar responses={responses} />
+
+      {/* 모바일에서 fixed 바 높이만큼 상단 여백 추가 (약 80px) */}
+      <div className="container mx-auto py-6 px-4 pt-[88px] lg:pt-6">
+        {/* 안내 문구 - 데스크톱만 표시 */}
+        <div className="mb-6 hidden lg:block">
+          <h1 className="text-2xl font-bold mb-2">{guide.title}</h1>
+          <p className="text-muted-foreground">{guide.description}</p>
+          <div className="mt-3 flex gap-4 text-sm">
+            <span className="text-gray-600 font-medium">● 1순위: 3개</span>
+            <span className="text-gray-600 font-medium">● 2순위: 4개</span>
+            <span className="text-gray-600 font-medium">● 3순위: 5개</span>
+          </div>
+        </div>
 
       <div className="flex gap-6">
         {/* 문항 그리드 */}
@@ -229,16 +231,17 @@ export function WpiTestPage() {
         </div>
       </div>
 
-      {/* 모바일: 하단 고정 제출 버튼 */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
-        <Button
-          className="w-full"
-          size="lg"
-          disabled={!isComplete || submitting}
-          onClick={handleSubmit}
-        >
-          {submitting ? "제출 중..." : isComplete ? "제출하기" : `${getTotalSelected(responses)}/12 선택됨`}
-        </Button>
+        {/* 모바일: 하단 고정 제출 버튼 */}
+        <div className="lg:hidden fixed bottom-0 left-0 right-0 p-4 bg-background border-t">
+          <Button
+            className="w-full"
+            size="lg"
+            disabled={!isComplete || submitting}
+            onClick={handleSubmit}
+          >
+            {submitting ? "제출 중..." : isComplete ? "제출하기" : `${getTotalSelected(responses)}/12 선택됨`}
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -318,9 +321,10 @@ function QuestionCard({
 }
 
 // 모바일 선택 현황 바 (2행: 순위명 / 선택 문항)
+// fixed 포지셔닝: 헤더(h-16, 64px) 바로 아래 고정
 function MobileSelectionBar({ responses }: { responses: Record<RankKey, number[]> }) {
   return (
-    <div className="lg:hidden sticky top-0 z-10 bg-background/95 backdrop-blur border-b mb-4 -mx-4 px-4 py-3">
+    <div className="lg:hidden fixed top-16 left-0 right-0 z-30 bg-background border-b px-4 py-3">
       <div className="flex items-start justify-around gap-2">
         {(["rank_1", "rank_2", "rank_3"] as const).map((rank) => {
           const config = RANK_CONFIG[rank]
@@ -411,7 +415,7 @@ function SelectionPanel({
                       onClick={() => onRemove(id)}
                       title={getQuestionText(id)}
                     >
-                      #{id}
+                      {id}
                       <X className="h-4 w-4" />
                     </div>
                   )

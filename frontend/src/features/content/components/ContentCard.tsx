@@ -44,16 +44,22 @@ function getStatusIcon(status: ContentStatus) {
 }
 
 function getContentTypeIcon(type: string) {
+  const iconClass = "h-4 w-4"
   switch (type) {
     case 'DOCUMENT':
-      return <FileText className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+      return <FileText className={iconClass} />
     case 'PORTRAY':
-      return <ImageIcon className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+      return <ImageIcon className={iconClass} />
     case 'AUDIO':
-      return <Music className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+      return <Music className={iconClass} />
     default:
       return null
   }
+}
+
+function getContentTypeStyle(_type: string) {
+  // 심플한 단일 스타일
+  return 'bg-muted/50 text-muted-foreground'
 }
 
 function formatDate(dateStr: string): string {
@@ -98,37 +104,38 @@ export function ContentCard({ content, selected, onToggle, onRetry }: ContentCar
   })
 
   return (
-    <Card ref={prefetchRef} className="hover:shadow-md transition-shadow h-full flex flex-col relative">
-      {onToggle && (
-        <Checkbox
-          checked={selected}
-          onCheckedChange={() => onToggle(content.id)}
-          onClick={(e) => e.stopPropagation()}
-          className="absolute top-4 right-4 z-10"
-        />
-      )}
-
-      <Link to={`/contents/${content.id}`} className="flex flex-col flex-1 px-5 py-4 gap-3">
-        {/* 상단: 확장자 + 날짜 */}
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+    <Card ref={prefetchRef} className="hover:shadow-md transition-shadow h-full flex flex-col">
+      <Link to={`/contents/${content.id}`} className="flex flex-col flex-1 px-5 py-4">
+        {/* Header: 타입 아이콘 + 확장자 + 체크박스 */}
+        <div className="flex items-center gap-2 mb-3">
+          <div className={`flex items-center justify-center w-7 h-7 rounded flex-shrink-0 ${getContentTypeStyle(content.content_type)}`}>
+            {getContentTypeIcon(content.content_type)}
+          </div>
           {getFileExtension(content.filename) && (
             <Badge variant="outline" className="text-xs">
               {getFileExtension(content.filename)}
             </Badge>
           )}
-          <span>{formatDate(content.created_at)}</span>
+          <div className="flex-1" />
+          {onToggle && (
+            <Checkbox
+              checked={selected}
+              onCheckedChange={() => onToggle(content.id)}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-shrink-0"
+            />
+          )}
         </div>
 
-        {/* 중앙: 타입 아이콘 + 제목 */}
-        <div className="flex items-start gap-2.5 flex-1">
-          {getContentTypeIcon(content.content_type)}
-          <h3 className="text-base font-semibold leading-snug line-clamp-2 min-h-[2.5rem] pr-4">
+        {/* Body: 제목 (핵심 콘텐츠) */}
+        <div className="flex-1 min-h-[2.75rem] mb-3">
+          <h3 className="text-base font-medium leading-snug line-clamp-2">
             {content.title || content.filename}
           </h3>
         </div>
 
-        {/* 하단: 상태 + 타입별 메타 */}
-        <div className="space-y-2">
+        {/* Footer: 상태 + 메타 + 날짜 */}
+        <div className="space-y-2 mt-auto pt-2 border-t border-border/50">
           {isProcessing ? (
             <div className="flex items-center gap-2.5">
               <Badge variant={getStatusVariant(status)} className="text-xs flex items-center gap-1.5 shrink-0">
@@ -141,23 +148,28 @@ export function ContentCard({ content, selected, onToggle, onRetry }: ContentCar
               </span>
             </div>
           ) : (
-            <div className="flex items-center gap-2 flex-wrap">
-              <Badge variant={getStatusVariant(status)} className="text-xs flex items-center gap-1.5">
-                {getStatusIcon(status)}
-                {STATUS_LABELS[status]}
-              </Badge>
-              {content.content_type === 'AUDIO' && status === 'COMPLETED' && (
-                <span className="text-sm text-muted-foreground">
-                  화자 {content.speakers?.length || 0}명 · {formatDuration(content.duration_seconds || 0)}
-                </span>
-              )}
-              {(content.content_type === 'DOCUMENT' || content.content_type === 'PORTRAY') &&
-                status === 'COMPLETED' &&
-                content.document?.page_count && (
-                  <span className="text-sm text-muted-foreground">
-                    {content.document.page_count}페이지
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Badge variant={getStatusVariant(status)} className="text-xs flex items-center gap-1.5">
+                  {getStatusIcon(status)}
+                  {STATUS_LABELS[status]}
+                </Badge>
+                {content.content_type === 'AUDIO' && status === 'COMPLETED' && (
+                  <span className="text-xs text-muted-foreground">
+                    화자 {content.speakers?.length || 0}명 · {formatDuration(content.duration_seconds || 0)}
                   </span>
                 )}
+                {(content.content_type === 'DOCUMENT' || content.content_type === 'PORTRAY') &&
+                  status === 'COMPLETED' &&
+                  content.document?.page_count && (
+                    <span className="text-xs text-muted-foreground">
+                      {content.document.page_count}페이지
+                    </span>
+                  )}
+              </div>
+              <span className="text-xs text-muted-foreground shrink-0">
+                {formatDate(content.created_at)}
+              </span>
             </div>
           )}
         </div>
