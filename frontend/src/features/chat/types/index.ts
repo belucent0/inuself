@@ -27,6 +27,11 @@ export interface QueryAnalysis {
   search_focus: string
 }
 
+/**
+ * 메시지 상태 타입 (서버와 동기화)
+ */
+export type MessageStatus = 'pending' | 'generating' | 'completed' | 'failed' | 'cancelled'
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -36,7 +41,9 @@ export interface ChatMessage {
   thinkingSteps?: ThinkingStep[]
   queryAnalysis?: QueryAnalysis
   isStreaming?: boolean
-  status?: string
+  /** 메시지 상태 (서버 동기화용) */
+  status?: MessageStatus
+  /** UI 표시용 현재 단계 */
   currentStep?: string
 }
 
