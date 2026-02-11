@@ -8,6 +8,9 @@ settings = get_settings()
 engine = create_async_engine(settings.postgres_dsn, echo=settings.debug, future=True)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
+# 백그라운드 태스크에서 사용할 세션 팩토리 (FastAPI 의존성 외부에서 사용)
+async_session_factory = AsyncSessionLocal
+
 
 async def get_session() -> AsyncSession:
     """FastAPI 의존성에서 사용할 세션 생성기."""
