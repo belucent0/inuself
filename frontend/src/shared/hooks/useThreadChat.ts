@@ -59,6 +59,26 @@ export function useThreadChat({ threadId, initialMessages = [], onMessageComplet
     searchQueries: [],
   })
 
+  // threadId 변경 시 상태 완전 초기화
+  const prevThreadIdRef = useRef<string>(threadId)
+  useEffect(() => {
+    if (prevThreadIdRef.current !== threadId) {
+      // 스레드가 변경되면 모든 상태 초기화
+      setState({
+        messages: initialMessages,
+        isLoading: false,
+        error: null,
+      })
+      setStreamingMetadata({
+        currentMessage: '',
+        thinkingSteps: [],
+        sources: [],
+        searchQueries: [],
+      })
+      prevThreadIdRef.current = threadId
+    }
+  }, [threadId, initialMessages])
+
   // 초기 메시지 동기화 - 스트리밍 중이 아닐 때만
   const initialMessagesRef = useRef<Message[]>(initialMessages)
   useEffect(() => {
