@@ -334,6 +334,7 @@ export function useThreadChat({ threadId, initialMessages = [], onMessageComplet
         const stream = await httpClient.postStream(`/threads/${threadId}/messages/stream`, {
           query: userQuery,
           mode: mode || 'auto',
+          skip_user_message: true, // 이미 저장된 사용자 메시지 중복 저장 방지
         })
 
         await processSSEStream(stream, mode || 'auto')
