@@ -2,7 +2,6 @@
  * Chat Feature 컴포넌트 exports
  */
 
-export { ChatInterface } from './ChatInterface'
 export { ChatMessage } from './ChatMessage'
 export { ChatInput } from './ChatInput'
 export { MessageList } from './MessageList'
