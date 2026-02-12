@@ -46,3 +46,53 @@ def resolve_tier_to_model(model_name: str) -> str:
 def get_available_tiers() -> list[str]:
     """사용 가능한 티어 목록 반환."""
     return list(TIER_MODEL_MAP.keys())
+
+
+# ============================================================
+# Tier-based Routing Policy (NPU/GPU 우선순위)
+# ============================================================
+# 각 티어별로 primary/fallback 디바이스와 대기 정책을 정의합니다.
+#
+# - primary: 우선 사용할 디바이스 (npu 또는 gpu)
+# - fallback: primary busy 시 사용할 대체 디바이스
+# - queue_on_busy: 둘 다 busy일 때 대기 여부 (True면 최대 30초 대기)
+# ============================================================
+
+TIER_ROUTING_POLICY = {
+    "tier-simple": {
+        "primary": "npu",
+        "fallback": "gpu",
+        "queue_on_busy": True,
+    },
+    "tier-thinking": {
+        "primary": "gpu",   # Thinking은 GPU 우선 (더 큰 모델 사용)
+        "fallback": "npu",
+        "queue_on_busy": True,
+    },
+    "tier-summarize": {
+        "primary": "npu",
+        "fallback": "gpu",
+        "queue_on_busy": True,
+    },
+}
+
+# 기본 정책 (tier 정보 없을 때)
+DEFAULT_ROUTING_POLICY = {
+    "primary": "npu",
+    "fallback": "gpu",
+    "queue_on_busy": True,
+}
+
+
+def get_routing_policy(tier: str | None) -> dict:
+    """티어에 해당하는 라우팅 정책 반환.
+
+    Args:
+        tier: 티어명 (예: "tier-simple", "tier-thinking")
+
+    Returns:
+        라우팅 정책 딕셔너리 (primary, fallback, queue_on_busy)
+    """
+    if tier and tier in TIER_ROUTING_POLICY:
+        return TIER_ROUTING_POLICY[tier]
+    return DEFAULT_ROUTING_POLICY

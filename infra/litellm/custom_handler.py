@@ -104,12 +104,12 @@ NPU_MODEL = os.getenv("NPU_MODEL", "qwen3vl-it:4b")  # FLM unified (LLM + OCR)
 # infra/shared/tier_config.py에서 정의된 설정을 사용합니다.
 # 모든 티어 관련 수정은 tier_config.py에서 하세요.
 try:
-    from infra.shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
+    from infra.shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model, get_routing_policy
 except ImportError:
     # Docker 환경에서 경로가 다를 수 있음
     import sys
     sys.path.insert(0, "/app/infra")
-    from shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
+    from shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model, get_routing_policy
 
 # Audio 설정
 GPU_AUDIO_API_BASE = os.getenv("GPU_AUDIO_API_BASE", "http://host.docker.internal:8001")
@@ -772,6 +772,261 @@ async def is_gpu_busy_async() -> tuple[bool, str]:
         return False, ""
 
 
+async def is_provider_busy_async(provider: str) -> bool:
+    """Provider busy 여부 확인 (Redis 세마포어만 사용).
+
+    Args:
+        provider: "npu" 또는 "gpu"
+
+    Returns:
+        busy 여부 (True면 사용 중)
+    """
+    if not redis_client_async:
+        return False
+
+    try:
+        if provider == "npu":
+            npu_active = await redis_client_async.exists("worker:npu:active")
+            if npu_active:
+                logger.debug(f"[BusyCheck] NPU busy (Redis semaphore)")
+                return True
+        elif provider == "gpu":
+            gpu_busy, _ = await is_gpu_busy_async()
+            if gpu_busy:
+                logger.debug(f"[BusyCheck] GPU busy (Redis semaphore)")
+                return True
+    except Exception as e:
+        logger.warning(f"[BusyCheck] Redis check failed: {e}")
+
+    return False
+
+
+def is_provider_busy_sync(provider: str) -> bool:
+    """Provider busy 여부 확인 (Redis 세마포어만 사용) - 동기 버전.
+
+    Args:
+        provider: "npu" 또는 "gpu"
+
+    Returns:
+        busy 여부 (True면 사용 중)
+    """
+    if not redis_client_sync:
+        return False
+
+    try:
+        if provider == "npu":
+            npu_active = redis_client_sync.exists("worker:npu:active")
+            if npu_active:
+                logger.debug(f"[BusyCheck] NPU busy (Redis semaphore)")
+                return True
+        elif provider == "gpu":
+            gpu_busy, _ = is_gpu_busy_sync()
+            if gpu_busy:
+                logger.debug(f"[BusyCheck] GPU busy (Redis semaphore)")
+                return True
+    except Exception as e:
+        logger.warning(f"[BusyCheck] Redis check failed: {e}")
+
+    return False
+
+
+import asyncio
+
+
+async def wait_for_available_provider_async(
+    primary: str,
+    fallback: str,
+    task_type: str,
+    get_provider_config_fn,
+    max_wait: float = 3600.0,  # 1시간 (ASR/OCR 긴 작업 대응)
+    poll_interval: float = 0.5,
+) -> tuple[str, str, str, str]:
+    """둘 다 busy일 때 대기하다가 먼저 available 되는 쪽 반환 (비동기).
+
+    Args:
+        primary: 우선 provider ("npu" 또는 "gpu")
+        fallback: 대체 provider
+        task_type: "chat" 또는 "audio"
+        get_provider_config_fn: provider config 반환 함수
+        max_wait: 최대 대기 시간 (초, 기본 1시간)
+        poll_interval: 폴링 간격 (초, Redis 세마포어만 체크)
+
+    Returns:
+        (api_base, model, provider_key, signal_provider)
+
+    Note:
+        폴링 루프는 하나의 span으로 추적하되, 내부 Redis 호출은 트레이싱에서 제외 (노이즈 방지)
+    """
+    from opentelemetry import trace
+
+    start_time = time.time()
+    logger.info(f"[Wait] Both {primary.upper()} and {fallback.upper()} busy, waiting up to {max_wait:.0f}s...")
+
+    # 폴링 루프 전체를 하나의 span으로 추적
+    if TELEMETRY_ENABLED:
+        tracer = get_tracer(__name__)
+        with tracer.start_as_current_span(
+            "wait_for_available_provider",
+            attributes={
+                "primary": primary,
+                "fallback": fallback,
+                "task_type": task_type,
+                "max_wait": max_wait,
+            }
+        ) as span:
+            result = await _wait_for_available_provider_loop(
+                primary, fallback, task_type, get_provider_config_fn,
+                start_time, max_wait, poll_interval, span
+            )
+            return result
+    else:
+        return await _wait_for_available_provider_loop(
+            primary, fallback, task_type, get_provider_config_fn,
+            start_time, max_wait, poll_interval, None
+        )
+
+
+async def _wait_for_available_provider_loop(
+    primary: str,
+    fallback: str,
+    task_type: str,
+    get_provider_config_fn,
+    start_time: float,
+    max_wait: float,
+    poll_interval: float,
+    span=None,
+) -> tuple[str, str, str, str]:
+    """폴링 루프 내부 로직 (트레이싱 제외)."""
+    from opentelemetry import trace
+
+    while time.time() - start_time < max_wait:
+        # 트레이싱 일시 중단 (Redis 호출 트레이스 제외)
+        with trace.use_span(trace.INVALID_SPAN):
+            # Primary 체크
+            if not await is_provider_busy_async(primary):
+                elapsed = time.time() - start_time
+                if span:
+                    span.set_attribute("wait_time_seconds", elapsed)
+                    span.set_attribute("selected_provider", primary)
+                logger.info(f"[Wait] {primary.upper()} available after {elapsed:.1f}s")
+                return get_provider_config_fn(primary, task_type)
+
+            # Fallback 체크
+            if not await is_provider_busy_async(fallback):
+                elapsed = time.time() - start_time
+                if span:
+                    span.set_attribute("wait_time_seconds", elapsed)
+                    span.set_attribute("selected_provider", fallback)
+                logger.info(f"[Wait] {fallback.upper()} available after {elapsed:.1f}s")
+                return get_provider_config_fn(fallback, task_type)
+
+        await asyncio.sleep(poll_interval)
+
+    # Timeout → Primary 강제 반환 (retry 기대)
+    if span:
+        span.set_attribute("timeout", True)
+        span.set_attribute("selected_provider", primary)
+    logger.warning(f"[Wait] Timeout ({max_wait:.0f}s), forcing {primary.upper()}")
+    return get_provider_config_fn(primary, task_type)
+
+
+def wait_for_available_provider_sync(
+    primary: str,
+    fallback: str,
+    task_type: str,
+    get_provider_config_fn,
+    max_wait: float = 3600.0,  # 1시간 (ASR/OCR 긴 작업 대응)
+    poll_interval: float = 0.5,
+) -> tuple[str, str, str, str]:
+    """둘 다 busy일 때 대기하다가 먼저 available 되는 쪽 반환 (동기).
+
+    Args:
+        primary: 우선 provider ("npu" 또는 "gpu")
+        fallback: 대체 provider
+        task_type: "chat" 또는 "audio"
+        get_provider_config_fn: provider config 반환 함수
+        max_wait: 최대 대기 시간 (초, 기본 1시간)
+        poll_interval: 폴링 간격 (초, Redis 세마포어만 체크)
+
+    Returns:
+        (api_base, model, provider_key, signal_provider)
+
+    Note:
+        폴링 루프는 하나의 span으로 추적하되, 내부 Redis 호출은 트레이싱에서 제외 (노이즈 방지)
+    """
+    from opentelemetry import trace
+
+    start_time = time.time()
+    logger.info(f"[Wait] Both {primary.upper()} and {fallback.upper()} busy, waiting up to {max_wait:.0f}s...")
+
+    # 폴링 루프 전체를 하나의 span으로 추적
+    if TELEMETRY_ENABLED:
+        tracer = get_tracer(__name__)
+        with tracer.start_as_current_span(
+            "wait_for_available_provider",
+            attributes={
+                "primary": primary,
+                "fallback": fallback,
+                "task_type": task_type,
+                "max_wait": max_wait,
+            }
+        ) as span:
+            result = _wait_for_available_provider_loop_sync(
+                primary, fallback, task_type, get_provider_config_fn,
+                start_time, max_wait, poll_interval, span
+            )
+            return result
+    else:
+        return _wait_for_available_provider_loop_sync(
+            primary, fallback, task_type, get_provider_config_fn,
+            start_time, max_wait, poll_interval, None
+        )
+
+
+def _wait_for_available_provider_loop_sync(
+    primary: str,
+    fallback: str,
+    task_type: str,
+    get_provider_config_fn,
+    start_time: float,
+    max_wait: float,
+    poll_interval: float,
+    span=None,
+) -> tuple[str, str, str, str]:
+    """폴링 루프 내부 로직 (트레이싱 제외) - 동기 버전."""
+    from opentelemetry import trace
+
+    while time.time() - start_time < max_wait:
+        # 트레이싱 일시 중단 (Redis 호출 트레이스 제외)
+        with trace.use_span(trace.INVALID_SPAN):
+            # Primary 체크
+            if not is_provider_busy_sync(primary):
+                elapsed = time.time() - start_time
+                if span:
+                    span.set_attribute("wait_time_seconds", elapsed)
+                    span.set_attribute("selected_provider", primary)
+                logger.info(f"[Wait] {primary.upper()} available after {elapsed:.1f}s")
+                return get_provider_config_fn(primary, task_type)
+
+            # Fallback 체크
+            if not is_provider_busy_sync(fallback):
+                elapsed = time.time() - start_time
+                if span:
+                    span.set_attribute("wait_time_seconds", elapsed)
+                    span.set_attribute("selected_provider", fallback)
+                logger.info(f"[Wait] {fallback.upper()} available after {elapsed:.1f}s")
+                return get_provider_config_fn(fallback, task_type)
+
+        time.sleep(poll_interval)
+
+    # Timeout → Primary 강제 반환 (retry 기대)
+    if span:
+        span.set_attribute("timeout", True)
+        span.set_attribute("selected_provider", primary)
+    logger.warning(f"[Wait] Timeout ({max_wait:.0f}s), forcing {primary.upper()}")
+    return get_provider_config_fn(primary, task_type)
+
+
 async def send_provider_control_signal(provider: str, action: str = "start"):
     """Host Agent에게 서비스 제어 요청 전송 (비동기, V6.3).
 
@@ -901,6 +1156,7 @@ async def select_provider_async(
     task_type: str = "chat",
     force_provider: Optional[str] = None,
     skip_signal: bool = False,
+    tier: Optional[str] = None,
 ) -> tuple[str, str, str]:
     """사용 가능한 Provider를 선택합니다 (비동기).
 
@@ -908,16 +1164,17 @@ async def select_provider_async(
         task_type: "chat" or "audio"
         force_provider: 강제 선택 - "gpu" or "npu" (None이면 자동 선택)
         skip_signal: Provider 시작 신호 전송 여부 (True면 호출자가 직접 전송)
+        tier: 티어명 (예: "tier-simple", "tier-thinking") - 라우팅 정책 결정에 사용
 
     Returns:
         (api_base, model, provider_name)
 
     라우팅 우선순위 (하이브리드 방식):
     1. 강제 선택 (force_provider) → 해당 Provider 사용
-    2. Redis 세마포어 → NPU/GPU 사용 중이면 다른 쪽 선택
-    3. 사용률 기반 우선 Provider 결정 (NPU 우선)
-    4. 선택된 Provider unhealthy → start 신호 + 대기 (max 15초)
-    5. timeout → fallback Provider 시도 (동일 로직)
+    2. Tier별 정책 적용 → tier-thinking은 GPU 우선, tier-simple은 NPU 우선
+    3. Primary busy → Fallback 시도
+    4. 둘 다 busy → 대기 (최대 30초)
+    5. 선택된 Provider unhealthy → start 신호 + 대기 (max 15초)
     """
     # Provider 설정 헬퍼 (V6.5: 통합 FLM 서버)
     def get_provider_config(provider: str, task: str) -> tuple[str, str, str, str]:
@@ -948,51 +1205,54 @@ async def select_provider_async(
             return NPU_API_BASE, NPU_AUDIO_MODEL, "npu-audio"
         return NPU_API_BASE, NPU_MODEL, "npu"  # V6.5: 통합 FLM (11434)
 
-    # 1. Redis 세마포어 체크 (즉시 반응)
-    # 1-1. NPU 세마포어 체크 → GPU로 강제
-    if redis_client_async:
-        try:
-            npu_active = await redis_client_async.exists("worker:npu:active")
-            if npu_active:
-                logger.info(f"[CustomRouter] NPU Semaphore Active → Forced GPU")
-                api_base, model, key, signal = get_provider_config("gpu", task_type)
-                if not skip_signal:
-                    await send_provider_control_signal(signal, "start")
-                return api_base, model, key
-        except Exception as e:
-            logger.warning(f"Redis NPU semaphore check failed: {e}")
+    # 1. Tier별 라우팅 정책 가져오기
+    routing_policy = get_routing_policy(tier)
+    policy_primary = routing_policy["primary"]
+    policy_fallback = routing_policy["fallback"]
+    queue_on_busy = routing_policy.get("queue_on_busy", True)
 
-    # 1-2. GPU 세마포어 체크 → NPU로 강제
-    gpu_busy, gpu_reason = await is_gpu_busy_async()
-    if gpu_busy:
-        logger.info(f"[CustomRouter] GPU Semaphore Active ({gpu_reason}) → Forced NPU")
-        api_base, model, key, signal = get_provider_config("npu", task_type)
+    logger.info(f"[CustomRouter] Tier: {tier or 'default'} → Policy: {policy_primary.upper()} primary, {policy_fallback.upper()} fallback")
+
+    # 2. Primary/Fallback busy 상태 확인 (Redis 세마포어 + Prometheus)
+    primary_busy = await is_provider_busy_async(policy_primary)
+    fallback_busy = await is_provider_busy_async(policy_fallback)
+
+    # 3. 라우팅 결정
+    if not primary_busy:
+        # Primary 사용 가능 → Primary 선택
+        primary, fallback = policy_primary, policy_fallback
+        logger.info(f"[CustomRouter] {policy_primary.upper()} available → Selected")
+    elif not fallback_busy:
+        # Primary busy, Fallback 사용 가능 → Fallback 선택
+        primary, fallback = policy_fallback, policy_primary
+        logger.info(f"[CustomRouter] {policy_primary.upper()} busy, {policy_fallback.upper()} available → Fallback")
+    elif queue_on_busy:
+        # 둘 다 busy → 대기
+        logger.info(f"[CustomRouter] Both busy, waiting for available provider...")
+        api_base, model, key, signal = await wait_for_available_provider_async(
+            policy_primary, policy_fallback, task_type, get_provider_config
+        )
         if not skip_signal:
             await send_provider_control_signal(signal, "start")
         return api_base, model, key
+    else:
+        # 대기 안 함 → Primary 강제 사용
+        primary, fallback = policy_primary, policy_fallback
+        logger.warning(f"[CustomRouter] Both busy, no queue → forcing {policy_primary.upper()}")
 
-    # 2. Prometheus 메트릭 + Health Check
-    gpu_avg = await query_prometheus_async("gpu")
-    npu_avg = await query_prometheus_async("npu")
+    # 4. Health Check
     # V6.5: 통합 FLM 서버 사용
     npu_health_provider = "flm"
     npu_healthy = await check_flm_health_with_model_async(npu_health_provider)
     gpu_healthy = await check_provider_health_async("llama")
 
-    # 메모리 사용량 조회
+    # 메모리 사용량 조회 (로깅용)
+    gpu_avg = await query_prometheus_async("gpu")
+    npu_avg = await query_prometheus_async("npu")
     gpu_mem = await query_memory_async("gpu")
     npu_mem = await query_memory_async("npu")
 
     logger.info(f"[CustomRouter] Usage - GPU: {gpu_avg:.1f}% ({format_bytes(gpu_mem['total'])}), NPU: {npu_avg:.1f}% ({format_bytes(npu_mem['total'])}) | Health - NPU({npu_health_provider}): {npu_healthy}, GPU: {gpu_healthy}")
-
-    # 3. 사용률 기반 우선 Provider 결정 (NPU 우선)
-    if npu_avg < BUSY_THRESHOLD:
-        primary, fallback = "npu", "gpu"
-    elif gpu_avg < BUSY_THRESHOLD:
-        primary, fallback = "gpu", "npu"
-    else:
-        # 둘 다 바쁘면 NPU 우선
-        primary, fallback = "npu", "gpu"
 
     logger.info(f"[CustomRouter] Priority: {primary.upper()} (fallback: {fallback.upper()})")
 
@@ -1289,15 +1549,25 @@ def select_provider_sync(
     task_type: str = "chat",
     force_provider: Optional[str] = None,
     skip_signal: bool = False,
+    tier: Optional[str] = None,
 ) -> tuple[str, str, str]:
     """사용 가능한 Provider를 선택합니다 (동기).
 
+    Args:
+        task_type: "chat" or "audio"
+        force_provider: 강제 선택 - "gpu" or "npu" (None이면 자동 선택)
+        skip_signal: Provider 시작 신호 전송 여부 (True면 호출자가 직접 전송)
+        tier: 티어명 (예: "tier-simple", "tier-thinking") - 라우팅 정책 결정에 사용
+
+    Returns:
+        (api_base, model, provider_name)
+
     라우팅 우선순위 (하이브리드 방식):
     1. 강제 선택 (force_provider) → 해당 Provider 사용
-    2. Redis 세마포어 → NPU/GPU 사용 중이면 다른 쪽 선택
-    3. 사용률 기반 우선 Provider 결정 (NPU 우선)
-    4. 선택된 Provider unhealthy → start 신호 + 대기 (max 15초)
-    5. timeout → fallback Provider 시도 (동일 로직)
+    2. Tier별 정책 적용 → tier-thinking은 GPU 우선, tier-simple은 NPU 우선
+    3. Primary busy → Fallback 시도
+    4. 둘 다 busy → 대기 (최대 30초)
+    5. 선택된 Provider unhealthy → start 신호 + 대기 (max 15초)
     """
     # Provider 설정 헬퍼 (V6.5: 통합 FLM 서버)
     def get_provider_config(provider: str, task: str) -> tuple[str, str, str, str]:
@@ -1328,51 +1598,54 @@ def select_provider_sync(
             return NPU_API_BASE, NPU_AUDIO_MODEL, "npu-audio"
         return NPU_API_BASE, NPU_MODEL, "npu"  # V6.5: 통합 FLM (11434)
 
-    # 1. Redis 세마포어 체크 (즉시 반응)
-    # 1-1. NPU 세마포어 체크 → GPU로 강제
-    if redis_client_sync:
-        try:
-            npu_active = redis_client_sync.exists("worker:npu:active")
-            if npu_active:
-                logger.info(f"[CustomRouter] NPU Semaphore Active → Forced GPU")
-                api_base, model, key, signal = get_provider_config("gpu", task_type)
-                if not skip_signal:
-                    send_provider_control_signal_sync(signal, "start")
-                return api_base, model, key
-        except Exception as e:
-            logger.warning(f"Redis NPU semaphore check failed: {e}")
+    # 1. Tier별 라우팅 정책 가져오기
+    routing_policy = get_routing_policy(tier)
+    policy_primary = routing_policy["primary"]
+    policy_fallback = routing_policy["fallback"]
+    queue_on_busy = routing_policy.get("queue_on_busy", True)
 
-    # 1-2. GPU 세마포어 체크 → NPU로 강제
-    gpu_busy, gpu_reason = is_gpu_busy_sync()
-    if gpu_busy:
-        logger.info(f"[CustomRouter] GPU Semaphore Active ({gpu_reason}) → Forced NPU")
-        api_base, model, key, signal = get_provider_config("npu", task_type)
+    logger.info(f"[CustomRouter] Tier: {tier or 'default'} → Policy: {policy_primary.upper()} primary, {policy_fallback.upper()} fallback")
+
+    # 2. Primary/Fallback busy 상태 확인 (Redis 세마포어 + Prometheus)
+    primary_busy = is_provider_busy_sync(policy_primary)
+    fallback_busy = is_provider_busy_sync(policy_fallback)
+
+    # 3. 라우팅 결정
+    if not primary_busy:
+        # Primary 사용 가능 → Primary 선택
+        primary, fallback = policy_primary, policy_fallback
+        logger.info(f"[CustomRouter] {policy_primary.upper()} available → Selected")
+    elif not fallback_busy:
+        # Primary busy, Fallback 사용 가능 → Fallback 선택
+        primary, fallback = policy_fallback, policy_primary
+        logger.info(f"[CustomRouter] {policy_primary.upper()} busy, {policy_fallback.upper()} available → Fallback")
+    elif queue_on_busy:
+        # 둘 다 busy → 대기
+        logger.info(f"[CustomRouter] Both busy, waiting for available provider...")
+        api_base, model, key, signal = wait_for_available_provider_sync(
+            policy_primary, policy_fallback, task_type, get_provider_config
+        )
         if not skip_signal:
             send_provider_control_signal_sync(signal, "start")
         return api_base, model, key
+    else:
+        # 대기 안 함 → Primary 강제 사용
+        primary, fallback = policy_primary, policy_fallback
+        logger.warning(f"[CustomRouter] Both busy, no queue → forcing {policy_primary.upper()}")
 
-    # 2. Prometheus 메트릭 + Health Check
-    gpu_avg = query_prometheus_sync("gpu")
-    npu_avg = query_prometheus_sync("npu")
+    # 4. Health Check
     # V6.5: 통합 FLM 서버 사용
     npu_health_provider = "flm"
     npu_healthy = check_flm_health_with_model_sync(npu_health_provider)
     gpu_healthy = check_provider_health_sync("llama")
 
-    # 메모리 사용량 조회
+    # 메모리 사용량 조회 (로깅용)
+    gpu_avg = query_prometheus_sync("gpu")
+    npu_avg = query_prometheus_sync("npu")
     gpu_mem = query_memory_sync("gpu")
     npu_mem = query_memory_sync("npu")
 
     logger.info(f"[CustomRouter] Usage - GPU: {gpu_avg:.1f}% ({format_bytes(gpu_mem['total'])}), NPU: {npu_avg:.1f}% ({format_bytes(npu_mem['total'])}) | Health - NPU({npu_health_provider}): {npu_healthy}, GPU: {gpu_healthy}")
-
-    # 3. 사용률 기반 우선 Provider 결정 (NPU 우선)
-    if npu_avg < BUSY_THRESHOLD:
-        primary, fallback = "npu", "gpu"
-    elif gpu_avg < BUSY_THRESHOLD:
-        primary, fallback = "gpu", "npu"
-    else:
-        # 둘 다 바쁘면 NPU 우선
-        primary, fallback = "npu", "gpu"
 
     logger.info(f"[CustomRouter] Priority: {primary.upper()} (fallback: {fallback.upper()})")
 
@@ -1559,8 +1832,10 @@ class PrometheusRouter(CustomLLM):
                 decrement_active_count_sync(target_provider)
 
         # 일반 LLM 요청
+        # Tier 정보 추출 (model_name이 tier-로 시작하면 해당 tier 사용)
+        tier = model_name if model_name.startswith("tier-") else None
         # Provider 선택 (신호 없이 - Redis Stream이 처리)
-        api_base, _, provider_key = select_provider_sync(task_type="chat", skip_signal=True)
+        api_base, _, provider_key = select_provider_sync(task_type="chat", skip_signal=True, tier=tier)
         target_provider = "flm" if "npu" in provider_key else "llama"
 
         # 요청된 모델명 사용 (라우터 prefix 제거)
@@ -1685,14 +1960,16 @@ class PrometheusRouter(CustomLLM):
                 await decrement_active_count(target_provider)
 
         # 일반 LLM 요청
+        # Tier 정보 추출 (model_name이 tier-로 시작하면 해당 tier 사용)
+        tier = model_name if model_name.startswith("tier-") else None
         # Provider 선택 (신호 없이 - Redis Stream이 처리)
-        api_base, _, provider_key = await select_provider_async(task_type="chat", skip_signal=True)
+        api_base, _, provider_key = await select_provider_async(task_type="chat", skip_signal=True, tier=tier)
         target_provider = "flm" if "npu" in provider_key else "llama"
 
         # 요청된 모델명 사용 (라우터 prefix 제거)
         requested_model_name = model_name  # 1607행에서 추출됨
 
-        logger.info(f"[PrometheusRouter V7.0] Routing to {target_provider} via Redis Stream, model={requested_model_name}")
+        logger.info(f"[PrometheusRouter V7.0] Routing to {target_provider} via Redis Stream, model={requested_model_name}, tier={tier}")
 
         # 활성 요청 카운트 증가
         await increment_active_count(target_provider)
@@ -1754,18 +2031,21 @@ class PrometheusRouter(CustomLLM):
 
         messages = kwargs.get("messages", [])
 
-        # Provider 선택 (신호 없이 - Redis Stream이 처리)
-        api_base, _, provider_key = await select_provider_async(task_type="chat", skip_signal=True)
+        # 요청된 모델명 추출 (라우터 prefix 제거)
+        raw_model_name = model.split("/")[-1] if "/" in model else model
+
+        # Tier 정보 추출 (model_name이 tier-로 시작하면 해당 tier 사용)
+        tier = raw_model_name if raw_model_name.startswith("tier-") else None
+
+        # Provider 선택 (신호 없이 - Redis Stream이 처리, tier별 정책 적용)
+        api_base, _, provider_key = await select_provider_async(task_type="chat", skip_signal=True, tier=tier)
         target_provider = "flm" if "npu" in provider_key else "llama"
 
-        # 요청된 모델명 사용 (라우터 prefix 제거)
-        requested_model_name = model.split("/")[-1] if "/" in model else model
-
         # V8.0: Tier-based routing - 티어명을 실제 모델명으로 변환
-        requested_model_name = resolve_tier_to_model(requested_model_name)
+        requested_model_name = resolve_tier_to_model(raw_model_name)
 
         selection_latency = time.time() - start_ts
-        logger.debug(f"{get_log_prefix()} [PrometheusRouter V8.0] Provider: {target_provider}, model={requested_model_name} (Latency: {selection_latency:.3f}s)")
+        logger.debug(f"{get_log_prefix()} [PrometheusRouter V8.0] Provider: {target_provider}, model={requested_model_name}, tier={tier} (Latency: {selection_latency:.3f}s)")
 
         await increment_active_count(target_provider)
 
