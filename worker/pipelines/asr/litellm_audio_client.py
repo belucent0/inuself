@@ -1,21 +1,27 @@
 """LiteLLM chat completion 엔드포인트를 통한 ASR/Diarization 요청 클라이언트.
 
-Architecture V7.4:
+Architecture V7.5:
 - ASR: Worker → LiteLLM HTTP (/v1/chat/completions, task_type=asr) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
 - Diarization: Worker → LiteLLM HTTP (/v1/chat/completions, task_type=diarization) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
 - LLM: Worker → LiteLLM HTTP → custom_handler.astreaming() → Redis Stream → Provider Manager → GPU
 - OCR: Worker → LiteLLM HTTP → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
-(모든 GPU/NPU 작업이 LiteLLM을 거침 - 세마포어는 custom_handler에서 통합 관리)
+
+V7.5 변경사항:
+- ASR+Diarization 묶음 잠금: pipeline.py에서 lock_id 획득 후 전달
+- lock_id가 전달되면 LiteLLM에서 잠금 재획득 스킵 (이미 획득됨)
+- GPU 리소스 독점: ASR+Diarization 실행 중 다른 GPU 작업 대기
 """
 import base64
 import json
 import os
 import time
+import uuid
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import httpx
+import redis
 
 from worker.logging_config import logger
 from worker.telemetry import get_trace_id, inject_trace_context
@@ -23,6 +29,93 @@ from worker.telemetry import get_trace_id, inject_trace_context
 # LiteLLM Proxy URL
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
 LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "sk-1234")
+
+# Redis URL (잠금용)
+REDIS_URL = os.getenv("REDIS_URL", "redis://valkey:6379/0")
+
+# Redis 클라이언트 (Worker측 잠금용)
+try:
+    _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+except Exception as e:
+    logger.warning(f"[LiteLLM Client] Redis client init failed: {e}")
+    _redis_client = None
+
+# Lua 스크립트: 원자적 잠금 해제 (본인 lock_id만 삭제)
+RELEASE_LOCK_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
+
+
+def acquire_gpu_lock(timeout: int = 3600, max_wait: float = 3600.0) -> str | None:
+    """GPU 잠금 획득 (Worker측).
+
+    ASR+Diarization 묶음 작업 시작 전 호출.
+    잠금 획득 때까지 대기합니다.
+
+    Args:
+        timeout: 잠금 TTL (초, 기본 1시간)
+        max_wait: 최대 대기 시간 (초, 기본 1시간)
+
+    Returns:
+        성공 시 lock_id, 실패 시 None
+    """
+    if not _redis_client:
+        logger.warning("[Worker Lock] Redis not available, proceeding without lock")
+        return str(uuid.uuid4())  # Redis 없으면 더미 ID 반환
+
+    key = "worker:gpu:active"
+    lock_id = str(uuid.uuid4())
+    wait_start = time.time()
+
+    while time.time() - wait_start < max_wait:
+        try:
+            # SETNX: 키가 없을 때만 설정 (원자적)
+            acquired = _redis_client.set(key, lock_id, nx=True, ex=timeout)
+            if acquired:
+                logger.info(f"[Worker Lock] GPU acquired: {key} (lock_id={lock_id[:8]}...)")
+                return lock_id
+            else:
+                logger.debug(f"[Worker Lock] GPU busy, waiting...")
+        except Exception as e:
+            logger.error(f"[Worker Lock] Failed to acquire GPU: {e}")
+
+        time.sleep(0.5)
+
+    logger.warning(f"[Worker Lock] GPU lock timeout after {max_wait}s")
+    return None
+
+
+def release_gpu_lock(lock_id: str) -> bool:
+    """GPU 잠금 해제 (Worker측).
+
+    ASR+Diarization 묶음 작업 완료 후 호출.
+
+    Args:
+        lock_id: 획득 시 받은 lock_id
+
+    Returns:
+        해제 성공 여부
+    """
+    if not _redis_client or not lock_id:
+        return True
+
+    key = "worker:gpu:active"
+
+    try:
+        result = _redis_client.eval(RELEASE_LOCK_SCRIPT, 1, key, lock_id)
+        released = result == 1
+        if released:
+            logger.info(f"[Worker Lock] GPU released: {key}")
+        else:
+            logger.warning(f"[Worker Lock] GPU release failed (not owner or expired): {key}")
+        return released
+    except Exception as e:
+        logger.error(f"[Worker Lock] Failed to release GPU: {e}")
+        return False
 
 
 class ASRProvider(Enum):
@@ -61,6 +154,7 @@ def call_litellm_transcription(
     timeout: float = 1800.0,
     resource_timeout: float = 120.0,
     on_resource_acquired: callable = None,
+    lock_id: str | None = None,  # V7.5: Worker에서 획득한 GPU 잠금 ID
 ) -> tuple[dict[str, Any], float, float, ASRProvider]:
     """LiteLLM chat completion 엔드포인트를 통한 ASR 요청.
 
@@ -75,6 +169,7 @@ def call_litellm_transcription(
         timeout: ASR 요청 타임아웃 (초)
         resource_timeout: (미사용, 호환성 유지)
         on_resource_acquired: ASR 요청 직전 호출되는 콜백 (상태 업데이트용)
+        lock_id: Worker에서 획득한 GPU 잠금 ID (V7.5: LiteLLM에서 재획득 스킵)
 
     Returns:
         (전사 결과, 대기 시간, 전사 시간, 사용된 Provider)
@@ -110,6 +205,18 @@ def call_litellm_transcription(
         logger.warning(f"[LiteLLM ASR] Failed to inject trace context: {e}")
 
     # Chat completion 형식으로 ASR 요청
+    extra_body = {
+        "task_type": "asr",
+        "audio_base64": audio_base64,
+        "language": language,
+        "accuracy_mode": accuracy_mode,
+    }
+
+    # V7.5: Worker에서 획득한 lock_id 전달 (LiteLLM에서 재획득 스킵)
+    if lock_id:
+        extra_body["lock_id"] = lock_id
+        logger.info(f"[LiteLLM ASR] Passing lock_id to LiteLLM: {lock_id[:8]}...")
+
     payload = {
         "model": model,
         "messages": [
@@ -118,12 +225,7 @@ def call_litellm_transcription(
                 "content": f"Transcribe this audio (language: {language})"
             }
         ],
-        "extra_body": {
-            "task_type": "asr",
-            "audio_base64": audio_base64,
-            "language": language,
-            "accuracy_mode": accuracy_mode,
-        },
+        "extra_body": extra_body,
     }
 
     # LiteLLM 요청 직전에 콜백 호출하여 "started" 이벤트 발행
@@ -188,6 +290,7 @@ def call_litellm_diarization(
     return_embeddings: bool = False,
     timeout: float = 1800.0,
     resource_timeout: float = 120.0,
+    lock_id: str | None = None,  # V7.5: Worker에서 획득한 GPU 잠금 ID
 ) -> tuple[DiarizationAnnotationWrapper, float, float, dict | None, Any, dict]:
     """LiteLLM chat completion 엔드포인트를 통한 Diarization 요청.
 
@@ -201,6 +304,7 @@ def call_litellm_diarization(
         return_embeddings: 임베딩 반환 여부 (미지원, 호환성 유지)
         timeout: Diarization 요청 타임아웃 (초)
         resource_timeout: (미사용, 호환성 유지)
+        lock_id: Worker에서 획득한 GPU 잠금 ID (V7.5: LiteLLM에서 재획득 스킵)
 
     Returns:
         (diarization, load_time, inference_time, embeddings_dict, pipeline, params)
@@ -230,6 +334,18 @@ def call_litellm_diarization(
         logger.warning(f"[LiteLLM Diarization] Failed to inject trace context: {e}")
 
     # Chat completion 형식으로 Diarization 요청
+    extra_body = {
+        "task_type": "diarization",
+        "audio_base64": audio_base64,
+        "min_speakers": min_speakers,
+        "max_speakers": max_speakers,
+    }
+
+    # V7.5: Worker에서 획득한 lock_id 전달 (LiteLLM에서 재획득 스킵)
+    if lock_id:
+        extra_body["lock_id"] = lock_id
+        logger.info(f"[LiteLLM Diarization] Passing lock_id to LiteLLM: {lock_id[:8]}...")
+
     payload = {
         "model": "diarization",
         "messages": [
@@ -238,12 +354,7 @@ def call_litellm_diarization(
                 "content": f"Diarize this audio (min_speakers={min_speakers}, max_speakers={max_speakers})"
             }
         ],
-        "extra_body": {
-            "task_type": "diarization",
-            "audio_base64": audio_base64,
-            "min_speakers": min_speakers,
-            "max_speakers": max_speakers,
-        },
+        "extra_body": extra_body,
     }
 
     try:

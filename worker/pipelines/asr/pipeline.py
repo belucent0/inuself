@@ -25,6 +25,8 @@ from .litellm_audio_client import (
     call_litellm_diarization,
     ASRProvider,
     DiarizationAnnotationWrapper,
+    acquire_gpu_lock,
+    release_gpu_lock,
 )
 
 
@@ -165,10 +167,20 @@ def _run_case4_parallel_processing(
     # ============================================================
     # 병렬 실행: ASR + Diarization 동시 실행
     # OpenTelemetry context를 명시적으로 복원하여 스레드에 전파
+    # V7.5: Worker측에서 GPU 잠금 획득 후 ASR+Diarization 공유
     # ============================================================
 
     # 현재 OpenTelemetry context 저장 (ThreadPoolExecutor로 전달)
     current_otel_context = otel_context.get_current()
+
+    # V7.5: ASR+Diarization 묶음 잠금 획득 (Worker측에서 한 번만)
+    # 두 작업이 동일한 lock_id를 공유하여 LiteLLM에서 재획득 스킵
+    print(f"\n[Parallel] Acquiring GPU lock for ASR+Diarization bundle...")
+    lock_id = acquire_gpu_lock(timeout=3600, max_wait=3600.0)
+    if lock_id:
+        print(f"[Parallel] GPU lock acquired: {lock_id[:8]}...")
+    else:
+        print(f"[Parallel] Warning: GPU lock failed, proceeding without lock")
 
     def run_asr():
         """ASR 작업 실행 (OpenTelemetry context 복원)."""
@@ -180,6 +192,7 @@ def _run_case4_parallel_processing(
                 accuracy_mode=accuracy_mode,
                 language="ko",
                 on_resource_acquired=on_asr_resource_acquired,
+                lock_id=lock_id,  # V7.5: Worker측 잠금 ID 전달
             )
         finally:
             otel_context.detach(token)
@@ -194,43 +207,53 @@ def _run_case4_parallel_processing(
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
                 return_embeddings=False,
+                lock_id=lock_id,  # V7.5: Worker측 잠금 ID 전달
             )
         finally:
             otel_context.detach(token)
 
     print(f"\n[Parallel] Starting ASR and Diarization simultaneously...")
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        # 두 작업을 동시에 시작 (OpenTelemetry context가 각 스레드에서 복원됨)
-        asr_future = executor.submit(run_asr)
-        diarization_future = executor.submit(run_diarization)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            # 두 작업을 동시에 시작 (OpenTelemetry context가 각 스레드에서 복원됨)
+            asr_future = executor.submit(run_asr)
+            diarization_future = executor.submit(run_diarization)
 
-        # ASR 결과 대기 (필수)
-        try:
-            asr_result, model_load_time, transcribe_time, asr_provider = asr_future.result()
-            print(f"[Parallel] ASR completed: {len(asr_result.get('segments', []))} segments")
-            print(f"[Parallel] ASR Provider: {asr_provider.value}")
-        except Exception as e:
-            print(f"[Pipeline] Error: ASR failed: {e}")
-            raise
+            # ASR 결과 대기 (필수)
+            try:
+                asr_result, model_load_time, transcribe_time, asr_provider = asr_future.result()
+                print(f"[Parallel] ASR completed: {len(asr_result.get('segments', []))} segments")
+                print(f"[Parallel] ASR Provider: {asr_provider.value}")
+            except Exception as e:
+                print(f"[Pipeline] Error: ASR failed: {e}")
+                raise
 
-        # Diarization 결과 대기 (실패해도 계속 진행)
-        try:
-            diarization, diarization_load_time, diarization_time, embeddings_dict, pipeline, diarization_params = diarization_future.result()
-            diarization_segment_count = len(list(diarization.itertracks(yield_label=True)))
-            if diarization_segment_count == 0:
-                print(f"[Pipeline] Warning: Diarization returned 0 segments. Using fallback: SPEAKER_00")
+            # Diarization 결과 대기 (실패해도 계속 진행)
+            try:
+                diarization, diarization_load_time, diarization_time, embeddings_dict, pipeline, diarization_params = diarization_future.result()
+                diarization_segment_count = len(list(diarization.itertracks(yield_label=True)))
+                if diarization_segment_count == 0:
+                    print(f"[Pipeline] Warning: Diarization returned 0 segments. Using fallback: SPEAKER_00")
+                    diarization_fallback_used = True
+                else:
+                    print(f"[Parallel] Diarization completed: {diarization_segment_count} segments")
+            except Exception as e:
+                print(f"[Pipeline] Warning: Diarization failed: {e}")
+                print(f"[Pipeline] Proceeding with ASR only (fallback: SPEAKER_00)")
+                diarization = DiarizationAnnotationWrapper([])
+                diarization_load_time = 0.0
+                diarization_time = 0.0
+                diarization_params = {}
                 diarization_fallback_used = True
+    finally:
+        # V7.5: ASR+Diarization 완료 후 잠금 해제
+        if lock_id:
+            released = release_gpu_lock(lock_id)
+            if released:
+                print(f"[Parallel] GPU lock released: {lock_id[:8]}...")
             else:
-                print(f"[Parallel] Diarization completed: {diarization_segment_count} segments")
-        except Exception as e:
-            print(f"[Pipeline] Warning: Diarization failed: {e}")
-            print(f"[Pipeline] Proceeding with ASR only (fallback: SPEAKER_00)")
-            diarization = DiarizationAnnotationWrapper([])
-            diarization_load_time = 0.0
-            diarization_time = 0.0
-            diarization_params = {}
-            diarization_fallback_used = True
+                print(f"[Parallel] Warning: GPU lock release failed")
 
     execution_time = time.time() - case_start
 

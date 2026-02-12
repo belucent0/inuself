@@ -159,11 +159,168 @@ DEVICE_GROUP_MAP = {
     "llamacpp": "gpu",
     "llamacpp_server": "gpu",
     "llama-server": "gpu",
+    "llama": "gpu",  # V7.6: llama provider 추가
+    "llama-ocr": "gpu",  # V7.6: llama-ocr provider 추가
     "whisper-cpp": "gpu",
     "insanely-fast": "gpu",
     "diarization-server": "gpu",
 }
 
+
+# ==========================================
+# V7.5: Redis 분산 잠금 (SETNX 기반)
+# 경쟁 조건 방지를 위한 원자적 잠금 메커니즘
+# ==========================================
+
+# Lua 스크립트: 원자적 잠금 해제 (본인 lock_id만 삭제)
+RELEASE_LOCK_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
+
+
+async def acquire_device_lock_async(
+    device: str,
+    lock_id: str | None = None,
+    timeout: int = 3600
+) -> str | None:
+    """원자적 디바이스 잠금 획득 (SETNX).
+
+    Args:
+        device: "gpu" 또는 "npu"
+        lock_id: 잠금 식별자 (미지정 시 UUID 생성)
+        timeout: TTL (초, 기본 1시간)
+
+    Returns:
+        성공 시 lock_id, 실패 시 None
+    """
+    if not redis_client_async:
+        logger.warning("[Lock] Redis client not available")
+        return str(uuid.uuid4())  # Redis 없으면 항상 성공 (개발 환경)
+
+    key = f"worker:{device}:active"
+    lock_id = lock_id or str(uuid.uuid4())
+
+    try:
+        # SETNX: 키가 없을 때만 설정 (원자적!)
+        acquired = await redis_client_async.set(
+            key, lock_id, nx=True, ex=timeout
+        )
+        if acquired:
+            logger.info(f"[Lock] {device.upper()} acquired: {key} (lock_id={lock_id[:8]}...)")
+            return lock_id
+        else:
+            logger.debug(f"[Lock] {device.upper()} busy: {key}")
+            return None
+    except Exception as e:
+        logger.error(f"[Lock] Failed to acquire {device}: {e}")
+        return None
+
+
+async def release_device_lock_async(device: str, lock_id: str) -> bool:
+    """디바이스 잠금 해제 (본인 것만).
+
+    Args:
+        device: "gpu" 또는 "npu"
+        lock_id: 획득 시 받은 lock_id
+
+    Returns:
+        해제 성공 여부
+    """
+    if not redis_client_async or not lock_id:
+        return True  # Redis 없거나 lock_id 없으면 성공으로 처리
+
+    key = f"worker:{device}:active"
+
+    try:
+        result = await redis_client_async.eval(
+            RELEASE_LOCK_SCRIPT, 1, key, lock_id
+        )
+        released = result == 1
+        if released:
+            logger.info(f"[Lock] {device.upper()} released: {key}")
+        else:
+            logger.warning(f"[Lock] {device.upper()} release failed (not owner or expired): {key}")
+        return released
+    except Exception as e:
+        logger.error(f"[Lock] Failed to release {device}: {e}")
+        return False
+
+
+def acquire_device_lock_sync(
+    device: str,
+    lock_id: str | None = None,
+    timeout: int = 3600
+) -> str | None:
+    """원자적 디바이스 잠금 획득 (SETNX) - 동기 버전.
+
+    Args:
+        device: "gpu" 또는 "npu"
+        lock_id: 잠금 식별자 (미지정 시 UUID 생성)
+        timeout: TTL (초, 기본 1시간)
+
+    Returns:
+        성공 시 lock_id, 실패 시 None
+    """
+    if not redis_client_sync:
+        logger.warning("[Lock] Redis client not available")
+        return str(uuid.uuid4())  # Redis 없으면 항상 성공 (개발 환경)
+
+    key = f"worker:{device}:active"
+    lock_id = lock_id or str(uuid.uuid4())
+
+    try:
+        # SETNX: 키가 없을 때만 설정 (원자적!)
+        acquired = redis_client_sync.set(
+            key, lock_id, nx=True, ex=timeout
+        )
+        if acquired:
+            logger.info(f"[Lock] {device.upper()} acquired: {key} (lock_id={lock_id[:8]}...)")
+            return lock_id
+        else:
+            logger.debug(f"[Lock] {device.upper()} busy: {key}")
+            return None
+    except Exception as e:
+        logger.error(f"[Lock] Failed to acquire {device}: {e}")
+        return None
+
+
+def release_device_lock_sync(device: str, lock_id: str) -> bool:
+    """디바이스 잠금 해제 (본인 것만) - 동기 버전.
+
+    Args:
+        device: "gpu" 또는 "npu"
+        lock_id: 획득 시 받은 lock_id
+
+    Returns:
+        해제 성공 여부
+    """
+    if not redis_client_sync or not lock_id:
+        return True  # Redis 없거나 lock_id 없으면 성공으로 처리
+
+    key = f"worker:{device}:active"
+
+    try:
+        result = redis_client_sync.eval(
+            RELEASE_LOCK_SCRIPT, 1, key, lock_id
+        )
+        released = result == 1
+        if released:
+            logger.info(f"[Lock] {device.upper()} released: {key}")
+        else:
+            logger.warning(f"[Lock] {device.upper()} release failed (not owner or expired): {key}")
+        return released
+    except Exception as e:
+        logger.error(f"[Lock] Failed to release {device}: {e}")
+        return False
+
+
+# ==========================================
+# Legacy 세마포어 함수 (하위 호환성 - 점진적 제거 예정)
+# ==========================================
 
 async def _set_redis_semaphore_async(provider: str, active: bool):
     """Redis 세마포어 설정/해제 (비동기).
@@ -910,8 +1067,12 @@ async def wait_for_available_provider_async(
     get_provider_config_fn,
     max_wait: float = 3600.0,  # 1시간 (ASR/OCR 긴 작업 대응)
     poll_interval: float = 0.5,
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str, str, str]:
     """둘 다 busy일 때 대기하다가 먼저 available 되는 쪽 반환 (비동기).
+
+    V7.5: SETNX 기반 원자적 잠금으로 경쟁 조건 방지
+    - 체크와 획득을 원자적으로 수행 (SETNX)
+    - lock_id 반환하여 호출자가 release_device_lock_async()로 해제
 
     Args:
         primary: 우선 provider ("npu" 또는 "gpu")
@@ -919,10 +1080,11 @@ async def wait_for_available_provider_async(
         task_type: "chat" 또는 "audio"
         get_provider_config_fn: provider config 반환 함수
         max_wait: 최대 대기 시간 (초, 기본 1시간)
-        poll_interval: 폴링 간격 (초, Redis 세마포어만 체크)
+        poll_interval: 폴링 간격 (초)
 
     Returns:
-        (api_base, model, provider_key, signal_provider)
+        (api_base, model, provider_key, signal_provider, lock_id)
+        - lock_id: 잠금 해제 시 사용할 식별자
 
     Note:
         폴링 루프는 하나의 span으로 추적하되, 내부 Redis 호출은 트레이싱에서 제외 (노이즈 방지)
@@ -965,39 +1127,49 @@ async def _wait_for_available_provider_loop(
     max_wait: float,
     poll_interval: float,
     span=None,
-) -> tuple[str, str, str, str]:
-    """폴링 루프 내부 로직 (트레이싱 제외)."""
+) -> tuple[str, str, str, str, str]:
+    """폴링 루프 내부 로직 - V7.5 SETNX 기반 원자적 잠금.
+
+    기존 is_provider_busy_async() 체크 대신 acquire_device_lock_async()로
+    체크와 획득을 원자적으로 수행합니다.
+    """
     from opentelemetry import trace
 
     while time.time() - start_time < max_wait:
         # 트레이싱 일시 중단 (Redis 호출 트레이스 제외)
         with trace.use_span(trace.INVALID_SPAN):
-            # Primary 체크
-            if not await is_provider_busy_async(primary):
+            # Primary 잠금 시도 (SETNX - 원자적)
+            lock_id = await acquire_device_lock_async(primary)
+            if lock_id:
                 elapsed = time.time() - start_time
                 if span:
                     span.set_attribute("wait_time_seconds", elapsed)
                     span.set_attribute("selected_provider", primary)
-                logger.info(f"[Wait] {primary.upper()} available after {elapsed:.1f}s")
-                return get_provider_config_fn(primary, task_type)
+                logger.info(f"[Wait] {primary.upper()} locked after {elapsed:.1f}s")
+                config = get_provider_config_fn(primary, task_type)
+                return (*config, lock_id)
 
-            # Fallback 체크
-            if not await is_provider_busy_async(fallback):
+            # Fallback 잠금 시도 (SETNX - 원자적)
+            lock_id = await acquire_device_lock_async(fallback)
+            if lock_id:
                 elapsed = time.time() - start_time
                 if span:
                     span.set_attribute("wait_time_seconds", elapsed)
                     span.set_attribute("selected_provider", fallback)
-                logger.info(f"[Wait] {fallback.upper()} available after {elapsed:.1f}s")
-                return get_provider_config_fn(fallback, task_type)
+                logger.info(f"[Wait] {fallback.upper()} locked after {elapsed:.1f}s")
+                config = get_provider_config_fn(fallback, task_type)
+                return (*config, lock_id)
 
         await asyncio.sleep(poll_interval)
 
-    # Timeout → Primary 강제 반환 (retry 기대)
+    # Timeout → Primary 강제 획득 시도 (TTL 만료된 경우 성공 가능)
+    lock_id = await acquire_device_lock_async(primary)
     if span:
         span.set_attribute("timeout", True)
         span.set_attribute("selected_provider", primary)
     logger.warning(f"[Wait] Timeout ({max_wait:.0f}s), forcing {primary.upper()}")
-    return get_provider_config_fn(primary, task_type)
+    config = get_provider_config_fn(primary, task_type)
+    return (*config, lock_id or "")
 
 
 def wait_for_available_provider_sync(
@@ -1007,8 +1179,12 @@ def wait_for_available_provider_sync(
     get_provider_config_fn,
     max_wait: float = 3600.0,  # 1시간 (ASR/OCR 긴 작업 대응)
     poll_interval: float = 0.5,
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str, str, str]:
     """둘 다 busy일 때 대기하다가 먼저 available 되는 쪽 반환 (동기).
+
+    V7.5: SETNX 기반 원자적 잠금으로 경쟁 조건 방지
+    - 체크와 획득을 원자적으로 수행 (SETNX)
+    - lock_id 반환하여 호출자가 release_device_lock_sync()로 해제
 
     Args:
         primary: 우선 provider ("npu" 또는 "gpu")
@@ -1016,10 +1192,11 @@ def wait_for_available_provider_sync(
         task_type: "chat" 또는 "audio"
         get_provider_config_fn: provider config 반환 함수
         max_wait: 최대 대기 시간 (초, 기본 1시간)
-        poll_interval: 폴링 간격 (초, Redis 세마포어만 체크)
+        poll_interval: 폴링 간격 (초)
 
     Returns:
-        (api_base, model, provider_key, signal_provider)
+        (api_base, model, provider_key, signal_provider, lock_id)
+        - lock_id: 잠금 해제 시 사용할 식별자
 
     Note:
         폴링 루프는 하나의 span으로 추적하되, 내부 Redis 호출은 트레이싱에서 제외 (노이즈 방지)
@@ -1062,39 +1239,49 @@ def _wait_for_available_provider_loop_sync(
     max_wait: float,
     poll_interval: float,
     span=None,
-) -> tuple[str, str, str, str]:
-    """폴링 루프 내부 로직 (트레이싱 제외) - 동기 버전."""
+) -> tuple[str, str, str, str, str]:
+    """폴링 루프 내부 로직 - V7.5 SETNX 기반 원자적 잠금 (동기 버전).
+
+    기존 is_provider_busy_sync() 체크 대신 acquire_device_lock_sync()로
+    체크와 획득을 원자적으로 수행합니다.
+    """
     from opentelemetry import trace
 
     while time.time() - start_time < max_wait:
         # 트레이싱 일시 중단 (Redis 호출 트레이스 제외)
         with trace.use_span(trace.INVALID_SPAN):
-            # Primary 체크
-            if not is_provider_busy_sync(primary):
+            # Primary 잠금 시도 (SETNX - 원자적)
+            lock_id = acquire_device_lock_sync(primary)
+            if lock_id:
                 elapsed = time.time() - start_time
                 if span:
                     span.set_attribute("wait_time_seconds", elapsed)
                     span.set_attribute("selected_provider", primary)
-                logger.info(f"[Wait] {primary.upper()} available after {elapsed:.1f}s")
-                return get_provider_config_fn(primary, task_type)
+                logger.info(f"[Wait] {primary.upper()} locked after {elapsed:.1f}s")
+                config = get_provider_config_fn(primary, task_type)
+                return (*config, lock_id)
 
-            # Fallback 체크
-            if not is_provider_busy_sync(fallback):
+            # Fallback 잠금 시도 (SETNX - 원자적)
+            lock_id = acquire_device_lock_sync(fallback)
+            if lock_id:
                 elapsed = time.time() - start_time
                 if span:
                     span.set_attribute("wait_time_seconds", elapsed)
                     span.set_attribute("selected_provider", fallback)
-                logger.info(f"[Wait] {fallback.upper()} available after {elapsed:.1f}s")
-                return get_provider_config_fn(fallback, task_type)
+                logger.info(f"[Wait] {fallback.upper()} locked after {elapsed:.1f}s")
+                config = get_provider_config_fn(fallback, task_type)
+                return (*config, lock_id)
 
         time.sleep(poll_interval)
 
-    # Timeout → Primary 강제 반환 (retry 기대)
+    # Timeout → Primary 강제 획득 시도 (TTL 만료된 경우 성공 가능)
+    lock_id = acquire_device_lock_sync(primary)
     if span:
         span.set_attribute("timeout", True)
         span.set_attribute("selected_provider", primary)
     logger.warning(f"[Wait] Timeout ({max_wait:.0f}s), forcing {primary.upper()}")
-    return get_provider_config_fn(primary, task_type)
+    config = get_provider_config_fn(primary, task_type)
+    return (*config, lock_id or "")
 
 
 async def send_provider_control_signal(provider: str, action: str = "start"):
@@ -1299,12 +1486,15 @@ async def select_provider_async(
     elif queue_on_busy:
         # 둘 다 busy → 대기
         logger.info(f"[CustomRouter] Both busy, waiting for available provider...")
-        api_base, model, key, signal = await wait_for_available_provider_async(
+        api_base, model, key, signal, lock_id = await wait_for_available_provider_async(
             policy_primary, policy_fallback, task_type, get_provider_config
         )
+        # V7.6: lock_id를 호출자에게 전달 (해제하지 않음)
+        # 호출자(acompletion 등)가 작업 완료 후 release_device_lock_async()로 해제
         if not skip_signal:
             await send_provider_control_signal(signal, "start")
-        return api_base, model, key
+        device_group = DEVICE_GROUP_MAP.get(signal, "gpu")
+        return api_base, model, key, device_group, lock_id
     else:
         # 대기 안 함 → Primary 강제 사용
         primary, fallback = policy_primary, policy_fallback
@@ -1692,12 +1882,15 @@ def select_provider_sync(
     elif queue_on_busy:
         # 둘 다 busy → 대기
         logger.info(f"[CustomRouter] Both busy, waiting for available provider...")
-        api_base, model, key, signal = wait_for_available_provider_sync(
+        api_base, model, key, signal, lock_id = wait_for_available_provider_sync(
             policy_primary, policy_fallback, task_type, get_provider_config
         )
+        # V7.6: lock_id를 호출자에게 전달 (해제하지 않음)
+        # 호출자(completion 등)가 작업 완료 후 release_device_lock_sync()로 해제
         if not skip_signal:
             send_provider_control_signal_sync(signal, "start")
-        return api_base, model, key
+        device_group = DEVICE_GROUP_MAP.get(signal, "gpu")
+        return api_base, model, key, device_group, lock_id
     else:
         # 대기 안 함 → Primary 강제 사용
         primary, fallback = policy_primary, policy_fallback
@@ -1859,8 +2052,32 @@ class PrometheusRouter(CustomLLM):
                 asr_model = "whisper-turbo"
                 target_provider = "whisper-cpp"
 
+            device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
+
+            # V7.5: Worker에서 전달받은 lock_id가 있으면 재획득 스킵
+            worker_lock_id = extra_body.get("lock_id")
+            lock_id = None
+            lock_acquired_here = False  # LiteLLM에서 획득했는지 여부
+
+            if worker_lock_id:
+                # Worker에서 이미 잠금 획득함 - 재획득 스킵
+                lock_id = worker_lock_id
+                logger.info(f"[PrometheusRouter V7.5] ASR using Worker lock_id: {lock_id[:8]}... (skip acquisition)")
+            else:
+                # 잠금 직접 획득 (기존 로직)
+                wait_start = time.time()
+                max_wait = 3600.0  # 1시간
+                while time.time() - wait_start < max_wait:
+                    lock_id = acquire_device_lock_sync(device_group)
+                    if lock_id:
+                        lock_acquired_here = True
+                        break
+                    time.sleep(0.5)
+
+                if not lock_id:
+                    logger.warning(f"[PrometheusRouter V7.5] ASR lock timeout after {max_wait}s, proceeding without lock")
+
             increment_active_count_sync(target_provider)
-            _set_redis_semaphore_sync(target_provider, True)
 
             try:
                 gpu_client = get_gpu_stream_client()
@@ -1902,15 +2119,17 @@ class PrometheusRouter(CustomLLM):
                     usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
                 )
             except Exception as e:
-                logger.error(f"[PrometheusRouter V7.4] ASR completion failed: {e}")
+                logger.error(f"[PrometheusRouter V7.5] ASR completion failed: {e}")
                 raise
             finally:
-                _set_redis_semaphore_sync(target_provider, False)
+                # V7.5: LiteLLM에서 획득한 잠금만 해제 (Worker 잠금은 Worker에서 해제)
+                if lock_acquired_here and lock_id:
+                    release_device_lock_sync(device_group, lock_id)
                 decrement_active_count_sync(target_provider)
 
         # V7.4: Diarization 요청 감지 및 처리
         if task_type == "diarization" or model_name == "diarization":
-            logger.info(f"[PrometheusRouter V7.4] Diarization request detected (sync): model={requested_model}")
+            logger.info(f"[PrometheusRouter V7.5] Diarization request detected (sync): model={requested_model}")
 
             # Diarization 파라미터 추출
             audio_base64 = extra_body.get("audio_base64", "")
@@ -1921,9 +2140,32 @@ class PrometheusRouter(CustomLLM):
                 raise ValueError("No audio_base64 provided for Diarization request")
 
             target_provider = "diarization-server"  # pyannote diarization provider
+            device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
+
+            # V7.5: Worker에서 전달받은 lock_id가 있으면 재획득 스킵
+            worker_lock_id = extra_body.get("lock_id")
+            lock_id = None
+            lock_acquired_here = False  # LiteLLM에서 획득했는지 여부
+
+            if worker_lock_id:
+                # Worker에서 이미 잠금 획득함 - 재획득 스킵
+                lock_id = worker_lock_id
+                logger.info(f"[PrometheusRouter V7.5] Diarization using Worker lock_id: {lock_id[:8]}... (skip acquisition)")
+            else:
+                # 잠금 직접 획득 (기존 로직)
+                wait_start = time.time()
+                max_wait = 3600.0  # 1시간
+                while time.time() - wait_start < max_wait:
+                    lock_id = acquire_device_lock_sync(device_group)
+                    if lock_id:
+                        lock_acquired_here = True
+                        break
+                    time.sleep(0.5)
+
+                if not lock_id:
+                    logger.warning(f"[PrometheusRouter V7.5] Diarization lock timeout after {max_wait}s, proceeding without lock")
 
             increment_active_count_sync(target_provider)
-            _set_redis_semaphore_sync(target_provider, True)
 
             try:
                 gpu_client = get_gpu_stream_client()
@@ -1965,10 +2207,12 @@ class PrometheusRouter(CustomLLM):
                     usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
                 )
             except Exception as e:
-                logger.error(f"[PrometheusRouter V7.4] Diarization completion failed: {e}")
+                logger.error(f"[PrometheusRouter V7.5] Diarization completion failed: {e}")
                 raise
             finally:
-                _set_redis_semaphore_sync(target_provider, False)
+                # V7.5: LiteLLM에서 획득한 잠금만 해제 (Worker 잠금은 Worker에서 해제)
+                if lock_acquired_here and lock_id:
+                    release_device_lock_sync(device_group, lock_id)
                 decrement_active_count_sync(target_provider)
 
         # V7.0: OCR 요청 감지 (모델명이 ocr-로 시작하거나 vision 요청)
@@ -2044,14 +2288,44 @@ class PrometheusRouter(CustomLLM):
         # 일반 LLM 요청
         # Tier 정보 추출 (model_name이 tier-로 시작하면 해당 tier 사용)
         tier = model_name if model_name.startswith("tier-") else None
-        # Provider 선택 (신호 없이 - Redis Stream이 처리)
-        api_base, _, provider_key = select_provider_sync(task_type="chat", skip_signal=True, tier=tier)
+        # V7.6: Provider 선택 - 잠금이 이미 획득될 수 있음
+        result = select_provider_sync(task_type="chat", skip_signal=True, tier=tier)
+
+        # V7.6: 반환값이 5개(lock_id 포함)인지 3개인지 확인
+        if len(result) == 5:
+            api_base, _, provider_key, device_group, lock_id = result
+        else:
+            api_base, _, provider_key = result
+            device_group = None
+            lock_id = None
+
         target_provider = "flm" if "npu" in provider_key else "llama"
 
-        # 요청된 모델명 사용 (라우터 prefix 제거)
-        requested_model_name = model_name  # 1478행에서 추출됨
+        # device_group이 없으면 target_provider에서 추론
+        if device_group is None:
+            device_group = DEVICE_GROUP_MAP.get(target_provider, "npu")
 
-        logger.info(f"[PrometheusRouter V7.0] Routing to {target_provider} via Redis Stream, model={requested_model_name}")
+        # 요청된 모델명 사용 (라우터 prefix 제거)
+        requested_model_name = model_name
+
+        logger.info(f"[PrometheusRouter V7.6] Routing to {target_provider} via Redis Stream, model={requested_model_name}, lock_id={lock_id[:8] if lock_id else 'None'}...")
+
+        # V7.6: lock_id가 없으면 직접 획득 시도
+        lock_acquired_here = False
+        if not lock_id:
+            wait_start = time.time()
+            max_wait = 300.0  # 동기 completion은 5분
+            while time.time() - wait_start < max_wait:
+                lock_id = acquire_device_lock_sync(device_group)
+                if lock_id:
+                    lock_acquired_here = True
+                    break
+                time.sleep(0.5)
+
+            if not lock_id:
+                logger.warning(f"[PrometheusRouter V7.6] LLM lock timeout after {max_wait}s, proceeding without lock")
+        else:
+            logger.info(f"[PrometheusRouter V7.6] Using lock from select_provider: {lock_id[:8]}...")
 
         # 활성 요청 카운트 증가
         increment_active_count_sync(target_provider)
@@ -2064,8 +2338,8 @@ class PrometheusRouter(CustomLLM):
                 model=requested_model_name,
                 max_tokens=optional_params.get("max_tokens", 4096),
                 temperature=optional_params.get("temperature", 0.7),
-                target_server=target_server,
-                timeout=120.0,
+                target_server=target_provider,
+                timeout=300.0,
             )
 
             return ModelResponse(
@@ -2086,9 +2360,12 @@ class PrometheusRouter(CustomLLM):
                 usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
             )
         except Exception as e:
-            logger.error(f"[PrometheusRouter V7.0] LLM completion failed: {e}")
+            logger.error(f"[PrometheusRouter V7.6] LLM completion failed: {e}")
             raise
         finally:
+            # V7.6: 잠금 해제 (select_provider에서 받은 것이든 직접 획득한 것이든)
+            if lock_id:
+                release_device_lock_sync(device_group, lock_id)
             decrement_active_count_sync(target_provider)
 
     async def acompletion(self, *args, **kwargs) -> ModelResponse:
@@ -2113,7 +2390,7 @@ class PrometheusRouter(CustomLLM):
 
         # V7.4: ASR 요청 감지 및 처리
         if task_type == "asr" or model_name.startswith("asr-"):
-            logger.info(f"[PrometheusRouter V7.4] ASR request detected: model={requested_model} (extracted: {model_name})")
+            logger.info(f"[PrometheusRouter V7.5] ASR request detected: model={requested_model} (extracted: {model_name})")
 
             # ASR 파라미터 추출
             audio_base64 = extra_body.get("audio_base64", "")
@@ -2131,8 +2408,32 @@ class PrometheusRouter(CustomLLM):
                 asr_model = "whisper-turbo"
                 target_provider = "whisper-cpp"
 
+            device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
+
+            # V7.5: Worker에서 전달받은 lock_id가 있으면 재획득 스킵
+            worker_lock_id = extra_body.get("lock_id")
+            lock_id = None
+            lock_acquired_here = False  # LiteLLM에서 획득했는지 여부
+
+            if worker_lock_id:
+                # Worker에서 이미 잠금 획득함 - 재획득 스킵
+                lock_id = worker_lock_id
+                logger.info(f"[PrometheusRouter V7.5] ASR using Worker lock_id: {lock_id[:8]}... (skip acquisition)")
+            else:
+                # 잠금 직접 획득 (기존 로직)
+                wait_start = time.time()
+                max_wait = 3600.0  # 1시간
+                while time.time() - wait_start < max_wait:
+                    lock_id = await acquire_device_lock_async(device_group)
+                    if lock_id:
+                        lock_acquired_here = True
+                        break
+                    await asyncio.sleep(0.5)
+
+                if not lock_id:
+                    logger.warning(f"[PrometheusRouter V7.5] ASR lock timeout after {max_wait}s, proceeding without lock")
+
             await increment_active_count(target_provider)
-            await _set_redis_semaphore_async(target_provider, True)
 
             try:
                 gpu_client = get_async_gpu_stream_client()
@@ -2174,15 +2475,17 @@ class PrometheusRouter(CustomLLM):
                     usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
                 )
             except Exception as e:
-                logger.error(f"[PrometheusRouter V7.4] ASR acompletion failed: {e}")
+                logger.error(f"[PrometheusRouter V7.5] ASR acompletion failed: {e}")
                 raise
             finally:
-                await _set_redis_semaphore_async(target_provider, False)
+                # V7.5: LiteLLM에서 획득한 잠금만 해제 (Worker 잠금은 Worker에서 해제)
+                if lock_acquired_here and lock_id:
+                    await release_device_lock_async(device_group, lock_id)
                 await decrement_active_count(target_provider)
 
         # V7.4: Diarization 요청 감지 및 처리
         if task_type == "diarization" or model_name == "diarization":
-            logger.info(f"[PrometheusRouter V7.4] Diarization request detected: model={requested_model}")
+            logger.info(f"[PrometheusRouter V7.5] Diarization request detected: model={requested_model}")
 
             # Diarization 파라미터 추출
             audio_base64 = extra_body.get("audio_base64", "")
@@ -2193,9 +2496,32 @@ class PrometheusRouter(CustomLLM):
                 raise ValueError("No audio_base64 provided for Diarization request")
 
             target_provider = "diarization-server"  # pyannote diarization provider
+            device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
+
+            # V7.5: Worker에서 전달받은 lock_id가 있으면 재획득 스킵
+            worker_lock_id = extra_body.get("lock_id")
+            lock_id = None
+            lock_acquired_here = False  # LiteLLM에서 획득했는지 여부
+
+            if worker_lock_id:
+                # Worker에서 이미 잠금 획득함 - 재획득 스킵
+                lock_id = worker_lock_id
+                logger.info(f"[PrometheusRouter V7.5] Diarization using Worker lock_id: {lock_id[:8]}... (skip acquisition)")
+            else:
+                # 잠금 직접 획득 (기존 로직)
+                wait_start = time.time()
+                max_wait = 3600.0  # 1시간
+                while time.time() - wait_start < max_wait:
+                    lock_id = await acquire_device_lock_async(device_group)
+                    if lock_id:
+                        lock_acquired_here = True
+                        break
+                    await asyncio.sleep(0.5)
+
+                if not lock_id:
+                    logger.warning(f"[PrometheusRouter V7.5] Diarization lock timeout after {max_wait}s, proceeding without lock")
 
             await increment_active_count(target_provider)
-            await _set_redis_semaphore_async(target_provider, True)
 
             try:
                 gpu_client = get_async_gpu_stream_client()
@@ -2237,10 +2563,12 @@ class PrometheusRouter(CustomLLM):
                     usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
                 )
             except Exception as e:
-                logger.error(f"[PrometheusRouter V7.4] Diarization acompletion failed: {e}")
+                logger.error(f"[PrometheusRouter V7.5] Diarization acompletion failed: {e}")
                 raise
             finally:
-                await _set_redis_semaphore_async(target_provider, False)
+                # V7.5: LiteLLM에서 획득한 잠금만 해제 (Worker 잠금은 Worker에서 해제)
+                if lock_acquired_here and lock_id:
+                    await release_device_lock_async(device_group, lock_id)
                 await decrement_active_count(target_provider)
 
         # V7.0: OCR 요청 감지 (모델명이 ocr-로 시작하거나 vision 요청)
@@ -2248,7 +2576,7 @@ class PrometheusRouter(CustomLLM):
         is_vision, image_base64, text_prompt = self._is_vision_request(messages)
 
         if is_ocr_model or is_vision:
-            logger.info(f"[PrometheusRouter V7.0] OCR/Vision request detected (async): model={requested_model} (extracted: {model_name})")
+            logger.info(f"[PrometheusRouter V7.5] OCR/Vision request detected (async): model={requested_model} (extracted: {model_name})")
 
             # accuracy_mode 추출 (extra_body에서)
             extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
@@ -2262,10 +2590,22 @@ class PrometheusRouter(CustomLLM):
                 ocr_model = "qwen3-vl-8b"  # GPU llama-ocr-server
                 target_provider = "llama-ocr"
 
-            await increment_active_count(target_provider)
+            device_group = DEVICE_GROUP_MAP.get(target_provider, "npu")
 
-            # V7.0: Redis 세마포어 획득
-            await _set_redis_semaphore_async(target_provider, True)
+            # V7.5: SETNX 기반 원자적 잠금 - 대기 루프
+            lock_id = None
+            wait_start = time.time()
+            max_wait = 300.0  # OCR은 5분
+            while time.time() - wait_start < max_wait:
+                lock_id = await acquire_device_lock_async(device_group)
+                if lock_id:
+                    break
+                await asyncio.sleep(0.5)
+
+            if not lock_id:
+                logger.warning(f"[PrometheusRouter V7.5] OCR lock timeout after {max_wait}s, proceeding without lock")
+
+            await increment_active_count(target_provider)
 
             try:
                 gpu_client = get_async_gpu_stream_client()
@@ -2307,30 +2647,60 @@ class PrometheusRouter(CustomLLM):
                 else:
                     raise ValueError("No image data provided for OCR request")
             except Exception as e:
-                logger.error(f"[PrometheusRouter V7.0] OCR acompletion failed: {e}")
+                logger.error(f"[PrometheusRouter V7.5] OCR acompletion failed: {e}")
                 raise
             finally:
-                # V7.0: Redis 세마포어 해제
-                await _set_redis_semaphore_async(target_provider, False)
+                # V7.5: SETNX 기반 잠금 해제
+                if lock_id:
+                    await release_device_lock_async(device_group, lock_id)
                 await decrement_active_count(target_provider)
 
         # 일반 LLM 요청
         # Tier 정보 추출 (model_name이 tier-로 시작하면 해당 tier 사용)
         tier = model_name if model_name.startswith("tier-") else None
-        # Provider 선택 (신호 없이 - Redis Stream이 처리)
-        api_base, _, provider_key = await select_provider_async(task_type="chat", skip_signal=True, tier=tier)
+        # V7.6: Provider 선택 - 잠금이 이미 획득될 수 있음
+        result = await select_provider_async(task_type="chat", skip_signal=True, tier=tier)
+
+        # V7.6: 반환값이 5개(lock_id 포함)인지 3개인지 확인
+        if len(result) == 5:
+            api_base, _, provider_key, device_group, lock_id = result
+        else:
+            api_base, _, provider_key = result
+            device_group = None
+            lock_id = None
+
         target_provider = "flm" if "npu" in provider_key else "llama"
+
+        # device_group이 없으면 target_provider에서 추론
+        if device_group is None:
+            device_group = DEVICE_GROUP_MAP.get(target_provider, "npu")
 
         # 요청된 모델명 사용 (라우터 prefix 제거)
         requested_model_name = model_name  # 1607행에서 추출됨
 
-        logger.info(f"[PrometheusRouter V7.0] Routing to {target_provider} via Redis Stream, model={requested_model_name}, tier={tier}")
+        logger.info(f"[PrometheusRouter V7.6] Routing to {target_provider} via Redis Stream, model={requested_model_name}, tier={tier}, lock_id={lock_id[:8] if lock_id else 'None'}...")
+
+        # V7.6: lock_id가 없으면 직접 획득 시도
+        lock_acquired_here = False
+        if not lock_id:
+            logger.info(f"[PrometheusRouter V7.6] Attempting to acquire {device_group.upper()} lock...")
+            wait_start = time.time()
+            max_wait = 600.0  # LLM은 10분
+            while time.time() - wait_start < max_wait:
+                lock_id = await acquire_device_lock_async(device_group)
+                if lock_id:
+                    lock_acquired_here = True
+                    logger.info(f"[PrometheusRouter V7.6] {device_group.upper()} lock acquired: {lock_id[:8]}...")
+                    break
+                await asyncio.sleep(0.5)
+
+            if not lock_id:
+                logger.warning(f"[PrometheusRouter V7.6] LLM lock timeout after {max_wait}s, proceeding without lock")
+        else:
+            logger.info(f"[PrometheusRouter V7.6] Using lock from select_provider: {lock_id[:8]}...")
 
         # 활성 요청 카운트 증가
         await increment_active_count(target_provider)
-
-        # V7.0: Redis 세마포어 획득
-        await _set_redis_semaphore_async(target_provider, True)
 
         try:
             # Redis Stream을 통한 LLM 요청 (비동기)
@@ -2362,11 +2732,12 @@ class PrometheusRouter(CustomLLM):
                 usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
             )
         except Exception as e:
-            logger.error(f"[PrometheusRouter V7.0] acompletion failed: {e}")
+            logger.error(f"[PrometheusRouter V7.6] acompletion failed: {e}")
             raise
         finally:
-            # V7.0: Redis 세마포어 해제
-            await _set_redis_semaphore_async(target_provider, False)
+            # V7.6: 잠금 해제 (select_provider에서 받은 것이든 직접 획득한 것이든)
+            if lock_id:
+                await release_device_lock_async(device_group, lock_id)
             await decrement_active_count(target_provider)
 
     async def astreaming(self, *args, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
@@ -2397,20 +2768,49 @@ class PrometheusRouter(CustomLLM):
         # Tier 정보 추출 (model_name이 tier-로 시작하면 해당 tier 사용)
         tier = raw_model_name if raw_model_name.startswith("tier-") else None
 
-        # Provider 선택 (신호 없이 - Redis Stream이 처리, tier별 정책 적용)
-        api_base, _, provider_key = await select_provider_async(task_type="chat", skip_signal=True, tier=tier)
+        # V7.6: Provider 선택 - 잠금이 이미 획득될 수 있음
+        result = await select_provider_async(task_type="chat", skip_signal=True, tier=tier)
+
+        # V7.6: 반환값이 5개(lock_id 포함)인지 3개인지 확인
+        if len(result) == 5:
+            api_base, _, provider_key, device_group, lock_id = result
+        else:
+            api_base, _, provider_key = result
+            device_group = None
+            lock_id = None
+
         target_provider = "flm" if "npu" in provider_key else "llama"
+
+        # device_group이 없으면 target_provider에서 추론
+        if device_group is None:
+            device_group = DEVICE_GROUP_MAP.get(target_provider, "npu")
 
         # V8.0: Tier-based routing - 티어명을 실제 모델명으로 변환
         requested_model_name = resolve_tier_to_model(raw_model_name)
 
         selection_latency = time.time() - start_ts
-        logger.debug(f"{get_log_prefix()} [PrometheusRouter V8.0] Provider: {target_provider}, model={requested_model_name}, tier={tier} (Latency: {selection_latency:.3f}s)")
+        logger.debug(f"{get_log_prefix()} [PrometheusRouter V8.0] Provider: {target_provider}, model={requested_model_name}, tier={tier}, lock_id={lock_id[:8] if lock_id else 'None'}... (Latency: {selection_latency:.3f}s)")
+
+        # V7.6: lock_id가 없으면 직접 획득 시도
+        lock_acquired_here = False
+        if not lock_id:
+            logger.info(f"{get_log_prefix()} [PrometheusRouter V7.6] Streaming: Attempting to acquire {device_group.upper()} lock...")
+            wait_start = time.time()
+            max_wait = 600.0  # 스트리밍은 10분
+            while time.time() - wait_start < max_wait:
+                lock_id = await acquire_device_lock_async(device_group)
+                if lock_id:
+                    lock_acquired_here = True
+                    logger.info(f"{get_log_prefix()} [PrometheusRouter V7.6] Streaming: {device_group.upper()} lock acquired: {lock_id[:8]}...")
+                    break
+                await asyncio.sleep(0.5)
+
+            if not lock_id:
+                logger.warning(f"{get_log_prefix()} [PrometheusRouter V7.6] Streaming lock timeout after {max_wait}s, proceeding without lock")
+        else:
+            logger.info(f"{get_log_prefix()} [PrometheusRouter V7.6] Streaming using lock from select_provider: {lock_id[:8]}...")
 
         await increment_active_count(target_provider)
-
-        # V7.0: Redis 세마포어 획득
-        await _set_redis_semaphore_async(target_provider, True)
 
         try:
             # Redis Stream을 통한 LLM 요청 (비동기, Real-time streaming)
@@ -2426,11 +2826,11 @@ class PrometheusRouter(CustomLLM):
             )
 
             ttfb_received = False
-            
+
             async for chunk_data in stream_gen:
                 if not ttfb_received:
                     ttfb_latency = time.time() - start_ts
-                    logger.info(f"{get_log_prefix()} [PrometheusRouter V7.4] First chunk received (TTFB: {ttfb_latency:.3f}s)")
+                    logger.info(f"{get_log_prefix()} [PrometheusRouter V7.5] First chunk received (TTFB: {ttfb_latency:.3f}s)")
                     ttfb_received = True
 
                 if "chunk" in chunk_data:
@@ -2440,7 +2840,7 @@ class PrometheusRouter(CustomLLM):
                         finish_reason=None,
                         usage=None,
                     )
-                
+
                 if "result" in chunk_data:
                     # Final result (usage, finish_reason)
                     result = chunk_data["result"]
@@ -2452,15 +2852,16 @@ class PrometheusRouter(CustomLLM):
                     )
 
             total_duration = time.time() - start_ts
-            logger.info(f"{get_log_prefix()} [PrometheusRouter V7.4] Request END: {model} (Total: {total_duration:.3f}s)")
+            logger.info(f"{get_log_prefix()} [PrometheusRouter V7.5] Request END: {model} (Total: {total_duration:.3f}s)")
 
         except Exception as e:
             total_duration = time.time() - start_ts
-            logger.error(f"{get_log_prefix()} [PrometheusRouter V7.4] Request FAILED: {model} (Total: {total_duration:.3f}s, Error: {e})")
+            logger.error(f"{get_log_prefix()} [PrometheusRouter V7.6] Request FAILED: {model} (Total: {total_duration:.3f}s, Error: {e})")
             raise
         finally:
-            # V7.0: Redis 세마포어 해제
-            await _set_redis_semaphore_async(target_provider, False)
+            # V7.6: 잠금 해제 (select_provider에서 받은 것이든 직접 획득한 것이든)
+            if lock_id:
+                await release_device_lock_async(device_group, lock_id)
             await decrement_active_count(target_provider)
 
     async def transcription(self, *args, **kwargs) -> ModelResponse:
@@ -2508,13 +2909,26 @@ class PrometheusRouter(CustomLLM):
 
             # 0. Diarization 라우팅 (model="pyannote")
             if requested_model.endswith("pyannote"):
-                logger.info(f"[PrometheusRouter V7.0] Routing to Diarization via Redis Stream: model={requested_model}")
+                logger.info(f"[PrometheusRouter V7.5] Routing to Diarization via Redis Stream: model={requested_model}")
+
+                target_provider = "diarization-server"
+                device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
+
+                # V7.5: SETNX 기반 원자적 잠금 - 대기 루프
+                lock_id = None
+                wait_start = time.time()
+                max_wait = 3600.0  # 1시간
+                while time.time() - wait_start < max_wait:
+                    lock_id = await acquire_device_lock_async(device_group)
+                    if lock_id:
+                        break
+                    await asyncio.sleep(0.5)
+
+                if not lock_id:
+                    logger.warning(f"[PrometheusRouter V7.5] Transcription Diarization lock timeout after {max_wait}s, proceeding without lock")
 
                 # 활성 카운트 증가 (모니터링용)
-                await increment_active_count("diarization-server")
-
-                # V7.0: Redis 세마포어 획득
-                await _set_redis_semaphore_async("diarization-server", True)
+                await increment_active_count(target_provider)
 
                 try:
                     # Redis Stream을 통한 Diarization 요청
@@ -2528,15 +2942,16 @@ class PrometheusRouter(CustomLLM):
                         timeout=1800.0,
                     )
 
-                    logger.info(f"[PrometheusRouter V7.0] Diarization completed via Redis Stream")
+                    logger.info(f"[PrometheusRouter V7.5] Diarization completed via Redis Stream")
                     return result
                 except Exception as e:
-                    logger.error(f"[PrometheusRouter V7.0] Diarization Error: {e}")
+                    logger.error(f"[PrometheusRouter V7.5] Diarization Error: {e}")
                     raise e
                 finally:
-                    # V7.0: Redis 세마포어 해제
-                    await _set_redis_semaphore_async("diarization-server", False)
-                    await decrement_active_count("diarization-server")
+                    # V7.5: SETNX 기반 잠금 해제
+                    if lock_id:
+                        await release_device_lock_async(device_group, lock_id)
+                    await decrement_active_count(target_provider)
 
             # 모드 판별 (라우터 prefix 제거)
             model_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
@@ -2548,31 +2963,43 @@ class PrometheusRouter(CustomLLM):
             if is_accuracy_mode:
                 target_model = "whisper-large-v3"
                 target_provider = "insanely-fast"
-                logger.info(f"[PrometheusRouter V6.6] Model '{requested_model}' -> GPU Accuracy (Insanely-Fast)")
+                logger.info(f"[PrometheusRouter V7.5] Model '{requested_model}' -> GPU Accuracy (Insanely-Fast)")
             elif is_turbo_mode:
                 target_model = "whisper-turbo"
                 target_provider = "whisper-cpp"
-                logger.info(f"[PrometheusRouter V6.6] Model '{requested_model}' -> GPU Speed (Whisper.cpp)")
+                logger.info(f"[PrometheusRouter V7.5] Model '{requested_model}' -> GPU Speed (Whisper.cpp)")
             elif is_speed_mode:
                 target_model = "flm-audio"
                 target_provider = "flm"
-                logger.info(f"[PrometheusRouter V6.6] Model '{requested_model}' -> NPU Speed (FLM)")
+                logger.info(f"[PrometheusRouter V7.5] Model '{requested_model}' -> NPU Speed (FLM)")
             else:
                 target_model = "whisper-large-v3"
                 target_provider = "insanely-fast"
-                logger.info(f"[PrometheusRouter V6.6] Model '{requested_model}' -> Default: GPU Accuracy")
+                logger.info(f"[PrometheusRouter V7.5] Model '{requested_model}' -> Default: GPU Accuracy")
+
+            device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
+
+            # V7.5: SETNX 기반 원자적 잠금 - 대기 루프
+            lock_id = None
+            wait_start = time.time()
+            max_wait = 3600.0  # 1시간
+            while time.time() - wait_start < max_wait:
+                lock_id = await acquire_device_lock_async(device_group)
+                if lock_id:
+                    break
+                await asyncio.sleep(0.5)
+
+            if not lock_id:
+                logger.warning(f"[PrometheusRouter V7.5] Transcription lock timeout after {max_wait}s, proceeding without lock")
 
             # 활성 카운트 증가
             await increment_active_count(target_provider)
-
-            # V7.0: Redis 세마포어 획득
-            await _set_redis_semaphore_async(target_provider, True)
 
             try:
                 # Redis Stream을 통한 Transcription 요청
                 language = data.get("language", "ko")
 
-                logger.info(f"[PrometheusRouter V7.0] Sending transcription via Redis Stream: model={target_model}")
+                logger.info(f"[PrometheusRouter V7.5] Sending transcription via Redis Stream: model={target_model}")
                 result = await gpu_client.request_transcription(
                     audio_file_path=temp_file,
                     model=target_model,
@@ -2580,7 +3007,7 @@ class PrometheusRouter(CustomLLM):
                     timeout=1800.0,
                 )
 
-                logger.info(f"[PrometheusRouter V7.0] Transcription completed")
+                logger.info(f"[PrometheusRouter V7.5] Transcription completed")
 
                 return ModelResponse(
                     id=result.get("id", f"transcribe-{uuid.uuid4()}"),
@@ -2599,17 +3026,26 @@ class PrometheusRouter(CustomLLM):
             except Exception as e:
                 # Fallback 로직 (Speed 모드에서 NPU 실패 시 -> GPU Whisper.cpp)
                 if is_speed_mode:
-                    logger.warning(f"[PrometheusRouter V7.0] NPU failed: {e}. Trying Fallback to whisper-cpp...")
+                    logger.warning(f"[PrometheusRouter V7.5] NPU failed: {e}. Trying Fallback to whisper-cpp...")
 
-                    # V7.0: NPU 세마포어 해제
-                    await _set_redis_semaphore_async("flm", False)
+                    # V7.5: NPU 잠금 해제
+                    if lock_id:
+                        await release_device_lock_async(device_group, lock_id)
                     await decrement_active_count("flm")
 
                     target_provider = "whisper-cpp"
-                    await increment_active_count(target_provider)
+                    fallback_device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
 
-                    # V7.0: GPU 세마포어 획득
-                    await _set_redis_semaphore_async(target_provider, True)
+                    # V7.5: GPU 잠금 획득 (Fallback)
+                    fallback_lock_id = None
+                    wait_start = time.time()
+                    while time.time() - wait_start < max_wait:
+                        fallback_lock_id = await acquire_device_lock_async(fallback_device_group)
+                        if fallback_lock_id:
+                            break
+                        await asyncio.sleep(0.5)
+
+                    await increment_active_count(target_provider)
 
                     try:
                         result = await gpu_client.request_transcription(
@@ -2633,15 +3069,22 @@ class PrometheusRouter(CustomLLM):
                             ],
                         )
                     except Exception as fallback_error:
-                        logger.error(f"[PrometheusRouter V7.0] Fallback failed: {fallback_error}")
+                        logger.error(f"[PrometheusRouter V7.5] Fallback failed: {fallback_error}")
                         raise fallback_error
+                    finally:
+                        # Fallback 잠금 해제
+                        if fallback_lock_id:
+                            await release_device_lock_async(fallback_device_group, fallback_lock_id)
+                        await decrement_active_count(target_provider)
                 else:
-                    logger.error(f"[PrometheusRouter V7.0] Transcription failed: {e}")
+                    logger.error(f"[PrometheusRouter V7.5] Transcription failed: {e}")
                     raise e
             finally:
-                # V7.0: Redis 세마포어 해제
-                await _set_redis_semaphore_async(target_provider, False)
-                await decrement_active_count(target_provider)
+                # V7.5: 잠금 해제 (Fallback이 아닌 경우에만)
+                if not is_speed_mode or 'fallback_lock_id' not in dir():
+                    if lock_id:
+                        await release_device_lock_async(device_group, lock_id)
+                    await decrement_active_count(target_provider)
 
         finally:
             # 임시 파일 정리

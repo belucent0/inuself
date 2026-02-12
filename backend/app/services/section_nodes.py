@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..core.config import Settings
 from ..core.logging import logger
 from ..prompts.summary import SECTION_GENERATION_TEMPLATE, SUMMARY_SYSTEM_PROMPT
-from .litellm_client import request_litellm_completion
+from .litellm_client import request_litellm_completion_async
 from .section_state import SectionGenerationState
 
 
@@ -119,10 +119,10 @@ def initialize_node(state: SectionGenerationState) -> SectionGenerationState:
     }
 
 
-def create_section_node(
+async def create_section_node(
     state: SectionGenerationState, settings: Settings
 ) -> SectionGenerationState:
-    """현재 주제(current_topic)에 대한 섹션을 생성하는 노드.
+    """현재 주제(current_topic)에 대한 섹션을 생성하는 노드 (비동기).
 
     Args:
         state: 현재 상태
@@ -174,8 +174,8 @@ def create_section_node(
             update={"llm_model": settings.litellm_model_summarize}
         )
 
-        # LLM 호출
-        response = request_litellm_completion(
+        # LLM 호출 (비동기)
+        response = await request_litellm_completion_async(
             settings=recap_settings,
             messages=messages,
         )
@@ -330,10 +330,10 @@ def validate_and_route(state: SectionGenerationState) -> str:
         return "fallback"
 
 
-def fallback_section_node(
+async def fallback_section_node(
     state: SectionGenerationState, settings: Settings
 ) -> SectionGenerationState:
-    """실패한 주제를 유사 주제로 대체 생성하는 노드.
+    """실패한 주제를 유사 주제로 대체 생성하는 노드 (비동기).
 
     Args:
         state: 현재 상태
@@ -373,7 +373,7 @@ def fallback_section_node(
             update={"llm_model": settings.litellm_model_summarize}
         )
 
-        response = request_litellm_completion(
+        response = await request_litellm_completion_async(
             settings=recap_settings,
             messages=messages,
         )

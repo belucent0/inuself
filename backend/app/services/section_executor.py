@@ -18,7 +18,7 @@ from ..core.config import Settings, get_settings
 from ..core.logging import logger
 from .section_state import create_initial_state, SectionGenerationState
 from .section_graph import get_section_graph
-from .litellm_client import request_litellm_completion
+from .litellm_client import request_litellm_completion, request_litellm_completion_async
 from ..prompts.summary import (
     PHASE1_STRUCTURE_TEMPLATE_V2,
     PHASE2_SUMMARY_TEMPLATE,
@@ -179,7 +179,7 @@ class SectionGraphExecutor:
                     update={"llm_model": self.settings.litellm_model_summarize}
                 )
 
-                response = request_litellm_completion(
+                response = await request_litellm_completion_async(
                     settings=recap_settings,
                     messages=messages,
                 )
