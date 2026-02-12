@@ -1,5 +1,9 @@
 /**
  * HomePage - 랜딩 페이지 (/)
+ *
+ * v1.0.0: 확인 후 라우팅
+ * - POST /api/threads/v2로 스레드+메시지 먼저 생성
+ * - 응답 받은 후 /chat/{thread_id}?messageId={message_id} 로 이동
  */
 
 import { useState } from 'react'
@@ -8,6 +12,8 @@ import { Sparkles, ArrowRight } from 'lucide-react'
 import { Button } from '@/shared/components/ui/button'
 import { ChatInput, type AIMode, AI_MODE_CONFIG } from '@/features/chat'
 import { cn } from '@/shared/utils/cn'
+import { toast } from 'sonner'
+import { useChatStore } from '@/shared/stores/chatStore'
 
 const suggestedQueries = [
   { text: '최근 AI 기술 트렌드는?', mode: 'search' as AIMode },
@@ -19,16 +25,46 @@ export function HomePage() {
   const navigate = useNavigate()
   const [input, setInput] = useState('')
   const [mode, setMode] = useState<AIMode>('search')
-  const [isLoading] = useState(false)
+  const [isNavigating, setIsNavigating] = useState(false)
 
   const handleSendMessage = async (text: string) => {
-    if (!text.trim() || isLoading) return
+    if (!text.trim() || isNavigating) return
 
-    // V10: 낙관적 라우팅 - 즉시 ChatPage로 이동
-    // 스트림 시작/취소/재연결 복잡성 제거
-    // ChatPage에서 직접 스레드 생성 + 스트리밍 처리
-    const query = encodeURIComponent(text)
-    navigate(`/chat/new?query=${query}&mode=${mode}`)
+    // 즉시 비활성화 (더블클릭/연속 엔터 방지)
+    setIsNavigating(true)
+
+    try {
+      // v1.0.0: POST로 스레드+메시지 먼저 생성
+      const response = await fetch('/api/threads/v2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: text, mode }),
+      })
+
+      if (!response.ok) {
+        throw new Error('스레드 생성 실패')
+      }
+
+      const { thread_id, message_id } = await response.json()
+
+      // v1.0.0: 사용자 메시지를 store에 미리 설정
+      // ChatPage로 이동 전에 사용자 메시지를 표시하기 위함
+      useChatStore.getState().switchThread(thread_id, [{
+        message_id,
+        role: 'user',
+        content: text,
+        timestamp: Date.now(),
+        status: 'completed',
+        metadata: { mode },
+      }])
+
+      // 응답 받은 후 라우팅 (안정적인 URL)
+      navigate(`/chat/${thread_id}?messageId=${message_id}`)
+    } catch (err) {
+      console.error('[HomePage] Failed to create thread:', err)
+      toast.error('대화 생성에 실패했습니다')
+      setIsNavigating(false)
+    }
   }
 
   const handleSuggestedQuery = (query: string, queryMode: AIMode) => {
@@ -58,7 +94,7 @@ export function HomePage() {
           input={input}
           onInputChange={setInput}
           onSendMessage={handleSendMessage}
-          isLoading={isLoading}
+          isLoading={isNavigating}
           mode={mode}
           onModeChange={setMode}
           showModeDescription
@@ -77,7 +113,7 @@ export function HomePage() {
               'border-transparent hover:border-primary/20'
             )}
             onClick={() => handleSuggestedQuery(query.text, query.mode)}
-            disabled={isLoading}
+            disabled={isNavigating}
           >
             <span className={cn('text-sm', AI_MODE_CONFIG[query.mode].color)}>
               {query.text}
