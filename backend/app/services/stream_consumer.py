@@ -459,12 +459,15 @@ class StreamConsumer:
                     await session.commit()
                     progress.completed_empty("처리 완료 (음성/텍스트가 감지되지 않았습니다)")
 
-                # ASR 활성 작업 해제
-                task_queue = get_task_queue()
-                task_queue.clear_active_job("asr", file_id)
+            # ASR 활성 작업 해제
+            task_queue = get_task_queue()
+            task_queue.clear_active_job("asr", file_id)
 
-            elif event == "failed":
-                error = message.get("error", "Unknown error")
+        elif event == "failed":
+            error = message.get("error", "Unknown error")
+
+            async with AsyncSessionLocal() as session:
+                file_repo = FileRepository(session)
 
                 await file_repo.update_file_status(file_id, FileStatus.ASR_FAILED)
                 await file_repo.add_log(
@@ -474,11 +477,11 @@ class StreamConsumer:
                 )
                 await session.commit()
 
-                logger.error(f"ASR failed: file_id={file_id}, error={error}")
-                progress.asr_failed(error)
+            logger.error(f"ASR failed: file_id={file_id}, error={error}")
+            progress.asr_failed(error)
 
-                task_queue = get_task_queue()
-                task_queue.clear_active_job("asr", file_id)
+            task_queue = get_task_queue()
+            task_queue.clear_active_job("asr", file_id)
 
     async def _handle_llm_result(self, message: dict[str, Any]) -> None:
         """LLM 결과를 처리합니다."""
@@ -712,11 +715,14 @@ class StreamConsumer:
                     await session.commit()
                     progress.completed_empty("처리 완료 (문서에서 텍스트가 감지되지 않았습니다)")
 
-                task_queue = get_task_queue()
-                task_queue.clear_active_job("ocr", file_id)
+            task_queue = get_task_queue()
+            task_queue.clear_active_job("ocr", file_id)
 
-            elif event == "failed":
-                error = message.get("error", "Unknown error")
+        elif event == "failed":
+            error = message.get("error", "Unknown error")
+
+            async with AsyncSessionLocal() as session:
+                file_repo = FileRepository(session)
 
                 await file_repo.update_file_status(file_id, FileStatus.OCR_FAILED)
                 await file_repo.add_log(
@@ -726,18 +732,18 @@ class StreamConsumer:
                 )
                 await session.commit()
 
-                logger.error(f"OCR failed: file_id={file_id}, error={error}")
-                progress.ocr_failed(error)
+            logger.error(f"OCR failed: file_id={file_id}, error={error}")
+            progress.ocr_failed(error)
 
-                task_queue = get_task_queue()
-                task_queue.clear_active_job("ocr", file_id)
+            task_queue = get_task_queue()
+            task_queue.clear_active_job("ocr", file_id)
 
-                try:
-                    await self._delete_temp_ocr_images(file_id)
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to delete temp OCR images: file_id={file_id}, error={e}"
-                    )
+            try:
+                await self._delete_temp_ocr_images(file_id)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to delete temp OCR images: file_id={file_id}, error={e}"
+                )
 
 
 # 싱글톤 인스턴스
