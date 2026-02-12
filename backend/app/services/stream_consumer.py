@@ -268,63 +268,66 @@ class StreamConsumer:
         event = message.get("event")
         progress = PipelineProgress(file_id)
 
-        async with AsyncSessionLocal() as session:
-            file_repo = FileRepository(session)
-            transcription_repo = TranscriptionRepository(session)
-
-            if event == "started":
+        if event == "started":
+            async with AsyncSessionLocal() as session:
+                file_repo = FileRepository(session)
                 await file_repo.update_file_status(file_id, FileStatus.PROCESSING)
                 await session.commit()
-                logger.info(f"ASR started: file_id={file_id}")
-                progress.asr_started()
+            logger.info(f"ASR started: file_id={file_id}")
+            progress.asr_started()
 
-            elif event == "completed":
-                result_s3_key = message.get("result_s3_key")
-                duration_seconds = message.get("duration_seconds", 0)
-                num_speakers = message.get("num_speakers", 0)
-                speaker_labels = message.get("speaker_labels", [])
+        elif event == "completed":
+            result_s3_key = message.get("result_s3_key")
+            duration_seconds = message.get("duration_seconds", 0)
+            num_speakers = message.get("num_speakers", 0)
+            speaker_labels = message.get("speaker_labels", [])
 
-                # S3에서 결과 다운로드
-                result_data = download_json(result_s3_key)
-                transcription_data = result_data.get("transcription", {})
+            # S3에서 결과 다운로드 (트랜잭션 밖에서 실행)
+            result_data = download_json(result_s3_key)
+            transcription_data = result_data.get("transcription", {})
 
-                # Worker Raw Segment 후처리 (분할/병합)
-                original_segments = transcription_data.get("segments", [])
+            # Worker Raw Segment 후처리 (트랜잭션 밖에서 실행)
+            original_segments = transcription_data.get("segments", [])
 
-                if original_segments:
-                    logger.info(
-                        f"Applying post-processing for file_id={file_id} (segments: {len(original_segments)})"
-                    )
+            if original_segments:
+                logger.info(
+                    f"Applying post-processing for file_id={file_id} (segments: {len(original_segments)})"
+                )
 
-                    split_segments = split_long_segments(
-                        original_segments, max_duration=30.0
-                    )
-                    processed_segments = merge_consecutive_speaker_segments(
-                        split_segments, max_duration=30.0
-                    )
+                split_segments = split_long_segments(
+                    original_segments, max_duration=30.0
+                )
+                processed_segments = merge_consecutive_speaker_segments(
+                    split_segments, max_duration=30.0
+                )
 
-                    transcription_data["segments"] = processed_segments
-                    transcription_data["text"] = rebuild_transcription_text(
-                        processed_segments
-                    )
+                transcription_data["segments"] = processed_segments
+                transcription_data["text"] = rebuild_transcription_text(
+                    processed_segments
+                )
 
-                    new_speaker_stats = rebuild_speaker_stats(processed_segments)
+                new_speaker_stats = rebuild_speaker_stats(processed_segments)
 
-                    if "diarization_metadata" not in transcription_data:
-                        transcription_data["diarization_metadata"] = {}
-                    transcription_data["diarization_metadata"].update(
-                        {
-                            "num_speakers": len(new_speaker_stats),
-                            "speaker_labels": sorted(new_speaker_stats.keys()),
-                        }
-                    )
+                if "diarization_metadata" not in transcription_data:
+                    transcription_data["diarization_metadata"] = {}
+                transcription_data["diarization_metadata"].update(
+                    {
+                        "num_speakers": len(new_speaker_stats),
+                        "speaker_labels": sorted(new_speaker_stats.keys()),
+                    }
+                )
 
-                    num_speakers = len(new_speaker_stats)
-                    speaker_labels = sorted(new_speaker_stats.keys())
+                num_speakers = len(new_speaker_stats)
+                speaker_labels = sorted(new_speaker_stats.keys())
 
-                    logger.info(
-                        f"Post-processing completed: {len(original_segments)} -> {len(processed_segments)} segments"
-                    )
+                logger.info(
+                    f"Post-processing completed: {len(original_segments)} -> {len(processed_segments)} segments"
+                )
+
+            # DB 작업만 트랜잭션 안에서 실행
+            async with AsyncSessionLocal() as session:
+                file_repo = FileRepository(session)
+                transcription_repo = TranscriptionRepository(session)
 
                 # Transcription 저장 (있으면 업데이트, 없으면 생성)
                 existing = await transcription_repo.get_by_file_id(file_id)
@@ -349,7 +352,7 @@ class StreamConsumer:
                 if current_status == FileStatus.QUEUED:
                     logger.info(f"[StreamConsumer] Transitioning {file_id}: QUEUED → PROCESSING → SUMMARY_QUEUED")
                     await file_repo.update_file_status(file_id, FileStatus.PROCESSING)
-                    await session.commit()
+                    await session.flush()
 
                 await file_repo.update_file_status(file_id, FileStatus.SUMMARY_QUEUED)
                 await file_repo.add_log(
@@ -571,24 +574,28 @@ class StreamConsumer:
         event = message.get("event")
         progress = PipelineProgress(file_id)
 
-        async with AsyncSessionLocal() as session:
-            file_repo = FileRepository(session)
-            document_repo = DocumentRepository(session)
-
-            if event == "started":
+        if event == "started":
+            async with AsyncSessionLocal() as session:
+                file_repo = FileRepository(session)
                 await file_repo.update_file_status(file_id, FileStatus.OCR_PROCESSING)
                 await session.commit()
-                logger.info(f"OCR started: file_id={file_id}")
-                progress.ocr_started()
+            logger.info(f"OCR started: file_id={file_id}")
+            progress.ocr_started()
 
-            elif event == "completed":
-                result_s3_key = message.get("result_s3_key")
-                page_count = message.get("page_count", 0)
-                text_length = message.get("text_length", 0)
+        elif event == "completed":
+            result_s3_key = message.get("result_s3_key")
+            page_count = message.get("page_count", 0)
+            text_length = message.get("text_length", 0)
 
-                result_data = download_json(result_s3_key)
-                ocr_text = result_data.get("ocr_text", "")
-                ocr_metadata = result_data.get("ocr_metadata", {})
+            # S3에서 결과 다운로드 (트랜잭션 밖에서 실행)
+            result_data = download_json(result_s3_key)
+            ocr_text = result_data.get("ocr_text", "")
+            ocr_metadata = result_data.get("ocr_metadata", {})
+
+            # DB 작업만 트랜잭션 안에서 실행
+            async with AsyncSessionLocal() as session:
+                file_repo = FileRepository(session)
+                document_repo = DocumentRepository(session)
 
                 existing_doc = await document_repo.get_by_file_id(file_id)
                 if existing_doc:
@@ -612,7 +619,7 @@ class StreamConsumer:
                 if current_status == FileStatus.QUEUED:
                     logger.info(f"[StreamConsumer] Transitioning {file_id}: QUEUED → OCR_PROCESSING → SUMMARY_QUEUED")
                     await file_repo.update_file_status(file_id, FileStatus.OCR_PROCESSING)
-                    await session.commit()
+                    await session.flush()
 
                 await file_repo.update_file_status(file_id, FileStatus.SUMMARY_QUEUED)
                 await file_repo.add_log(
