@@ -34,7 +34,10 @@ CACHE_TTL = 60 * 60 * 24  # 24시간 (캐시 TTL, DB에는 영구 저장)
 
 
 class Message:
-    """대화 메시지 (API 응답용 DTO)."""
+    """대화 메시지 (API 응답용 DTO).
+
+    v1.0.0: partial_content 추가 (SSE 재연결 시 복구용)
+    """
 
     def __init__(
         self,
@@ -44,6 +47,7 @@ class Message:
         timestamp: float | None = None,
         metadata: dict | None = None,
         status: str = "completed",
+        partial_content: str | None = None,
     ):
         self.message_id = message_id
         self.role = role
@@ -51,6 +55,7 @@ class Message:
         self.timestamp = timestamp or datetime.now(timezone.utc).timestamp()
         self.metadata = metadata or {}
         self.status = status
+        self.partial_content = partial_content
 
     def to_dict(self) -> dict:
         """딕셔너리로 변환."""
@@ -61,6 +66,7 @@ class Message:
             "timestamp": self.timestamp,
             "metadata": self.metadata,
             "status": self.status,
+            "partial_content": self.partial_content,
         }
 
     @classmethod
@@ -73,6 +79,7 @@ class Message:
             timestamp=data.get("timestamp"),
             metadata=data.get("metadata", {}),
             status=data.get("status", "completed"),
+            partial_content=data.get("partial_content"),
         )
 
     @classmethod
@@ -85,6 +92,7 @@ class Message:
             timestamp=model.created_at.timestamp(),
             metadata=model.metadata_,
             status=model.status,
+            partial_content=model.partial_content,
         )
 
 
@@ -596,6 +604,64 @@ class ThreadService:
 
         # 캐시 무효화 (스레드 캐시 갱신)
         await self._invalidate_cache(str(db_message.thread_id))
+
+        return Message.from_db_model(db_message)
+
+    async def update_message_partial_content(
+        self,
+        message_id: str | UUID,
+        partial_content: str,
+        status: str | None = None,
+    ) -> Message | None:
+        """메시지 부분 응답 업데이트 (v1.0.0).
+
+        스트리밍 중 2초마다 호출되어 부분 응답을 저장합니다.
+        SSE 재연결 시 이 값부터 복구합니다.
+
+        Args:
+            message_id: 메시지 ID
+            partial_content: 현재까지 생성된 부분 응답
+            status: 현재 상태 (선택)
+
+        Returns:
+            업데이트된 메시지 또는 None
+        """
+        if not self.repo:
+            raise RuntimeError("Database session not available")
+
+        message_uuid = UUID(str(message_id))
+        db_message = await self.repo.update_message_partial_content(
+            message_uuid, partial_content, status
+        )
+
+        if not db_message:
+            return None
+
+        # 캐시 무효화 (스레드 캐시 갱신)
+        await self._invalidate_cache(str(db_message.thread_id))
+
+        return Message.from_db_model(db_message)
+
+    async def get_message(
+        self,
+        message_id: str | UUID,
+    ) -> Message | None:
+        """메시지 단일 조회 (v1.0.0).
+
+        Args:
+            message_id: 메시지 ID
+
+        Returns:
+            메시지 또는 None
+        """
+        if not self.repo:
+            raise RuntimeError("Database session not available")
+
+        message_uuid = UUID(str(message_id))
+        db_message = await self.repo.get_message(message_uuid)
+
+        if not db_message:
+            return None
 
         return Message.from_db_model(db_message)
 

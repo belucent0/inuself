@@ -224,6 +224,36 @@ class ThreadRepository:
         await self.session.flush()
         return message
 
+    async def update_message_partial_content(
+        self,
+        message_id: UUID,
+        partial_content: str,
+        status: str | None = None,
+    ) -> AiMessage | None:
+        """메시지 부분 응답 업데이트 (v1.0.0).
+
+        스트리밍 중 2초마다 호출되어 부분 응답을 저장합니다.
+        SSE 재연결 시 이 값부터 복구합니다.
+
+        Args:
+            message_id: 메시지 ID
+            partial_content: 현재까지 생성된 부분 응답
+            status: 현재 상태 (선택, queued|analyzing|searching|thinking|generating)
+
+        Returns:
+            업데이트된 메시지 또는 None
+        """
+        message = await self.get_message(message_id)
+        if not message:
+            return None
+
+        message.partial_content = partial_content
+        if status is not None:
+            message.status = status
+
+        await self.session.flush()
+        return message
+
     async def get_generating_messages(self, thread_id: UUID) -> list[AiMessage]:
         """generating 상태의 메시지 조회.
 
