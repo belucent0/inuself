@@ -42,6 +42,9 @@ interface ChatState {
   isLoading: boolean
   error: Error | null
 
+  // 스레드 생성 중 (중복 생성 방지)
+  isCreatingThread: boolean
+
   // 스트리밍 취소용
   abortController: AbortController | null
 
@@ -60,6 +63,14 @@ interface ChatActions {
 
   // 스트리밍 제어
   cancelStreaming: () => void
+
+  // v1.0.0: SSE 스트리밍용 외부 접근 가능 액션
+  setStreamingContent: (content: string) => void
+  appendStreamingContent: (token: string) => void
+  addThinkingStep: (step: ThinkingStep) => void
+  setSources: (sources: Source[]) => void
+  finishStreaming: (content: string, metadata?: Record<string, unknown>) => void
+  startStreamingMode: () => void
 
   // 내부 헬퍼 (스트리밍 콜백용)
   _appendToken: (token: string) => void
@@ -105,6 +116,7 @@ export const useChatStore = create<ChatStore>()(
       streaming: { ...initialStreamingState },
       isLoading: false,
       error: null,
+      isCreatingThread: false,
       abortController: null,
       pollingInterval: null,
 
@@ -191,7 +203,15 @@ export const useChatStore = create<ChatStore>()(
       },
 
       createAndStream: async (query, mode = 'auto') => {
-        const { switchThread, _startStreaming, _appendToken, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming, _setThreadId } = get()
+        const { isCreatingThread, switchThread, _startStreaming, _appendToken, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming, _setThreadId } = get()
+
+        // 이미 생성 중이면 무시 (중복 호출 방지)
+        if (isCreatingThread) {
+          console.warn('[chatStore] Thread creation already in progress, ignoring duplicate call')
+          return null
+        }
+
+        set({ isCreatingThread: true }, false, 'startCreatingThread')
 
         // 새 스레드 시작: 이전 상태 클리어
         switchThread(null)
@@ -216,13 +236,15 @@ export const useChatStore = create<ChatStore>()(
             onSearchQueries: _setSearchQueries,
             onComplete: _finishStreaming,
             onError: (err) => {
-              set({ error: err, isLoading: false }, false, 'createAndStreamError')
+              set({ error: err, isLoading: false, isCreatingThread: false }, false, 'createAndStreamError')
             },
             onThreadId: _setThreadId,
           }, abortController.signal)
 
+          set({ isCreatingThread: false }, false, 'finishCreatingThread')
           return newThreadId
         } catch (err) {
+          set({ isCreatingThread: false }, false, 'finishCreatingThread')
           if (err instanceof DOMException && err.name === 'AbortError') {
             return null
           }
@@ -278,6 +300,63 @@ export const useChatStore = create<ChatStore>()(
           abortController: null,
         }, false, 'cancelStreaming')
       },
+
+      // --------------------------------------------------------
+      // v1.0.0: SSE 스트리밍용 외부 접근 가능 액션
+      // ChatPage에서 EventSource 이벤트 처리 시 호출
+      // --------------------------------------------------------
+      setStreamingContent: (content) => set((state) => ({
+        streaming: {
+          ...state.streaming,
+          currentMessage: content,
+        },
+      }), false, 'setStreamingContent'),
+
+      appendStreamingContent: (token) => set((state) => ({
+        streaming: {
+          ...state.streaming,
+          currentMessage: state.streaming.currentMessage + token,
+        },
+      }), false, 'appendStreamingContent'),
+
+      addThinkingStep: (step) => set((state) => ({
+        streaming: {
+          ...state.streaming,
+          thinkingSteps: [...state.streaming.thinkingSteps, step],
+        },
+      }), false, 'addThinkingStep'),
+
+      setSources: (sources) => set((state) => ({
+        streaming: {
+          ...state.streaming,
+          sources,
+        },
+      }), false, 'setSources'),
+
+      finishStreaming: (content, metadata = {}) => set((state) => ({
+        messages: [...state.messages, {
+          role: 'assistant' as const,
+          content,
+          timestamp: Date.now() / 1000,
+          status: 'completed',
+          metadata: metadata as Message['metadata'],
+        }],
+        streaming: { ...initialStreamingState },
+        isLoading: false,
+        abortController: null,
+      }), false, 'finishStreaming'),
+
+      startStreamingMode: () => set({
+        streaming: {
+          isStreaming: true,
+          currentMessage: '',
+          thinkingSteps: [],
+          sources: [],
+          searchQueries: [],
+        },
+        isLoading: true,
+        error: null,
+      }, false, 'startStreamingMode'),
 
       // --------------------------------------------------------
       // 내부 헬퍼 (스트리밍 콜백용)
