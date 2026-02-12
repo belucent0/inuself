@@ -324,7 +324,7 @@ class StreamConsumer:
                     f"Post-processing completed: {len(original_segments)} -> {len(processed_segments)} segments"
                 )
 
-            # DB 작업만 트랜잭션 안에서 실행
+            # 트랜잭션 1: Transcription 저장 및 상태 업데이트 (DB 작업만)
             async with AsyncSessionLocal() as session:
                 file_repo = FileRepository(session)
                 transcription_repo = TranscriptionRepository(session)
@@ -365,36 +365,45 @@ class StreamConsumer:
                     message=f"ASR completed ({duration_seconds:.1f}s, {num_speakers} speakers)",
                 )
                 await session.commit()
+            # 트랜잭션 1 종료
 
+            logger.info(
+                f"ASR completed: file_id={file_id}, duration={duration_seconds}s"
+            )
+            progress.asr_completed(
+                duration_seconds=duration_seconds, speakers=speaker_labels,
+            )
+
+            # LLM 요약 준비 (트랜잭션 밖에서)
+            segments = transcription_data.get("segments", [])
+            if segments:
+                text_to_summarize = segments_to_text_with_metadata(segments)
                 logger.info(
-                    f"ASR completed: file_id={file_id}, duration={duration_seconds}s"
+                    f"Using segment format with speaker/time metadata: file_id={file_id}"
                 )
-                progress.asr_completed(
-                    duration_seconds=duration_seconds, speakers=speaker_labels,
-                )
+            else:
+                text_to_summarize = transcription_data.get("text", "")
 
-                # LLM 요약 실행
-                segments = transcription_data.get("segments", [])
-                if segments:
-                    text_to_summarize = segments_to_text_with_metadata(segments)
-                    logger.info(
-                        f"Using segment format with speaker/time metadata: file_id={file_id}"
+            if text_to_summarize:
+                # 트랜잭션 2: SUMMARIZING 상태로 전환
+                async with AsyncSessionLocal() as session:
+                    file_repo = FileRepository(session)
+                    await file_repo.update_file_status(
+                        file_id, FileStatus.SUMMARIZING
                     )
-                else:
-                    text_to_summarize = transcription_data.get("text", "")
+                    await session.commit()
+                progress.llm_started()
 
-                if text_to_summarize:
-                    try:
-                        await file_repo.update_file_status(
-                            file_id, FileStatus.SUMMARIZING
-                        )
-                        await session.commit()
-                        progress.llm_started()
+                # LLM 요약 실행 (트랜잭션 밖에서 - 30초+ 소요)
+                try:
+                    executor = SectionGraphExecutor(
+                        on_progress=progress.llm_progress,
+                    )
+                    title, summary_md = await executor.execute(text_to_summarize)
 
-                        executor = SectionGraphExecutor(
-                            on_progress=progress.llm_progress,
-                        )
-                        title, summary_md = await executor.execute(text_to_summarize)
+                    # 트랜잭션 3: 결과 저장
+                    async with AsyncSessionLocal() as session:
+                        file_repo = FileRepository(session)
 
                         if title:
                             await file_repo.update_title(file_id, title)
@@ -415,17 +424,19 @@ class StreamConsumer:
                         )
                         await session.commit()
 
-                        logger.info(
-                            f"LLM completed (direct): file_id={file_id}, title={title[:50]}..."
-                        )
-                        progress.llm_completed(
-                            **({"title": title} if title else {}),
-                        )
+                    logger.info(
+                        f"LLM completed (direct): file_id={file_id}, title={title[:50]}..."
+                    )
+                    progress.llm_completed(
+                        **({"title": title} if title else {}),
+                    )
 
-                    except (PhaseExecutionError, Exception) as exc:
-                        logger.error(
-                            f"LLM summarization failed: file_id={file_id}, error={exc}"
-                        )
+                except (PhaseExecutionError, Exception) as exc:
+                    logger.error(
+                        f"LLM summarization failed: file_id={file_id}, error={exc}"
+                    )
+                    async with AsyncSessionLocal() as session:
+                        file_repo = FileRepository(session)
                         await file_repo.update_file_status(
                             file_id, FileStatus.SUMMARY_FAILED
                         )
@@ -435,12 +446,15 @@ class StreamConsumer:
                             message=f"LLM failed: {exc}",
                         )
                         await session.commit()
-                        progress.llm_failed(str(exc))
+                    progress.llm_failed(str(exc))
 
-                else:
-                    logger.info(
-                        f"No text to summarize, completing without summary: file_id={file_id}"
-                    )
+            else:
+                logger.info(
+                    f"No text to summarize, completing without summary: file_id={file_id}"
+                )
+
+                async with AsyncSessionLocal() as session:
+                    file_repo = FileRepository(session)
 
                     file = await file_repo.get_file(file_id)
                     if file:
@@ -457,7 +471,7 @@ class StreamConsumer:
                         message="LLM skipped: No text detected in audio",
                     )
                     await session.commit()
-                    progress.completed_empty("처리 완료 (음성/텍스트가 감지되지 않았습니다)")
+                progress.completed_empty("처리 완료 (음성/텍스트가 감지되지 않았습니다)")
 
             # ASR 활성 작업 해제
             task_queue = get_task_queue()
@@ -595,7 +609,7 @@ class StreamConsumer:
             ocr_text = result_data.get("ocr_text", "")
             ocr_metadata = result_data.get("ocr_metadata", {})
 
-            # DB 작업만 트랜잭션 안에서 실행
+            # 트랜잭션 1: Document 저장 및 상태 업데이트 (DB 작업만)
             async with AsyncSessionLocal() as session:
                 file_repo = FileRepository(session)
                 document_repo = DocumentRepository(session)
@@ -635,22 +649,31 @@ class StreamConsumer:
                     message=f"OCR completed ({page_count} pages, {text_length} chars)",
                 )
                 await session.commit()
+            # 트랜잭션 1 종료
 
-                logger.info(f"OCR completed: file_id={file_id}, pages={page_count}")
-                progress.ocr_completed(page_count=page_count)
+            logger.info(f"OCR completed: file_id={file_id}, pages={page_count}")
+            progress.ocr_completed(page_count=page_count)
 
-                if ocr_text:
-                    try:
-                        await file_repo.update_file_status(
-                            file_id, FileStatus.SUMMARIZING
-                        )
-                        await session.commit()
-                        progress.llm_started()
+            if ocr_text:
+                # 트랜잭션 2: SUMMARIZING 상태로 전환
+                async with AsyncSessionLocal() as session:
+                    file_repo = FileRepository(session)
+                    await file_repo.update_file_status(
+                        file_id, FileStatus.SUMMARIZING
+                    )
+                    await session.commit()
+                progress.llm_started()
 
-                        executor = SectionGraphExecutor(
-                            on_progress=progress.llm_progress,
-                        )
-                        title, summary_md = await executor.execute(ocr_text)
+                # LLM 요약 실행 (트랜잭션 밖에서 - 30초+ 소요)
+                try:
+                    executor = SectionGraphExecutor(
+                        on_progress=progress.llm_progress,
+                    )
+                    title, summary_md = await executor.execute(ocr_text)
+
+                    # 트랜잭션 3: 결과 저장
+                    async with AsyncSessionLocal() as session:
+                        file_repo = FileRepository(session)
 
                         if title:
                             await file_repo.update_title(file_id, title)
@@ -671,17 +694,19 @@ class StreamConsumer:
                         )
                         await session.commit()
 
-                        logger.info(
-                            f"LLM completed (direct/OCR): file_id={file_id}, title={title[:50]}..."
-                        )
-                        progress.llm_completed(
-                            **({"title": title} if title else {}),
-                        )
+                    logger.info(
+                        f"LLM completed (direct/OCR): file_id={file_id}, title={title[:50]}..."
+                    )
+                    progress.llm_completed(
+                        **({"title": title} if title else {}),
+                    )
 
-                    except (PhaseExecutionError, Exception) as exc:
-                        logger.error(
-                            f"LLM summarization failed (OCR): file_id={file_id}, error={exc}"
-                        )
+                except (PhaseExecutionError, Exception) as exc:
+                    logger.error(
+                        f"LLM summarization failed (OCR): file_id={file_id}, error={exc}"
+                    )
+                    async with AsyncSessionLocal() as session:
+                        file_repo = FileRepository(session)
                         await file_repo.update_file_status(
                             file_id, FileStatus.SUMMARY_FAILED
                         )
@@ -691,12 +716,15 @@ class StreamConsumer:
                             message=f"LLM failed (OCR): {exc}",
                         )
                         await session.commit()
-                        progress.llm_failed(str(exc))
+                    progress.llm_failed(str(exc))
 
-                else:
-                    logger.info(
-                        f"No text from OCR, completing without summary: file_id={file_id}"
-                    )
+            else:
+                logger.info(
+                    f"No text from OCR, completing without summary: file_id={file_id}"
+                )
+
+                async with AsyncSessionLocal() as session:
+                    file_repo = FileRepository(session)
 
                     file = await file_repo.get_file(file_id)
                     if file:

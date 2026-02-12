@@ -126,8 +126,10 @@ def call_litellm_transcription(
         },
     }
 
-    # V7.4: on_resource_acquired는 custom_handler에서 호출됨 (Provider Manager 응답 받은 후)
-    # 여기서 호출하지 않음
+    # LiteLLM 요청 직전에 콜백 호출하여 "started" 이벤트 발행
+    if on_resource_acquired:
+        on_resource_acquired()
+        logger.info(f"[LiteLLM ASR] Resource acquired callback invoked")
 
     try:
         with httpx.Client(timeout=timeout) as client:
