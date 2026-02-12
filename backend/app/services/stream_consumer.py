@@ -345,7 +345,7 @@ class StreamConsumer:
 
                 # 상태 전환: QUEUED → PROCESSING → SUMMARY_QUEUED
                 # Worker가 "started" 이벤트를 보내지 않으므로 여기서 PROCESSING 거쳐야 함
-                current_file = await file_repo.get_file_by_id(file_id)
+                current_file = await file_repo.get_file(file_id)
                 if current_file and current_file.status == FileStatus.QUEUED:
                     logger.info(f"[StreamConsumer] Transitioning {file_id}: QUEUED → PROCESSING → SUMMARY_QUEUED")
                     await file_repo.update_file_status(file_id, FileStatus.PROCESSING)
@@ -608,7 +608,7 @@ class StreamConsumer:
 
                 # 상태 전환: QUEUED → OCR_PROCESSING → SUMMARY_QUEUED
                 # Worker가 "started" 이벤트를 보내지 않으므로 여기서 OCR_PROCESSING 거쳐야 함
-                current_file = await file_repo.get_file_by_id(file_id)
+                current_file = await file_repo.get_file(file_id)
                 if current_file and current_file.status == FileStatus.QUEUED:
                     logger.info(f"[StreamConsumer] Transitioning {file_id}: QUEUED → OCR_PROCESSING → SUMMARY_QUEUED")
                     await file_repo.update_file_status(file_id, FileStatus.OCR_PROCESSING)
