@@ -1,26 +1,28 @@
-"""LiteLLM Proxy를 통한 ASR/Diarization 요청 클라이언트.
+"""LiteLLM chat completion 엔드포인트를 통한 ASR/Diarization 요청 클라이언트.
 
-Architecture V6.6 Hybrid:
-- ASR/Diarization: Worker → Redis Stream → Provider Manager (Host) → GPU
-  (LiteLLM 우회 - LiteLLM transcription이 custom provider 미지원)
-- LLM: Worker → LiteLLM (HTTP) → Redis Stream → Provider Manager → GPU
-  (LiteLLM 경유 - custom provider 지원)
+Architecture V7.4:
+- ASR: Worker → LiteLLM HTTP (/v1/chat/completions, task_type=asr) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
+- Diarization: Worker → LiteLLM HTTP (/v1/chat/completions, task_type=diarization) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
+- LLM: Worker → LiteLLM HTTP → custom_handler.astreaming() → Redis Stream → Provider Manager → GPU
+- OCR: Worker → LiteLLM HTTP → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
+(모든 GPU/NPU 작업이 LiteLLM을 거침 - 세마포어는 custom_handler에서 통합 관리)
 """
+import base64
+import json
 import os
-import sys
 import time
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-# infra/litellm/gpu_stream_client.py 임포트를 위한 경로 추가
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "infra" / "litellm"))
-
-from gpu_stream_client import GPUStreamClient, get_gpu_stream_client
+import httpx
 
 from worker.logging_config import logger
-from worker.telemetry import get_trace_id
+from worker.telemetry import get_trace_id, inject_trace_context
+
+# LiteLLM Proxy URL
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "sk-1234")
 
 
 class ASRProvider(Enum):
@@ -37,7 +39,7 @@ except ImportError:
     class DiarizationAnnotationWrapper:
         def __init__(self, segments):
             self.segments = segments
-        
+
         def itertracks(self, yield_label=False):
             for seg in self.segments:
                 if yield_label:
@@ -46,7 +48,7 @@ except ImportError:
                         def __init__(self, start, end):
                             self.start = start
                             self.end = end
-                    
+
                     yield Segment(seg["start"], seg["end"]), None, seg["speaker"]
                 else:
                     yield seg
@@ -60,11 +62,11 @@ def call_litellm_transcription(
     resource_timeout: float = 120.0,
     on_resource_acquired: callable = None,
 ) -> tuple[dict[str, Any], float, float, ASRProvider]:
-    """Redis Stream을 통한 ASR 요청.
+    """LiteLLM chat completion 엔드포인트를 통한 ASR 요청.
 
-    Architecture V6.6 Hybrid: LiteLLM 우회, Redis Stream 직접 사용
-    - LiteLLM transcription은 custom provider 미지원
-    - Worker → Redis Stream → Provider Manager (Host) → GPU Server
+    Architecture V7.4: OCR과 동일한 방식
+    - Worker → LiteLLM (/v1/chat/completions) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
+    - extra_body에 task_type=asr, audio_base64 전달
 
     Args:
         audio_file_path: 오디오 파일 경로
@@ -81,40 +83,85 @@ def call_litellm_transcription(
 
     # accuracy_mode에 따라 모델 선택
     if accuracy_mode == "accuracy":
-        model = "whisper-large-v3"  # → insanely-fast (GPU Accuracy)
+        model = "asr-accuracy"  # custom_handler에서 whisper-large-v3로 라우팅
     else:
-        model = "whisper-turbo"     # → whisper.cpp (GPU Speed)
+        model = "asr-speed"     # custom_handler에서 whisper-turbo로 라우팅
 
     # OpenTelemetry trace 확인
     current_trace_id = get_trace_id()
-    logger.info(f"[GPUStream] Requesting transcription: model={model}, accuracy_mode={accuracy_mode}, trace_id={current_trace_id}")
+    logger.info(f"[LiteLLM ASR] Requesting transcription: model={model}, accuracy_mode={accuracy_mode}, trace_id={current_trace_id}")
 
-    # V7.2: ASR 요청 직전에 "started" 콜백 호출 (상태를 PROCESSING으로 업데이트)
-    if on_resource_acquired:
-        logger.info("[GPUStream] Calling on_resource_acquired callback (ASR started)")
-        on_resource_acquired()
+    # Audio 파일을 base64로 인코딩
+    with open(audio_file_path, "rb") as f:
+        audio_content = f.read()
+        audio_base64 = base64.b64encode(audio_content).decode('utf-8')
 
-    # Redis Stream 클라이언트 사용
-    gpu_client = get_gpu_stream_client()
+    # LiteLLM chat completion 요청
+    url = f"{LITELLM_BASE_URL}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    # OpenTelemetry trace context 주입
+    try:
+        inject_trace_context(headers)
+    except Exception as e:
+        logger.warning(f"[LiteLLM ASR] Failed to inject trace context: {e}")
+
+    # Chat completion 형식으로 ASR 요청
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Transcribe this audio (language: {language})"
+            }
+        ],
+        "extra_body": {
+            "task_type": "asr",
+            "audio_base64": audio_base64,
+            "language": language,
+            "accuracy_mode": accuracy_mode,
+        },
+    }
+
+    # V7.4: on_resource_acquired는 custom_handler에서 호출됨 (Provider Manager 응답 받은 후)
+    # 여기서 호출하지 않음
 
     try:
-        result = gpu_client.request_transcription(
-            audio_file_path=audio_file_path,
-            model=model,
-            language=language,
-            timeout=timeout,
-        )
-    except TimeoutError:
-        logger.error(f"[GPUStream] Transcription timed out after {timeout}s")
-        raise
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+
+        # Chat completion 응답에서 transcription 결과 추출
+        if "choices" in result and len(result["choices"]) > 0:
+            content = result["choices"][0].get("message", {}).get("content", "")
+
+            # custom_handler가 JSON 문자열로 반환
+            try:
+                transcription_result = json.loads(content)
+            except json.JSONDecodeError:
+                # Fallback
+                transcription_result = {"text": content, "segments": [], "language": language}
+        else:
+            raise ValueError(f"Unexpected response format: {result}")
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[LiteLLM ASR] HTTP error: {e.response.status_code} - {e.response.text}")
+        raise RuntimeError(f"ASR HTTP error: {e.response.status_code}")
+    except httpx.TimeoutException:
+        logger.error(f"[LiteLLM ASR] Timeout after {timeout}s")
+        raise TimeoutError(f"ASR timeout after {timeout}s")
     except Exception as e:
-        logger.error(f"[GPUStream] Transcription failed: {e}")
-        raise
+        logger.error(f"[LiteLLM ASR] Request failed: {e}")
+        raise RuntimeError(f"ASR request failed: {e}")
 
     total_time = time.time() - start_time
 
     # 사용된 Provider 파싱
-    used_model = result.get("model", model)
+    used_model = transcription_result.get("model", "")
     if "insanely-fast" in used_model or "whisper-large-v3" in used_model:
         provider = ASRProvider.INSANELY_FAST
     elif "whisper-turbo" in used_model or "whisper-cpp" in used_model:
@@ -124,12 +171,12 @@ def call_litellm_transcription(
     else:
         provider = ASRProvider.INSANELY_FAST if accuracy_mode == "accuracy" else ASRProvider.WHISPER_CPP
 
-    logger.info(f"[GPUStream] Transcription completed in {total_time:.2f}s")
-    logger.info(f"[GPUStream] Provider used: {provider.value}")
-    logger.info(f"[GPUStream] Segments: {len(result.get('segments', []))}, Text length: {len(result.get('text', ''))}")
+    logger.info(f"[LiteLLM ASR] Transcription completed in {total_time:.2f}s")
+    logger.info(f"[LiteLLM ASR] Provider used: {provider.value}")
+    logger.info(f"[LiteLLM ASR] Text length: {len(transcription_result.get('text', ''))}")
 
     # 호환성: (결과, 대기시간, 처리시간, Provider)
-    return result, 0.0, total_time, provider
+    return transcription_result, 0.0, total_time, provider
 
 
 def call_litellm_diarization(
@@ -140,11 +187,10 @@ def call_litellm_diarization(
     timeout: float = 1800.0,
     resource_timeout: float = 120.0,
 ) -> tuple[DiarizationAnnotationWrapper, float, float, dict | None, Any, dict]:
-    """Redis Stream을 통한 Diarization 요청.
+    """LiteLLM chat completion 엔드포인트를 통한 Diarization 요청.
 
-    Architecture V6.6 Hybrid: LiteLLM 우회, Redis Stream 직접 사용
-    - LiteLLM transcription은 custom provider 미지원
-    - Worker → Redis Stream → Provider Manager (Host) → GPU Server (pyannote)
+    Architecture V7.4: ASR과 동일한 방식
+    - Worker → LiteLLM (/v1/chat/completions) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
 
     Args:
         audio_file_path: 오디오 파일 경로
@@ -161,33 +207,79 @@ def call_litellm_diarization(
 
     # OpenTelemetry trace 확인
     current_trace_id = get_trace_id()
-    logger.info(f"[GPUStream] Requesting diarization: min_speakers={min_speakers}, max_speakers={max_speakers}, trace_id={current_trace_id}")
+    logger.info(f"[LiteLLM Diarization] Requesting: min_speakers={min_speakers}, max_speakers={max_speakers}, trace_id={current_trace_id}")
 
-    # Redis Stream 클라이언트 사용
-    gpu_client = get_gpu_stream_client()
+    # Audio 파일을 base64로 인코딩
+    with open(audio_file_path, "rb") as f:
+        audio_content = f.read()
+        audio_base64 = base64.b64encode(audio_content).decode('utf-8')
+
+    # LiteLLM chat completion 요청
+    url = f"{LITELLM_BASE_URL}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {LITELLM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    # OpenTelemetry trace context 주입
+    try:
+        inject_trace_context(headers)
+    except Exception as e:
+        logger.warning(f"[LiteLLM Diarization] Failed to inject trace context: {e}")
+
+    # Chat completion 형식으로 Diarization 요청
+    payload = {
+        "model": "diarization",
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Diarize this audio (min_speakers={min_speakers}, max_speakers={max_speakers})"
+            }
+        ],
+        "extra_body": {
+            "task_type": "diarization",
+            "audio_base64": audio_base64,
+            "min_speakers": min_speakers,
+            "max_speakers": max_speakers,
+        },
+    }
 
     try:
-        result = gpu_client.request_diarization(
-            audio_file_path=audio_file_path,
-            min_speakers=min_speakers,
-            max_speakers=max_speakers,
-            timeout=timeout,
-        )
-    except TimeoutError:
-        logger.error(f"[GPUStream] Diarization timed out after {timeout}s")
-        raise
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+
+        # Chat completion 응답에서 diarization 결과 추출
+        if "choices" in result and len(result["choices"]) > 0:
+            content = result["choices"][0].get("message", {}).get("content", "")
+
+            # custom_handler가 JSON 문자열로 반환
+            try:
+                diarization_result = json.loads(content)
+            except json.JSONDecodeError:
+                raise ValueError(f"Failed to parse diarization result: {content}")
+        else:
+            raise ValueError(f"Unexpected response format: {result}")
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[LiteLLM Diarization] HTTP error: {e.response.status_code} - {e.response.text}")
+        raise RuntimeError(f"Diarization HTTP error: {e.response.status_code}")
+    except httpx.TimeoutException:
+        logger.error(f"[LiteLLM Diarization] Timeout after {timeout}s")
+        raise TimeoutError(f"Diarization timeout after {timeout}s")
     except Exception as e:
-        logger.error(f"[GPUStream] Diarization request failed: {e}")
-        raise
+        logger.error(f"[LiteLLM Diarization] Request failed: {e}")
+        raise RuntimeError(f"Diarization request failed: {e}")
 
     total_time = time.time() - start_time
 
     # 결과 파싱
-    segments = result.get("segments", [])
-    num_speakers = result.get("num_speakers", 0)
+    segments = diarization_result.get("segments", [])
+    num_speakers = diarization_result.get("num_speakers", 0)
 
-    logger.info(f"[GPUStream] Diarization completed in {total_time:.2f}s")
-    logger.info(f"[GPUStream] Speakers: {num_speakers}, Segments: {len(segments)}")
+    logger.info(f"[LiteLLM Diarization] Completed in {total_time:.2f}s")
+    logger.info(f"[LiteLLM Diarization] Speakers: {num_speakers}, Segments: {len(segments)}")
 
     # DiarizationAnnotationWrapper로 변환 (기존 API 호환)
     diarization = DiarizationAnnotationWrapper(segments)

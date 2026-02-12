@@ -152,6 +152,76 @@ except Exception as e:
     redis_client_sync = None
     redis_client_async = None
 
+# V7.0: Provider to Device Group 매핑
+DEVICE_GROUP_MAP = {
+    "flm": "npu",
+    "flm-server": "npu",
+    "llamacpp": "gpu",
+    "llamacpp_server": "gpu",
+    "llama-server": "gpu",
+    "whisper-cpp": "gpu",
+    "insanely-fast": "gpu",
+    "diarization-server": "gpu",
+}
+
+
+async def _set_redis_semaphore_async(provider: str, active: bool):
+    """Redis 세마포어 설정/해제 (비동기).
+
+    Args:
+        provider: Provider 이름 (flm, whisper-cpp, insanely-fast 등)
+        active: True면 획득, False면 해제
+    """
+    if not redis_client_async:
+        logger.warning("[Semaphore] Redis client not available")
+        return
+
+    device_group = DEVICE_GROUP_MAP.get(provider)
+    if not device_group:
+        logger.debug(f"[Semaphore] Unknown provider: {provider}")
+        return
+
+    key = f"worker:{device_group}:active"
+
+    try:
+        if active:
+            await redis_client_async.set(key, "1", ex=600)  # TTL 10분
+            logger.info(f"[Semaphore] {device_group.upper()} acquired: {key} (provider={provider})")
+        else:
+            await redis_client_async.delete(key)
+            logger.info(f"[Semaphore] {device_group.upper()} released: {key} (provider={provider})")
+    except Exception as e:
+        logger.error(f"[Semaphore] Failed to set Redis semaphore: {e}")
+
+
+def _set_redis_semaphore_sync(provider: str, active: bool):
+    """Redis 세마포어 설정/해제 (동기).
+
+    Args:
+        provider: Provider 이름 (flm, whisper-cpp, insanely-fast 등)
+        active: True면 획득, False면 해제
+    """
+    if not redis_client_sync:
+        logger.warning("[Semaphore] Redis client not available")
+        return
+
+    device_group = DEVICE_GROUP_MAP.get(provider)
+    if not device_group:
+        logger.debug(f"[Semaphore] Unknown provider: {provider}")
+        return
+
+    key = f"worker:{device_group}:active"
+
+    try:
+        if active:
+            redis_client_sync.set(key, "1", ex=600)  # TTL 10분
+            logger.info(f"[Semaphore] {device_group.upper()} acquired: {key} (provider={provider})")
+        else:
+            redis_client_sync.delete(key)
+            logger.info(f"[Semaphore] {device_group.upper()} released: {key} (provider={provider})")
+    except Exception as e:
+        logger.error(f"[Semaphore] Failed to set Redis semaphore: {e}")
+
 
 def get_gpu_device_ids_sync() -> list[str]:
     """Prometheus에서 GPU device ID를 동적으로 조회.
@@ -1738,15 +1808,18 @@ class PrometheusRouter(CustomLLM):
         return False, None, None
 
     def completion(self, *args, **kwargs) -> ModelResponse:
-        """동기 completion (Non-streaming) - V7.0 Redis Stream 기반.
+        """동기 completion (Non-streaming) - V7.4 Redis Stream 기반.
 
-        Architecture V7.0:
+        Architecture V7.4:
         - HTTP 직접 통신 대신 Redis Stream을 통해 Provider Manager로 요청
-        - Vision/OCR 요청 감지 및 처리
+        - OCR/ASR/Diarization 요청 감지 및 처리
         - Docker Desktop 크래시 방지
         """
         from custom.gpu_stream_client import get_gpu_stream_client
         import base64
+        import json
+        import tempfile
+        from pathlib import Path
 
         messages = kwargs.get("messages", [])
         requested_model = kwargs.get("model", "")
@@ -1755,13 +1828,150 @@ class PrometheusRouter(CustomLLM):
         optional_params = kwargs.get("optional_params", {})
         stream = kwargs.get("stream", False) or litellm_params.get("stream") or optional_params.get("stream")
 
-        logger.info(f"[PrometheusRouter V7.0] completion called. model={requested_model}, stream={stream}")
+        logger.info(f"[PrometheusRouter V7.4] completion called. model={requested_model}, stream={stream}")
         if stream:
-            logger.warning("[PrometheusRouter V7.0] stream=True detected in completion. LiteLLM should have called astreaming.")
+            logger.warning("[PrometheusRouter V7.4] stream=True detected in completion. LiteLLM should have called astreaming.")
+
+        # V7.4: 라우터 prefix 제거 (예: "prometheus-router/ocr-speed" -> "ocr-speed")
+        model_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
+
+        # extra_body에서 task_type 추출 (ASR/Diarization 감지용)
+        extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
+        task_type = extra_body.get("task_type", "")
+
+        # V7.4: ASR 요청 감지 및 처리
+        if task_type == "asr" or model_name.startswith("asr-"):
+            logger.info(f"[PrometheusRouter V7.4] ASR request detected (sync): model={requested_model} (extracted: {model_name})")
+
+            # ASR 파라미터 추출
+            audio_base64 = extra_body.get("audio_base64", "")
+            language = extra_body.get("language", "ko")
+            accuracy_mode = extra_body.get("accuracy_mode", "speed")
+
+            if not audio_base64:
+                raise ValueError("No audio_base64 provided for ASR request")
+
+            # accuracy_mode에 따라 모델 및 Provider 결정
+            if accuracy_mode == "accuracy":
+                asr_model = "whisper-large-v3"
+                target_provider = "insanely-fast"
+            else:
+                asr_model = "whisper-turbo"
+                target_provider = "whisper-cpp"
+
+            increment_active_count_sync(target_provider)
+            _set_redis_semaphore_sync(target_provider, True)
+
+            try:
+                gpu_client = get_gpu_stream_client()
+
+                # Base64 디코딩 및 임시 파일 생성
+                audio_data = base64.b64decode(audio_base64)
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    tmp_file.write(audio_data)
+                    tmp_audio_path = Path(tmp_file.name)
+
+                try:
+                    # Redis Stream을 통한 ASR 요청
+                    result = gpu_client.request_transcription(
+                        audio_file_path=tmp_audio_path,
+                        model=asr_model,
+                        language=language,
+                        timeout=1800.0,
+                    )
+                finally:
+                    # 임시 파일 삭제
+                    tmp_audio_path.unlink(missing_ok=True)
+
+                # 결과를 JSON 문자열로 변환하여 chat completion 응답 형식으로 반환
+                return ModelResponse(
+                    id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
+                    created=result.get("created", int(time.time())),
+                    model=asr_model,
+                    object="chat.completion",
+                    choices=[
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(result, ensure_ascii=False),
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+                )
+            except Exception as e:
+                logger.error(f"[PrometheusRouter V7.4] ASR completion failed: {e}")
+                raise
+            finally:
+                _set_redis_semaphore_sync(target_provider, False)
+                decrement_active_count_sync(target_provider)
+
+        # V7.4: Diarization 요청 감지 및 처리
+        if task_type == "diarization" or model_name == "diarization":
+            logger.info(f"[PrometheusRouter V7.4] Diarization request detected (sync): model={requested_model}")
+
+            # Diarization 파라미터 추출
+            audio_base64 = extra_body.get("audio_base64", "")
+            min_speakers = extra_body.get("min_speakers")
+            max_speakers = extra_body.get("max_speakers")
+
+            if not audio_base64:
+                raise ValueError("No audio_base64 provided for Diarization request")
+
+            target_provider = "diarization-server"  # pyannote diarization provider
+
+            increment_active_count_sync(target_provider)
+            _set_redis_semaphore_sync(target_provider, True)
+
+            try:
+                gpu_client = get_gpu_stream_client()
+
+                # Base64 디코딩 및 임시 파일 생성
+                audio_data = base64.b64decode(audio_base64)
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    tmp_file.write(audio_data)
+                    tmp_audio_path = Path(tmp_file.name)
+
+                try:
+                    # Redis Stream을 통한 Diarization 요청
+                    result = gpu_client.request_diarization(
+                        audio_file_path=tmp_audio_path,
+                        min_speakers=min_speakers,
+                        max_speakers=max_speakers,
+                        timeout=1800.0,
+                    )
+                finally:
+                    # 임시 파일 삭제
+                    tmp_audio_path.unlink(missing_ok=True)
+
+                # 결과를 JSON 문자열로 변환하여 chat completion 응답 형식으로 반환
+                return ModelResponse(
+                    id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
+                    created=result.get("created", int(time.time())),
+                    model="diarization",
+                    object="chat.completion",
+                    choices=[
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(result, ensure_ascii=False),
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+                )
+            except Exception as e:
+                logger.error(f"[PrometheusRouter V7.4] Diarization completion failed: {e}")
+                raise
+            finally:
+                _set_redis_semaphore_sync(target_provider, False)
+                decrement_active_count_sync(target_provider)
 
         # V7.0: OCR 요청 감지 (모델명이 ocr-로 시작하거나 vision 요청)
-        # 라우터 prefix 제거 (예: "prometheus-router/ocr-speed" -> "ocr-speed")
-        model_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
         is_ocr_model = model_name.startswith("ocr-")
         is_vision, image_base64, text_prompt = self._is_vision_request(messages)
 
@@ -1882,18 +2092,158 @@ class PrometheusRouter(CustomLLM):
             decrement_active_count_sync(target_provider)
 
     async def acompletion(self, *args, **kwargs) -> ModelResponse:
-        """비동기 completion (Non-streaming) - V7.0 Redis Stream 기반."""
+        """비동기 completion (Non-streaming) - V7.4 Redis Stream 기반 (OCR/ASR/Diarization 지원)."""
         import base64
+        import json
+        import tempfile
+        from pathlib import Path
 
         messages = kwargs.get("messages", [])
         requested_model = kwargs.get("model", "")
         optional_params = kwargs.get("optional_params", {})
 
-        logger.info(f"[PrometheusRouter V7.0] acompletion called. model={requested_model}")
+        logger.info(f"[PrometheusRouter V7.4] acompletion called. model={requested_model}")
+
+        # V7.4: 라우터 prefix 제거 (예: "prometheus-router/ocr-speed" -> "ocr-speed")
+        model_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
+
+        # extra_body에서 task_type 추출 (ASR/Diarization 감지용)
+        extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
+        task_type = extra_body.get("task_type", "")
+
+        # V7.4: ASR 요청 감지 및 처리
+        if task_type == "asr" or model_name.startswith("asr-"):
+            logger.info(f"[PrometheusRouter V7.4] ASR request detected: model={requested_model} (extracted: {model_name})")
+
+            # ASR 파라미터 추출
+            audio_base64 = extra_body.get("audio_base64", "")
+            language = extra_body.get("language", "ko")
+            accuracy_mode = extra_body.get("accuracy_mode", "speed")
+
+            if not audio_base64:
+                raise ValueError("No audio_base64 provided for ASR request")
+
+            # accuracy_mode에 따라 모델 및 Provider 결정
+            if accuracy_mode == "accuracy":
+                asr_model = "whisper-large-v3"
+                target_provider = "insanely-fast"
+            else:
+                asr_model = "whisper-turbo"
+                target_provider = "whisper-cpp"
+
+            await increment_active_count(target_provider)
+            await _set_redis_semaphore_async(target_provider, True)
+
+            try:
+                gpu_client = get_async_gpu_stream_client()
+
+                # Base64 디코딩 및 임시 파일 생성
+                audio_data = base64.b64decode(audio_base64)
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    tmp_file.write(audio_data)
+                    tmp_audio_path = Path(tmp_file.name)
+
+                try:
+                    # Redis Stream을 통한 ASR 요청
+                    result = await gpu_client.request_transcription(
+                        audio_file_path=tmp_audio_path,
+                        model=asr_model,
+                        language=language,
+                        timeout=1800.0,
+                    )
+                finally:
+                    # 임시 파일 삭제
+                    tmp_audio_path.unlink(missing_ok=True)
+
+                # 결과를 JSON 문자열로 변환하여 chat completion 응답 형식으로 반환
+                return ModelResponse(
+                    id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
+                    created=result.get("created", int(time.time())),
+                    model=asr_model,
+                    object="chat.completion",
+                    choices=[
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(result, ensure_ascii=False),
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+                )
+            except Exception as e:
+                logger.error(f"[PrometheusRouter V7.4] ASR acompletion failed: {e}")
+                raise
+            finally:
+                await _set_redis_semaphore_async(target_provider, False)
+                await decrement_active_count(target_provider)
+
+        # V7.4: Diarization 요청 감지 및 처리
+        if task_type == "diarization" or model_name == "diarization":
+            logger.info(f"[PrometheusRouter V7.4] Diarization request detected: model={requested_model}")
+
+            # Diarization 파라미터 추출
+            audio_base64 = extra_body.get("audio_base64", "")
+            min_speakers = extra_body.get("min_speakers")
+            max_speakers = extra_body.get("max_speakers")
+
+            if not audio_base64:
+                raise ValueError("No audio_base64 provided for Diarization request")
+
+            target_provider = "diarization-server"  # pyannote diarization provider
+
+            await increment_active_count(target_provider)
+            await _set_redis_semaphore_async(target_provider, True)
+
+            try:
+                gpu_client = get_async_gpu_stream_client()
+
+                # Base64 디코딩 및 임시 파일 생성
+                audio_data = base64.b64decode(audio_base64)
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    tmp_file.write(audio_data)
+                    tmp_audio_path = Path(tmp_file.name)
+
+                try:
+                    # Redis Stream을 통한 Diarization 요청
+                    result = await gpu_client.request_diarization(
+                        audio_file_path=tmp_audio_path,
+                        min_speakers=min_speakers,
+                        max_speakers=max_speakers,
+                        timeout=1800.0,
+                    )
+                finally:
+                    # 임시 파일 삭제
+                    tmp_audio_path.unlink(missing_ok=True)
+
+                # 결과를 JSON 문자열로 변환하여 chat completion 응답 형식으로 반환
+                return ModelResponse(
+                    id=result.get("id", f"chatcmpl-{uuid.uuid4()}"),
+                    created=result.get("created", int(time.time())),
+                    model="diarization",
+                    object="chat.completion",
+                    choices=[
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(result, ensure_ascii=False),
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    usage=result.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+                )
+            except Exception as e:
+                logger.error(f"[PrometheusRouter V7.4] Diarization acompletion failed: {e}")
+                raise
+            finally:
+                await _set_redis_semaphore_async(target_provider, False)
+                await decrement_active_count(target_provider)
 
         # V7.0: OCR 요청 감지 (모델명이 ocr-로 시작하거나 vision 요청)
-        # 라우터 prefix 제거 (예: "prometheus-router/ocr-speed" -> "ocr-speed")
-        model_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
         is_ocr_model = model_name.startswith("ocr-")
         is_vision, image_base64, text_prompt = self._is_vision_request(messages)
 
@@ -1913,6 +2263,9 @@ class PrometheusRouter(CustomLLM):
                 target_provider = "llama-ocr"
 
             await increment_active_count(target_provider)
+
+            # V7.0: Redis 세마포어 획득
+            await _set_redis_semaphore_async(target_provider, True)
 
             try:
                 gpu_client = get_async_gpu_stream_client()
@@ -1957,6 +2310,8 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.0] OCR acompletion failed: {e}")
                 raise
             finally:
+                # V7.0: Redis 세마포어 해제
+                await _set_redis_semaphore_async(target_provider, False)
                 await decrement_active_count(target_provider)
 
         # 일반 LLM 요청
@@ -1973,6 +2328,9 @@ class PrometheusRouter(CustomLLM):
 
         # 활성 요청 카운트 증가
         await increment_active_count(target_provider)
+
+        # V7.0: Redis 세마포어 획득
+        await _set_redis_semaphore_async(target_provider, True)
 
         try:
             # Redis Stream을 통한 LLM 요청 (비동기)
@@ -2007,6 +2365,8 @@ class PrometheusRouter(CustomLLM):
             logger.error(f"[PrometheusRouter V7.0] acompletion failed: {e}")
             raise
         finally:
+            # V7.0: Redis 세마포어 해제
+            await _set_redis_semaphore_async(target_provider, False)
             await decrement_active_count(target_provider)
 
     async def astreaming(self, *args, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
@@ -2048,6 +2408,9 @@ class PrometheusRouter(CustomLLM):
         logger.debug(f"{get_log_prefix()} [PrometheusRouter V8.0] Provider: {target_provider}, model={requested_model_name}, tier={tier} (Latency: {selection_latency:.3f}s)")
 
         await increment_active_count(target_provider)
+
+        # V7.0: Redis 세마포어 획득
+        await _set_redis_semaphore_async(target_provider, True)
 
         try:
             # Redis Stream을 통한 LLM 요청 (비동기, Real-time streaming)
@@ -2096,6 +2459,8 @@ class PrometheusRouter(CustomLLM):
             logger.error(f"{get_log_prefix()} [PrometheusRouter V7.4] Request FAILED: {model} (Total: {total_duration:.3f}s, Error: {e})")
             raise
         finally:
+            # V7.0: Redis 세마포어 해제
+            await _set_redis_semaphore_async(target_provider, False)
             await decrement_active_count(target_provider)
 
     async def transcription(self, *args, **kwargs) -> ModelResponse:
@@ -2143,10 +2508,13 @@ class PrometheusRouter(CustomLLM):
 
             # 0. Diarization 라우팅 (model="pyannote")
             if requested_model.endswith("pyannote"):
-                logger.info(f"[PrometheusRouter V6.6] Routing to Diarization via Redis Stream: model={requested_model}")
+                logger.info(f"[PrometheusRouter V7.0] Routing to Diarization via Redis Stream: model={requested_model}")
 
                 # 활성 카운트 증가 (모니터링용)
                 await increment_active_count("diarization-server")
+
+                # V7.0: Redis 세마포어 획득
+                await _set_redis_semaphore_async("diarization-server", True)
 
                 try:
                     # Redis Stream을 통한 Diarization 요청
@@ -2160,12 +2528,14 @@ class PrometheusRouter(CustomLLM):
                         timeout=1800.0,
                     )
 
-                    logger.info(f"[PrometheusRouter V6.6] Diarization completed via Redis Stream")
+                    logger.info(f"[PrometheusRouter V7.0] Diarization completed via Redis Stream")
                     return result
                 except Exception as e:
-                    logger.error(f"[PrometheusRouter V6.6] Diarization Error: {e}")
+                    logger.error(f"[PrometheusRouter V7.0] Diarization Error: {e}")
                     raise e
                 finally:
+                    # V7.0: Redis 세마포어 해제
+                    await _set_redis_semaphore_async("diarization-server", False)
                     await decrement_active_count("diarization-server")
 
             # 모드 판별 (라우터 prefix 제거)
@@ -2195,11 +2565,14 @@ class PrometheusRouter(CustomLLM):
             # 활성 카운트 증가
             await increment_active_count(target_provider)
 
+            # V7.0: Redis 세마포어 획득
+            await _set_redis_semaphore_async(target_provider, True)
+
             try:
                 # Redis Stream을 통한 Transcription 요청
                 language = data.get("language", "ko")
 
-                logger.info(f"[PrometheusRouter V6.6] Sending transcription via Redis Stream: model={target_model}")
+                logger.info(f"[PrometheusRouter V7.0] Sending transcription via Redis Stream: model={target_model}")
                 result = await gpu_client.request_transcription(
                     audio_file_path=temp_file,
                     model=target_model,
@@ -2207,7 +2580,7 @@ class PrometheusRouter(CustomLLM):
                     timeout=1800.0,
                 )
 
-                logger.info(f"[PrometheusRouter V6.6] Transcription completed")
+                logger.info(f"[PrometheusRouter V7.0] Transcription completed")
 
                 return ModelResponse(
                     id=result.get("id", f"transcribe-{uuid.uuid4()}"),
@@ -2226,11 +2599,17 @@ class PrometheusRouter(CustomLLM):
             except Exception as e:
                 # Fallback 로직 (Speed 모드에서 NPU 실패 시 -> GPU Whisper.cpp)
                 if is_speed_mode:
-                    logger.warning(f"[PrometheusRouter V6.6] NPU failed: {e}. Trying Fallback to whisper-cpp...")
+                    logger.warning(f"[PrometheusRouter V7.0] NPU failed: {e}. Trying Fallback to whisper-cpp...")
+
+                    # V7.0: NPU 세마포어 해제
+                    await _set_redis_semaphore_async("flm", False)
                     await decrement_active_count("flm")
 
                     target_provider = "whisper-cpp"
                     await increment_active_count(target_provider)
+
+                    # V7.0: GPU 세마포어 획득
+                    await _set_redis_semaphore_async(target_provider, True)
 
                     try:
                         result = await gpu_client.request_transcription(
@@ -2254,12 +2633,14 @@ class PrometheusRouter(CustomLLM):
                             ],
                         )
                     except Exception as fallback_error:
-                        logger.error(f"[PrometheusRouter V6.6] Fallback failed: {fallback_error}")
+                        logger.error(f"[PrometheusRouter V7.0] Fallback failed: {fallback_error}")
                         raise fallback_error
                 else:
-                    logger.error(f"[PrometheusRouter V6.6] Transcription failed: {e}")
+                    logger.error(f"[PrometheusRouter V7.0] Transcription failed: {e}")
                     raise e
             finally:
+                # V7.0: Redis 세마포어 해제
+                await _set_redis_semaphore_async(target_provider, False)
                 await decrement_active_count(target_provider)
 
         finally:
