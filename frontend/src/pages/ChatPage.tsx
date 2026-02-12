@@ -1,13 +1,14 @@
 /**
  * ChatPage - /chat/:threadId 라우트
  *
- * Zustand store 기반 채팅 페이지 (V2)
- * - URL 변경 시 switchThread() 호출로 단순화
- * - V10: 낙관적 라우팅 지원 - threadId='new'일 때 새 스레드 생성
+ * v1.0.0: 확인 후 라우팅 + SSE 재연결
+ * - HomePage에서 POST로 스레드 생성 후 /chat/{threadId}?messageId={messageId}로 진입
+ * - messageId가 있으면 SSE 스트리밍 연결
+ * - 재연결 시 partial_content 복구
  */
 
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { useEffect, useCallback, useRef } from 'react'
+import { useEffect, useCallback, useRef, useState } from 'react'
 import { useThread } from '@/shared/hooks/useThreads'
 import { useChatStore } from '@/shared/stores/chatStore'
 import { useThreadTitle } from '@/shared/contexts/ThreadTitleContext'
@@ -15,18 +16,24 @@ import { threadsApi } from '@/shared/services'
 import { ChatArea } from '@/features/chat/components/ChatArea'
 import { toast } from 'sonner'
 
+// v1.0.0: 메시지 상태 타입
+type MessageStatus = 'queued' | 'analyzing' | 'searching' | 'thinking' | 'generating' | 'completed' | 'failed'
+
 export function ChatPage() {
   const { threadId: paramThreadId } = useParams<{ threadId: string }>()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
 
-  // V10: 새 스레드 생성 모드 감지
-  const isNewThread = paramThreadId === 'new'
-  const query = searchParams.get('query')
+  // v1.0.0: messageId 파라미터 (SSE 스트리밍 시작용)
+  const messageId = searchParams.get('messageId')
+
+  // 하위 호환: 레거시 /chat/new 경로 처리
+  const isLegacyNewThread = paramThreadId === 'new'
+  const legacyQuery = searchParams.get('query')
   const mode = searchParams.get('mode') || 'auto'
 
-  // 실제 threadId (new일 때는 빈 문자열)
-  const threadId = isNewThread ? '' : (paramThreadId || '')
+  // 실제 threadId
+  const threadId = isLegacyNewThread ? '' : (paramThreadId || '')
 
   // TanStack Query로 스레드 로드 (기존 스레드일 때만)
   const { thread, isLoading: isThreadLoading } = useThread(threadId || null)
@@ -38,7 +45,6 @@ export function ChatPage() {
     streaming,
     switchThread,
     sendMessage,
-    createAndStream,
     regenerate,
   } = useChatStore()
 
@@ -93,8 +99,8 @@ export function ChatPage() {
   // 핵심: TanStack Query 데이터 → Zustand store 동기화
   // ============================================================
   useEffect(() => {
-    // 새 스레드 모드면 스킵 (createAndStream이 처리)
-    if (isNewThread) return
+    // 레거시 새 스레드 모드면 스킵 (createAndStream이 처리)
+    if (isLegacyNewThread) return
 
     // 로딩 중이면 스킵
     if (isThreadLoading) return
@@ -106,6 +112,7 @@ export function ChatPage() {
     if (streaming.isStreaming && storeThreadId === threadId) return
 
     // 이미 같은 스레드가 설정되어 있고 메시지가 있으면 스킵
+    // v1.0.0: messageId가 있어도 store에 메시지가 없으면 로드 필요 (새로고침 케이스)
     if (storeThreadId === threadId && messages.length > 0) return
 
     // 메시지 포맷 변환 및 store에 설정
@@ -123,37 +130,179 @@ export function ChatPage() {
     })) || []
 
     switchThread(threadId, formattedMessages)
-  }, [thread, threadId, isNewThread, isThreadLoading, storeThreadId, messages.length, streaming.isStreaming, switchThread])
+  }, [thread, threadId, isLegacyNewThread, isThreadLoading, storeThreadId, messages.length, streaming.isStreaming, switchThread])
 
   // ============================================================
-  // V10: 새 스레드 생성 모드
+  // v1.0.0: SSE 스트리밍 연결 (messageId가 있을 때)
   // ============================================================
-  const hasStartedRef = useRef(false)
+  const connectedMessageIdRef = useRef<string | null>(null)
+  const eventSourceRef = useRef<EventSource | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_messageStatus, setMessageStatus] = useState<MessageStatus | null>(null)
 
   useEffect(() => {
-    if (hasStartedRef.current) return
-    if (!isNewThread || !query) return
+    // messageId가 없거나 threadId가 없으면 스킵
+    if (!messageId || !threadId) return
 
-    hasStartedRef.current = true
-    const decodedQuery = decodeURIComponent(query)
+    // 이미 같은 messageId로 연결했으면 스킵
+    if (connectedMessageIdRef.current === messageId) return
+    connectedMessageIdRef.current = messageId
 
-    createAndStream(decodedQuery, mode)
-      .then((newThreadId) => {
-        if (newThreadId) {
-          navigate(`/chat/${newThreadId}`, { replace: true })
+    console.log('[ChatPage v1.0.0] Connecting SSE:', { threadId, messageId })
+
+    // SSE 연결
+    const eventSource = new EventSource(
+      `/api/threads/${threadId}/messages/${messageId}/stream`
+    )
+    eventSourceRef.current = eventSource
+
+    // 스트리밍 모드 시작 (UI 상태 업데이트)
+    // 매번 getState()를 호출하여 최신 액션을 사용해야 React 리렌더링이 트리거됨
+    useChatStore.getState().startStreamingMode()
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        const eventType = data.type
+        const eventData = data.data
+
+        // 중요: 매 이벤트마다 getState()를 호출하여 최신 액션 참조
+        // 한 번만 호출하고 재사용하면 React 컴포넌트 리렌더링이 안됨
+        const store = useChatStore.getState()
+
+        switch (eventType) {
+          case 'status':
+            // 상태 변화 이벤트
+            setMessageStatus(eventData as MessageStatus)
+            break
+
+          case 'partial_restore':
+            // 재연결 시 기존 부분 컨텐츠 복구
+            store.setStreamingContent(eventData || '')
+            break
+
+          case 'thinking_step':
+            // 사고 과정 추가
+            store.addThinkingStep(eventData)
+            break
+
+          case 'query_analysis':
+            // 쿼리 분석 결과
+            store.addThinkingStep({ type: 'query_analysis', ...eventData })
+            break
+
+          case 'sources':
+            // 참고 자료
+            store.setSources(eventData || [])
+            break
+
+          case 'citations':
+            // 출처 표시
+            // store에 citations 추가 필요 시 여기서 처리
+            break
+
+          case 'search_queries':
+          case 'search_results':
+            // 검색 관련 이벤트 (UI에서 필요시 처리)
+            break
+
+          case 'token':
+            // 토큰 스트리밍
+            store.appendStreamingContent(eventData || '')
+            break
+
+          case 'content':
+            // 전체 콘텐츠 업데이트
+            store.setStreamingContent(eventData || '')
+            break
+
+          case 'partial_save':
+            // 2초마다 DB 저장 알림 (클라이언트에서는 무시)
+            break
+
+          case 'done':
+            // 스트리밍 완료
+            console.log('[ChatPage v1.0.0] Streaming done')
+            store.finishStreaming(eventData?.content || '', eventData?.metadata || {})
+            setMessageStatus('completed')
+            eventSource.close()
+            // messageId 파라미터 제거
+            setSearchParams((prev) => {
+              prev.delete('messageId')
+              return prev
+            })
+            break
+
+          case 'error':
+            // 에러 발생
+            console.error('[ChatPage v1.0.0] Stream error:', eventData)
+            toast.error(`오류: ${eventData}`)
+            setMessageStatus('failed')
+            eventSource.close()
+            break
         }
-      })
+      } catch (err) {
+        console.error('[ChatPage v1.0.0] Failed to parse event:', err)
+      }
+    }
+
+    eventSource.onerror = (err) => {
+      console.error('[ChatPage v1.0.0] SSE connection error:', err)
+      // 재연결 시도하지 않고 에러 처리 (브라우저가 자동 재연결)
+    }
+
+    // 클린업
+    return () => {
+      console.log('[ChatPage v1.0.0] Closing SSE connection')
+      eventSource.close()
+      eventSourceRef.current = null
+      // connectedMessageIdRef는 리셋하지 않음 - 같은 messageId로 재연결 방지
+    }
+  }, [messageId, threadId, setSearchParams])
+
+  // 페이지 떠날 때 SSE 연결 정리
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close()
+        eventSourceRef.current = null
+      }
+    }
+  }, [])
+
+  // ============================================================
+  // 하위 호환: 레거시 /chat/new 경로 처리
+  // (v0.11.x 이하 호환, 나중에 제거 가능)
+  // ============================================================
+  const hasStartedLegacyRef = useRef(false)
+
+  useEffect(() => {
+    if (!isLegacyNewThread || !legacyQuery) return
+    if (hasStartedLegacyRef.current) return
+
+    hasStartedLegacyRef.current = true
+    const decodedQuery = decodeURIComponent(legacyQuery)
+
+    // store에서 직접 함수 호출 (의존성 배열에서 제거하여 재실행 방지)
+    useChatStore.getState().createAndStream(decodedQuery, mode)
       .catch((err) => {
-        console.error('[ChatPage] Failed to create thread:', err)
+        console.error('[ChatPage] Legacy create failed:', err)
         toast.error('대화 생성에 실패했습니다')
         navigate('/')
       })
-  }, [isNewThread, query, mode, navigate, createAndStream])
+  }, [isLegacyNewThread, legacyQuery, mode, navigate])
+
+  // 레거시: thread_id 수신 시 URL 변경
+  useEffect(() => {
+    if (isLegacyNewThread && storeThreadId) {
+      navigate(`/chat/${storeThreadId}`, { replace: true })
+    }
+  }, [isLegacyNewThread, storeThreadId, navigate])
 
   // ============================================================
   // 로딩 상태
   // ============================================================
-  if (!isNewThread && isThreadLoading) {
+  if (!isLegacyNewThread && isThreadLoading) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />

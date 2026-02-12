@@ -5,7 +5,20 @@ from .base import Base
 
 settings = get_settings()
 
-engine = create_async_engine(settings.postgres_dsn, echo=settings.debug, future=True)
+# 연결 풀 설정 추가
+# - pool_pre_ping: 연결 사용 전 유효성 확인 (끊어진 연결 자동 재연결)
+# - pool_recycle: 연결 재활용 시간 (초) - PostgreSQL 기본 timeout보다 짧게
+# - pool_size: 기본 연결 수
+# - max_overflow: 추가 연결 허용 수
+engine = create_async_engine(
+    settings.postgres_dsn,
+    echo=settings.debug,
+    future=True,
+    pool_pre_ping=True,
+    pool_recycle=300,  # 5분마다 연결 재활용
+    pool_size=10,
+    max_overflow=20,
+)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 # 백그라운드 태스크에서 사용할 세션 팩토리 (FastAPI 의존성 외부에서 사용)

@@ -17,26 +17,20 @@ model_list:
       model: "prometheus-router/*"
       stream: true
 
-  # Audio Models - V6.6: prometheus-router를 통해 Redis Stream으로 라우팅
-
-  # Audio Models - V6.6: prometheus-router를 통해 Redis Stream으로 라우팅
-  # custom_handler.py의 transcription 메서드가 Redis Stream을 사용하여
-  # Provider Manager (Host)로 요청을 전달합니다.
-  - model_name: "flm-audio"
+  # ASR Models - V7.4: chat completion 엔드포인트 사용 (OCR과 동일)
+  # /v1/chat/completions 엔드포인트를 사용하여 custom provider 지원
+  # custom_handler.acompletion()에서 task_type=asr 감지하여 처리
+  - model_name: "asr-speed"
     litellm_params:
-      model: "prometheus-router/flm-audio"
+      model: "prometheus-router/asr-speed"
 
-  - model_name: "whisper-large-v3"
+  - model_name: "asr-accuracy"
     litellm_params:
-      model: "prometheus-router/whisper-large-v3"
+      model: "prometheus-router/asr-accuracy"
 
-  - model_name: "whisper-turbo"
+  - model_name: "diarization"
     litellm_params:
-      model: "prometheus-router/whisper-turbo"
-
-  - model_name: "pyannote"
-    litellm_params:
-      model: "prometheus-router/pyannote"
+      model: "prometheus-router/diarization"
 
   # OCR Vision Models - V7.0: prometheus-router를 통해 Redis Stream으로 라우팅
   # custom_handler.py가 OCR 요청을 감지하고 Redis Stream을 통해

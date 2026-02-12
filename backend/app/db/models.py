@@ -483,12 +483,14 @@ class AiMessage(Base):
 
     개별 대화 턴 (user/assistant).
 
-    V9.2: status 필드 추가 - 메시지 상태 관리
-    - pending: 사용자 메시지 전송 대기 (큐잉된 상태)
-    - generating: AI 응답 생성 중
-    - completed: 완료 (사용자 메시지 저장됨 / AI 응답 완료)
-    - failed: 생성 실패
-    - cancelled: 사용자에 의해 취소됨
+    v1.0.0: 메시지 상태 세분화 + 부분 응답 저장
+    - queued: 메시지 생성됨, 처리 대기
+    - analyzing: 의도 분석 + 검색 전략 수립
+    - searching: 웹/RAG 검색 수행
+    - thinking: 사고 과정 (reasoning)
+    - generating: 답변 토큰 생성
+    - completed: 완료
+    - failed: 실패
     """
 
     __tablename__ = "ai_message"
@@ -512,12 +514,21 @@ class AiMessage(Base):
     # 메시지 내용
     content: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # 메시지 상태 (pending | generating | completed | failed | cancelled)
+    # 메시지 상태
+    # v1.0.0: queued | analyzing | searching | thinking | generating | completed | failed
     status: Mapped[str] = mapped_column(
         String(20),
         default="completed",  # 기존 메시지 호환성
         nullable=False,
         index=True,
+    )
+
+    # 부분 응답 (스트리밍 중 2초마다 저장)
+    # v1.0.0: SSE 재연결 시 복구용
+    partial_content: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
     )
 
     # 메타데이터 (sources, thinking_steps, mode, model 등)

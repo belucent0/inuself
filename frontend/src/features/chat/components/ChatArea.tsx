@@ -40,16 +40,28 @@ import type { SearchSource, ThinkingStep, AIMode } from '../types'
 import { AI_MODE_CONFIG } from '../types'
 
 // Message 인터페이스
+// v1.0.0: 상태 세분화 추가
+type MessageStatus = 'queued' | 'analyzing' | 'searching' | 'thinking' | 'generating' | 'completed' | 'failed' | 'pending' | 'cancelled'
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp?: number
-  status?: 'pending' | 'generating' | 'completed' | 'failed' | 'cancelled'  // F-1: status 추가
+  status?: MessageStatus  // v1.0.0: 상태 세분화
   metadata?: {
     sources?: SearchSource[]
     thinking_steps?: ThinkingStep[]
     mode?: AIMode
   }
+}
+
+// v1.0.0: 상태별 UI 설정
+const MESSAGE_STATUS_CONFIG: Record<string, { icon: typeof Loader2; text: string }> = {
+  queued: { icon: Loader2, text: '대기 중...' },
+  analyzing: { icon: Loader2, text: '질문 분석 중...' },
+  searching: { icon: Loader2, text: '검색 중...' },
+  thinking: { icon: Loader2, text: '생각 중...' },
+  generating: { icon: Loader2, text: '답변 작성 중...' },
 }
 
 // 출처 모달 컴포넌트
@@ -156,8 +168,9 @@ function MessageItem({
   const thinkingSteps = message.metadata?.thinking_steps || []
   const mode = message.metadata?.mode
 
-  // F-2: DB에서 로드된 generating 상태 감지
-  const isGenerating = message.status === 'generating'
+  // v1.0.0: AI 응답 대기/생성 중 상태 감지
+  const isProcessing = ['queued', 'analyzing', 'searching', 'thinking', 'generating'].includes(message.status || '')
+  const statusConfig = message.status ? MESSAGE_STATUS_CONFIG[message.status] : null
 
   // 사용자 메시지: 오른쪽 정렬 말풍선
   if (isUser) {
@@ -172,9 +185,8 @@ function MessageItem({
     )
   }
 
-  // F-2 + H: AI 메시지 - generating 상태이고 content 없으면 로딩 표시
-  // H 개선: metadata (thinking_steps, sources)가 있으면 함께 표시
-  if (isGenerating && !message.content) {
+  // v1.0.0: AI 응답 처리 중 상태 (content 없음)
+  if (isProcessing && !message.content) {
     return (
       <div className="px-2 py-4">
         {/* 모드 표시 */}
@@ -186,23 +198,23 @@ function MessageItem({
           </div>
         )}
 
-        {/* H: generating 중에도 thinking_steps 표시 (DB에서 로드됨) */}
+        {/* thinking_steps 표시 (DB에서 로드됨) */}
         {thinkingSteps.length > 0 && (
           <ThinkingProcessAccordion steps={thinkingSteps} isStreaming={true} />
         )}
 
-        {/* H: generating 중에도 sources 표시 (DB에서 로드됨) */}
+        {/* sources 표시 (DB에서 로드됨) */}
         {sources.length > 0 && (
           <div className="mb-2">
             <StreamingSourcesToggle sources={sources} hasContent={false} />
           </div>
         )}
 
-        {/* 로딩 인디케이터 */}
+        {/* v1.0.0: 상태별 로딩 인디케이터 */}
         <div className="flex items-center gap-2">
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           <span className="text-sm text-muted-foreground">
-            {thinkingSteps.length > 0 || sources.length > 0 ? '답변 작성 중...' : '답변 생성 중...'}
+            {statusConfig?.text || '답변 생성 중...'}
           </span>
         </div>
 
@@ -244,8 +256,8 @@ function MessageItem({
         {/* 출처 버튼 */}
         {sources.length > 0 && <SourcesModal sources={sources} />}
 
-        {/* F-3: 재생성 버튼 - 마지막 AI 메시지에만 표시 (generating이 아닐 때만) */}
-        {isLastAssistant && onRegenerate && !isStreaming && !isGenerating && (
+        {/* F-3: 재생성 버튼 - 마지막 AI 메시지에만 표시 (processing 중이 아닐 때만) */}
+        {isLastAssistant && onRegenerate && !isStreaming && !isProcessing && (
           <Button
             variant="ghost"
             size="sm"
