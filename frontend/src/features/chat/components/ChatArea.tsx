@@ -155,6 +155,8 @@ function MessageItem({
   const sources = message.metadata?.sources || []
   const thinkingSteps = message.metadata?.thinking_steps || []
   const mode = message.metadata?.mode
+  const normalizedMode = normalizeMode(typeof mode === 'string' ? mode : undefined)
+  const modeLabel = normalizedMode ? AI_MODE_CONFIG[normalizedMode].label : mode
 
   // F-2: DB에서 로드된 generating 상태 감지
   const isGenerating = message.status === 'generating'
@@ -181,7 +183,7 @@ function MessageItem({
         {mode && (
           <div className="mb-2">
             <Badge variant="outline" className="text-xs">
-              {mode}
+              {modeLabel}
             </Badge>
           </div>
         )}
@@ -224,7 +226,7 @@ function MessageItem({
       {mode && (
         <div className="mb-2">
           <Badge variant="outline" className="text-xs">
-            {mode}
+            {modeLabel}
           </Badge>
         </div>
       )}
