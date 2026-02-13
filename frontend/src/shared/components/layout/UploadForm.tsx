@@ -29,6 +29,7 @@ export default function UploadForm() {
   const [isUploading, setUploading] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [showOcrModal, setShowOcrModal] = useState(false)
+  const [showOfficeModal, setShowOfficeModal] = useState(false)
   const [showStreamingModal, setShowStreamingModal] = useState(false)
   const [speakerRange, setSpeakerRange] = useState<SpeakerRange>('auto')
   const [accuracyMode, setAccuracyMode] = useState<AccuracyMode>('speed')
@@ -84,17 +85,14 @@ export default function UploadForm() {
     const file = e.target.files?.[0] ?? null
     if (file) {
       // 허용되지 않은 파일 체크
-      if (!isAudioFile(file.name) && !isDocumentFile(file.name)) {
-        // Office 문서인 경우 별도 메시지
-        if (isOfficeDocument(file.name)) {
-          setStatus(
-            'Office 문서(.doc, .docx, .xls, .xlsx, .ppt, .pptx)는 현재 지원하지 않습니다. PDF, 이미지, 또는 텍스트 파일로 변환 후 업로드해 주세요.'
-          )
-        } else {
-          setStatus(
-            '지원하지 않는 파일 형식입니다. 오디오/비디오 파일, PDF, 이미지 파일, 또는 텍스트 파일만 업로드 가능합니다.'
-          )
-        }
+      if (
+        !isAudioFile(file.name) &&
+        !isDocumentFile(file.name) &&
+        !isOfficeDocument(file.name)
+      ) {
+        setStatus(
+          '지원하지 않는 파일 형식입니다. 오디오/비디오 파일, PDF, 이미지 파일, 텍스트 파일 또는 Office 문서만 업로드 가능합니다.'
+        )
         if (fileInputRef.current) {
           fileInputRef.current.value = ''
         }
@@ -111,6 +109,9 @@ export default function UploadForm() {
         setShowOcrModal(true)
         setOcrMode(null)
         setOcrAccuracyMode('speed')
+      } else if (isOfficeDocument(file.name)) {
+        // Office 문서는 별도 확인 모달 표시
+        setShowOfficeModal(true)
       }
     }
   }
@@ -148,6 +149,50 @@ export default function UploadForm() {
       setSelectedFile(null)
       setOcrMode(null)
       setOcrAccuracyMode('speed')
+
+      // 파일 입력 필드 초기화
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+
+      toast.success('파일이 처리 대기열에 추가되었습니다', {
+        description: filename,
+      })
+
+      navigate('/contents')
+      dispatchContentsRefresh()
+    } catch (error) {
+      setStatus('')
+      toast.error('업로드 실패', {
+        description: '다시 시도해 주세요.',
+      })
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const handleOfficeModalClose = () => {
+    setShowOfficeModal(false)
+    setSelectedFile(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  const handleOfficeUpload = async () => {
+    if (!selectedFile) return
+
+    const filename = selectedFile.name
+    setUploading(true)
+    setStatus('업로드 중...')
+    try {
+      await uploadApi.uploadContent(selectedFile, {
+        ocrMode: 'document',
+        ocrAccuracyMode: 'speed',
+      })
+      setStatus('')
+      setShowOfficeModal(false)
+      setSelectedFile(null)
 
       // 파일 입력 필드 초기화
       if (fileInputRef.current) {
@@ -477,6 +522,54 @@ export default function UploadForm() {
       </Dialog>
 
       <StreamingASRModal open={showStreamingModal} onOpenChange={setShowStreamingModal} />
+
+      {/* Office 문서 업로드 확인 모달 */}
+      <Dialog open={showOfficeModal} onOpenChange={setShowOfficeModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>문서 업로드</DialogTitle>
+            <DialogDescription>
+              선택한 문서에서 텍스트를 추출하여 요약합니다.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-4">
+            <div className="flex items-center space-x-3 rounded-md border p-4">
+              <div className="text-2xl">📄</div>
+              <div className="flex-1 space-y-1">
+                <p className="text-sm font-medium leading-none">
+                  {selectedFile?.name}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {(selectedFile?.size ? (selectedFile.size / 1024 / 1024).toFixed(2) : 0)} MB
+                </p>
+              </div>
+            </div>
+            <p className="text-sm text-muted-foreground mt-4">
+              * MarkItDown을 사용하여 텍스트를 추출합니다.<br />
+              * 이미지나 복잡한 레이아웃은 제외될 수 있습니다.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleOfficeModalClose}
+              disabled={isUploading}
+            >
+              취소
+            </Button>
+            <Button
+              type="button"
+              onClick={handleOfficeUpload}
+              disabled={isUploading}
+            >
+              {isUploading ? '업로드 중...' : '업로드'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
