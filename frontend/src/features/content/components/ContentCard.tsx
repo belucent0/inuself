@@ -86,11 +86,12 @@ function formatDuration(seconds: number): string {
 interface ContentCardProps {
   content: ContentSummary
   selected?: boolean
+  selectionMode?: boolean
   onToggle?: (id: string) => void
   onRetry?: (id: string, type: 'download' | 'asr' | 'ocr' | 'summary') => void
 }
 
-export function ContentCard({ content, selected, onToggle, onRetry }: ContentCardProps) {
+export function ContentCard({ content, selected, selectionMode, onToggle, onRetry }: ContentCardProps) {
   const status = content.status
   const isProcessing = PROCESSING_STATUSES.includes(status)
   const isFailed = FAILED_STATUSES.includes(status)
@@ -103,77 +104,117 @@ export function ContentCard({ content, selected, onToggle, onRetry }: ContentCar
     enabled: status === 'COMPLETED',
   })
 
+  const isSelected = Boolean(selectionMode && selected)
+  const metaText =
+    content.content_type === 'AUDIO' && status === 'COMPLETED'
+      ? `화자 ${content.speakers?.length || 0}명 · ${formatDuration(content.duration_seconds || 0)}`
+      : (content.content_type === 'DOCUMENT' || content.content_type === 'PORTRAY') &&
+          status === 'COMPLETED' &&
+          content.document?.page_count
+        ? `${content.document.page_count}페이지`
+        : null
+  const body = (
+    <div className="flex-1 min-h-[2.75rem] mb-3">
+      <h3 className="text-base font-medium leading-snug line-clamp-2">
+        {content.title || content.filename}
+      </h3>
+    </div>
+  )
+  const footer = (
+    <div className="space-y-2 mt-auto pt-2 border-t border-border/50">
+      {isProcessing ? (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2.5">
+            <Badge variant={getStatusVariant(status)} className="text-xs flex items-center gap-1.5 shrink-0">
+              {getStatusIcon(status)}
+              {STATUS_LABELS[status]}
+            </Badge>
+            <Progress value={displayProgress} className="h-1.5 flex-1" />
+            <span className="text-xs text-muted-foreground shrink-0">
+              {displayProgress}%
+            </span>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {formatDate(content.created_at)}
+          </span>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-2">
+          <Badge variant={getStatusVariant(status)} className="text-xs flex items-center gap-1.5">
+            {getStatusIcon(status)}
+            {STATUS_LABELS[status]}
+          </Badge>
+          <span className="text-xs text-muted-foreground shrink-0">
+            {formatDate(content.created_at)}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+
   return (
-    <Card ref={prefetchRef} className="hover:shadow-md transition-shadow h-full flex flex-col">
-      <Link to={`/contents/${content.id}`} className="flex flex-col flex-1 px-5 py-4">
+    <Card
+      ref={prefetchRef}
+      className={`hover:shadow-md transition-shadow h-full flex flex-col ${isSelected ? 'bg-muted/30' : ''}`}
+      onClick={selectionMode && onToggle ? () => onToggle(content.id) : undefined}
+    >
+      <div className="flex flex-col flex-1 px-5 py-4">
         {/* Header: 타입 아이콘 + 확장자 + 체크박스 */}
         <div className="flex items-center gap-2 mb-3">
-          <div className={`flex items-center justify-center w-7 h-7 rounded flex-shrink-0 ${getContentTypeStyle(content.content_type)}`}>
-            {getContentTypeIcon(content.content_type)}
-          </div>
-          {getFileExtension(content.filename) && (
-            <Badge variant="outline" className="text-xs">
-              {getFileExtension(content.filename)}
-            </Badge>
-          )}
-          <div className="flex-1" />
-          {onToggle && (
-            <Checkbox
-              checked={selected}
-              onCheckedChange={() => onToggle(content.id)}
-              onClick={(e) => e.stopPropagation()}
-              className="flex-shrink-0"
-            />
-          )}
-        </div>
-
-        {/* Body: 제목 (핵심 콘텐츠) */}
-        <div className="flex-1 min-h-[2.75rem] mb-3">
-          <h3 className="text-base font-medium leading-snug line-clamp-2">
-            {content.title || content.filename}
-          </h3>
-        </div>
-
-        {/* Footer: 상태 + 메타 + 날짜 */}
-        <div className="space-y-2 mt-auto pt-2 border-t border-border/50">
-          {isProcessing ? (
-            <div className="flex items-center gap-2.5">
-              <Badge variant={getStatusVariant(status)} className="text-xs flex items-center gap-1.5 shrink-0">
-                {getStatusIcon(status)}
-                {STATUS_LABELS[status]}
-              </Badge>
-              <Progress value={displayProgress} className="h-1.5 flex-1" />
-              <span className="text-xs text-muted-foreground shrink-0">
-                {displayProgress}%
-              </span>
+          {selectionMode ? (
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <div className={`flex items-center justify-center w-7 h-7 rounded flex-shrink-0 ${getContentTypeStyle(content.content_type)}`}>
+                {getContentTypeIcon(content.content_type)}
+              </div>
+              {getFileExtension(content.filename) && (
+                <Badge variant="outline" className="text-xs">
+                  {getFileExtension(content.filename)}
+                </Badge>
+              )}
             </div>
           ) : (
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Badge variant={getStatusVariant(status)} className="text-xs flex items-center gap-1.5">
-                  {getStatusIcon(status)}
-                  {STATUS_LABELS[status]}
-                </Badge>
-                {content.content_type === 'AUDIO' && status === 'COMPLETED' && (
-                  <span className="text-xs text-muted-foreground">
-                    화자 {content.speakers?.length || 0}명 · {formatDuration(content.duration_seconds || 0)}
-                  </span>
-                )}
-                {(content.content_type === 'DOCUMENT' || content.content_type === 'PORTRAY') &&
-                  status === 'COMPLETED' &&
-                  content.document?.page_count && (
-                    <span className="text-xs text-muted-foreground">
-                      {content.document.page_count}페이지
-                    </span>
-                  )}
+            <Link
+              to={`/contents/${content.id}`}
+              className="flex items-center gap-2 flex-1 min-w-0"
+            >
+              <div className={`flex items-center justify-center w-7 h-7 rounded flex-shrink-0 ${getContentTypeStyle(content.content_type)}`}>
+                {getContentTypeIcon(content.content_type)}
               </div>
-              <span className="text-xs text-muted-foreground shrink-0">
-                {formatDate(content.created_at)}
-              </span>
+              {getFileExtension(content.filename) && (
+                <Badge variant="outline" className="text-xs">
+                  {getFileExtension(content.filename)}
+                </Badge>
+              )}
+            </Link>
+          )}
+          <div className="flex items-center text-xs text-muted-foreground">
+            {metaText && <span>{metaText}</span>}
+          </div>
+          {selectionMode && onToggle && (
+            <div
+              className="flex-shrink-0"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <Checkbox
+                checked={selected}
+                onCheckedChange={() => onToggle(content.id)}
+              />
             </div>
           )}
         </div>
-      </Link>
+
+        {selectionMode ? (
+          <div className="flex flex-col flex-1">
+            {body}
+            {footer}
+          </div>
+        ) : (
+          <Link to={`/contents/${content.id}`} className="flex flex-col flex-1">
+            {body}
+            {footer}
+          </Link>
+        )}
+      </div>
 
       {/* 실패 시 재처리 버튼 */}
       {onRetry && isFailed && (

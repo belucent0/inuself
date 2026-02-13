@@ -189,14 +189,18 @@ async def _process_job(
 
         # 텍스트 파일은 OCR 불필요
         if is_text_file and text_content is not None:
-            logger.info(f"[OCR] [5/5] Text file processing completed: {len(text_content)} chars")
+            logger.info(f"[OCR] [5/5] Text/Office file processing completed: {len(text_content)} chars")
+
+            file_type = prep_result.get("file_type", ".txt")
+            html_content = prep_result.get("html_content")  # HTML 결과 가져오기
 
             # 결과 저장
             result_data = {
                 "file_id": file_id,
                 "ocr_text": text_content,
+                "html_content": html_content,  # DB 저장을 위해 HTML 포함
                 "page_count": 1,
-                "ocr_metadata": {"file_type": ".txt", "direct_read": True},
+                "ocr_metadata": {"file_type": file_type, "direct_read": True},
             }
 
             result_s3_key = f"results/ocr/{file_id}/{uuid4().hex}.json"

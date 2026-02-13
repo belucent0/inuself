@@ -4,8 +4,12 @@ WORKDIR /app
 
 # 시스템 의존성 설치 (최소화)
 # - ffmpeg: 오디오 변환 (WAV), duration 추출
+# - libreoffice: Office 문서 PDF 변환 (MarkItDown 실패 시 fallback)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    libreoffice-writer \
+    libreoffice-calc \
+    libreoffice-impress \
     && rm -rf /var/lib/apt/lists/*
 
 # uv 설치 (공식 이미지에서 복사)
