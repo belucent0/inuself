@@ -3,6 +3,7 @@
 최종 응답을 생성하는 노드입니다.
 V8.3 Phase 4: Citation (출처 표시) 추가
 """
+
 from __future__ import annotations
 
 from loguru import logger
@@ -16,13 +17,11 @@ from ..tools.llm_client import async_llm_completion_stream
 from ...utils.citation_manager import CitationManager
 
 
-
 # 모드별 시스템 프롬프트
 SYSTEM_PROMPTS = {
     AIMode.SIMPLE: """당신은 친절하고 도움이 되는 AI 어시스턴트입니다.
 사용자의 질문에 명확하고 간결하게 답변하세요.
 한국어로 자연스럽게 대화하세요.""",
-
     AIMode.SEARCH: """당신은 웹 검색 결과를 바탕으로 정보를 제공하는 AI 어시스턴트입니다.
 
 **중요: 개체 명확화 (Entity Disambiguation) 원칙**
@@ -39,17 +38,14 @@ SYSTEM_PROMPTS = {
 제공된 검색 결과를 참고하여 정확한 정보를 전달하세요.
 출처를 명시하고, 검색 결과에 없는 정보는 추측하지 마세요.
 한국어로 답변하세요.""",
-
     AIMode.RAG: """당신은 사용자의 문서를 기반으로 답변하는 AI 어시스턴트입니다.
 제공된 문서 내용을 참고하여 정확한 정보를 전달하세요.
 문서에 없는 내용은 "해당 정보가 문서에 없습니다"라고 안내하세요.
 한국어로 답변하세요.""",
-
     AIMode.REASONING: """당신은 복잡한 문제를 분석하고 추론하는 AI 어시스턴트입니다.
 단계별로 논리적으로 설명하세요.
 필요하면 여러 관점에서 분석하세요.
 한국어로 답변하세요.""",
-
     AIMode.HYBRID: """당신은 웹 검색과 내부 문서를 종합하여 답변하는 AI 어시스턴트입니다.
 
 **중요: 개체 명확화 (Entity Disambiguation) 원칙**
@@ -90,11 +86,13 @@ class GeneratorNode:
         thinking_steps = list(state.get("thinking_steps", []))
 
         # 사고 과정 기록
-        thinking_steps.append(ThinkingStep(
-            step="generation_start",
-            content=f"응답 생성 시작 (모드: {mode})",
-            timestamp=time.time()
-        ))
+        thinking_steps.append(
+            ThinkingStep(
+                step="generation_start",
+                content=f"응답 생성 시작 (모드: {mode})",
+                timestamp=time.time(),
+            )
+        )
 
         # 컨텍스트 구성
         context = self._build_context(mode, search_results)
@@ -107,10 +105,9 @@ class GeneratorNode:
 
         # 컨텍스트가 있으면 추가
         if context:
-            messages.append({
-                "role": "user",
-                "content": f"참고 자료:\n{context}\n\n질문: {query}"
-            })
+            messages.append(
+                {"role": "user", "content": f"참고 자료:\n{context}\n\n질문: {query}"}
+            )
         else:
             messages.append({"role": "user", "content": query})
 
@@ -151,11 +148,13 @@ class GeneratorNode:
                 if citations:
                     logger.info(f"[Generator] Extracted {len(citations)} citations")
 
-            thinking_steps.append(ThinkingStep(
-                step="generation_complete",
-                content=f"응답 생성 완료 ({len(response)} 글자, {len(citations)}개 출처)",
-                timestamp=time.time()
-            ))
+            thinking_steps.append(
+                ThinkingStep(
+                    step="generation_complete",
+                    content=f"응답 생성 완료 ({len(response)} 글자, {len(citations)}개 출처)",
+                    timestamp=time.time(),
+                )
+            )
 
             # 소스 정보 추출
             sources = self._extract_sources(search_results)
@@ -170,11 +169,13 @@ class GeneratorNode:
 
         except Exception as e:
             logger.error(f"[Generator] Generation failed: {e}")
-            thinking_steps.append(ThinkingStep(
-                step="generation_error",
-                content=f"응답 생성 실패: {str(e)}",
-                timestamp=time.time()
-            ))
+            thinking_steps.append(
+                ThinkingStep(
+                    step="generation_error",
+                    content=f"응답 생성 실패: {str(e)}",
+                    timestamp=time.time(),
+                )
+            )
             return {
                 "response": "죄송합니다. 응답 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
                 "sources": [],
@@ -205,10 +206,9 @@ class GeneratorNode:
         ]
 
         if context:
-            messages.append({
-                "role": "user",
-                "content": f"참고 자료:\n{context}\n\n질문: {query}"
-            })
+            messages.append(
+                {"role": "user", "content": f"참고 자료:\n{context}\n\n질문: {query}"}
+            )
         else:
             messages.append({"role": "user", "content": query})
 
@@ -220,8 +220,8 @@ class GeneratorNode:
             "data": {
                 "step": "generation_start",
                 "content": f"응답 생성 시작 (모델: {selected_model or 'auto'})",
-                "timestamp": time.time()
-            }
+                "timestamp": time.time(),
+            },
         }
 
         response_chunks = []
@@ -238,8 +238,8 @@ class GeneratorNode:
             "data": {
                 "step": "generation_complete",
                 "content": "응답 생성 완료",
-                "timestamp": time.time()
-            }
+                "timestamp": time.time(),
+            },
         }
 
         # 완료 시 소스 정보 및 Citation 전송
@@ -286,14 +286,19 @@ class GeneratorNode:
             return ""
 
         context_parts = []
-        for i, result in enumerate(search_results[:10], 1):  # 최대 10개 (LLM 컨텍스트 효율성)
+        for i, result in enumerate(
+            search_results[:10], 1
+        ):  # 최대 10개 (LLM 컨텍스트 효율성)
             source_type = "웹" if result.get("source") == "web" else "문서"
+            content_text = result.get("content_preview") or result.get("snippet", "")
+            if len(content_text) > 700:
+                content_text = content_text[:700]
             # Phase 4: 출처 번호를 명확히 표시
             context_parts.append(
                 f"출처 [{i}] ({source_type})\n"
                 f"제목: {result.get('title', '제목 없음')}\n"
                 f"URL: {result.get('url', '')}\n"
-                f"내용: {result.get('snippet', '')}\n"
+                f"내용: {content_text}\n"
             )
 
         header = "## 제공된 출처 정보\n\n"
@@ -301,7 +306,9 @@ class GeneratorNode:
 
         return header + "\n---\n".join(context_parts)
 
-    def _extract_sources(self, search_results: list[SearchResult]) -> list[SearchResult]:
+    def _extract_sources(
+        self, search_results: list[SearchResult]
+    ) -> list[SearchResult]:
         """검색 결과에서 출처 정보 추출.
 
         Args:

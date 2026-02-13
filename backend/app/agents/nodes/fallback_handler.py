@@ -2,6 +2,7 @@
 
 V8.4: 모든 검색 시도가 실패했을 때 대안을 제공합니다.
 """
+
 from __future__ import annotations
 
 import time
@@ -55,11 +56,13 @@ class FallbackHandlerNode:
             # RAG로 전환 (내부 문서 검색)
             logger.info("[FallbackHandler] Fallback: Switching to RAG mode")
 
-            thinking_steps.append(ThinkingStep(
-                step="fallback_rag",
-                content="웹 검색 실패, 내부 문서 검색으로 전환",
-                timestamp=time.time()
-            ))
+            thinking_steps.append(
+                ThinkingStep(
+                    step="fallback_rag",
+                    content="웹 검색 실패, 내부 문서 검색으로 전환",
+                    timestamp=time.time(),
+                )
+            )
 
             return {
                 "mode": AIMode.RAG,
@@ -71,13 +74,17 @@ class FallbackHandlerNode:
             # LLM 지식만으로 답변
             logger.info("[FallbackHandler] Fallback: Using LLM knowledge only")
 
-            fallback_message = self._create_fallback_message(query, retry_count, retry_reason)
+            fallback_message = self._create_fallback_message(
+                query, retry_count, retry_reason
+            )
 
-            thinking_steps.append(ThinkingStep(
-                step="fallback_llm",
-                content="웹 검색 실패, 내장 지식으로 답변",
-                timestamp=time.time()
-            ))
+            thinking_steps.append(
+                ThinkingStep(
+                    step="fallback_llm",
+                    content="웹 검색 실패, 내장 지식으로 답변",
+                    timestamp=time.time(),
+                )
+            )
 
             return {
                 "search_results": [],
@@ -88,20 +95,24 @@ class FallbackHandlerNode:
                 "metadata": {
                     **state.get("metadata", {}),
                     "fallback_message": fallback_message,
-                }
+                },
             }
 
         else:  # explicit_error
             # 사용자에게 명시적으로 실패 알림
             logger.info("[FallbackHandler] Fallback: Explicit error message")
 
-            error_message = self._create_error_message(query, retry_count, failed_queries)
+            error_message = self._create_error_message(
+                query, retry_count, failed_queries
+            )
 
-            thinking_steps.append(ThinkingStep(
-                step="fallback_error",
-                content="검색 실패, 사용자에게 안내",
-                timestamp=time.time()
-            ))
+            thinking_steps.append(
+                ThinkingStep(
+                    step="fallback_error",
+                    content="검색 실패, 사용자에게 안내",
+                    timestamp=time.time(),
+                )
+            )
 
             return {
                 "search_results": [],
@@ -125,7 +136,10 @@ class FallbackHandlerNode:
 
         # 1. 내부 문서가 있을 가능성이 높으면 RAG로 전환
         query = state["query"].lower()
-        if any(keyword in query for keyword in ["내 문서", "내 콘텐츠", "저장된", "업로드한"]):
+        if any(
+            keyword in query
+            for keyword in ["내 문서", "내 콘텐츠", "저장된", "업로드한"]
+        ):
             return "rag"
 
         # 2. HYBRID 모드였다면 이미 RAG도 시도했을 것이므로 LLM만 사용
@@ -133,13 +147,18 @@ class FallbackHandlerNode:
             return "llm_only"
 
         # 3. 특정 최신 정보가 필요한 경우 명시적 에러
-        if any(keyword in query for keyword in ["최신", "현재", "오늘", "실시간", "2026", "2025"]):
+        if any(
+            keyword in query
+            for keyword in ["최신", "현재", "오늘", "실시간", "2026", "2025"]
+        ):
             return "explicit_error"
 
         # 4. 기본: LLM 지식으로 답변 시도
         return "llm_only"
 
-    def _create_fallback_message(self, query: str, retry_count: int, retry_reason: str) -> str:
+    def _create_fallback_message(
+        self, query: str, retry_count: int, retry_reason: str
+    ) -> str:
         """폴백 메시지 생성.
 
         Args:
@@ -155,6 +174,7 @@ class FallbackHandlerNode:
             "insufficient_results": "충분한 검색 결과를 찾지 못했습니다",
             "low_quality": "신뢰할 만한 검색 결과를 찾지 못했습니다",
             "low_relevance": "관련성 높은 검색 결과를 찾지 못했습니다",
+            "low_content_coverage": "근거가 충분한 본문 결과를 찾지 못했습니다",
         }
 
         reason_msg = reason_messages.get(retry_reason, "검색 결과를 찾지 못했습니다")

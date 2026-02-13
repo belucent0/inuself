@@ -167,6 +167,8 @@ function MessageItem({
   const sources = message.metadata?.sources || []
   const thinkingSteps = message.metadata?.thinking_steps || []
   const mode = message.metadata?.mode
+  const normalizedMode = normalizeMode(typeof mode === 'string' ? mode : undefined)
+  const modeLabel = normalizedMode ? AI_MODE_CONFIG[normalizedMode].label : mode
 
   // v1.0.0: AI 응답 대기/생성 중 상태 감지
   const isProcessing = ['queued', 'analyzing', 'searching', 'thinking', 'generating'].includes(message.status || '')
@@ -193,7 +195,7 @@ function MessageItem({
         {mode && (
           <div className="mb-2">
             <Badge variant="outline" className="text-xs">
-              {mode}
+              {modeLabel}
             </Badge>
           </div>
         )}
@@ -236,7 +238,7 @@ function MessageItem({
       {mode && (
         <div className="mb-2">
           <Badge variant="outline" className="text-xs">
-            {mode}
+            {modeLabel}
           </Badge>
         </div>
       )}

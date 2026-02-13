@@ -2,7 +2,7 @@
  * 사고 과정 표시 컴포넌트
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { ChevronDown, ChevronUp, Brain, Search, CheckCircle2, Loader2 } from 'lucide-react'
 import { cn } from '@/shared/utils/cn'
 import { type ThinkingStep, type AIMode, AI_MODE_CONFIG } from '../types'
@@ -40,8 +40,11 @@ function getStepIcon(step: string, isLatest: boolean, isStreaming: boolean) {
   switch (step) {
     case 'intent_analysis':
     case 'intent_result':
+    case 'topic_understanding':
       return <Brain className="h-3 w-3 text-purple-500" />
     case 'query_generated':
+    case 'request_reframing':
+    case 'cross_language_fallback':
       return <Search className="h-3 w-3 text-cyan-500" />
     case 'source_analysis':
       return <Brain className="h-3 w-3 text-orange-500" />
@@ -69,15 +72,18 @@ function getStepIcon(step: string, isLatest: boolean, isStreaming: boolean) {
 // 단계 이름 변환
 function getStepLabel(step: string): string {
   const labels: Record<string, string> = {
-    intent_analysis: '의도 분석',
+    intent_analysis: '질문 이해',
     intent_result: '모드 결정',
-    query_generated: '검색 쿼리 생성',
+    topic_understanding: '질문 해석',
+    request_reframing: '요청 재정의',
+    cross_language_fallback: '검색 확장',
+    query_generated: '검색 중',
     source_analysis: '출처 분석',
-    web_search: '웹 검색 중',
-    web_search_complete: '웹 검색 완료',
-    rag_search: '문서 검색 중',
-    rag_search_complete: '문서 검색 완료',
-    search_complete: '통합 검색 완료',
+    web_search: '검색 중',
+    web_search_complete: '검색 완료',
+    rag_search: '검색 중',
+    rag_search_complete: '검색 완료',
+    search_complete: '검색 완료',
     reasoning_start: '추론 시작',
     reasoning_step: '추론 중',
     reasoning_complete: '추론 완료',
@@ -87,6 +93,103 @@ function getStepLabel(step: string): string {
     reflection_complete: '검증 완료',
   }
   return labels[step] || step
+}
+
+function normalizeStepContent(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (content == null) return ''
+  return String(content)
+}
+
+function getStepLines(step: string, content: unknown): string[] {
+  const safeContent = normalizeStepContent(content)
+  const normalized = step === 'topic_understanding'
+    ? safeContent.replace(/\s\|\s/g, '\n')
+    : safeContent
+
+  return normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function renderStepContent(step: string, content: unknown): ReactNode {
+  const lines = getStepLines(step, content)
+  if (lines.length === 0) return null
+
+  if (step === 'query_generated') {
+    return (
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {lines.map((line, idx) => {
+          const query = line.replace(/^\d+\.\s*/, '').trim()
+          return (
+            <span
+              key={`${idx}-${query}`}
+              className="text-[11px] px-2 py-1 rounded-md bg-blue-100/80 text-blue-800 border border-blue-200"
+            >
+              {query}
+            </span>
+          )
+        })}
+      </div>
+    )
+  }
+
+  if (step === 'topic_understanding') {
+    const [headline, ...details] = lines
+    return (
+      <div className="mt-1.5 space-y-1.5">
+        <p className="text-xs leading-relaxed text-foreground/80">{headline}</p>
+        {details.map((line, idx) => {
+          const match = line.match(/^([^:]+):\s*(.+)$/)
+          if (!match) {
+            return (
+              <p key={`${idx}-${line}`} className="text-xs leading-relaxed text-muted-foreground">
+                {line}
+              </p>
+            )
+          }
+
+          const [, label, value] = match
+          return (
+            <div key={`${idx}-${label}`} className="flex items-start gap-2 text-xs leading-relaxed">
+              <span className="px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 border border-violet-200 shrink-0">
+                {label}
+              </span>
+              <span className="text-muted-foreground">{value}</span>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  if (step === 'request_reframing') {
+    const [headline, ...items] = lines
+    return (
+      <div className="mt-1.5 space-y-1.5">
+        <p className="text-xs leading-relaxed text-foreground/80">{headline}</p>
+        {items.length > 0 && (
+          <div className="space-y-1">
+            {items.map((line, idx) => (
+              <p
+                key={`${idx}-${line}`}
+                className="text-xs text-muted-foreground px-2 py-1 rounded-md bg-muted/40"
+              >
+                {line}
+              </p>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <p className="text-muted-foreground text-xs mt-0.5 leading-relaxed whitespace-pre-wrap">
+      {normalizeStepContent(content)}
+    </p>
+  )
 }
 
 interface ThinkingProcessAccordionProps {
@@ -156,10 +259,11 @@ export function ThinkingProcessAccordion({
         <div className="px-4 py-3 bg-muted/10 border-t">
           <div className="space-y-2">
             {thinkingSteps.map((step, index) => {
+              const stepKey = typeof step.step === 'string' ? step.step : 'thinking'
               const isLatest = index === thinkingSteps.length - 1
               return (
                 <div
-                  key={`${step.step}-${index}`}
+                  key={`${stepKey}-${index}`}
                   className={cn(
                     'flex items-start gap-3 text-sm animate-in fade-in slide-in-from-left-2',
                     isLatest && isStreaming && 'opacity-80'
@@ -173,7 +277,7 @@ export function ThinkingProcessAccordion({
                         isLatest && isStreaming && 'border-purple-500/50'
                       )}
                     >
-                      {getStepIcon(step.step, isLatest, isStreaming || false)}
+                      {getStepIcon(stepKey, isLatest, isStreaming || false)}
                     </div>
                     {index < thinkingSteps.length - 1 && (
                       <div className="w-px h-full min-h-[16px] bg-border" />
@@ -182,13 +286,11 @@ export function ThinkingProcessAccordion({
 
                   <div className="flex-1 pb-2">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-foreground/80">
-                        {getStepLabel(step.step)}
-                      </span>
-                    </div>
-                    <p className="text-muted-foreground text-xs mt-0.5 leading-relaxed whitespace-pre-wrap">
-                      {step.content}
-                    </p>
+                        <span className="font-medium text-foreground/80">
+                          {getStepLabel(stepKey)}
+                        </span>
+                      </div>
+                    {renderStepContent(stepKey, step.content)}
                   </div>
                 </div>
               )

@@ -14,6 +14,7 @@ v1.0.0: 확인 후 라우팅 + SSE 재연결 + 메시지 상태 세분화
 
 기존 chat_controller.py와 별도로 동작합니다.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,27 +43,46 @@ router = APIRouter(prefix="/api/threads", tags=["threads"])
 
 class CreateThreadRequest(BaseModel):
     """새 스레드 생성 요청 (첫 메시지 포함)."""
+
     query: str = Field(..., description="사용자 질문", min_length=1)
-    mode: str = Field(default="auto", description="AI 모드 (auto, simple, search, rag, reasoning, hybrid)")
-    context: dict | None = Field(default=None, description="추가 컨텍스트 (RAG용 content_ids 등)")
+    mode: str = Field(
+        default="auto",
+        description="AI 모드 (auto, simple, search, rag, reasoning, hybrid)",
+    )
+    context: dict | None = Field(
+        default=None, description="추가 컨텍스트 (RAG용 content_ids 등)"
+    )
 
 
 class AddMessageRequest(BaseModel):
     """기존 스레드에 메시지 추가 요청."""
+
     query: str = Field(..., description="사용자 질문", min_length=1)
-    mode: str = Field(default="auto", description="AI 모드 (auto, simple, search, rag, reasoning, hybrid)")
-    context: dict | None = Field(default=None, description="추가 컨텍스트 (RAG용 content_ids 등)")
-    skip_user_message: bool = Field(default=False, description="사용자 메시지 저장 건너뛰기 (이미 저장된 경우)")
+    mode: str = Field(
+        default="auto",
+        description="AI 모드 (auto, simple, search, rag, reasoning, hybrid)",
+    )
+    context: dict | None = Field(
+        default=None, description="추가 컨텍스트 (RAG용 content_ids 등)"
+    )
+    skip_user_message: bool = Field(
+        default=False, description="사용자 메시지 저장 건너뛰기 (이미 저장된 경우)"
+    )
 
 
 class RegenerateRequest(BaseModel):
     """답변 재생성 요청."""
-    mode: str = Field(default="auto", description="AI 모드 (auto, simple, search, rag, reasoning, hybrid)")
+
+    mode: str = Field(
+        default="auto",
+        description="AI 모드 (auto, simple, search, rag, reasoning, hybrid)",
+    )
     context: dict | None = Field(default=None, description="추가 컨텍스트")
 
 
 class CitationModel(BaseModel):
     """Citation (출처 표시) 모델 - Phase 4."""
+
     id: int = Field(..., description="출처 번호")
     title: str = Field(..., description="출처 제목")
     url: str = Field(..., description="출처 URL")
@@ -72,22 +92,27 @@ class CitationModel(BaseModel):
 
 class ThreadResponse(BaseModel):
     """스레드 응답 (생성/메시지 추가 후)."""
+
     response: str = Field(..., description="AI 응답")
     thread_id: str = Field(..., description="스레드 ID")
     mode: str = Field(..., description="사용된 AI 모드")
     sources: list[dict] = Field(default=[], description="참조 소스 목록")
-    citations: list[CitationModel] = Field(default=[], description="출처 표시 목록 (Phase 4)")
+    citations: list[CitationModel] = Field(
+        default=[], description="출처 표시 목록 (Phase 4)"
+    )
     thinking_steps: list[dict] = Field(default=[], description="사고 과정")
 
 
 class ThreadListResponse(BaseModel):
     """스레드 목록 응답."""
+
     threads: list[dict] = Field(..., description="스레드 목록")
     total: int = Field(..., description="전체 개수")
 
 
 class ThreadDetailResponse(BaseModel):
     """스레드 상세 응답."""
+
     thread_id: str
     title: str
     messages: list[dict]
@@ -109,6 +134,27 @@ async def get_current_user_id() -> UUID:
     return UUID("01234567-89ab-cdef-0123-456789abcdef")
 
 
+def _normalize_mode_name(mode: Any) -> str:
+    """AIMode/문자열 모드를 UI 친화 문자열로 정규화."""
+    if mode is None:
+        return "simple"
+
+    # Enum-like object
+    value = getattr(mode, "value", None)
+    if isinstance(value, str) and value:
+        return value.lower()
+
+    text = str(mode).strip()
+    if not text:
+        return "simple"
+
+    # 'AIMode.SEARCH' -> 'search'
+    if text.startswith("AIMode."):
+        text = text.split(".", 1)[1]
+
+    return text.lower()
+
+
 # === 백그라운드 AI 응답 생성 ===
 
 
@@ -128,7 +174,9 @@ async def generate_ai_response_background(
 
     V9.2: message_id가 제공되면 기존 메시지를 업데이트, 없으면 새로 생성
     """
-    logger.info(f"[Thread] Background generation started: thread_id={thread_id}, message_id={message_id}, query='{query[:50]}...'")
+    logger.info(
+        f"[Thread] Background generation started: thread_id={thread_id}, message_id={message_id}, query='{query[:50]}...'"
+    )
 
     try:
         # 새로운 DB 세션 생성 (백그라운드 태스크는 별도 세션 필요)
@@ -155,7 +203,9 @@ async def generate_ai_response_background(
                     status="completed",
                     content=response_content,
                 )
-                logger.info(f"[Thread] Background generation updated existing message: message_id={message_id}")
+                logger.info(
+                    f"[Thread] Background generation updated existing message: message_id={message_id}"
+                )
             else:
                 # 기존 방식: 새 메시지 생성
                 await svc.add_message(
@@ -164,7 +214,7 @@ async def generate_ai_response_background(
                     role="assistant",
                     content=response_content,
                     metadata={
-                        "mode": str(result.get("mode", "simple")),
+                        "mode": _normalize_mode_name(result.get("mode", "simple")),
                         "sources": result.get("sources", []),
                         "citations": result.get("citations", []),
                         "intent": result.get("query_analysis"),
@@ -183,10 +233,14 @@ async def generate_ai_response_background(
             # 백그라운드 태스크에서는 명시적 커밋 필요 (FastAPI 의존성 외부)
             await session.commit()
 
-            logger.info(f"[Thread] Background generation completed: thread_id={thread_id}")
+            logger.info(
+                f"[Thread] Background generation completed: thread_id={thread_id}"
+            )
 
     except Exception as e:
-        logger.exception(f"[Thread] Background generation failed: thread_id={thread_id}, error={e}")
+        logger.exception(
+            f"[Thread] Background generation failed: thread_id={thread_id}, error={e}"
+        )
         # 에러 발생 시 메시지 상태를 failed로 업데이트
         try:
             async with async_session_factory() as session:
@@ -229,7 +283,9 @@ async def create_thread(
 
     POST /api/threads - 새 대화 시작
     """
-    logger.info(f"[Thread] Create: user={user_id}, query='{request.query[:50]}...', mode={request.mode}")
+    logger.info(
+        f"[Thread] Create: user={user_id}, query='{request.query[:50]}...', mode={request.mode}"
+    )
 
     try:
         # 새 스레드 생성 (user_id 포함)
@@ -261,12 +317,14 @@ async def create_thread(
             role="assistant",
             content=result.get("response", ""),
             metadata={
-                "mode": str(result.get("mode", "simple")),
+                "mode": _normalize_mode_name(result.get("mode", "simple")),
                 "sources": result.get("sources", []),
                 "citations": result.get("citations", []),  # Phase 4
                 "intent": result.get("query_analysis"),  # Intent Parser 결과
                 "search_queries": result.get("search_queries", []),  # 생성된 검색 쿼리
-                "search_results": result.get("search_results", []),  # 검색 결과 (품질 점수 포함)
+                "search_results": result.get(
+                    "search_results", []
+                ),  # 검색 결과 (품질 점수 포함)
                 "thinking_steps": result.get("thinking_steps", []),  # 사고 과정
                 # V8.4: 재시도 정보
                 "search_retry_count": result.get("search_retry_count", 0),
@@ -279,7 +337,7 @@ async def create_thread(
         return ThreadResponse(
             response=result.get("response", ""),
             thread_id=thread.thread_id,
-            mode=str(result.get("mode", "simple")),
+            mode=_normalize_mode_name(result.get("mode", "simple")),
             sources=result.get("sources", []),
             citations=result.get("citations", []),  # Phase 4: Citation 추가
             thinking_steps=result.get("thinking_steps", []),
@@ -305,7 +363,9 @@ async def create_thread_stream(
     V9.1: 클라이언트 연결 끊김 시 백그라운드에서 응답 생성 계속
     V9.2: 메시지 상태 관리 - generating → completed
     """
-    logger.info(f"[Thread] Create stream: user={user_id}, query='{request.query[:50]}...', mode={request.mode}")
+    logger.info(
+        f"[Thread] Create stream: user={user_id}, query='{request.query[:50]}...', mode={request.mode}"
+    )
 
     # 스레드 먼저 생성 (generate 함수 밖에서)
     thread = await svc.create_thread(user_id=user_id, metadata=request.context)
@@ -383,7 +443,7 @@ async def create_thread_stream(
                     if isinstance(event_data, dict):
                         thinking_steps.append(event_data)
                         if "mode" in event_data:
-                            mode_used = event_data["mode"]
+                            mode_used = _normalize_mode_name(event_data["mode"])
                         # V8.4: 재시도 정보 수집
                         if "search_retry_count" in event_data:
                             search_retry_count = event_data["search_retry_count"]
@@ -410,13 +470,19 @@ async def create_thread_stream(
 
                 elif event_type == "token":
                     # 토큰 단위 스트리밍 - 점진적으로 응답 축적
-                    token = event_data if isinstance(event_data, str) else str(event_data or "")
+                    token = (
+                        event_data
+                        if isinstance(event_data, str)
+                        else str(event_data or "")
+                    )
                     full_response += token
                     yield f"data: {json.dumps({'type': 'token', 'data': token})}\n\n"
 
                 elif event_type == "content":
                     # 전체 콘텐츠 업데이트 (non-streaming fallback)
-                    full_response = event_data if isinstance(event_data, str) else str(event_data)
+                    full_response = (
+                        event_data if isinstance(event_data, str) else str(event_data)
+                    )
                     yield f"data: {json.dumps({'type': 'content', 'data': full_response})}\n\n"
 
                 elif event_type == "sources":
@@ -459,8 +525,12 @@ async def create_thread_stream(
                 elif event_type == "search_retry":  # V8.4: 재시도 이벤트
                     # 재시도 정보 업데이트
                     if isinstance(event_data, dict):
-                        search_retry_count = event_data.get("retry_count", search_retry_count)
-                        search_quality_score = event_data.get("quality_score", search_quality_score)
+                        search_retry_count = event_data.get(
+                            "retry_count", search_retry_count
+                        )
+                        search_quality_score = event_data.get(
+                            "quality_score", search_quality_score
+                        )
                         retry_reason = event_data.get("reason", retry_reason)
                         if "failed_query" in event_data:
                             failed_queries.append(event_data["failed_query"])
@@ -503,7 +573,9 @@ async def create_thread_stream(
 
         except asyncio.CancelledError:
             # 클라이언트 연결 끊김 - 백그라운드에서 계속 생성
-            logger.info(f"[Thread] Client disconnected, continuing in background: thread_id={captured_thread_id}, message_id={captured_ai_message_id}")
+            logger.info(
+                f"[Thread] Client disconnected, continuing in background: thread_id={captured_thread_id}, message_id={captured_ai_message_id}"
+            )
             if not response_completed["value"]:
                 # 백그라운드 태스크로 응답 생성 계속
                 asyncio.create_task(
@@ -610,7 +682,9 @@ async def add_message(
 
     POST /api/threads/{thread_id}/messages
     """
-    logger.info(f"[Thread] Add message: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}")
+    logger.info(
+        f"[Thread] Add message: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}"
+    )
 
     # 스레드 존재 확인 (권한 검증 포함)
     thread = await svc.get_thread(thread_id, user_id=user_id)
@@ -644,7 +718,7 @@ async def add_message(
             role="assistant",
             content=result.get("response", ""),
             metadata={
-                "mode": str(result.get("mode", "simple")),
+                "mode": _normalize_mode_name(result.get("mode", "simple")),
                 "sources": result.get("sources", []),
                 "citations": result.get("citations", []),
                 "intent": result.get("query_analysis"),
@@ -661,7 +735,7 @@ async def add_message(
         return ThreadResponse(
             response=result.get("response", ""),
             thread_id=thread_id,
-            mode=str(result.get("mode", "simple")),
+            mode=_normalize_mode_name(result.get("mode", "simple")),
             sources=result.get("sources", []),
             citations=result.get("citations", []),
             thinking_steps=result.get("thinking_steps", []),
@@ -688,7 +762,9 @@ async def add_message_stream(
     V9.1: 클라이언트 연결 끊김 시 백그라운드에서 응답 생성 계속
     V9.2: 메시지 상태 관리 - generating → completed
     """
-    logger.info(f"[Thread] Add message stream: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}")
+    logger.info(
+        f"[Thread] Add message stream: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}"
+    )
 
     # 스레드 존재 확인 (권한 검증 포함)
     thread = await svc.get_thread(thread_id, user_id=user_id)
@@ -737,7 +813,7 @@ async def add_message_stream(
 
             # AI Agent 스트리밍 실행
             full_response = ""
-            mode_used = "simple"
+            mode_used = _normalize_mode_name(request.mode)
             sources = []
             citations = []
             intent = None
@@ -768,7 +844,7 @@ async def add_message_stream(
                     if isinstance(event_data, dict):
                         thinking_steps.append(event_data)
                         if "mode" in event_data:
-                            mode_used = event_data["mode"]
+                            mode_used = _normalize_mode_name(event_data["mode"])
                         if "search_retry_count" in event_data:
                             search_retry_count = event_data["search_retry_count"]
                         if "search_quality_score" in event_data:
@@ -792,12 +868,18 @@ async def add_message_stream(
                     yield f"data: {json.dumps({'type': 'query_analysis', 'data': event_data})}\n\n"
 
                 elif event_type == "token":
-                    token = event_data if isinstance(event_data, str) else str(event_data or "")
+                    token = (
+                        event_data
+                        if isinstance(event_data, str)
+                        else str(event_data or "")
+                    )
                     full_response += token
                     yield f"data: {json.dumps({'type': 'token', 'data': token})}\n\n"
 
                 elif event_type == "content":
-                    full_response = event_data if isinstance(event_data, str) else str(event_data)
+                    full_response = (
+                        event_data if isinstance(event_data, str) else str(event_data)
+                    )
                     yield f"data: {json.dumps({'type': 'content', 'data': full_response})}\n\n"
 
                 elif event_type == "sources":
@@ -839,8 +921,12 @@ async def add_message_stream(
 
                 elif event_type == "search_retry":
                     if isinstance(event_data, dict):
-                        search_retry_count = event_data.get("retry_count", search_retry_count)
-                        search_quality_score = event_data.get("quality_score", search_quality_score)
+                        search_retry_count = event_data.get(
+                            "retry_count", search_retry_count
+                        )
+                        search_quality_score = event_data.get(
+                            "quality_score", search_quality_score
+                        )
                         retry_reason = event_data.get("reason", retry_reason)
                         if "failed_query" in event_data:
                             failed_queries.append(event_data["failed_query"])
@@ -881,7 +967,9 @@ async def add_message_stream(
 
         except asyncio.CancelledError:
             # 클라이언트 연결 끊김 - 백그라운드에서 계속 생성
-            logger.info(f"[Thread] Client disconnected, continuing in background: thread_id={captured_thread_id}, message_id={captured_ai_message_id}")
+            logger.info(
+                f"[Thread] Client disconnected, continuing in background: thread_id={captured_thread_id}, message_id={captured_ai_message_id}"
+            )
             if not response_completed["value"]:
                 # 백그라운드 태스크로 응답 생성 계속
                 asyncio.create_task(
@@ -933,7 +1021,9 @@ async def regenerate_response(
     1. 마지막 assistant 메시지 삭제
     2. 마지막 user 메시지로 AI 재요청
     """
-    logger.info(f"[Thread] Regenerate: user={user_id}, thread_id={thread_id}, mode={request.mode}")
+    logger.info(
+        f"[Thread] Regenerate: user={user_id}, thread_id={thread_id}, mode={request.mode}"
+    )
 
     # 스레드 존재 확인 (권한 검증 포함)
     thread = await svc.get_thread(thread_id, user_id=user_id)
@@ -941,11 +1031,13 @@ async def regenerate_response(
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
 
     # 마지막 assistant 메시지 삭제하고 user 쿼리 가져오기
-    last_user_query = await svc.remove_last_assistant_message(thread_id, user_id=user_id)
+    last_user_query = await svc.remove_last_assistant_message(
+        thread_id, user_id=user_id
+    )
     if not last_user_query:
         raise HTTPException(
             status_code=400,
-            detail="재생성할 답변이 없습니다 (마지막 메시지가 assistant가 아님)"
+            detail="재생성할 답변이 없습니다 (마지막 메시지가 assistant가 아님)",
         )
 
     # 클로저에서 사용할 변수 캡처
@@ -955,7 +1047,7 @@ async def regenerate_response(
         try:
             # AI Agent 스트리밍 실행
             full_response = ""
-            mode_used = request.mode or "auto"
+            mode_used = _normalize_mode_name(request.mode or "auto")
             sources = []
             citations = []
             intent = None
@@ -986,7 +1078,7 @@ async def regenerate_response(
                     if isinstance(event_data, dict):
                         thinking_steps.append(event_data)
                         if "mode" in event_data:
-                            mode_used = event_data["mode"]
+                            mode_used = _normalize_mode_name(event_data["mode"])
                         if "search_retry_count" in event_data:
                             search_retry_count = event_data["search_retry_count"]
                         if "search_quality_score" in event_data:
@@ -999,12 +1091,18 @@ async def regenerate_response(
                     yield f"data: {json.dumps({'type': 'query_analysis', 'data': event_data})}\n\n"
 
                 elif event_type == "token":
-                    token = event_data if isinstance(event_data, str) else str(event_data or "")
+                    token = (
+                        event_data
+                        if isinstance(event_data, str)
+                        else str(event_data or "")
+                    )
                     full_response += token
                     yield f"data: {json.dumps({'type': 'token', 'data': token})}\n\n"
 
                 elif event_type == "content":
-                    full_response = event_data if isinstance(event_data, str) else str(event_data)
+                    full_response = (
+                        event_data if isinstance(event_data, str) else str(event_data)
+                    )
                     yield f"data: {json.dumps({'type': 'content', 'data': full_response})}\n\n"
 
                 elif event_type == "sources":
@@ -1025,8 +1123,12 @@ async def regenerate_response(
 
                 elif event_type == "search_retry":
                     if isinstance(event_data, dict):
-                        search_retry_count = event_data.get("retry_count", search_retry_count)
-                        search_quality_score = event_data.get("quality_score", search_quality_score)
+                        search_retry_count = event_data.get(
+                            "retry_count", search_retry_count
+                        )
+                        search_quality_score = event_data.get(
+                            "quality_score", search_quality_score
+                        )
                         retry_reason = event_data.get("reason", retry_reason)
                         if "failed_query" in event_data:
                             failed_queries.append(event_data["failed_query"])

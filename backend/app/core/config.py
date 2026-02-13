@@ -81,6 +81,20 @@ class Settings(BaseSettings):
         "tier-simple", validation_alias="LITELLM_MODEL_SUMMARIZE"
     )
 
+    # AI Agent 검색 품질 튜닝 파라미터
+    agent_search_web_limit: int = Field(
+        15,
+        validation_alias="AGENT_SEARCH_WEB_LIMIT",
+    )
+    agent_hybrid_web_limit: int = Field(
+        10,
+        validation_alias="AGENT_HYBRID_WEB_LIMIT",
+    )
+    agent_content_fetch_top_k: int = Field(
+        8,
+        validation_alias="AGENT_CONTENT_FETCH_TOP_K",
+    )
+
     # 공통 LLM 설정 (모든 provider에서 사용)
     llm_system_prompt: str = "당신은 회의록을 요약하는 전문가입니다. 모든 응답은 반드시 한글로 작성하세요. 마크다운 형식으로 명확하고 간결한 요약을 제공하되, 지시사항이나 프롬프트는 절대 포함하지 마세요."
     llm_context_length: int = (
