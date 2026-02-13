@@ -31,6 +31,8 @@ class ContentStateMachine(BaseStateMachine[FileStatus]):
             FileStatus.PULLING,  # YouTube 등 외부 소스
             FileStatus.PROCESSING,  # 로컬 파일 ASR
             FileStatus.OCR_PROCESSING,  # 문서 OCR
+            FileStatus.ASR_FAILED,  # 즉시 실패 대응
+            FileStatus.OCR_FAILED,  # 즉시 실패 대응
             FileStatus.CANCELLED,
         ],
         # 진행 중 상태

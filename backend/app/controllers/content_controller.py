@@ -109,17 +109,13 @@ async def upload_content(
         f"[Upload] 파일 업로드 요청: {file.filename} ({file.content_type}), min_speakers={min_speakers}, max_speakers={max_speakers}, ocr_mode={ocr_mode}, ocr_accuracy_mode={ocr_accuracy_mode}, accuracy_mode={accuracy_mode}"
     )
 
-    # Office 문서 체크 (현재 지원하지 않음)
+    # Office 문서 체크
     if file.filename:
         filename_lower = file.filename.lower()
         office_extensions = (".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx")
         if filename_lower.endswith(office_extensions):
-            logger.warning(
-                "[Upload] Office document upload rejected: filename={}", file.filename
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Office 문서(.doc, .docx, .xls, .xlsx, .ppt, .pptx)는 현재 지원하지 않습니다. PDF, 이미지, 또는 텍스트 파일로 변환 후 업로드해 주세요.",
+            logger.info(
+                "[Upload] Office document upload accepted (will use MarkItDown): filename={}", file.filename
             )
 
     try:
