@@ -249,8 +249,44 @@ class OcrPreprocessor:
             elif self._is_image(file_path):
                 images = [self._load_image(file_path)]
             elif self._is_office_document(file_path):
-                temp_pdf_path = self._office_to_pdf(file_path)
-                images = self._pdf_to_images(temp_pdf_path)
+                # MarkItDown 사용 시도 (텍스트 직접 추출)
+                try:
+                    logger.info(f"Attempting to use MarkItDown for: {file_path}")
+                    from markitdown import MarkItDown
+                    markitdown = MarkItDown()
+                    result = markitdown.convert(str(file_path))
+                    text_content = result.text_content
+                    logger.info(f"Successfully extracted text from Office document using MarkItDown: {file_path}")
+
+                    # Markdown to HTML 변환 (테이블 및 펜스 코드 블록 지원)
+                    try:
+                        import markdown
+                        html_content = markdown.markdown(text_content, extensions=['tables', 'fenced_code'])
+                        logger.info("Successfully converted Markdown to HTML")
+                    except ImportError:
+                        logger.warning("markdown library not found, skipping HTML conversion")
+                        html_content = None
+                    except Exception as e:
+                        logger.error(f"Markdown to HTML conversion failed: {e}")
+                        html_content = None
+
+                    return {
+                        "images": [],
+                        "page_count": 1,
+                        "file_type": file_path.suffix.lower(),
+                        "is_text_file": True,  # 텍스트 파일처럼 처리
+                        "text_content": text_content,
+                        "html_content": html_content, # HTML 내용 추가
+                    }
+                except ImportError as ie:
+                    error_msg = f"MarkItDown import failed: {ie}. Make sure 'markitdown' is installed."
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
+                except Exception as e:
+                    import traceback
+                    error_msg = f"MarkItDown conversion failed: {e}\n{traceback.format_exc()}"
+                    logger.error(error_msg)
+                    raise RuntimeError(f"Failed to convert Office document with MarkItDown: {e}")
             else:
                 raise ValueError(f"Unsupported file type: {file_path.suffix}")
 

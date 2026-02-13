@@ -257,8 +257,12 @@ class StreamConsumer:
 
             # 원본 trace ID를 attribute로 저장 (검색 용이)
             if parent_span_ctx.is_valid:
-                span.set_attribute("link.trace_id", format(parent_span_ctx.trace_id, '032x'))
-                span.set_attribute("link.span_id", format(parent_span_ctx.span_id, '016x'))
+                span.set_attribute(
+                    "link.trace_id", format(parent_span_ctx.trace_id, "032x")
+                )
+                span.set_attribute(
+                    "link.span_id", format(parent_span_ctx.span_id, "016x")
+                )
 
             yield
 
@@ -350,7 +354,9 @@ class StreamConsumer:
                 # Worker가 "started" 이벤트를 보내지 않으므로 여기서 PROCESSING 거쳐야 함
                 current_status = await file_repo.get_content_status(file_id)
                 if current_status == FileStatus.QUEUED:
-                    logger.info(f"[StreamConsumer] Transitioning {file_id}: QUEUED → PROCESSING → SUMMARY_QUEUED")
+                    logger.info(
+                        f"[StreamConsumer] Transitioning {file_id}: QUEUED → PROCESSING → SUMMARY_QUEUED"
+                    )
                     await file_repo.update_file_status(file_id, FileStatus.PROCESSING)
                     await session.flush()
 
@@ -371,7 +377,8 @@ class StreamConsumer:
                 f"ASR completed: file_id={file_id}, duration={duration_seconds}s"
             )
             progress.asr_completed(
-                duration_seconds=duration_seconds, speakers=speaker_labels,
+                duration_seconds=duration_seconds,
+                speakers=speaker_labels,
             )
 
             # LLM 요약 준비 (트랜잭션 밖에서)
@@ -388,9 +395,7 @@ class StreamConsumer:
                 # 트랜잭션 2: SUMMARIZING 상태로 전환
                 async with AsyncSessionLocal() as session:
                     file_repo = FileRepository(session)
-                    await file_repo.update_file_status(
-                        file_id, FileStatus.SUMMARIZING
-                    )
+                    await file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
                     await session.commit()
                 progress.llm_started()
 
@@ -458,7 +463,11 @@ class StreamConsumer:
 
                     file = await file_repo.get_file(file_id)
                     if file:
-                        base_name = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
+                        base_name = (
+                            file.filename.rsplit(".", 1)[0]
+                            if "." in file.filename
+                            else file.filename
+                        )
                         empty_title = f"{base_name} - 내용 없음"
                         await file_repo.update_title(file_id, empty_title)
 
@@ -471,7 +480,9 @@ class StreamConsumer:
                         message="LLM skipped: No text detected in audio",
                     )
                     await session.commit()
-                progress.completed_empty("처리 완료 (음성/텍스트가 감지되지 않았습니다)")
+                progress.completed_empty(
+                    "처리 완료 (음성/텍스트가 감지되지 않았습니다)"
+                )
 
             # ASR 활성 작업 해제
             task_queue = get_task_queue()
@@ -558,9 +569,7 @@ class StreamConsumer:
                 )
                 await session.commit()
 
-                logger.info(
-                    f"LLM completed: file_id={file_id}, title={title[:50]}..."
-                )
+                logger.info(f"LLM completed: file_id={file_id}, title={title[:50]}...")
                 progress.llm_completed(
                     **({"title": title} if title else {}),
                 )
@@ -608,6 +617,7 @@ class StreamConsumer:
             result_data = download_json(result_s3_key)
             ocr_text = result_data.get("ocr_text", "")
             ocr_metadata = result_data.get("ocr_metadata", {})
+            html_content = result_data.get("html_content")
 
             # 트랜잭션 1: Document 저장 및 상태 업데이트 (DB 작업만)
             async with AsyncSessionLocal() as session:
@@ -621,6 +631,7 @@ class StreamConsumer:
                         ocr_text=ocr_text,
                         page_count=page_count,
                         ocr_metadata=ocr_metadata,
+                        html_content=html_content,
                     )
                 else:
                     await document_repo.create_document(
@@ -628,14 +639,19 @@ class StreamConsumer:
                         ocr_text=ocr_text,
                         page_count=page_count,
                         ocr_metadata=ocr_metadata,
+                        html_content=html_content,
                     )
 
                 # 상태 전환: QUEUED → OCR_PROCESSING → SUMMARY_QUEUED
                 # Worker가 "started" 이벤트를 보내지 않으므로 여기서 OCR_PROCESSING 거쳐야 함
                 current_status = await file_repo.get_content_status(file_id)
                 if current_status == FileStatus.QUEUED:
-                    logger.info(f"[StreamConsumer] Transitioning {file_id}: QUEUED → OCR_PROCESSING → SUMMARY_QUEUED")
-                    await file_repo.update_file_status(file_id, FileStatus.OCR_PROCESSING)
+                    logger.info(
+                        f"[StreamConsumer] Transitioning {file_id}: QUEUED → OCR_PROCESSING → SUMMARY_QUEUED"
+                    )
+                    await file_repo.update_file_status(
+                        file_id, FileStatus.OCR_PROCESSING
+                    )
                     await session.flush()
 
                 await file_repo.update_file_status(file_id, FileStatus.SUMMARY_QUEUED)
@@ -658,9 +674,7 @@ class StreamConsumer:
                 # 트랜잭션 2: SUMMARIZING 상태로 전환
                 async with AsyncSessionLocal() as session:
                     file_repo = FileRepository(session)
-                    await file_repo.update_file_status(
-                        file_id, FileStatus.SUMMARIZING
-                    )
+                    await file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
                     await session.commit()
                 progress.llm_started()
 
@@ -728,7 +742,11 @@ class StreamConsumer:
 
                     file = await file_repo.get_file(file_id)
                     if file:
-                        base_name = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
+                        base_name = (
+                            file.filename.rsplit(".", 1)[0]
+                            if "." in file.filename
+                            else file.filename
+                        )
                         empty_title = f"{base_name} - 내용 없음"
                         await file_repo.update_title(file_id, empty_title)
 
@@ -741,7 +759,9 @@ class StreamConsumer:
                         message="LLM skipped: No text detected in document",
                     )
                     await session.commit()
-                    progress.completed_empty("처리 완료 (문서에서 텍스트가 감지되지 않았습니다)")
+                    progress.completed_empty(
+                        "처리 완료 (문서에서 텍스트가 감지되지 않았습니다)"
+                    )
 
             task_queue = get_task_queue()
             task_queue.clear_active_job("ocr", file_id)

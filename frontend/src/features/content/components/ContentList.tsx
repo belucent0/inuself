@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, Upload } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/shared/components/ui/button'
 import { Card, CardContent } from '@/shared/components/ui/card'
@@ -32,11 +32,11 @@ interface ContentListProps {
   pagination?: PaginationProps
   onDelete?: (ids: string[]) => Promise<void>
   onRetry?: (id: string, type: 'download' | 'asr' | 'ocr' | 'summary') => Promise<void>
-  onUpload?: () => void
 }
 
-export function ContentList({ contents, pagination, onDelete, onRetry, onUpload }: ContentListProps) {
+export function ContentList({ contents, pagination, onDelete, onRetry }: ContentListProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [selectionMode, setSelectionMode] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [optimisticallyHidden, setOptimisticallyHidden] = useState<Set<string>>(new Set())
 
@@ -73,6 +73,16 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
     })
   }
 
+  const handleSelectionModeToggle = () => {
+    setSelectionMode((prev) => {
+      const next = !prev
+      if (!next) {
+        setSelectedIds(new Set())
+      }
+      return next
+    })
+  }
+
   const handleBulkDeleteClick = () => {
     if (!selectedIds.size || !onDelete) return
     setDeleteDialogOpen(true)
@@ -85,6 +95,7 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
     setDeleteDialogOpen(false)
     setOptimisticallyHidden(new Set(idsToDelete))
     setSelectedIds(new Set())
+    setSelectionMode(false)
 
     try {
       await toast.promise(onDelete(idsToDelete), {
@@ -132,23 +143,40 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
   return (
     <div className="space-y-2 md:space-y-4 pt-2 md:pt-0">
       {/* 액션 바 */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <Button
-          type="button"
-          variant={allSelected ? 'secondary' : 'outline'}
-          onClick={handleSelectAll}
-          disabled={!selectableIds.length}
-        >
-          {allSelected ? '선택 해제' : '전체 선택'}
-        </Button>
+      <div className="flex items-center gap-2 flex-nowrap">
         {onDelete && (
           <Button
             type="button"
+            size="sm"
+            variant={selectionMode ? 'secondary' : 'outline'}
+            onClick={handleSelectionModeToggle}
+            className="h-8 px-2.5 text-xs"
+          >
+            {selectionMode ? '취소' : '선택'}
+          </Button>
+        )}
+        {selectionMode && (
+          <Button
+            type="button"
+            size="sm"
+            variant={allSelected ? 'secondary' : 'outline'}
+            onClick={handleSelectAll}
+            disabled={!selectableIds.length}
+            className="h-8 px-2.5 text-xs"
+          >
+            전체
+          </Button>
+        )}
+        {selectionMode && onDelete && (
+          <Button
+            type="button"
+            size="sm"
             variant="destructive"
             onClick={handleBulkDeleteClick}
             disabled={selectedIds.size === 0}
+            className="h-8 px-2.5 text-xs"
           >
-            선택 삭제 ({selectedIds.size}개)
+            삭제({selectedIds.size}개)
           </Button>
         )}
         {pagination && (
@@ -159,7 +187,7 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
                 pagination.onPageSizeChange?.(parseInt(value, 10))
               }}
             >
-              <SelectTrigger className="h-8 w-[70px]">
+              <SelectTrigger className="h-8 w-[70px] px-2 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -171,12 +199,6 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
             <span className="hidden md:inline text-sm text-muted-foreground">개</span>
           </div>
         )}
-        {onUpload && (
-          <Button type="button" onClick={onUpload}>
-            <Upload className="h-4 w-4 mr-2" />
-            업로드
-          </Button>
-        )}
       </div>
 
       {/* 콘텐츠 목록 */}
@@ -186,7 +208,8 @@ export function ContentList({ contents, pagination, onDelete, onRetry, onUpload 
             key={item.id}
             content={item}
             selected={selectedIds.has(item.id)}
-            onToggle={toggleSelection}
+            selectionMode={selectionMode}
+            onToggle={selectionMode ? toggleSelection : undefined}
             onRetry={onRetry ? handleRetry : undefined}
           />
         ))}
