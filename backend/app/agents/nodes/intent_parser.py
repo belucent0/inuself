@@ -18,6 +18,7 @@ V8.3: 플러그인 기반 Query Transformation 아키텍처
 - 질의 분해 (DecomposeTransformer)
 - 모듈형 설계로 새 기법 추가 용이
 """
+
 from __future__ import annotations
 
 import json
@@ -57,24 +58,83 @@ def warmup_kiwi() -> None:
         return
 
     import time
+
     start = time.time()
     kiwi = get_kiwi()
     # 첫 분석으로 내부 캐시 워밍업
     kiwi.analyze("워밍업 테스트 문장입니다")
     _kiwi_warmed_up = True
-    logger.info(f"[IntentParser] Kiwi warmed up in {time.time()-start:.2f}s")
+    logger.info(f"[IntentParser] Kiwi warmed up in {time.time() - start:.2f}s")
 
 
 # 코드/에러 패턴 정규식
 CODE_PATTERNS = [
-    r'[{}\[\]();]',              # 괄호, 세미콜론
-    r'^\s*(def|class|import|from|const|let|var|function)\s',  # 함수/클래스 선언
-    r'(Error|Exception|Traceback|TypeError|ValueError)',      # 에러 타입
-    r'(\.py|\.js|\.ts|\.java|\.cpp|\.go)[:"\']',              # 파일 확장자
-    r'(https?://|localhost:\d+)',                             # URL
-    r'(\w+\.\w+\()',                                          # 메서드 호출
-    r'(=>|->|::)',                                            # 연산자
+    r"[{}\[\]();]",  # 괄호, 세미콜론
+    r"^\s*(def|class|import|from|const|let|var|function)\s",  # 함수/클래스 선언
+    r"(Error|Exception|Traceback|TypeError|ValueError)",  # 에러 타입
+    r'(\.py|\.js|\.ts|\.java|\.cpp|\.go)[:"\']',  # 파일 확장자
+    r"(https?://|localhost:\d+)",  # URL
+    r"(\w+\.\w+\()",  # 메서드 호출
+    r"(=>|->|::)",  # 연산자
 ]
+
+# 검색 제약 힌트 패턴
+RECENCY_HINT_PATTERNS: list[tuple[str, list[str]]] = [
+    ("day", ["오늘", "금일", "실시간", "방금", "속보", "latest", "today", "breaking"]),
+    ("week", ["이번주", "이번 주", "지난주", "지난 주", "주간", "weekly", "this week"]),
+    (
+        "month",
+        ["이번달", "이번 달", "지난달", "지난 달", "월간", "month", "monthly", "최근"],
+    ),
+    ("year", ["올해", "작년", "연간", "year", "yearly"]),
+]
+
+LANGUAGE_HINT_PATTERNS: dict[str, list[str]] = {
+    "ko-KR": ["한국어", "한글", "국문", "korean", "kor"],
+    "en-US": ["영어", "영문", "english", "eng"],
+    "ja-JP": ["일본어", "일문", "japanese", "jpn", "일본 기사"],
+    "zh-CN": ["중국어", "중문", "chinese", "chn", "중국 기사"],
+}
+
+OFFICIAL_DOC_DOMAIN_HINTS: dict[str, list[str]] = {
+    "python": ["python.org", "docs.python.org"],
+    "fastapi": ["fastapi.tiangolo.com", "python.org"],
+    "pytorch": ["pytorch.org"],
+    "tensorflow": ["tensorflow.org"],
+    "react": ["react.dev"],
+    "django": ["docs.djangoproject.com"],
+}
+
+MIN_QUERY_COUNT_SEARCH = 2
+MIN_QUERY_COUNT_HYBRID = 3
+MAX_QUERY_COUNT = 5
+
+FACTOID_QUERY_MARKERS = {
+    "무엇",
+    "어떤",
+    "누구",
+    "언제",
+    "어디",
+    "몇",
+    "1위",
+    "최고",
+    "최초",
+    "순위",
+    "top",
+}
+
+# 검색 쿼리에서 의미가 약한 일반어
+LOW_SIGNAL_NOUNS = {
+    "정도",
+    "수준",
+    "부분",
+    "관련",
+    "기준",
+    "의미",
+    "내용",
+    "정보",
+    "결과",
+}
 
 # 의도 분석 프롬프트
 INTENT_ANALYSIS_PROMPT = """당신은 사용자 질문의 의도를 분석하는 전문가입니다.
@@ -106,6 +166,7 @@ MULTI_QUERY_PROMPT = """다음 질문에 대해 웹 검색에 효과적인 검�
 # Query Transformation Plugin Architecture (V8.3)
 # =============================================================================
 
+
 class QueryTransformer(ABC):
     """쿼리 변환 기법의 추상 인터페이스.
 
@@ -115,10 +176,7 @@ class QueryTransformer(ABC):
 
     @abstractmethod
     async def transform(
-        self,
-        query: str,
-        state: GraphState,
-        settings: Any
+        self, query: str, state: GraphState, settings: Any
     ) -> list[str]:
         """쿼리를 변환하여 새 쿼리 목록 반환.
 
@@ -159,10 +217,7 @@ class ContextualizeTransformer(QueryTransformer):
     """
 
     async def transform(
-        self,
-        query: str,
-        state: GraphState,
-        settings: Any
+        self, query: str, state: GraphState, settings: Any
     ) -> list[str]:
         """대화 맥락을 반영하여 쿼리 재작성."""
         messages = state.get("messages", [])
@@ -206,7 +261,9 @@ class ContextualizeTransformer(QueryTransformer):
 
             # 유효성 검사: 너무 길거나 이상하면 원본 사용
             if len(contextualized) > 200 or len(contextualized) < 3:
-                logger.warning(f"[ContextualizeTransformer] Invalid output, using original: {contextualized[:50]}")
+                logger.warning(
+                    f"[ContextualizeTransformer] Invalid output, using original: {contextualized[:50]}"
+                )
                 return [query]
 
             logger.info(f"[ContextualizeTransformer] '{query}' → '{contextualized}'")
@@ -263,10 +320,7 @@ class DecomposeTransformer(QueryTransformer):
     """
 
     async def transform(
-        self,
-        query: str,
-        state: GraphState,
-        settings: Any
+        self, query: str, state: GraphState, settings: Any
     ) -> list[str]:
         """복잡한 질문을 3-5개 하위 질문으로 분해."""
 
@@ -300,10 +354,14 @@ class DecomposeTransformer(QueryTransformer):
 
             # 유효성 검사: 너무 많거나 적으면 원본 사용
             if len(sub_queries) < 2 or len(sub_queries) > 7:
-                logger.info(f"[DecomposeTransformer] Not decomposed (count={len(sub_queries)}), using original")
+                logger.info(
+                    f"[DecomposeTransformer] Not decomposed (count={len(sub_queries)}), using original"
+                )
                 return [query]
 
-            logger.info(f"[DecomposeTransformer] Decomposed into {len(sub_queries)} sub-queries")
+            logger.info(
+                f"[DecomposeTransformer] Decomposed into {len(sub_queries)} sub-queries"
+            )
             return sub_queries[:5]  # 최대 5개로 제한
 
         except Exception as e:
@@ -331,9 +389,23 @@ class DecomposeTransformer(QueryTransformer):
 
         # 복잡도 마커
         complexity_markers = [
-            "와", "과", "영향", "비교", "차이", "관계", "트렌드",
-            "분석", "전망", "미래", "변화", "발전", "역사",
-            "장단점", "장점과 단점", "어떻게 다른", "무엇이 다른"
+            "와",
+            "과",
+            "영향",
+            "비교",
+            "차이",
+            "관계",
+            "트렌드",
+            "분석",
+            "전망",
+            "미래",
+            "변화",
+            "발전",
+            "역사",
+            "장단점",
+            "장점과 단점",
+            "어떻게 다른",
+            "무엇이 다른",
         ]
 
         return any(marker in query for marker in complexity_markers)
@@ -347,7 +419,7 @@ class DecomposeTransformer(QueryTransformer):
         Returns:
             파싱된 항목 목록
         """
-        lines = text.strip().split('\n')
+        lines = text.strip().split("\n")
         items = []
 
         for line in lines:
@@ -356,7 +428,7 @@ class DecomposeTransformer(QueryTransformer):
                 continue
 
             # 번호 제거: "1. ", "1) ", "- " 등
-            cleaned = re.sub(r'^[\d\-\*\•]+[\.\)]\s*', '', line)
+            cleaned = re.sub(r"^[\d\-\*\•]+[\.\)]\s*", "", line)
             if cleaned and len(cleaned) >= 5:  # 최소 5자
                 items.append(cleaned)
 
@@ -379,10 +451,7 @@ class HyDETransformer(QueryTransformer):
     """
 
     async def transform(
-        self,
-        query: str,
-        state: GraphState,
-        settings: Any
+        self, query: str, state: GraphState, settings: Any
     ) -> list[str]:
         """HyDE 기반 쿼리 재작성."""
 
@@ -409,7 +478,9 @@ class HyDETransformer(QueryTransformer):
 
             # 키워드가 너무 적으면 HyDE 적용 안 함
             if len(hyde_keywords) < 2:
-                logger.info(f"[HyDETransformer] Too few keywords ({len(hyde_keywords)}), skipping")
+                logger.info(
+                    f"[HyDETransformer] Too few keywords ({len(hyde_keywords)}), skipping"
+                )
                 return []
 
             # 키워드 기반 검색 쿼리 생성 (상위 5개)
@@ -439,8 +510,18 @@ class HyDETransformer(QueryTransformer):
 
         # HyDE에 적합한 패턴: 정의, 비교, 방법, 특징
         hyde_patterns = [
-            "이란", "무엇", "어떤", "어떻게", "방법", "비교",
-            "차이", "특징", "장점", "단점", "종류", "예시"
+            "이란",
+            "무엇",
+            "어떤",
+            "어떻게",
+            "방법",
+            "비교",
+            "차이",
+            "특징",
+            "장점",
+            "단점",
+            "종류",
+            "예시",
         ]
 
         # 질문이 너무 짧거나 길면 제외
@@ -471,7 +552,7 @@ class HyDETransformer(QueryTransformer):
             keywords = []
 
             # 추출할 품사: NNG(일반명사), NNP(고유명사), SL(외국어)
-            target_pos = {'NNG', 'NNP', 'SL', 'SH'}
+            target_pos = {"NNG", "NNP", "SL", "SH"}
 
             for token in tokens:
                 form = token.form
@@ -482,7 +563,20 @@ class HyDETransformer(QueryTransformer):
                     continue
 
                 # 불용어 제외
-                stopwords = {'것', '수', '때', '등', '중', '내', '더', '안', '및', '또는', '입니다', '있습니다'}
+                stopwords = {
+                    "것",
+                    "수",
+                    "때",
+                    "등",
+                    "중",
+                    "내",
+                    "더",
+                    "안",
+                    "및",
+                    "또는",
+                    "입니다",
+                    "있습니다",
+                }
                 if form in stopwords:
                     continue
 
@@ -521,12 +615,14 @@ class IntentParserNode:
         # Query Transformation 플러그인 등록 (순서대로 실행)
         self.transformers: list[QueryTransformer] = [
             ContextualizeTransformer(),  # 1순위: 대화 맥락 반영
-            DecomposeTransformer(),       # 2순위: 질의 분해
-            HyDETransformer(),            # 3순위: HyDE (Phase 1B)
+            DecomposeTransformer(),  # 2순위: 질의 분해
+            HyDETransformer(),  # 3순위: HyDE (Phase 1B)
             # StepBackTransformer(),      # 4순위: Step-back (Phase 5+에서 추가 예정)
         ]
 
-        logger.info(f"[IntentParser] Initialized with {len(self.transformers)} query transformers")
+        logger.info(
+            f"[IntentParser] Initialized with {len(self.transformers)} query transformers"
+        )
 
     async def __call__(self, state: GraphState) -> dict:
         """의도 분석 실행.
@@ -544,18 +640,20 @@ class IntentParserNode:
         # 명시적으로 모드가 지정된 경우 (SIMPLE이 아닌 경우) 분석 건너뛰기
         # SIMPLE은 기본값이므로 auto로 간주
         if current_mode and current_mode != AIMode.SIMPLE:
-            logger.info(f"[IntentParser] Using explicitly specified mode: {current_mode}")
-            thinking_steps.append(ThinkingStep(
-                step="intent_analysis",
-                content="질문 분석 중...",
-                timestamp=time.time()
-            ))
+            logger.info(
+                f"[IntentParser] Using explicitly specified mode: {current_mode}"
+            )
+            thinking_steps.append(
+                ThinkingStep(
+                    step="intent_analysis",
+                    content="질문 분석 중...",
+                    timestamp=time.time(),
+                )
+            )
 
             # Tier 기반 라우팅
             selected_tier = await self.tier_router.select_tier(
-                query=query,
-                mode=current_mode.value,
-                context_size=0
+                query=query, mode=current_mode.value, context_size=0
             )
             logger.info(f"[IntentParser] Tier routing: {selected_tier}")
 
@@ -563,20 +661,28 @@ class IntentParserNode:
             query_analysis = None
             search_queries = [query]  # 기본값: 원본 쿼리
             if current_mode in (AIMode.SEARCH, AIMode.HYBRID):
-                query_analysis = await self.reformulate_query(query, state)
+                query_analysis = await self.reformulate_query(
+                    query,
+                    state,
+                    mode=current_mode,
+                )
                 if query_analysis:
                     search_queries = query_analysis.get("sub_queries", [query])
-                    thinking_steps.append(ThinkingStep(
-                        step="query_reformulation",
-                        content=f"검색 쿼리 재정의: {query_analysis.get('search_focus', '')}",
-                        timestamp=time.time()
-                    ))
+                    thinking_steps.append(
+                        ThinkingStep(
+                            step="query_reformulation",
+                            content=f"검색 쿼리 재정의: {query_analysis.get('search_focus', '')}",
+                            timestamp=time.time(),
+                        )
+                    )
 
-            thinking_steps.append(ThinkingStep(
-                step="intent_result",
-                content=f"모드: {current_mode}, 티어: {selected_tier}",
-                timestamp=time.time()
-            ))
+            thinking_steps.append(
+                ThinkingStep(
+                    step="intent_result",
+                    content=f"모드: {current_mode}, 티어: {selected_tier}",
+                    timestamp=time.time(),
+                )
+            )
             return {
                 "mode": current_mode,
                 "selected_model": selected_tier,  # tier명이 LiteLLM으로 전달됨
@@ -588,11 +694,13 @@ class IntentParserNode:
             }
 
         # 사고 과정 기록
-        thinking_steps.append(ThinkingStep(
-            step="intent_analysis",
-            content=f"사용자 질문 분석 중: '{query[:50]}...'",
-            timestamp=time.time()
-        ))
+        thinking_steps.append(
+            ThinkingStep(
+                step="intent_analysis",
+                content=f"사용자 질문 분석 중: '{query[:50]}...'",
+                timestamp=time.time(),
+            )
+        )
 
         # 간단한 패턴 매칭으로 빠른 분류 (LLM 호출 최소화)
         quick_mode = self._quick_classify(query)
@@ -601,9 +709,7 @@ class IntentParserNode:
 
             # Tier 기반 라우팅
             selected_tier = await self.tier_router.select_tier(
-                query=query,
-                mode=quick_mode.value,
-                context_size=0
+                query=query, mode=quick_mode.value, context_size=0
             )
             logger.info(f"[IntentParser] Tier routing: {selected_tier}")
 
@@ -611,20 +717,28 @@ class IntentParserNode:
             query_analysis = None
             search_queries = [query]
             if quick_mode in (AIMode.SEARCH, AIMode.HYBRID):
-                query_analysis = await self.reformulate_query(query, state)
+                query_analysis = await self.reformulate_query(
+                    query,
+                    state,
+                    mode=quick_mode,
+                )
                 if query_analysis:
                     search_queries = query_analysis.get("sub_queries", [query])
-                    thinking_steps.append(ThinkingStep(
-                        step="query_reformulation",
-                        content=f"검색 쿼리 재정의: {query_analysis.get('search_focus', '')}",
-                        timestamp=time.time()
-                    ))
+                    thinking_steps.append(
+                        ThinkingStep(
+                            step="query_reformulation",
+                            content=f"검색 쿼리 재정의: {query_analysis.get('search_focus', '')}",
+                            timestamp=time.time(),
+                        )
+                    )
 
-            thinking_steps.append(ThinkingStep(
-                step="intent_result",
-                content=f"빠른 분류: {quick_mode} 모드, 티어: {selected_tier}",
-                timestamp=time.time()
-            ))
+            thinking_steps.append(
+                ThinkingStep(
+                    step="intent_result",
+                    content=f"빠른 분류: {quick_mode} 모드, 티어: {selected_tier}",
+                    timestamp=time.time(),
+                )
+            )
             return {
                 "mode": quick_mode,
                 "selected_model": selected_tier,  # tier명이 LiteLLM으로 전달됨
@@ -651,13 +765,13 @@ class IntentParserNode:
             confidence = float(result.get("confidence", 0.7))
             reason = result.get("reason", "")
 
-            logger.info(f"[IntentParser] LLM classification: mode={mode}, confidence={confidence}")
+            logger.info(
+                f"[IntentParser] LLM classification: mode={mode}, confidence={confidence}"
+            )
 
             # Tier 기반 라우팅
             selected_tier = await self.tier_router.select_tier(
-                query=query,
-                mode=mode.value,
-                context_size=0
+                query=query, mode=mode.value, context_size=0
             )
             logger.info(f"[IntentParser] Tier routing: {selected_tier}")
 
@@ -665,20 +779,28 @@ class IntentParserNode:
             query_analysis = None
             search_queries = [query]
             if mode in (AIMode.SEARCH, AIMode.HYBRID):
-                query_analysis = await self.reformulate_query(query, state)
+                query_analysis = await self.reformulate_query(
+                    query,
+                    state,
+                    mode=mode,
+                )
                 if query_analysis:
                     search_queries = query_analysis.get("sub_queries", [query])
-                    thinking_steps.append(ThinkingStep(
-                        step="query_reformulation",
-                        content=f"검색 쿼리 재정의: {query_analysis.get('search_focus', '')}",
-                        timestamp=time.time()
-                    ))
+                    thinking_steps.append(
+                        ThinkingStep(
+                            step="query_reformulation",
+                            content=f"검색 쿼리 재정의: {query_analysis.get('search_focus', '')}",
+                            timestamp=time.time(),
+                        )
+                    )
 
-            thinking_steps.append(ThinkingStep(
-                step="intent_result",
-                content=f"의도 분석: {mode} 모드, 티어: {selected_tier} (신뢰도: {confidence:.0%})",
-                timestamp=time.time()
-            ))
+            thinking_steps.append(
+                ThinkingStep(
+                    step="intent_result",
+                    content=f"의도 분석: {mode} 모드, 티어: {selected_tier} (신뢰도: {confidence:.0%})",
+                    timestamp=time.time(),
+                )
+            )
 
             return {
                 "mode": mode,
@@ -691,12 +813,16 @@ class IntentParserNode:
             }
 
         except Exception as e:
-            logger.warning(f"[IntentParser] LLM classification failed: {e}, falling back to simple mode")
-            thinking_steps.append(ThinkingStep(
-                step="intent_error",
-                content=f"의도 분석 실패, 기본 모드 사용: {str(e)}",
-                timestamp=time.time()
-            ))
+            logger.warning(
+                f"[IntentParser] LLM classification failed: {e}, falling back to simple mode"
+            )
+            thinking_steps.append(
+                ThinkingStep(
+                    step="intent_error",
+                    content=f"의도 분석 실패, 기본 모드 사용: {str(e)}",
+                    timestamp=time.time(),
+                )
+            )
             return {
                 "mode": AIMode.SIMPLE,
                 "selected_model": "tier-simple",  # 기본 티어
@@ -720,12 +846,31 @@ class IntentParserNode:
         query_lower = query.lower()
 
         # 인사/간단한 대화 패턴
-        greetings = ["안녕", "반가워", "hi", "hello", "ㅎㅇ", "하이", "뭐해", "고마워", "감사"]
+        greetings = [
+            "안녕",
+            "반가워",
+            "hi",
+            "hello",
+            "ㅎㅇ",
+            "하이",
+            "뭐해",
+            "고마워",
+            "감사",
+        ]
         if any(g in query_lower for g in greetings) and len(query) < 20:
             return AIMode.SIMPLE
 
         # 웹 검색이 필요한 패턴
-        search_patterns = ["최신", "뉴스", "오늘", "현재", "실시간", "검색해", "찾아줘", "알려줘"]
+        search_patterns = [
+            "최신",
+            "뉴스",
+            "오늘",
+            "현재",
+            "실시간",
+            "검색해",
+            "찾아줘",
+            "알려줘",
+        ]
         if any(p in query_lower for p in search_patterns):
             return AIMode.SEARCH
 
@@ -735,7 +880,15 @@ class IntentParserNode:
             return AIMode.RAG
 
         # 추론이 필요한 패턴
-        reasoning_patterns = ["분석해", "비교해", "왜", "어떻게", "설명해", "단계별", "차이점"]
+        reasoning_patterns = [
+            "분석해",
+            "비교해",
+            "왜",
+            "어떻게",
+            "설명해",
+            "단계별",
+            "차이점",
+        ]
         if any(p in query_lower for p in reasoning_patterns):
             return AIMode.REASONING
 
@@ -791,23 +944,40 @@ class IntentParserNode:
         # 명령형/요청형 패턴 (순서 중요: 긴 패턴부터 매칭)
         patterns = [
             # "-해주세요" 계열
-            (r"(을|를|에|에서|로|과|와)\s*(알려주세요|설명해주세요|안내해주세요|조사해주세요|찾아주세요|검색해주세요|분석해주세요|비교해주세요)", ""),
-            (r"\s*(알려주세요|설명해주세요|안내해주세요|조사해주세요|찾아주세요|검색해주세요|분석해주세요|비교해주세요)", ""),
-
+            (
+                r"(을|를|에|에서|로|과|와)\s*(알려주세요|설명해주세요|안내해주세요|조사해주세요|찾아주세요|검색해주세요|분석해주세요|비교해주세요)",
+                "",
+            ),
+            (
+                r"\s*(알려주세요|설명해주세요|안내해주세요|조사해주세요|찾아주세요|검색해주세요|분석해주세요|비교해주세요)",
+                "",
+            ),
             # "-해줘" 계열
-            (r"(을|를|에|에서|로|과|와)\s*(알려줘|설명해줘|안내해줘|조사해줘|찾아줘|검색해줘|분석해줘|비교해줘)", ""),
-            (r"\s*(알려줘|설명해줘|안내해줘|조사해줘|찾아줘|검색해줘|분석해줘|비교해줘)", ""),
-
+            (
+                r"(을|를|에|에서|로|과|와)\s*(알려줘|설명해줘|안내해줘|조사해줘|찾아줘|검색해줘|분석해줘|비교해줘)",
+                "",
+            ),
+            (
+                r"\s*(알려줘|설명해줘|안내해줘|조사해줘|찾아줘|검색해줘|분석해줘|비교해줘)",
+                "",
+            ),
             # "-해달라" 계열
-            (r"(을|를|에|에서|로|과|와)\s*(알려달라|설명해달라|안내해달라|조사해달라|찾아달라|검색해달라|분석해달라|비교해달라)", ""),
-            (r"\s*(알려달라|설명해달라|안내해달라|조사해달라|찾아달라|검색해달라|분석해달라|비교해달라)", ""),
-
+            (
+                r"(을|를|에|에서|로|과|와)\s*(알려달라|설명해달라|안내해달라|조사해달라|찾아달라|검색해달라|분석해달라|비교해달라)",
+                "",
+            ),
+            (
+                r"\s*(알려달라|설명해달라|안내해달라|조사해달라|찾아달라|검색해달라|분석해달라|비교해달라)",
+                "",
+            ),
             # "-바람" 계열 (가장 문제되는 패턴)
             (r"(을|를|에|에서|로|과|와)\s*(안내바람|알림바람|조사바람|검색바람)", ""),
             (r"\s*(안내바람|알림바람|조사바람|검색바람)", ""),
-
             # "-해" 단순 명령형
-            (r"(을|를|에|에서|로|과|와)\s*(알려|설명해|안내해|조사해|찾아|검색해|분석해|비교해)$", ""),
+            (
+                r"(을|를|에|에서|로|과|와)\s*(알려|설명해|안내해|조사해|찾아|검색해|분석해|비교해)$",
+                "",
+            ),
         ]
 
         cleaned = query
@@ -815,7 +985,7 @@ class IntentParserNode:
             cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
 
         # 연속 공백 제거 및 trim
-        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
         # 결과가 너무 짧아지면 원본 반환
         if len(cleaned) < 2:
@@ -824,7 +994,12 @@ class IntentParserNode:
         logger.debug(f"[IntentParser] Query cleaned: '{query}' → '{cleaned}'")
         return cleaned
 
-    async def reformulate_query(self, query: str, state: GraphState | None = None) -> QueryAnalysis | None:
+    async def reformulate_query(
+        self,
+        query: str,
+        state: GraphState | None = None,
+        mode: AIMode | None = None,
+    ) -> QueryAnalysis | None:
         """플러그인 기반 Query Transformation + 형태소 분석 하이브리드 쿼리 추출.
 
         V8.3: 플러그인 아키텍처 적용
@@ -838,6 +1013,7 @@ class IntentParserNode:
         Args:
             query: 원본 사용자 쿼리
             state: 현재 그래프 상태 (대화 히스토리 등)
+            mode: 현재 선택된 모드 (검색 쿼리 최소 개수 결정)
 
         Returns:
             QueryAnalysis
@@ -847,19 +1023,28 @@ class IntentParserNode:
 
         search_queries = []
         keywords = []
+        pos_map: dict[str, str] = {}
 
         # ===== Phase 1: Query Transformation Plugins =====
         if state:
-            logger.info(f"[IntentParser] Applying {len(self.transformers)} query transformers...")
+            logger.info(
+                f"[IntentParser] Applying {len(self.transformers)} query transformers..."
+            )
             for transformer in self.transformers:
                 # Transformer는 원본 쿼리 사용 (컨텍스트 이해 위해)
                 if transformer.should_apply(query, state):
                     try:
-                        transformed = await transformer.transform(query, state, self.settings)
+                        transformed = await transformer.transform(
+                            query, state, self.settings
+                        )
                         search_queries.extend(transformed)
-                        logger.info(f"[IntentParser] {transformer.__class__.__name__} applied: {len(transformed)} queries")
+                        logger.info(
+                            f"[IntentParser] {transformer.__class__.__name__} applied: {len(transformed)} queries"
+                        )
                     except Exception as e:
-                        logger.error(f"[IntentParser] {transformer.__class__.__name__} failed: {e}")
+                        logger.error(
+                            f"[IntentParser] {transformer.__class__.__name__} failed: {e}"
+                        )
 
         # ===== Phase 2: 기존 형태소 분석 기반 키워드 추출 =====
         # 1. 쿼리 타입 감지 (정제된 쿼리 사용)
@@ -880,7 +1065,8 @@ class IntentParserNode:
             if keywords:
                 # 키워드 조합으로 검색 쿼리 생성 (고유명사/외국어는 따옴표)
                 keyword_query = self._build_search_query(keywords, pos_map)
-                search_queries.append(keyword_query)
+                if keyword_query:
+                    search_queries.append(keyword_query)
 
             # 정제된 쿼리 추가 (적절한 길이면)
             if len(refined_query) <= 80:
@@ -894,11 +1080,12 @@ class IntentParserNode:
             for ck in code_keywords:
                 if ck not in pos_map:
                     keywords.append(ck)
-                    pos_map[ck] = 'SL'
+                    pos_map[ck] = "SL"
 
             if keywords:
                 keyword_query = self._build_search_query(keywords, pos_map)
-                search_queries.append(keyword_query)
+                if keyword_query:
+                    search_queries.append(keyword_query)
 
             # 정제된 쿼리 앞부분
             if len(refined_query) <= 120:
@@ -928,22 +1115,211 @@ class IntentParserNode:
 
         # 최소 1개 쿼리 보장 (정제된 쿼리 사용)
         if not unique_queries:
-            unique_queries = [refined_query[:100] if len(refined_query) > 100 else refined_query]
+            unique_queries = [
+                refined_query[:100] if len(refined_query) > 100 else refined_query
+            ]
+
+        target_min_queries = self._determine_target_min_queries(
+            mode=mode,
+            query_type=query_type,
+            refined_query=refined_query,
+            keywords=keywords,
+        )
+        if (
+            query_type in {"natural", "mixed"}
+            and len(unique_queries) < target_min_queries
+        ):
+            diversified_queries = self._build_diversified_queries(
+                refined_query=refined_query,
+                keywords=keywords,
+                pos_map=pos_map,
+            )
+            for candidate in diversified_queries:
+                candidate_clean = candidate.strip()
+                normalized = candidate_clean.lower()
+                if (
+                    candidate_clean
+                    and len(candidate_clean) >= 3
+                    and normalized not in seen
+                ):
+                    seen.add(normalized)
+                    unique_queries.append(candidate_clean)
+                if len(unique_queries) >= target_min_queries:
+                    break
+
+        # 사실 확인형 질문은 과도한 분해를 피하고 핵심 쿼리 1~2개를 유지
+        if (
+            mode == AIMode.HYBRID
+            and query_type == "natural"
+            and self._is_factoid_query(refined_query, keywords)
+            and len(unique_queries) > 2
+        ):
+            unique_queries = unique_queries[:2]
 
         # 최대 5개로 제한 (너무 많으면 검색 시간 증가)
-        unique_queries = unique_queries[:5]
+        unique_queries = unique_queries[:MAX_QUERY_COUNT]
+
+        # ===== Phase 4: 검색 제약 힌트 추출 =====
+        search_constraints = self._extract_search_constraints(
+            original_query=query,
+            refined_query=refined_query,
+            keywords=keywords,
+        )
 
         query_analysis = QueryAnalysis(
             original_query=query,
-            reformulated_query=refined_query if refined_query != query else unique_queries[0],  # V8.5: 정제된 쿼리 표시
+            reformulated_query=refined_query
+            if refined_query != query
+            else unique_queries[0],  # V8.5: 정제된 쿼리 표시
             sub_queries=unique_queries,
             keywords=keywords[:10],
-            search_focus=f"키워드: {', '.join(keywords[:3])}" if keywords else "원본 쿼리 검색",
+            search_focus=f"키워드: {', '.join(keywords[:3])}"
+            if keywords
+            else "원본 쿼리 검색",
         )
 
-        logger.info(f"[IntentParser] Final search queries: {query_analysis['sub_queries']}")
+        recency_hint = search_constraints.get("search_recency")
+        if recency_hint:
+            query_analysis["search_recency"] = recency_hint
+
+        language_hint = search_constraints.get("search_language")
+        if language_hint:
+            query_analysis["search_language"] = language_hint
+
+        domain_allowlist = search_constraints.get("domain_allowlist", [])
+        if domain_allowlist:
+            query_analysis["domain_allowlist"] = domain_allowlist
+
+        focus_parts = []
+        if keywords:
+            focus_parts.append(f"키워드: {', '.join(keywords[:3])}")
+        if recency_hint:
+            focus_parts.append(f"최신성: {recency_hint}")
+        if language_hint:
+            focus_parts.append(f"언어: {language_hint}")
+        if domain_allowlist:
+            focus_parts.append(f"도메인: {', '.join(domain_allowlist[:2])}")
+
+        query_analysis["search_focus"] = (
+            " / ".join(focus_parts) if focus_parts else "원본 쿼리 검색"
+        )
+
+        logger.info(
+            f"[IntentParser] Final search queries: {query_analysis.get('sub_queries', [])}"
+        )
         logger.info(f"[IntentParser] Extracted keywords: {keywords[:10]}")
+        if search_constraints:
+            logger.info(f"[IntentParser] Search constraints: {search_constraints}")
         return query_analysis
+
+    def _build_diversified_queries(
+        self,
+        refined_query: str,
+        keywords: list[str],
+        pos_map: dict[str, str],
+    ) -> list[str]:
+        """검색 다양성을 위한 보조 쿼리 후보를 생성한다."""
+        candidates: list[str] = []
+        normalized_query = refined_query.strip()
+
+        if keywords:
+            exact_match_pos = {"NNP", "SL", "SH"}
+            quoted_keywords: list[str] = []
+            for kw in keywords[:4]:
+                pos = pos_map.get(kw, "NNG")
+                if pos in exact_match_pos:
+                    quoted_keywords.append(f'"{kw}"')
+                else:
+                    quoted_keywords.append(kw)
+
+            keyword_core = " ".join(quoted_keywords).strip()
+            expansion_terms = self._extract_query_expansion_terms(normalized_query)
+            if expansion_terms:
+                core_terms = [kw for kw in keywords[:3] if len(kw) >= 2]
+                if core_terms:
+                    candidates.append(" ".join(core_terms + expansion_terms))
+
+            if keyword_core:
+                candidates.append(keyword_core)
+
+        if 4 <= len(normalized_query) <= 90:
+            candidates.append(f'"{normalized_query}"')
+
+        if len(candidates) < 3:
+            condensed = re.sub(r"[?!.]", " ", normalized_query)
+            condensed_tokens = [t for t in condensed.split() if len(t) >= 2]
+            if condensed_tokens:
+                candidates.append(" ".join(condensed_tokens[:5]))
+
+        return candidates[:3]
+
+    def _extract_query_expansion_terms(self, query: str) -> list[str]:
+        """질문 의도에 맞는 확장 토픽 키워드를 추출한다."""
+        query_lower = query.lower()
+
+        if any(
+            token in query_lower
+            for token in ["흥행", "박스오피스", "box office", "매출"]
+        ):
+            return ["박스오피스", "흥행 기록", "box office"]
+
+        if any(
+            token in query_lower
+            for token in ["인식", "평가", "이미지", "브랜드", "평판", "여론"]
+        ):
+            return ["평가", "평판", "여론"]
+
+        if any(
+            token in query_lower
+            for token in ["맞나", "맞나요", "사실", "팩트", "진짜", "아닌가", "아닌지"]
+        ):
+            return ["사실", "근거", "검증"]
+
+        if any(token in query_lower for token in ["비교", "차이", "vs"]):
+            return ["비교", "차이", "장단점"]
+
+        if any(token in query_lower for token in ["왜", "이유", "원인"]):
+            return ["원인", "배경", "이유"]
+
+        if any(token in query_lower for token in ["방법", "어떻게", "가이드", "절차"]):
+            return ["방법", "절차", "가이드"]
+
+        return []
+
+    def _determine_target_min_queries(
+        self,
+        mode: AIMode | None,
+        query_type: str,
+        refined_query: str,
+        keywords: list[str],
+    ) -> int:
+        """질문 유형에 따라 최소 쿼리 개수를 결정한다."""
+        default_count = (
+            MIN_QUERY_COUNT_HYBRID if mode == AIMode.HYBRID else MIN_QUERY_COUNT_SEARCH
+        )
+
+        if mode == AIMode.HYBRID and query_type == "natural":
+            if self._is_factoid_query(refined_query, keywords):
+                return 2
+
+        return default_count
+
+    def _is_factoid_query(self, query: str, keywords: list[str]) -> bool:
+        """단일 사실 확인형 질문 여부를 판단한다."""
+        normalized = query.lower().strip()
+
+        if len(normalized) > 70:
+            return False
+        if len(keywords) > 6:
+            return False
+
+        if any(marker in normalized for marker in FACTOID_QUERY_MARKERS):
+            return True
+
+        if normalized.endswith("?") and len(normalized) <= 45:
+            return True
+
+        return False
 
     def _detect_query_type(self, query: str) -> str:
         """쿼리 타입 감지: code_error, natural, mixed.
@@ -961,11 +1337,11 @@ class IntentParserNode:
                 code_score += 1
 
         # 특수문자 비율
-        special_chars = sum(1 for c in query if c in '{}[]();=<>|&^%$#@!')
+        special_chars = sum(1 for c in query if c in "{}[]();=<>|&^%$#@!")
         special_ratio = special_chars / max(len(query), 1)
 
         # 줄바꿈 개수 (코드는 여러 줄)
-        newline_count = query.count('\n')
+        newline_count = query.count("\n")
 
         # 판정
         if code_score >= 2 or special_ratio > 0.1 or newline_count >= 3:
@@ -986,11 +1362,11 @@ class IntentParserNode:
         """
         # 에러 타입 라인 찾기
         error_patterns = [
-            r'(Error|Exception|Traceback)[:\s].*',
-            r'(TypeError|ValueError|KeyError|AttributeError|ImportError)[:\s].*',
-            r'failed.*',
-            r'cannot.*',
-            r'unable to.*',
+            r"(Error|Exception|Traceback)[:\s].*",
+            r"(TypeError|ValueError|KeyError|AttributeError|ImportError)[:\s].*",
+            r"failed.*",
+            r"cannot.*",
+            r"unable to.*",
         ]
 
         for pattern in error_patterns:
@@ -1015,20 +1391,20 @@ class IntentParserNode:
 
         # 에러 타입 추출
         error_types = re.findall(
-            r'(TypeError|ValueError|KeyError|AttributeError|ImportError|'
-            r'RuntimeError|SyntaxError|NameError|IndexError|ModuleNotFoundError)',
-            query
+            r"(TypeError|ValueError|KeyError|AttributeError|ImportError|"
+            r"RuntimeError|SyntaxError|NameError|IndexError|ModuleNotFoundError)",
+            query,
         )
         keywords.extend(error_types)
 
         # 모듈/패키지명 추출 (import xxx, from xxx)
-        imports = re.findall(r'(?:import|from)\s+(\w+)', query)
+        imports = re.findall(r"(?:import|from)\s+(\w+)", query)
         keywords.extend(imports)
 
         # 함수/메서드명 추출
-        methods = re.findall(r'(\w+)\s*\(', query)
+        methods = re.findall(r"(\w+)\s*\(", query)
         # 너무 일반적인 것 제외
-        common_funcs = {'print', 'len', 'str', 'int', 'list', 'dict', 'set', 'range'}
+        common_funcs = {"print", "len", "str", "int", "list", "dict", "set", "range"}
         keywords.extend([m for m in methods if m not in common_funcs and len(m) > 2])
 
         # 중복 제거
@@ -1046,7 +1422,9 @@ class IntentParserNode:
         keywords, _ = self._extract_keywords_with_pos(query)
         return keywords
 
-    def _extract_keywords_with_pos(self, query: str) -> tuple[list[str], dict[str, str]]:
+    def _extract_keywords_with_pos(
+        self, query: str
+    ) -> tuple[list[str], dict[str, str]]:
         """Kiwi 형태소 분석으로 키워드와 품사 정보 추출.
 
         Args:
@@ -1068,8 +1446,9 @@ class IntentParserNode:
             keywords = []
             pos_map = {}  # 키워드 -> 품사 매핑
 
-            # 추출할 품사: NNG(일반명사), NNP(고유명사), VV(동사), VA(형용사), SL(외국어)
-            target_pos = {'NNG', 'NNP', 'VV', 'VA', 'SL', 'SH'}  # SH: 한자
+            # 추출할 품사: 명사/고유명사/외국어 중심
+            # VV/VA(용언 어간)는 "어쩌", "되" 같은 저품질 토큰을 유발해 제외
+            target_pos = {"NNG", "NNP", "SL", "SH"}  # SH: 한자
 
             for token in tokens:
                 form = token.form
@@ -1078,7 +1457,7 @@ class IntentParserNode:
                 # 불용어 필터링
                 if len(form) < 2:
                     continue
-                if form in {'것', '수', '때', '등', '중', '내', '더', '안'}:
+                if form in {"것", "수", "때", "등", "중", "내", "더", "안"}:
                     continue
 
                 if tag in target_pos:
@@ -1106,17 +1485,154 @@ class IntentParserNode:
         """
         query_parts = []
         # 정확한 매칭이 필요한 품사
-        exact_match_pos = {'NNP', 'SL', 'SH'}  # 고유명사, 외국어, 한자
+        exact_match_pos = {"NNP", "SL", "SH"}  # 고유명사, 외국어, 한자
 
-        for kw in keywords[:5]:  # 최대 5개
-            pos = pos_map.get(kw, 'NNG')
+        filtered_keywords: list[str] = []
+        for kw in keywords:
+            pos = pos_map.get(kw, "NNG")
+            if self._is_low_signal_keyword(kw, pos):
+                continue
+            filtered_keywords.append(kw)
+            if len(filtered_keywords) >= 5:
+                break
+
+        for kw in filtered_keywords:
+            pos = pos_map.get(kw, "NNG")
             if pos in exact_match_pos and len(kw) >= 2:
                 # 고유명사/외국어는 따옴표로 감싸기
                 query_parts.append(f'"{kw}"')
             else:
                 query_parts.append(kw)
 
+        # 의미 있는 토큰이 너무 적으면 키워드 쿼리 생성 생략
+        if len(query_parts) < 2:
+            return ""
+
         return " ".join(query_parts)
+
+    def _is_low_signal_keyword(self, keyword: str, pos: str) -> bool:
+        """검색 품질이 낮은 키워드를 필터링한다."""
+        token = keyword.strip().lower()
+        if len(token) < 2:
+            return True
+
+        if pos == "NNG" and token in LOW_SIGNAL_NOUNS:
+            return True
+
+        # 한글 2글자 일반명사 중 일반어는 제거
+        if pos == "NNG" and len(token) == 2 and token in {"관련", "내용", "정보"}:
+            return True
+
+        return False
+
+    def _extract_search_constraints(
+        self,
+        original_query: str,
+        refined_query: str,
+        keywords: list[str],
+    ) -> dict[str, Any]:
+        """검색 필터 힌트 추출.
+
+        의도 분석 결과를 검색 옵션으로 매핑하기 위한 최소 제약을 반환합니다.
+        """
+        combined_text = f"{original_query} {refined_query}".lower()
+        constraints: dict[str, Any] = {}
+
+        recency = self._extract_recency_hint(combined_text)
+        if recency:
+            constraints["search_recency"] = recency
+
+        language = self._extract_language_hint(combined_text)
+        if language:
+            constraints["search_language"] = language
+
+        domain_allowlist = self._extract_domain_allowlist(original_query)
+        if not domain_allowlist:
+            domain_allowlist = self._infer_domain_allowlist(combined_text, keywords)
+
+        if domain_allowlist:
+            constraints["domain_allowlist"] = domain_allowlist[:5]
+
+        return constraints
+
+    def _extract_recency_hint(self, text: str) -> str | None:
+        """질문에서 최신성 힌트를 추출."""
+        for recency, markers in RECENCY_HINT_PATTERNS:
+            if any(marker in text for marker in markers):
+                return recency
+
+        # 연도 단위 질의는 기본적으로 year 힌트 부여
+        if re.search(r"\b20\d{2}\b", text):
+            return "year"
+
+        return None
+
+    def _extract_language_hint(self, text: str) -> str | None:
+        """질문에서 언어 힌트를 추출."""
+        for language, markers in LANGUAGE_HINT_PATTERNS.items():
+            if any(marker in text for marker in markers):
+                return language
+
+        # 한글이 거의 없고 영문 토큰 위주면 영문 검색으로 힌트
+        if not re.search(r"[가-힣]", text) and re.search(r"[a-z]{4,}", text):
+            return "en-US"
+
+        return None
+
+    def _extract_domain_allowlist(self, text: str) -> list[str]:
+        """질문에 명시된 site: 도메인 추출."""
+        matches = re.findall(
+            r"\bsite:([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b", text, flags=re.IGNORECASE
+        )
+
+        normalized: list[str] = []
+        seen = set()
+        for domain in matches:
+            norm = self._normalize_domain(domain)
+            if norm and norm not in seen:
+                seen.add(norm)
+                normalized.append(norm)
+
+        return normalized
+
+    def _infer_domain_allowlist(self, text: str, keywords: list[str]) -> list[str]:
+        """질문 의미에서 도메인 허용 목록을 추론."""
+        inferred: list[str] = []
+        text_lower = text.lower()
+
+        if "arxiv" in text_lower:
+            inferred.append("arxiv.org")
+
+        if "위키" in text_lower or "wikipedia" in text_lower:
+            inferred.append("wikipedia.org")
+
+        needs_official_docs = "공식" in text_lower and (
+            "문서" in text_lower or "docs" in text_lower
+        )
+        if needs_official_docs:
+            combined_tokens = " ".join(keywords).lower()
+            for token, domains in OFFICIAL_DOC_DOMAIN_HINTS.items():
+                if token in text_lower or token in combined_tokens:
+                    inferred.extend(domains)
+
+        normalized: list[str] = []
+        seen = set()
+        for domain in inferred:
+            norm = self._normalize_domain(domain)
+            if norm and norm not in seen:
+                seen.add(norm)
+                normalized.append(norm)
+
+        return normalized
+
+    def _normalize_domain(self, domain: str) -> str:
+        """도메인 문자열 정규화."""
+        normalized = domain.strip().lower()
+        normalized = re.sub(r"^https?://", "", normalized)
+        normalized = normalized.strip("/")
+        if normalized.startswith("www."):
+            normalized = normalized[4:]
+        return normalized
 
     async def _expand_with_embedding(self, keywords: list[str]) -> str | None:
         """임베딩 모델로 의미적 확장 쿼리 생성.
@@ -1134,7 +1650,9 @@ class IntentParserNode:
             return None
 
         # 임베딩 서버 URL (settings에서 가져오거나 기본값)
-        embedding_url = getattr(self.settings, 'EMBEDDING_URL', 'http://localhost:11435/v1/embeddings')
+        embedding_url = getattr(
+            self.settings, "EMBEDDING_URL", "http://localhost:11435/v1/embeddings"
+        )
 
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1145,7 +1663,7 @@ class IntentParserNode:
                     json={
                         "model": "embeddinggemma:300m",
                         "input": text,
-                    }
+                    },
                 )
 
                 if response.status_code == 200:

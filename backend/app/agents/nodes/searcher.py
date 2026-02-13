@@ -5,17 +5,19 @@ Multi-Query 전략과 Reciprocal Rank Fusion(RRF) 리랭킹을 지원합니다.
 V8.1: 키워드 기반 관련성 필터링 추가.
 V8.3 Phase 3: 신뢰도 평가 및 품질 기반 재정렬 추가.
 """
+
 from __future__ import annotations
 
+import asyncio
 import re
 import time
-from collections import defaultdict
-from typing import Any
+from typing import Any, cast
+from urllib.parse import urlparse
 
 from loguru import logger
 
-from ..state import GraphState, AIMode, ThinkingStep, SearchResult
-from ..tools.web_search import search_web, WebSearchError
+from ..state import GraphState, AIMode, ThinkingStep, SearchResult, QueryAnalysis
+from ..tools.web_search import search_web, fetch_url_content, WebSearchError
 from ...utils.quality_assessor import QualityAssessor
 from .entity_disambiguator import EntityDisambiguator
 
@@ -24,6 +26,10 @@ RRF_K = 60
 
 # 관련성 필터링 최소 매칭 키워드 수 (2개 이상 매칭되어야 관련성 있음)
 MIN_KEYWORD_MATCH = 2
+DEFAULT_SEARCH_WEB_LIMIT = 15
+DEFAULT_HYBRID_WEB_LIMIT = 10
+DEFAULT_STAGE2_FETCH_TOP_K = 8
+MIN_CONTENT_LEN_FOR_HIGH_QUALITY = 450
 
 
 class SearcherNode:
@@ -51,6 +57,7 @@ class SearcherNode:
         original_query = state["query"]
         mode = state["mode"]
         thinking_steps = list(state.get("thinking_steps", []))
+        query_analysis = state.get("query_analysis") or {}
 
         # 재정의된 검색 쿼리 사용 (없으면 원본 쿼리)
         search_queries = state.get("search_queries", [original_query])
@@ -58,16 +65,28 @@ class SearcherNode:
             search_queries = [original_query]
 
         # 사고 과정 기록
-        thinking_steps.append(ThinkingStep(
-            step="search_start",
-            content=f"웹 검색 시작: {len(search_queries)}개 쿼리",
-            timestamp=time.time()
-        ))
+        thinking_steps.append(
+            ThinkingStep(
+                step="search_start",
+                content=f"웹 검색 시작: {len(search_queries)}개 쿼리",
+                timestamp=time.time(),
+            )
+        )
 
         logger.info(f"[Searcher] Using reformulated queries: {search_queries}")
 
         # 검색 옵션 결정 (원본 쿼리로 카테고리 등 결정)
-        search_options = self._determine_search_options(original_query, mode)
+        search_options = self._determine_search_options(
+            original_query, mode, query_analysis=query_analysis
+        )
+        logger.info(
+            "[Searcher] Options: "
+            f"limit={search_options['limit']}, "
+            f"content_fetch_top_k={search_options.get('content_fetch_top_k')}, "
+            f"language={search_options.get('language')}, "
+            f"time_range={search_options.get('time_range')}"
+        )
+        domain_allowlist: list[str] = search_options.get("domain_allowlist", [])
 
         # 각 쿼리별 검색 결과 수집 (RRF용 순위 정보 포함)
         # url -> {"result": dict, "ranks": [rank1, rank2, ...]}
@@ -79,12 +98,19 @@ class SearcherNode:
                 # V9.0 Phase 3: 쿼리 명확화 적용
                 clarified_query = self.entity_disambiguator.clarify_query(sq)
 
+                search_query = clarified_query
+                if domain_allowlist:
+                    search_query = self._apply_domain_filter_to_query(
+                        clarified_query, domain_allowlist
+                    )
+
                 results = await search_web(
-                    clarified_query,  # 명확화된 쿼리 사용
+                    search_query,
                     settings=self.settings,
                     limit=search_options["limit"],
                     categories=search_options["categories"],
                     language=search_options["language"],
+                    time_range=search_options.get("time_range"),
                     use_cache=True,
                 )
 
@@ -104,13 +130,14 @@ class SearcherNode:
             scored_results = []
             for url, data in url_to_result.items():
                 rrf_score = sum(1.0 / (RRF_K + rank) for rank in data["ranks"])
-                scored_results.append((rrf_score, data["result"]))
+                result_with_meta = dict(data["result"])
+                result_with_meta["rrf_score"] = round(rrf_score, 6)
+                scored_results.append((rrf_score, result_with_meta))
 
             # RRF 점수 기준 내림차순 정렬
             scored_results.sort(key=lambda x: x[0], reverse=True)
 
             # 관련성 필터링 (키워드 기반)
-            query_analysis = state.get("query_analysis")
             keywords = query_analysis.get("keywords", []) if query_analysis else []
             logger.info(f"[Searcher] Relevance filter keywords: {keywords}")
 
@@ -122,24 +149,40 @@ class SearcherNode:
                 filtered_count = 0
                 for score, r in scored_results:
                     relevance = self._calculate_relevance(r, keywords)
+                    r["relevance_match_count"] = relevance
                     if relevance >= min_match:
                         filtered_results.append((score, r, relevance))
                     else:
                         filtered_count += 1
-                        logger.debug(f"[Searcher] Filtered: {r.get('title', '')[:30]}... (relevance={relevance})")
+                        logger.debug(
+                            f"[Searcher] Filtered: {r.get('title', '')[:30]}... (relevance={relevance})"
+                        )
 
                 # 관련성 + RRF 점수로 재정렬 (관련성 우선)
                 filtered_results.sort(key=lambda x: (x[2], x[0]), reverse=True)
-                results = [r for _, r, _ in filtered_results[:search_options["limit"] * 2]]
+                results = [
+                    r for _, r, _ in filtered_results[: search_options["limit"] * 2]
+                ]
 
                 if filtered_count > 0:
-                    logger.info(f"[Searcher] Filtered out {filtered_count} irrelevant results (min_match={min_match})")
+                    logger.info(
+                        f"[Searcher] Filtered out {filtered_count} irrelevant results (min_match={min_match})"
+                    )
             else:
                 # 키워드 없으면 RRF 점수만 사용
-                results = [r for _, r in scored_results[:search_options["limit"] * 2]]
+                results = [r for _, r in scored_results[: search_options["limit"] * 2]]
+
+            if domain_allowlist:
+                before_count = len(results)
+                results = self._filter_results_by_domain(results, domain_allowlist)
+                logger.info(
+                    f"[Searcher] Domain allowlist applied: {before_count} -> {len(results)}"
+                )
 
             # [Phase 3] 품질 평가 및 재정렬
-            logger.info(f"[Searcher] Found {len(results)} results, now assessing quality...")
+            logger.info(
+                f"[Searcher] Found {len(results)} results, now assessing quality..."
+            )
 
             # 각 결과에 품질 점수 부여
             for result in results:
@@ -153,31 +196,70 @@ class SearcherNode:
 
             # V9.0: Entity Disambiguation 적용
             results = await self.entity_disambiguator.disambiguate(
-                query=original_query,
-                search_results=results
+                query=original_query, search_results=results
             )
 
-            # 최종 제한
-            results = results[:search_options["limit"]]
+            # Phase 4: URL 본문 수집 기반 2차 리랭킹
+            results = await self._enrich_with_url_content(
+                results,
+                top_k=int(
+                    search_options.get(
+                        "content_fetch_top_k", DEFAULT_STAGE2_FETCH_TOP_K
+                    )
+                ),
+            )
+            results = self._rerank_second_stage(results, keywords)
 
-            logger.info(f"[Searcher] Final {len(results)} results (quality-filtered, disambiguated, and reranked)")
+            # 최종 제한
+            results = results[: search_options["limit"]]
+
+            logger.info(
+                f"[Searcher] Final {len(results)} results (quality-filtered, disambiguated, and reranked)"
+            )
 
             # 결과를 SearchResult 형식으로 변환
-            search_results = [
-                SearchResult(
-                    title=r.get("title", ""),
-                    url=r.get("url", ""),
-                    snippet=r.get("snippet", ""),
-                    source="web",
-                )
-                for r in results
-            ]
+            # 중요: evaluator 단계에서 사용될 품질/랭킹 메타데이터를 보존한다.
+            search_results: list[SearchResult] = []
+            passthrough_keys = (
+                "position",
+                "engine",
+                "published_date",
+                "last_updated",
+                "rrf_score",
+                "relevance_match_count",
+                "quality_score",
+                "trust_score",
+                "freshness_score",
+                "content_score",
+                "disambiguation_score",
+                "content_preview",
+                "fetched_content_length",
+                "content_fetch_quality",
+                "second_stage_score",
+            )
 
-            thinking_steps.append(ThinkingStep(
-                step="search_complete",
-                content=f"검색 완료: {len(search_results)}개 결과 발견",
-                timestamp=time.time()
-            ))
+            for r in results:
+                item: dict[str, Any] = {
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "snippet": r.get("snippet", ""),
+                    "source": "web",
+                }
+
+                for key in passthrough_keys:
+                    value = r.get(key)
+                    if value is not None:
+                        item[key] = value
+
+                search_results.append(cast(SearchResult, item))
+
+            thinking_steps.append(
+                ThinkingStep(
+                    step="search_complete",
+                    content=f"검색 완료: {len(search_results)}개 결과 발견",
+                    timestamp=time.time(),
+                )
+            )
 
             return {
                 "search_results": search_results,
@@ -186,11 +268,13 @@ class SearcherNode:
 
         except WebSearchError as e:
             logger.warning(f"[Searcher] Search failed: {e}")
-            thinking_steps.append(ThinkingStep(
-                step="search_error",
-                content=f"검색 실패: {str(e)}",
-                timestamp=time.time()
-            ))
+            thinking_steps.append(
+                ThinkingStep(
+                    step="search_error",
+                    content=f"검색 실패: {str(e)}",
+                    timestamp=time.time(),
+                )
+            )
             return {
                 "search_results": [],
                 "thinking_steps": thinking_steps,
@@ -199,38 +283,83 @@ class SearcherNode:
 
         except Exception as e:
             logger.error(f"[Searcher] Unexpected error: {e}")
-            thinking_steps.append(ThinkingStep(
-                step="search_error",
-                content=f"예상치 못한 오류: {str(e)}",
-                timestamp=time.time()
-            ))
+            thinking_steps.append(
+                ThinkingStep(
+                    step="search_error",
+                    content=f"예상치 못한 오류: {str(e)}",
+                    timestamp=time.time(),
+                )
+            )
             return {
                 "search_results": [],
                 "thinking_steps": thinking_steps,
                 "error": f"검색 오류: {e}",
             }
 
-    def _determine_search_options(self, query: str, mode: AIMode) -> dict:
+    def _determine_search_options(
+        self,
+        query: str,
+        mode: AIMode,
+        query_analysis: QueryAnalysis | None = None,
+    ) -> dict:
         """쿼리와 모드에 따른 검색 옵션 결정.
 
         Args:
             query: 검색 쿼리
             mode: AI 모드
+            query_analysis: 의도 분석 결과의 검색 제약 힌트
 
         Returns:
             검색 옵션 딕셔너리
         """
+        default_search_limit = self._get_int_setting(
+            "agent_search_web_limit",
+            DEFAULT_SEARCH_WEB_LIMIT,
+            minimum=5,
+            maximum=30,
+        )
+        default_hybrid_limit = self._get_int_setting(
+            "agent_hybrid_web_limit",
+            DEFAULT_HYBRID_WEB_LIMIT,
+            minimum=5,
+            maximum=20,
+        )
+        content_fetch_top_k = self._get_int_setting(
+            "agent_content_fetch_top_k",
+            DEFAULT_STAGE2_FETCH_TOP_K,
+            minimum=3,
+            maximum=15,
+        )
+
         # 기본 옵션 - 검색 결과는 충분히 수집하고 LLM 컨텍스트에서 제한
         options = {
-            "limit": 15,  # 검색 결과 최대 15개 수집
+            "limit": default_search_limit,
             "categories": "general",
             "language": "ko-KR",
+            "time_range": None,
+            "domain_allowlist": [],
+            "content_fetch_top_k": content_fetch_top_k,
         }
+
+        query_analysis = query_analysis or {}
+        search_language = query_analysis.get("search_language")
+        if isinstance(search_language, str) and search_language:
+            options["language"] = search_language
+
+        search_recency = query_analysis.get("search_recency")
+        if search_recency in {"day", "week", "month", "year"}:
+            options["time_range"] = search_recency
+
+        raw_domains = query_analysis.get("domain_allowlist", [])
+        if isinstance(raw_domains, list):
+            options["domain_allowlist"] = [
+                self._normalize_domain(d) for d in raw_domains if isinstance(d, str)
+            ]
 
         # 모드별 조정
         if mode == AIMode.HYBRID:
             # 하이브리드 모드에서는 웹 + RAG 분배
-            options["limit"] = 8  # 웹 검색 8개 + RAG 8개로 분배
+            options["limit"] = default_hybrid_limit
 
         # 쿼리 기반 카테고리 자동 감지
         query_lower = query.lower()
@@ -243,6 +372,71 @@ class SearcherNode:
             options["categories"] = "images"
 
         return options
+
+    def _get_int_setting(
+        self,
+        name: str,
+        default: int,
+        *,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        """설정값을 정수로 읽고 안전 범위로 보정한다."""
+        raw_value = getattr(self.settings, name, default)
+        try:
+            parsed = int(raw_value)
+        except (TypeError, ValueError):
+            return default
+
+        if parsed < minimum:
+            return minimum
+        if parsed > maximum:
+            return maximum
+        return parsed
+
+    def _apply_domain_filter_to_query(self, query: str, domains: list[str]) -> str:
+        """검색 쿼리에 site: 도메인 필터를 적용."""
+        normalized_domains = [self._normalize_domain(d) for d in domains if d]
+        normalized_domains = [d for d in normalized_domains if d]
+        if not normalized_domains:
+            return query
+
+        if len(normalized_domains) == 1:
+            return f"{query} site:{normalized_domains[0]}"
+
+        domain_clause = " OR ".join(f"site:{d}" for d in normalized_domains[:3])
+        return f"{query} ({domain_clause})"
+
+    def _filter_results_by_domain(
+        self, results: list[dict[str, Any]], domains: list[str]
+    ) -> list[dict[str, Any]]:
+        """결과를 허용 도메인 기준으로 필터링."""
+        allowlist = [self._normalize_domain(d) for d in domains if d]
+        allowlist = [d for d in allowlist if d]
+        if not allowlist:
+            return results
+
+        filtered: list[dict[str, Any]] = []
+        for result in results:
+            url = result.get("url", "")
+            if not url:
+                continue
+
+            netloc = self._normalize_domain(urlparse(url).netloc)
+            if any(netloc == d or netloc.endswith(f".{d}") for d in allowlist):
+                filtered.append(result)
+
+        # 도메인 필터 후 결과가 0개면 원본 유지 (과도한 필터링 완화)
+        return filtered if filtered else results
+
+    def _normalize_domain(self, value: str) -> str:
+        """도메인 문자열을 정규화."""
+        normalized = value.strip().lower()
+        normalized = re.sub(r"^https?://", "", normalized)
+        normalized = normalized.strip("/")
+        if normalized.startswith("www."):
+            normalized = normalized[4:]
+        return normalized
 
     def _calculate_relevance(self, result: dict, keywords: list[str]) -> int:
         """검색 결과의 관련성 점수 계산.
@@ -265,7 +459,152 @@ class SearcherNode:
             kw_lower = kw.lower()
             # 정규식으로 단어 경계 매칭 (부분 매칭 방지)
             # 한글은 단어 경계가 없으므로 단순 포함 검사
-            if re.search(rf'\b{re.escape(kw_lower)}\b', text) or kw_lower in text:
+            if re.search(rf"\b{re.escape(kw_lower)}\b", text) or kw_lower in text:
                 matched += 1
 
         return matched
+
+    async def _enrich_with_url_content(
+        self,
+        results: list[dict[str, Any]],
+        *,
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        """상위 검색 결과 URL 본문을 수집하고 품질 신호를 보강한다."""
+        if not results:
+            return results
+
+        effective_top_k = max(0, min(len(results), top_k))
+        if effective_top_k == 0:
+            return results
+
+        fetch_targets = results[:effective_top_k]
+        tasks = []
+        for item in fetch_targets:
+            url = item.get("url", "")
+            if not url:
+                tasks.append(None)
+                continue
+            tasks.append(
+                fetch_url_content(
+                    url,
+                    settings=self.settings,
+                    max_chars=2200,
+                    use_cache=True,
+                )
+            )
+
+        awaitables = [t for t in tasks if t is not None]
+        if not awaitables:
+            return results
+
+        fetched_payloads = await asyncio.gather(*awaitables, return_exceptions=True)
+        payload_iter = iter(fetched_payloads)
+
+        success_count = 0
+        for item, task in zip(fetch_targets, tasks, strict=False):
+            if task is None:
+                continue
+
+            payload = next(payload_iter)
+            if isinstance(payload, BaseException):
+                logger.debug(
+                    f"[Searcher] Content fetch failed for {item.get('url', '')}: {payload}"
+                )
+                item["content_fetch_quality"] = 0.0
+                continue
+
+            payload_dict = cast(dict[str, Any], payload)
+            text = payload_dict.get("text", "")
+            content_length = int(payload_dict.get("length", 0))
+            if not text or content_length <= 0:
+                item["content_fetch_quality"] = 0.0
+                continue
+
+            success_count += 1
+            preview = text[:600]
+            content_quality = self._score_fetched_content(text, content_length)
+            base_quality = float(item.get("quality_score", 50.0))
+            blended_quality = base_quality * 0.75 + content_quality * 0.25
+
+            item["content_preview"] = preview
+            item["fetched_content_length"] = content_length
+            item["content_fetch_quality"] = round(content_quality, 2)
+            item["quality_score"] = round(max(min(blended_quality, 100.0), 0.0), 2)
+
+            # snippet이 매우 짧으면 본문 발췌로 보강
+            snippet = item.get("snippet", "")
+            if len(snippet) < 80:
+                item["snippet"] = preview[:240]
+
+        logger.info(
+            f"[Searcher] Content enrichment complete: {success_count}/{effective_top_k} fetched"
+        )
+        return results
+
+    def _score_fetched_content(self, text: str, content_length: int) -> float:
+        """수집 본문 품질을 휴리스틱으로 평가한다 (0-100)."""
+        score = 40.0
+        normalized = text.lower()
+
+        if content_length >= MIN_CONTENT_LEN_FOR_HIGH_QUALITY:
+            score += 20.0
+        if content_length >= 1200:
+            score += 18.0
+        if content_length >= 2200:
+            score += 10.0
+
+        sentence_count = len(re.findall(r"[.!?。]\s", text))
+        if sentence_count >= 8:
+            score += 8.0
+
+        boilerplate_hits = sum(
+            1
+            for kw in [
+                "cookie",
+                "privacy",
+                "로그인",
+                "회원가입",
+                "구독",
+                "advertisement",
+            ]
+            if kw in normalized
+        )
+        if boilerplate_hits:
+            score -= min(boilerplate_hits * 6.0, 18.0)
+
+        return max(min(score, 100.0), 0.0)
+
+    def _rerank_second_stage(
+        self, results: list[dict[str, Any]], keywords: list[str]
+    ) -> list[dict[str, Any]]:
+        """snippet+본문 품질 신호를 결합해 2차 리랭킹한다."""
+        if not results:
+            return results
+
+        keyword_count = len(keywords)
+        rescored: list[dict[str, Any]] = []
+        for item in results:
+            quality = float(item.get("quality_score", 0.0))
+            content_quality = float(item.get("content_fetch_quality", 0.0))
+            rrf_score = float(item.get("rrf_score", 0.0))
+            disambiguation = float(item.get("disambiguation_score", 50.0))
+
+            if keyword_count > 0:
+                match_count = float(item.get("relevance_match_count", 0.0))
+                relevance_ratio = min(match_count / keyword_count, 1.0)
+            else:
+                relevance_ratio = 0.5
+
+            second_stage_score = (
+                quality * 0.58
+                + content_quality * 0.2
+                + relevance_ratio * 15.0
+                + min(rrf_score * 500.0, 10.0)
+                + disambiguation * 0.07
+            )
+            item["second_stage_score"] = round(second_stage_score, 4)
+            rescored.append(item)
+
+        rescored.sort(key=lambda x: x.get("second_stage_score", 0.0), reverse=True)
+        return rescored

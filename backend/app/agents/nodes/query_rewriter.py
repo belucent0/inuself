@@ -2,6 +2,7 @@
 
 V8.4: 검색 실패 시 쿼리를 재작성하여 재시도합니다.
 """
+
 from __future__ import annotations
 
 import time
@@ -43,6 +44,11 @@ class QueryRewriterNode:
         retry_reason = state.get("retry_reason", "")
         failed_queries = state.get("failed_queries", [])
         original_queries = state.get("original_search_queries", [])
+        query_analysis = state.get("query_analysis") or {}
+        keyword_hints = query_analysis.get("keywords", [])
+        domain_allowlist = query_analysis.get("domain_allowlist", [])
+        search_recency = query_analysis.get("search_recency")
+        search_language = query_analysis.get("search_language")
         thinking_steps = list(state.get("thinking_steps", []))
 
         # 원본 쿼리 저장 (첫 재시도 시)
@@ -59,17 +65,29 @@ class QueryRewriterNode:
 
         # LLM으로 쿼리 재작성
         new_queries = await self._rewrite_queries(
-            query, original_queries, failed_queries, strategy, retry_reason
+            query,
+            original_queries,
+            failed_queries,
+            strategy,
+            retry_reason,
+            keyword_hints=keyword_hints,
+            domain_allowlist=domain_allowlist,
+            search_recency=search_recency,
+            search_language=search_language,
         )
 
-        logger.info(f"[QueryRewriter] Generated {len(new_queries)} new queries: {new_queries}")
+        logger.info(
+            f"[QueryRewriter] Generated {len(new_queries)} new queries: {new_queries}"
+        )
 
         # 사고 과정 기록
-        thinking_steps.append(ThinkingStep(
-            step="query_rewrite",
-            content=f"검색 재시도 #{retry_count + 1} - 전략: {strategy}",
-            timestamp=time.time()
-        ))
+        thinking_steps.append(
+            ThinkingStep(
+                step="query_rewrite",
+                content=f"검색 재시도 #{retry_count + 1} - 전략: {strategy}",
+                timestamp=time.time(),
+            )
+        )
 
         return {
             "search_queries": new_queries,
@@ -99,6 +117,9 @@ class QueryRewriterNode:
         elif retry_reason == "low_relevance":
             # 관련성 낮음 → 키워드 강화
             return "keyword_boost"
+        elif retry_reason == "low_content_coverage":
+            # 본문 근거 부족 → 더 해설형/문서형 쿼리
+            return "source_depth"
 
         # 기본 순환 전략
         if retry_count == 0:
@@ -115,6 +136,10 @@ class QueryRewriterNode:
         failed_queries: list[str],
         strategy: str,
         retry_reason: str,
+        keyword_hints: list[str] | None = None,
+        domain_allowlist: list[str] | None = None,
+        search_recency: str | None = None,
+        search_language: str | None = None,
     ) -> list[str]:
         """쿼리 재작성.
 
@@ -124,6 +149,10 @@ class QueryRewriterNode:
             failed_queries: 실패한 쿼리들
             strategy: 재작성 전략
             retry_reason: 재시도 이유
+            keyword_hints: 핵심 키워드 힌트
+            domain_allowlist: 도메인 제한 힌트
+            search_recency: 최신성 힌트
+            search_language: 언어 힌트
 
         Returns:
             새로운 검색 쿼리 목록
@@ -133,40 +162,66 @@ class QueryRewriterNode:
             "broaden": """더 넓은 범위의 일반적인 용어를 사용하세요.
 예: "FastAPI 성능 벤치마크" → "파이썬 웹 프레임워크 성능 비교"
 예: "TSMC 2026 투자 계획" → "TSMC 투자", "반도체 투자 2026" """,
-
             "narrow": """더 구체적이고 특정한 용어를 사용하세요.
 예: "파이썬 웹 프레임워크" → "FastAPI vs Flask 성능"
 예: "TSMC 투자" → "TSMC 2026년 설비 투자 계획 82조" """,
-
             "synonym": """동의어나 관련어를 사용하세요.
 예: "투자 계획" → "투자 전략", "자본 지출 계획"
 예: "성능" → "속도", "처리량", "응답 시간" """,
-
             "trusted_domains": """신뢰도 높은 출처를 명시하세요.
 예: "AI 뉴스" → "AI 뉴스 site:techcrunch.com OR site:venturebeat.com"
 예: "파이썬 튜토리얼" → "python tutorial site:python.org OR site:realpython.com" """,
-
             "keyword_boost": """핵심 키워드를 강조하고 명확히 하세요.
 예: "그거" → 원본 주제를 명확히 명시
 예: "빠른 것" → "성능이 빠른 프레임워크" """,
+            "source_depth": """본문이 풍부한 문서/리포트/공식 자료를 찾도록 쿼리를 만드세요.
+예: "AI 동향" → "AI 동향 보고서 분석", "AI 산업 리포트 2026"
+예: "성능 비교" → "공식 벤치마크 보고서", "technical deep dive" """,
         }
 
-        instruction = strategy_instructions.get(strategy, strategy_instructions["broaden"])
+        instruction = strategy_instructions.get(
+            strategy, strategy_instructions["broaden"]
+        )
+
+        keyword_hints = keyword_hints or []
+        domain_allowlist = domain_allowlist or []
+
+        constraint_lines = []
+        if keyword_hints:
+            constraint_lines.append(
+                f"- 핵심 키워드 유지: {', '.join(keyword_hints[:5])}"
+            )
+        if domain_allowlist:
+            constraint_lines.append(
+                f"- 도메인 제한 유지: {', '.join(domain_allowlist[:3])}"
+            )
+        if search_recency:
+            constraint_lines.append(f"- 최신성 필터 유지: {search_recency}")
+        if search_language:
+            constraint_lines.append(f"- 언어 필터 유지: {search_language}")
+
+        constraints_text = (
+            "\n".join(constraint_lines) if constraint_lines else "- 제약 없음"
+        )
 
         rewrite_prompt = f"""검색 결과가 만족스럽지 않아 쿼리를 재작성해야 합니다.
 
 **원본 질문**: {query}
 
-**최초 검색 쿼리들**: {', '.join(original_queries)}
+**최초 검색 쿼리들**: {", ".join(original_queries)}
 
-**실패한 쿼리들**: {', '.join(failed_queries) if failed_queries else '없음'}
+**실패한 쿼리들**: {", ".join(failed_queries) if failed_queries else "없음"}
 
 **실패 이유**: {self._translate_retry_reason(retry_reason)}
 
 **재작성 전략**: {strategy}
 {instruction}
 
+**검색 제약(가능하면 유지)**
+{constraints_text}
+
 **중요**: 실패한 쿼리와 중복되지 않도록 하세요.
+**중요**: 단어만 나열하지 말고 실제 검색 가능한 쿼리 문장으로 작성하세요.
 
 새로운 검색 쿼리 3개를 생성하세요 (한 줄에 하나씩, 번호나 기호 없이):"""
 
@@ -180,10 +235,10 @@ class QueryRewriterNode:
 
             # 쿼리 추출
             new_queries = []
-            for line in response.strip().split('\n'):
+            for line in response.strip().split("\n"):
                 line = line.strip()
                 # 번호나 기호 제거
-                line = line.lstrip('0123456789.-•* ')
+                line = line.lstrip("0123456789.-•* ")
                 if line and line not in failed_queries and line not in original_queries:
                     new_queries.append(line)
 
@@ -192,7 +247,9 @@ class QueryRewriterNode:
 
             if not new_queries:
                 # 생성 실패 시 폴백: 원본 쿼리 약간 변형
-                logger.warning("[QueryRewriter] Failed to generate new queries, using fallback")
+                logger.warning(
+                    "[QueryRewriter] Failed to generate new queries, using fallback"
+                )
                 new_queries = [f"{query} 정보", f"{query} 자세히", f"{query} 관련"]
 
             return new_queries
@@ -216,6 +273,7 @@ class QueryRewriterNode:
             "insufficient_results": "검색 결과가 부족함 (3개 미만)",
             "low_quality": "검색 결과의 품질이 낮음",
             "low_relevance": "검색 결과의 관련성이 낮음",
+            "low_content_coverage": "검색 결과 본문 근거가 부족함",
             "overall_low_score": "전체 품질 점수가 낮음",
         }
         return translations.get(reason, reason)

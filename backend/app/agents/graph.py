@@ -3,6 +3,7 @@
 LangGraph를 사용하여 AI 에이전트 워크플로우를 정의합니다.
 V8.0: 전체 워크플로우 구현 (Intent → Search/RAG/Reasoning → Generator → Reflector)
 """
+
 from __future__ import annotations
 
 from typing import Any, AsyncIterator
@@ -32,13 +33,13 @@ MODE_DISPLAY_MAP = {
     AIMode.REASONING: "추론",
     AIMode.RAG: "문서 검색",
     AIMode.HYBRID: "하이브리드",
-    AIMode.SIMPLE: "일반"
+    AIMode.SIMPLE: "일반",
 }
 
 TIER_DISPLAY_MAP = {
     "tier-simple": "간단",
     "tier-medium": "보통",
-    "tier-complex": "복잡"
+    "tier-complex": "복잡",
 }
 
 
@@ -107,7 +108,7 @@ def create_ai_graph(settings: Any, enable_reflection: bool = False) -> StateGrap
             "searcher": "searcher",
             "rag_retriever": "rag_retriever",
             "reasoner": "reasoner",
-        }
+        },
     )
 
     # Searcher → Generator (또는 Hybrid인 경우 RAG로)
@@ -124,7 +125,7 @@ def create_ai_graph(settings: Any, enable_reflection: bool = False) -> StateGrap
         {
             "generator": "generator",
             "rag_retriever": "rag_retriever",
-        }
+        },
     )
 
     # RAG Retriever → Generator
@@ -218,7 +219,7 @@ def create_ai_graph_with_retry(
             "searcher": "searcher",
             "rag_retriever": "rag_retriever",
             "reasoner": "reasoner",
-        }
+        },
     )
 
     # Searcher → SearchEvaluator (항상)
@@ -241,6 +242,10 @@ def create_ai_graph_with_retry(
         if retry_count < max_retries:
             return "query_rewriter"
 
+        # HYBRID는 웹 검색 품질이 낮아도 내부 문서 결합 시도
+        if mode == AIMode.HYBRID:
+            return "rag_retriever"
+
         # 모든 시도 실패 → FallbackHandler
         return "fallback_handler"
 
@@ -252,7 +257,7 @@ def create_ai_graph_with_retry(
             "rag_retriever": "rag_retriever",
             "query_rewriter": "query_rewriter",
             "fallback_handler": "fallback_handler",
-        }
+        },
     )
 
     # QueryRewriter → Searcher (루프!)
@@ -272,7 +277,7 @@ def create_ai_graph_with_retry(
         {
             "generator": "generator",
             "rag_retriever": "rag_retriever",
-        }
+        },
     )
 
     # RAG Retriever → Generator
@@ -352,7 +357,9 @@ async def run_ai_agent(
                         messages.append(AIMessage(content=msg.content))
                 # 현재 쿼리 추가
                 messages.append(HumanMessage(content=query))
-                logger.info(f"[AIAgent] Loaded {len(messages)-1} previous messages for thread {thread_id}")
+                logger.info(
+                    f"[AIAgent] Loaded {len(messages) - 1} previous messages for thread {thread_id}"
+                )
         except Exception as e:
             logger.warning(f"[AIAgent] Failed to load thread history: {e}")
             messages = [HumanMessage(content=query)]
@@ -385,7 +392,9 @@ async def run_ai_agent(
     }
 
     # 그래프 실행
-    logger.info(f"[AIAgent] Running agent: query='{query[:50]}...', mode={mode}, thread_id={thread_id}")
+    logger.info(
+        f"[AIAgent] Running agent: query='{query[:50]}...', mode={mode}, thread_id={thread_id}"
+    )
 
     # LLM Observability 콜백 핸들러 설정 (Langfuse)
     callbacks = []
@@ -405,7 +414,9 @@ async def run_ai_agent(
 
     try:
         result = await graph.ainvoke(initial_state, config=config)
-        logger.info(f"[AIAgent] Completed: mode={result['mode']}, response_length={len(result.get('response', ''))}")
+        logger.info(
+            f"[AIAgent] Completed: mode={result['mode']}, response_length={len(result.get('response', ''))}"
+        )
         return result
     except Exception as e:
         logger.error(f"[AIAgent] Execution failed: {e}")
@@ -473,13 +484,16 @@ async def stream_ai_agent(
     links = []
     if parent_span_ctx and parent_span_ctx.is_valid:
         links = [Link(parent_span_ctx)]
-        logger.debug(f"[AIAgent] Linked to parent trace: {format(parent_span_ctx.trace_id, '032x')}")
+        logger.debug(
+            f"[AIAgent] Linked to parent trace: {format(parent_span_ctx.trace_id, '032x')}"
+        )
 
     # Langfuse trace 생성 (v2 API)
     langfuse_trace = None
     langfuse_client = None
     try:
         from ..core.langfuse import get_langfuse_client, is_langfuse_enabled
+
         if is_langfuse_enabled():
             langfuse_client = get_langfuse_client()
             if langfuse_client:
@@ -491,7 +505,9 @@ async def stream_ai_agent(
                     tags=["ai-chat-mode", "streaming", f"mode:{mode or 'auto'}"],
                     metadata=metadata or {},
                 )
-                logger.debug(f"[Langfuse] Trace created: {langfuse_trace.id if langfuse_trace else 'none'}")
+                logger.debug(
+                    f"[Langfuse] Trace created: {langfuse_trace.id if langfuse_trace else 'none'}"
+                )
     except Exception as e:
         logger.warning(f"[Langfuse] Failed to create trace: {e}")
 
@@ -507,13 +523,15 @@ async def stream_ai_agent(
             "ai.thread_id": thread_id or "",
             "ai.user_id": user_id or "",
             "ai.operation": "stream",
-        }
+        },
     )
 
     # Parent trace ID 저장 (검색 용이)
     if parent_span_ctx and parent_span_ctx.is_valid:
-        otel_span.set_attribute("link.trace_id", format(parent_span_ctx.trace_id, '032x'))
-        otel_span.set_attribute("link.span_id", format(parent_span_ctx.span_id, '016x'))
+        otel_span.set_attribute(
+            "link.trace_id", format(parent_span_ctx.trace_id, "032x")
+        )
+        otel_span.set_attribute("link.span_id", format(parent_span_ctx.span_id, "016x"))
 
     # Span을 current context로 활성화 (child span이 제대로 연결되도록)
     ctx = otel_trace.set_span_in_context(otel_span)
@@ -539,7 +557,9 @@ async def stream_ai_agent(
                         messages.append(AIMessage(content=msg.content))
                 # 현재 쿼리 추가
                 messages.append(HumanMessage(content=query))
-                logger.info(f"[AIAgent] Stream: Loaded {len(messages)-1} previous messages")
+                logger.info(
+                    f"[AIAgent] Stream: Loaded {len(messages) - 1} previous messages"
+                )
         except Exception as e:
             logger.warning(f"[AIAgent] Stream: Failed to load thread history: {e}")
             messages = [HumanMessage(content=query)]
@@ -573,12 +593,17 @@ async def stream_ai_agent(
 
     try:
         # 1. Intent 분석
-        yield {"type": "thinking", "data": {"step": "intent_analysis", "content": "질문 분석 중..."}}
+        yield {
+            "type": "thinking",
+            "data": {"step": "intent_analysis", "content": "질문 분석 중..."},
+        }
 
         # Langfuse span
         intent_span = None
         if langfuse_trace:
-            intent_span = langfuse_trace.span(name="intent_parser", input={"query": query})
+            intent_span = langfuse_trace.span(
+                name="intent_parser", input={"query": query}
+            )
 
         # OpenTelemetry child span
         with tracer.start_as_current_span("intent_parser") as intent_otel:
@@ -589,7 +614,9 @@ async def stream_ai_agent(
             state.update(intent_result)
 
             detected_mode = state["mode"]
-            selected_tier = state.get("selected_model", "tier-simple")  # tier명이 selected_model에 저장됨
+            selected_tier = state.get(
+                "selected_model", "tier-simple"
+            )  # tier명이 selected_model에 저장됨
             query_analysis = state.get("query_analysis")
 
             intent_otel.set_attribute("ai.detected_mode", str(detected_mode))
@@ -613,49 +640,102 @@ async def stream_ai_agent(
             "data": {
                 "step": "intent_result",
                 "content": f"모드 선택 완료 ({mode_display} / {tier_display})",
-                "mode": str(detected_mode),
+                "mode": detected_mode.value,
                 "selected_tier": selected_tier,
-            }
+            },
         }
 
         # 쿼리 재정의 결과가 있으면 전송 (Perplexity 스타일 UI용)
         if query_analysis:
+            reformulated_query = query_analysis.get("reformulated_query", "")
+            keywords = query_analysis.get("keywords", [])
+            search_focus = query_analysis.get("search_focus", "")
+            reframed_queries = query_analysis.get("sub_queries", [])
+
+            topic_parts = []
+            if reformulated_query:
+                topic_parts.append(f"핵심 질문: {reformulated_query}")
+            if keywords:
+                topic_parts.append(f"핵심 키워드: {', '.join(keywords[:4])}")
+            if search_focus:
+                topic_parts.append(f"검색 방향: {search_focus}")
+
+            if topic_parts:
+                yield {
+                    "type": "thinking",
+                    "data": {
+                        "step": "topic_understanding",
+                        "content": "\n".join(
+                            ["사용자 질문을 이렇게 이해했어요.", *topic_parts]
+                        ),
+                    },
+                }
+
+            if reframed_queries:
+                if len(reframed_queries) == 1:
+                    reframing_content = (
+                        "요청을 단일 검색 과제로 재정의했습니다.\n"
+                        f"1. {reframed_queries[0]}"
+                    )
+                else:
+                    numbered_queries = "\n".join(
+                        [f"{idx + 1}. {q}" for idx, q in enumerate(reframed_queries)]
+                    )
+                    reframing_content = (
+                        f"요청을 {len(reframed_queries)}개 검색 과제로 재정의했습니다.\n"
+                        f"{numbered_queries}"
+                    )
+
+                yield {
+                    "type": "thinking",
+                    "data": {
+                        "step": "request_reframing",
+                        "content": reframing_content,
+                    },
+                }
+
             yield {
                 "type": "query_analysis",
                 "data": {
                     "original_query": query_analysis.get("original_query", query),
-                    "reformulated_query": query_analysis.get("reformulated_query", ""),
+                    "reformulated_query": reformulated_query,
                     "search_queries": query_analysis.get("sub_queries", []),
-                    "keywords": query_analysis.get("keywords", []),
-                    "search_focus": query_analysis.get("search_focus", ""),
-                }
+                    "keywords": keywords,
+                    "search_focus": search_focus,
+                    "search_recency": query_analysis.get("search_recency", ""),
+                    "search_language": query_analysis.get("search_language", ""),
+                    "domain_allowlist": query_analysis.get("domain_allowlist", []),
+                },
             }
 
             # 쿼리 생성 후 상태 표시
             search_queries = query_analysis.get("sub_queries", [])
             if search_queries:
-                queries_text = "\n".join([f"- {q}" for q in search_queries])
+                queries_text = "\n".join(
+                    [f"{idx + 1}. {q}" for idx, q in enumerate(search_queries)]
+                )
                 yield {
                     "type": "thinking",
                     "data": {
                         "step": "query_generated",
-                        "content": f"검색 쿼리 {len(search_queries)}개 생성:\n{queries_text}"
-                    }
+                        "content": queries_text,
+                    },
                 }
 
         # IntentParser가 생성한 search_queries 전송 (메타데이터 저장용)
         search_queries_from_intent = state.get("search_queries", [])
         if search_queries_from_intent:
-            yield {
-                "type": "search_queries",
-                "data": search_queries_from_intent
-            }
+            yield {"type": "search_queries", "data": search_queries_from_intent}
 
         # 2. 모드별 처리
         if detected_mode == AIMode.SEARCH:
             # V8.4: 재시도 활성화 시 루프 구조
             if enable_retry:
-                from .nodes import SearchEvaluatorNode, QueryRewriterNode, FallbackHandlerNode
+                from .nodes import (
+                    SearchEvaluatorNode,
+                    QueryRewriterNode,
+                    FallbackHandlerNode,
+                )
 
                 # 원본 쿼리 저장
                 state["original_search_queries"] = state.get("search_queries", [query])
@@ -665,13 +745,25 @@ async def stream_ai_agent(
                     # 웹 검색
                     retry_count = state["search_retry_count"]
                     if retry_count == 0:
-                        yield {"type": "thinking", "data": {"step": "web_search", "content": "웹 검색 중..."}}
+                        yield {
+                            "type": "thinking",
+                            "data": {"step": "web_search", "content": "웹 검색 중..."},
+                        }
                     else:
-                        yield {"type": "thinking", "data": {"step": f"web_search_retry_{retry_count}", "content": f"재검색 중... ({retry_count}/{max_retries})"}}
+                        yield {
+                            "type": "thinking",
+                            "data": {
+                                "step": f"web_search_retry_{retry_count}",
+                                "content": f"재검색 중... ({retry_count}/{max_retries})",
+                            },
+                        }
 
                     search_span = None
                     if langfuse_trace:
-                        search_span = langfuse_trace.span(name=f"web_search_attempt_{retry_count}", input={"queries": state.get("search_queries", [])})
+                        search_span = langfuse_trace.span(
+                            name=f"web_search_attempt_{retry_count}",
+                            input={"queries": state.get("search_queries", [])},
+                        )
 
                     searcher = SearcherNode(settings)
                     search_result = await searcher(state)
@@ -699,13 +791,16 @@ async def stream_ai_agent(
                                 "quality_score": quality_score,
                                 "reason": retry_reason,
                                 "results_count": len(search_results),
-                            }
+                            },
                         }
 
                     # 성공하면 루프 종료
                     if not needs_retry:
                         if search_results:
-                            yield {"type": "sources", "data": _convert_sources(search_results)}
+                            yield {
+                                "type": "sources",
+                                "data": _convert_sources(search_results),
+                            }
                             # 검색 결과 전송 (메타데이터 저장용)
                             yield {"type": "search_results", "data": search_results}
                             # 출처 분석 상태 표시
@@ -713,8 +808,8 @@ async def stream_ai_agent(
                                 "type": "thinking",
                                 "data": {
                                     "step": "source_analysis",
-                                    "content": f"답변 준비 중 (출처 {len(search_results)}개 분석)"
-                                }
+                                    "content": f"답변 준비 중 (출처 {len(search_results)}개 분석)",
+                                },
                             }
                         break
 
@@ -738,7 +833,10 @@ async def stream_ai_agent(
 
                 search_span = None
                 if langfuse_trace:
-                    search_span = langfuse_trace.span(name="web_search", input={"queries": state.get("search_queries", [])})
+                    search_span = langfuse_trace.span(
+                        name="web_search",
+                        input={"queries": state.get("search_queries", [])},
+                    )
 
                 searcher = SearcherNode(settings)
                 search_result = await searcher(state)
@@ -757,17 +855,22 @@ async def stream_ai_agent(
                         "type": "thinking",
                         "data": {
                             "step": "source_analysis",
-                            "content": f"답변 준비 중 (출처 {len(search_results)}개 분석)"
-                        }
+                            "content": f"답변 준비 중 (출처 {len(search_results)}개 분석)",
+                        },
                     }
 
         elif detected_mode == AIMode.RAG:
             # RAG 검색
-            yield {"type": "thinking", "data": {"step": "rag_search", "content": "내부 문서 검색 중..."}}
+            yield {
+                "type": "thinking",
+                "data": {"step": "rag_search", "content": "내부 문서 검색 중..."},
+            }
 
             rag_span = None
             if langfuse_trace:
-                rag_span = langfuse_trace.span(name="rag_retrieval", input={"query": query})
+                rag_span = langfuse_trace.span(
+                    name="rag_retrieval", input={"query": query}
+                )
 
             rag_retriever = RAGRetrieverNode(settings)
             rag_result = await rag_retriever(state)
@@ -780,44 +883,143 @@ async def stream_ai_agent(
             if search_results:
                 yield {
                     "type": "thinking",
-                    "data": {"step": "rag_search_complete", "content": f"문서 검색 완료: {len(search_results)}개 결과"}
+                    "data": {
+                        "step": "rag_search_complete",
+                        "content": f"문서 검색 완료: {len(search_results)}개 결과",
+                    },
                 }
                 yield {"type": "sources", "data": _convert_sources(search_results)}
                 # 검색 결과 전송 (메타데이터 저장용)
                 yield {"type": "search_results", "data": search_results}
 
         elif detected_mode == AIMode.HYBRID:
-            # 웹 + RAG 검색
-            yield {"type": "thinking", "data": {"step": "web_search", "content": "웹 검색 중..."}}
-
             hybrid_span = None
             if langfuse_trace:
-                hybrid_span = langfuse_trace.span(name="hybrid_search", input={"query": query})
-
-            searcher = SearcherNode(settings)
-            search_result = await searcher(state)
-            state.update(search_result)
+                hybrid_span = langfuse_trace.span(
+                    name="hybrid_search", input={"query": query}
+                )
 
             web_results = state.get("search_results", [])
-            if web_results:
+
+            # 웹 검색 + 품질 평가 + 재시도 (SEARCH 모드와 동일 정책)
+            if enable_retry:
+                from .nodes import SearchEvaluatorNode, QueryRewriterNode
+
+                state["original_search_queries"] = state.get("search_queries", [query])
+
+                while state["search_retry_count"] < max_retries:
+                    retry_count = state["search_retry_count"]
+                    if retry_count == 0:
+                        yield {
+                            "type": "thinking",
+                            "data": {"step": "web_search", "content": "웹 검색 중..."},
+                        }
+                    else:
+                        yield {
+                            "type": "thinking",
+                            "data": {
+                                "step": f"web_search_retry_{retry_count}",
+                                "content": f"재검색 중... ({retry_count}/{max_retries})",
+                            },
+                        }
+
+                    searcher = SearcherNode(settings)
+                    search_result = await searcher(state)
+                    state.update(search_result)
+
+                    web_results = state.get("search_results", [])
+
+                    evaluator = SearchEvaluatorNode(settings)
+                    eval_result = await evaluator(state)
+                    state.update(eval_result)
+
+                    quality_score = state.get("search_quality_score", 0.0)
+                    needs_retry = state.get("needs_retry", False)
+                    retry_reason = state.get("retry_reason", "")
+
+                    if retry_count > 0 or needs_retry:
+                        yield {
+                            "type": "search_retry",
+                            "data": {
+                                "retry_count": retry_count,
+                                "quality_score": quality_score,
+                                "reason": retry_reason,
+                                "results_count": len(web_results),
+                            },
+                        }
+
+                    if not needs_retry:
+                        if web_results:
+                            yield {
+                                "type": "thinking",
+                                "data": {
+                                    "step": "web_search_complete",
+                                    "content": f"웹 검색 완료: {len(web_results)}개 결과",
+                                },
+                            }
+                        break
+
+                    # HYBRID는 웹 검색 재시도 한계 도달 시에도 RAG 결합을 진행
+                    if retry_count >= max_retries - 1:
+                        yield {
+                            "type": "thinking",
+                            "data": {
+                                "step": "web_search_degraded",
+                                "content": "웹 검색 품질이 낮아 내부 문서 결합으로 보완합니다.",
+                            },
+                        }
+                        break
+
+                    rewriter = QueryRewriterNode(settings)
+                    rewrite_result = await rewriter(state)
+                    state.update(rewrite_result)
+
+                    state["search_retry_count"] = retry_count + 1
+            else:
                 yield {
                     "type": "thinking",
-                    "data": {"step": "web_search_complete", "content": f"웹 검색 완료: {len(web_results)}개 결과"}
+                    "data": {"step": "web_search", "content": "웹 검색 중..."},
                 }
 
-            yield {"type": "thinking", "data": {"step": "rag_search", "content": "내부 문서 검색 중..."}}
+                searcher = SearcherNode(settings)
+                search_result = await searcher(state)
+                state.update(search_result)
+
+                web_results = state.get("search_results", [])
+                if web_results:
+                    yield {
+                        "type": "thinking",
+                        "data": {
+                            "step": "web_search_complete",
+                            "content": f"웹 검색 완료: {len(web_results)}개 결과",
+                        },
+                    }
+
+            yield {
+                "type": "thinking",
+                "data": {"step": "rag_search", "content": "내부 문서 검색 중..."},
+            }
             rag_retriever = RAGRetrieverNode(settings)
             rag_result = await rag_retriever(state)
             state.update(rag_result)
 
             all_results = state.get("search_results", [])
             if hybrid_span:
-                hybrid_span.end(output={"web_results": len(web_results), "total_results": len(all_results)})
+                hybrid_span.end(
+                    output={
+                        "web_results": len(web_results),
+                        "total_results": len(all_results),
+                        "retry_count": state.get("search_retry_count", 0),
+                    }
+                )
 
             if all_results:
                 yield {
                     "type": "thinking",
-                    "data": {"step": "search_complete", "content": f"통합 검색 완료: {len(all_results)}개 결과"}
+                    "data": {
+                        "step": "search_complete",
+                        "content": f"통합 검색 완료: {len(all_results)}개 결과",
+                    },
                 }
                 yield {"type": "sources", "data": _convert_sources(all_results)}
                 # 검색 결과 전송 (메타데이터 저장용)
@@ -825,11 +1027,16 @@ async def stream_ai_agent(
 
         elif detected_mode == AIMode.REASONING:
             # 추론 모드 - Reasoner가 직접 응답 생성
-            yield {"type": "thinking", "data": {"step": "reasoning_start", "content": "단계별 분석 중..."}}
+            yield {
+                "type": "thinking",
+                "data": {"step": "reasoning_start", "content": "단계별 분석 중..."},
+            }
 
             reasoning_span = None
             if langfuse_trace:
-                reasoning_span = langfuse_trace.span(name="reasoner", input={"query": query})
+                reasoning_span = langfuse_trace.span(
+                    name="reasoner", input={"query": query}
+                )
 
             reasoner = ReasonerNode(settings)
             reasoning_response = ""
@@ -857,12 +1064,18 @@ async def stream_ai_agent(
                 if langfuse_client:
                     langfuse_client.flush()
 
-            yield {"type": "thinking", "data": {"step": "reasoning_complete", "content": "추론 완료"}}
+            yield {
+                "type": "thinking",
+                "data": {"step": "reasoning_complete", "content": "추론 완료"},
+            }
             yield {"type": "done", "data": None}
             return
 
         # 3. Generator로 응답 생성 (토큰 스트리밍)
-        yield {"type": "thinking", "data": {"step": "generation_start", "content": "답변 생성 중..."}}
+        yield {
+            "type": "thinking",
+            "data": {"step": "generation_start", "content": "답변 생성 중..."},
+        }
 
         generation_span = None
         if langfuse_trace:
@@ -928,6 +1141,7 @@ async def stream_ai_agent(
 
         # OpenTelemetry span 에러 기록
         from opentelemetry.trace import Status, StatusCode
+
         otel_span.set_status(Status(StatusCode.ERROR, str(e)))
         otel_span.record_exception(e)
         otel_context.detach(token)
@@ -940,10 +1154,16 @@ def _convert_sources(sources: list) -> list[dict]:
     """검색 결과를 dict 형태로 변환."""
     return [
         {
-            "title": s.get("title", "") if isinstance(s, dict) else getattr(s, "title", ""),
+            "title": s.get("title", "")
+            if isinstance(s, dict)
+            else getattr(s, "title", ""),
             "url": s.get("url", "") if isinstance(s, dict) else getattr(s, "url", ""),
-            "snippet": s.get("snippet", "") if isinstance(s, dict) else getattr(s, "snippet", ""),
-            "source": s.get("source", "web") if isinstance(s, dict) else getattr(s, "source", "web"),
+            "snippet": s.get("snippet", "")
+            if isinstance(s, dict)
+            else getattr(s, "snippet", ""),
+            "source": s.get("source", "web")
+            if isinstance(s, dict)
+            else getattr(s, "source", "web"),
         }
         for s in sources
     ]

@@ -2,6 +2,7 @@
 
 LangGraph 워크플로우에서 사용하는 상태 스키마를 정의합니다.
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -13,23 +14,50 @@ from langchain_core.messages import BaseMessage
 
 class AIMode(str, Enum):
     """AI 모드 종류."""
-    SIMPLE = "simple"       # 단순 대화
-    SEARCH = "search"       # 웹 검색
-    RAG = "rag"             # 내부 문서 검색
-    REASONING = "reasoning" # 복잡한 추론
-    HYBRID = "hybrid"       # 웹 + RAG 통합
+
+    SIMPLE = "simple"  # 단순 대화
+    SEARCH = "search"  # 웹 검색
+    RAG = "rag"  # 내부 문서 검색
+    REASONING = "reasoning"  # 복잡한 추론
+    HYBRID = "hybrid"  # 웹 + RAG 통합
 
 
-class SearchResult(TypedDict):
-    """검색 결과."""
+class SearchResultBase(TypedDict):
+    """검색 결과의 공통 필드."""
+
     title: str
     url: str
     snippet: str
     source: str  # "web" | "rag"
 
 
+class SearchResult(SearchResultBase, total=False):
+    """검색 결과.
+
+    검색 파이프라인 단계에서 계산되는 품질/랭킹 메타데이터를
+    evaluator까지 전달하기 위해 확장 필드를 허용합니다.
+    """
+
+    position: int
+    engine: str
+    published_date: str
+    last_updated: str
+    rrf_score: float
+    relevance_match_count: int
+    quality_score: float
+    trust_score: float
+    freshness_score: float
+    content_score: float
+    disambiguation_score: float
+    content_preview: str
+    fetched_content_length: int
+    content_fetch_quality: float
+    second_stage_score: float
+
+
 class CitationInfo(TypedDict):
     """Citation (출처 표시) 정보 - Phase 4."""
+
     id: int
     title: str
     url: str
@@ -39,6 +67,7 @@ class CitationInfo(TypedDict):
 
 class ThinkingStep(TypedDict):
     """사고 과정 단계."""
+
     step: str
     content: str
     timestamp: float
@@ -49,11 +78,15 @@ class QueryAnalysis(TypedDict, total=False):
 
     사용자 질문의 핵심 의도를 파악하고, 필요시 하위 질문으로 분해합니다.
     """
-    original_query: str        # 원본 쿼리
-    reformulated_query: str    # 핵심 의도로 재구성된 쿼리
-    sub_queries: list[str]     # 분해된 하위 질문들
-    keywords: list[str]        # 추출된 핵심 키워드
-    search_focus: str          # 검색 초점 (예: "최신 뉴스", "기술 비교" 등)
+
+    original_query: str  # 원본 쿼리
+    reformulated_query: str  # 핵심 의도로 재구성된 쿼리
+    sub_queries: list[str]  # 분해된 하위 질문들
+    keywords: list[str]  # 추출된 핵심 키워드
+    search_focus: str  # 검색 초점 (예: "최신 뉴스", "기술 비교" 등)
+    search_recency: str  # "day" | "week" | "month" | "year"
+    search_language: str  # 검색 언어 힌트 (예: "ko-KR", "en-US")
+    domain_allowlist: list[str]  # 허용 도메인 목록 (예: ["python.org", "pytorch.org"])
 
 
 class GraphState(TypedDict):
@@ -86,6 +119,7 @@ class GraphState(TypedDict):
         needs_retry: bool                    # 재시도 필요 여부
         retry_reason: str                    # 재시도 이유
     """
+
     messages: Annotated[list[BaseMessage], add_messages]
     query: str
     mode: AIMode
