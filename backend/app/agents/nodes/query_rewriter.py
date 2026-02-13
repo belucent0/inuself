@@ -5,6 +5,7 @@ V8.4: 검색 실패 시 쿼리를 재작성하여 재시도합니다.
 
 from __future__ import annotations
 
+import copy
 import time
 from typing import Any
 
@@ -58,6 +59,27 @@ class QueryRewriterNode:
         # 재작성 전략 선택
         strategy = self._select_strategy(retry_count, retry_reason)
 
+        # 교차 언어 fallback: 한국어 중심 검색이 낮은 품질일 때 영어 검색 재시도
+        effective_search_language = search_language
+        if self._should_enable_cross_language_fallback(
+            retry_reason=retry_reason,
+            search_language=search_language,
+            retry_count=retry_count,
+        ):
+            effective_search_language = "en-US"
+            logger.info(
+                "[QueryRewriter] Cross-language fallback enabled: "
+                f"{search_language or 'auto'} -> en-US"
+            )
+
+            thinking_steps.append(
+                ThinkingStep(
+                    step="cross_language_fallback",
+                    content="한국어 검색 품질이 낮아 영어 검색도 병행합니다.",
+                    timestamp=time.time(),
+                )
+            )
+
         logger.info(
             f"[QueryRewriter] Retry #{retry_count + 1}, "
             f"reason={retry_reason}, strategy={strategy}"
@@ -73,7 +95,7 @@ class QueryRewriterNode:
             keyword_hints=keyword_hints,
             domain_allowlist=domain_allowlist,
             search_recency=search_recency,
-            search_language=search_language,
+            search_language=effective_search_language,
         )
 
         logger.info(
@@ -89,13 +111,41 @@ class QueryRewriterNode:
             )
         )
 
+        updated_query_analysis = copy.deepcopy(query_analysis)
+        if isinstance(updated_query_analysis, dict):
+            if effective_search_language:
+                updated_query_analysis["search_language"] = effective_search_language
+
         return {
             "search_queries": new_queries,
             "search_retry_count": retry_count + 1,
             "failed_queries": failed_queries + state.get("search_queries", []),
             "original_search_queries": original_queries,
+            "query_analysis": updated_query_analysis,
             "thinking_steps": thinking_steps,
         }
+
+    def _should_enable_cross_language_fallback(
+        self,
+        *,
+        retry_reason: str,
+        search_language: str | None,
+        retry_count: int,
+    ) -> bool:
+        """교차 언어 fallback 적용 여부를 판단한다."""
+        # 첫 실패에서 바로 전환하지 않고, 한 번 실패한 뒤부터 적용
+        if retry_count < 1:
+            return False
+
+        if retry_reason not in {
+            "low_quality",
+            "low_relevance",
+            "low_content_coverage",
+        }:
+            return False
+
+        normalized = (search_language or "").lower()
+        return normalized in {"", "ko-kr", "ko"}
 
     def _select_strategy(self, retry_count: int, retry_reason: str) -> str:
         """재작성 전략 선택.

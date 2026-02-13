@@ -44,6 +44,7 @@ function getStepIcon(step: string, isLatest: boolean, isStreaming: boolean) {
       return <Brain className="h-3 w-3 text-purple-500" />
     case 'query_generated':
     case 'request_reframing':
+    case 'cross_language_fallback':
       return <Search className="h-3 w-3 text-cyan-500" />
     case 'source_analysis':
       return <Brain className="h-3 w-3 text-orange-500" />
@@ -75,6 +76,7 @@ function getStepLabel(step: string): string {
     intent_result: '모드 결정',
     topic_understanding: '질문 해석',
     request_reframing: '요청 재정의',
+    cross_language_fallback: '검색 확장',
     query_generated: '검색 중',
     source_analysis: '출처 분석',
     web_search: '검색 중',
