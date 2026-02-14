@@ -71,6 +71,7 @@ export async function createThreadWithMessage(
     query: data.content,
     mode: data.mode || 'auto',
     context: data.metadata,
+    model: data.model,
   })
 }
 
@@ -87,6 +88,7 @@ export async function sendMessage(
     query: data.content,
     mode: data.mode || 'auto',
     context: data.metadata,
+    model: data.model,
   })
 }
 
@@ -97,10 +99,12 @@ export async function sendMessage(
  */
 export async function regenerateMessage(
   threadId: string,
-  mode?: string
+  mode?: string,
+  model?: string
 ): Promise<ReadableStream<Uint8Array>> {
   return httpClient.postStream(`/threads/${threadId}/regenerate`, {
     mode: mode || 'auto',
+    model,
   })
 }
 

@@ -1,5 +1,31 @@
 model_list:
   # ============================================================
+  # CLIProxyAPI 경유 Codex 모델 (OpenAI OAuth)
+  # ============================================================
+  # - 내부 Docker 네트워크에서 cli-proxy-api:8317 로 직접 연결
+  # - CLIPROXY_API_KEY는 infra/cliproxy/config.yaml 의 api-keys 값과 동일해야 함
+  - model_name: "codex-high"
+    litellm_params:
+      model: "openai/gpt-5-codex(high)"
+      api_base: "http://cli-proxy-api:8317/v1"
+      api_key: "os.environ/CLIPROXY_API_KEY"
+      stream: true
+
+  - model_name: "codex-medium"
+    litellm_params:
+      model: "openai/gpt-5-codex(medium)"
+      api_base: "http://cli-proxy-api:8317/v1"
+      api_key: "os.environ/CLIPROXY_API_KEY"
+      stream: true
+
+  - model_name: "codex-low"
+    litellm_params:
+      model: "openai/gpt-5-codex(low)"
+      api_base: "http://cli-proxy-api:8317/v1"
+      api_key: "os.environ/CLIPROXY_API_KEY"
+      stream: true
+
+  # ============================================================
   # 동적 라우팅 (와일드카드) - 새 모델 추가 시 config 수정 불필요
   # ============================================================
   # 모든 LLM 모델은 prometheus-router를 통해 동적으로 라우팅됩니다.

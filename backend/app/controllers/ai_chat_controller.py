@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import Any
 from uuid import UUID
@@ -52,6 +53,10 @@ class CreateThreadRequest(BaseModel):
     context: dict | None = Field(
         default=None, description="추가 컨텍스트 (RAG용 content_ids 등)"
     )
+    model: str | None = Field(
+        default=None,
+        description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
+    )
 
 
 class AddMessageRequest(BaseModel):
@@ -64,6 +69,10 @@ class AddMessageRequest(BaseModel):
     )
     context: dict | None = Field(
         default=None, description="추가 컨텍스트 (RAG용 content_ids 등)"
+    )
+    model: str | None = Field(
+        default=None,
+        description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
     )
     skip_user_message: bool = Field(
         default=False, description="사용자 메시지 저장 건너뛰기 (이미 저장된 경우)"
@@ -78,6 +87,10 @@ class RegenerateRequest(BaseModel):
         description="AI 모드 (auto, simple, search, rag, reasoning, hybrid)",
     )
     context: dict | None = Field(default=None, description="추가 컨텍스트")
+    model: str | None = Field(
+        default=None,
+        description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
+    )
 
 
 class CitationModel(BaseModel):
@@ -155,6 +168,52 @@ def _normalize_mode_name(mode: Any) -> str:
     return text.lower()
 
 
+MODEL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+(?:\([A-Za-z0-9._:-]+\))?$")
+
+
+def _parse_allowed_models(settings: Settings) -> set[str]:
+    raw = settings.litellm_allowed_models.strip()
+    if not raw:
+        return set()
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _validate_requested_model(settings: Settings, requested_model: str) -> str:
+    model = requested_model.strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model must not be empty")
+    if len(model) > 120 or not MODEL_NAME_PATTERN.fullmatch(model):
+        raise HTTPException(status_code=400, detail="invalid model format")
+
+    allowed = _parse_allowed_models(settings)
+    if allowed and model not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"model '{model}' is not in LITELLM_ALLOWED_MODELS",
+        )
+    return model
+
+
+def _build_agent_metadata(
+    *,
+    settings: Settings,
+    context: dict | None,
+    requested_model: str | None,
+) -> dict[str, Any] | None:
+    metadata: dict[str, Any] = dict(context) if isinstance(context, dict) else {}
+
+    model_candidate = requested_model
+    if model_candidate is None:
+        context_model = metadata.get("model") or metadata.get("llm_model")
+        if isinstance(context_model, str):
+            model_candidate = context_model
+
+    if isinstance(model_candidate, str) and model_candidate.strip():
+        metadata["model"] = _validate_requested_model(settings, model_candidate)
+
+    return metadata or None
+
+
 # === 백그라운드 AI 응답 생성 ===
 
 
@@ -195,6 +254,21 @@ async def generate_ai_response_background(
             )
 
             response_content = result.get("response", "")
+            response_metadata = {
+                "mode": _normalize_mode_name(result.get("mode", "simple")),
+                "sources": result.get("sources", []),
+                "citations": result.get("citations", []),
+                "intent": result.get("query_analysis"),
+                "search_queries": result.get("search_queries", []),
+                "search_results": result.get("search_results", []),
+                "thinking_steps": result.get("thinking_steps", []),
+                "search_retry_count": result.get("search_retry_count", 0),
+                "search_quality_score": result.get("search_quality_score", 0.0),
+                "failed_queries": result.get("failed_queries", []),
+                "retry_reason": result.get("retry_reason", ""),
+                "background_generated": True,
+                "context": context,
+            }
 
             if message_id:
                 # V9.2: 기존 메시지가 있으면 상태 업데이트 (generating → completed)
@@ -202,6 +276,7 @@ async def generate_ai_response_background(
                     message_id,
                     status="completed",
                     content=response_content,
+                    metadata=response_metadata,
                 )
                 logger.info(
                     f"[Thread] Background generation updated existing message: message_id={message_id}"
@@ -213,20 +288,7 @@ async def generate_ai_response_background(
                     user_id=user_id,
                     role="assistant",
                     content=response_content,
-                    metadata={
-                        "mode": _normalize_mode_name(result.get("mode", "simple")),
-                        "sources": result.get("sources", []),
-                        "citations": result.get("citations", []),
-                        "intent": result.get("query_analysis"),
-                        "search_queries": result.get("search_queries", []),
-                        "search_results": result.get("search_results", []),
-                        "thinking_steps": result.get("thinking_steps", []),
-                        "search_retry_count": result.get("search_retry_count", 0),
-                        "search_quality_score": result.get("search_quality_score", 0.0),
-                        "failed_queries": result.get("failed_queries", []),
-                        "retry_reason": result.get("retry_reason", ""),
-                        "background_generated": True,  # 백그라운드 생성 플래그
-                    },
+                    metadata=response_metadata,
                     status="completed",
                 )
 
@@ -286,10 +348,15 @@ async def create_thread(
     logger.info(
         f"[Thread] Create: user={user_id}, query='{request.query[:50]}...', mode={request.mode}"
     )
+    agent_metadata = _build_agent_metadata(
+        settings=settings,
+        context=request.context,
+        requested_model=request.model,
+    )
 
     try:
         # 새 스레드 생성 (user_id 포함)
-        thread = await svc.create_thread(user_id=user_id, metadata=request.context)
+        thread = await svc.create_thread(user_id=user_id, metadata=agent_metadata)
 
         # 사용자 메시지 저장
         await svc.add_message(
@@ -305,7 +372,7 @@ async def create_thread(
             query=request.query,
             thread_id=thread.thread_id,
             mode=request.mode,
-            metadata=request.context,
+            metadata=agent_metadata,
             enable_retry=True,  # V8.4: 검색 재시도 활성화
             max_retries=3,
         )
@@ -331,6 +398,7 @@ async def create_thread(
                 "search_quality_score": result.get("search_quality_score", 0.0),
                 "failed_queries": result.get("failed_queries", []),
                 "retry_reason": result.get("retry_reason", ""),
+                "context": agent_metadata,
             },
         )
 
@@ -366,9 +434,14 @@ async def create_thread_stream(
     logger.info(
         f"[Thread] Create stream: user={user_id}, query='{request.query[:50]}...', mode={request.mode}"
     )
+    agent_metadata = _build_agent_metadata(
+        settings=settings,
+        context=request.context,
+        requested_model=request.model,
+    )
 
     # 스레드 먼저 생성 (generate 함수 밖에서)
-    thread = await svc.create_thread(user_id=user_id, metadata=request.context)
+    thread = await svc.create_thread(user_id=user_id, metadata=agent_metadata)
 
     # 사용자 메시지 저장 (완료 상태)
     await svc.add_message(
@@ -393,7 +466,7 @@ async def create_thread_stream(
     captured_thread_id = thread.thread_id
     captured_query = request.query
     captured_mode = request.mode
-    captured_context = request.context
+    captured_context = agent_metadata
     captured_settings = settings
     captured_ai_message_id = ai_message.message_id
 
@@ -557,6 +630,7 @@ async def create_thread_stream(
                                 "search_quality_score": search_quality_score,
                                 "failed_queries": failed_queries,
                                 "retry_reason": retry_reason,
+                                "context": captured_context,
                             },
                         )
                     response_completed["value"] = True
@@ -685,6 +759,11 @@ async def add_message(
     logger.info(
         f"[Thread] Add message: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}"
     )
+    agent_metadata = _build_agent_metadata(
+        settings=settings,
+        context=request.context,
+        requested_model=request.model,
+    )
 
     # 스레드 존재 확인 (권한 검증 포함)
     thread = await svc.get_thread(thread_id, user_id=user_id)
@@ -706,7 +785,7 @@ async def add_message(
             query=request.query,
             thread_id=thread_id,
             mode=request.mode,
-            metadata=request.context,
+            metadata=agent_metadata,
             enable_retry=True,
             max_retries=3,
         )
@@ -729,6 +808,7 @@ async def add_message(
                 "search_quality_score": result.get("search_quality_score", 0.0),
                 "failed_queries": result.get("failed_queries", []),
                 "retry_reason": result.get("retry_reason", ""),
+                "context": agent_metadata,
             },
         )
 
@@ -765,6 +845,11 @@ async def add_message_stream(
     logger.info(
         f"[Thread] Add message stream: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}"
     )
+    agent_metadata = _build_agent_metadata(
+        settings=settings,
+        context=request.context,
+        requested_model=request.model,
+    )
 
     # 스레드 존재 확인 (권한 검증 포함)
     thread = await svc.get_thread(thread_id, user_id=user_id)
@@ -796,7 +881,7 @@ async def add_message_stream(
     captured_thread_id = thread_id
     captured_query = request.query
     captured_mode = request.mode
-    captured_context = request.context
+    captured_context = agent_metadata
     captured_settings = settings
     captured_ai_message_id = ai_message.message_id
 
@@ -951,6 +1036,7 @@ async def add_message_stream(
                                 "search_quality_score": search_quality_score,
                                 "failed_queries": failed_queries,
                                 "retry_reason": retry_reason,
+                                "context": captured_context,
                             },
                         )
                     response_completed["value"] = True
@@ -1024,6 +1110,11 @@ async def regenerate_response(
     logger.info(
         f"[Thread] Regenerate: user={user_id}, thread_id={thread_id}, mode={request.mode}"
     )
+    agent_metadata = _build_agent_metadata(
+        settings=settings,
+        context=request.context,
+        requested_model=request.model,
+    )
 
     # 스레드 존재 확인 (권한 검증 포함)
     thread = await svc.get_thread(thread_id, user_id=user_id)
@@ -1064,7 +1155,7 @@ async def regenerate_response(
                 query=last_user_query,
                 thread_id=thread_id,
                 mode=request.mode,
-                metadata=request.context,
+                metadata=agent_metadata,
                 enable_retry=True,
                 max_retries=3,
                 user_id=str(captured_user_id),
@@ -1154,6 +1245,7 @@ async def regenerate_response(
                                 "failed_queries": failed_queries,
                                 "retry_reason": retry_reason,
                                 "regenerated": True,  # 재생성 플래그
+                                "context": agent_metadata,
                             },
                         )
                     yield f"data: {json.dumps({'type': 'done', 'data': None})}\n\n"
@@ -1183,13 +1275,19 @@ async def regenerate_response(
 
 class CreateThreadV2Request(BaseModel):
     """v1.0.0: 스레드+메시지 생성 요청 (AI 실행 없음)."""
+
     query: str = Field(..., description="사용자 질문", min_length=1)
     mode: str = Field(default="auto", description="AI 모드")
     context: dict | None = Field(default=None, description="추가 컨텍스트")
+    model: str | None = Field(
+        default=None,
+        description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
+    )
 
 
 class CreateThreadV2Response(BaseModel):
     """v1.0.0: 스레드+메시지 생성 응답."""
+
     thread_id: str = Field(..., description="스레드 ID")
     message_id: str = Field(..., description="AI 메시지 ID (queued 상태)")
     user_message_id: str = Field(..., description="사용자 메시지 ID")
@@ -1197,13 +1295,19 @@ class CreateThreadV2Response(BaseModel):
 
 class AddMessageV2Request(BaseModel):
     """v1.0.0: 기존 스레드에 메시지 추가 요청 (AI 실행 없음)."""
+
     query: str = Field(..., description="사용자 질문", min_length=1)
     mode: str = Field(default="auto", description="AI 모드")
     context: dict | None = Field(default=None, description="추가 컨텍스트")
+    model: str | None = Field(
+        default=None,
+        description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
+    )
 
 
 class AddMessageV2Response(BaseModel):
     """v1.0.0: 메시지 추가 응답."""
+
     thread_id: str = Field(..., description="스레드 ID")
     message_id: str = Field(..., description="AI 메시지 ID (queued 상태)")
     user_message_id: str = Field(..., description="사용자 메시지 ID")
@@ -1212,6 +1316,7 @@ class AddMessageV2Response(BaseModel):
 @router.post("/v2", response_model=CreateThreadV2Response)
 async def create_thread_v2(
     request: CreateThreadV2Request,
+    settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
 ):
@@ -1228,11 +1333,18 @@ async def create_thread_v2(
     클라이언트는 응답 후 /chat/{thread_id}?messageId={message_id} 로 이동
     ChatPage에서 GET .../stream으로 SSE 연결
     """
-    logger.info(f"[Thread v1.0.0] Create: user={user_id}, query='{request.query[:50]}...', mode={request.mode}")
+    logger.info(
+        f"[Thread v1.0.0] Create: user={user_id}, query='{request.query[:50]}...', mode={request.mode}"
+    )
+    agent_metadata = _build_agent_metadata(
+        settings=settings,
+        context=request.context,
+        requested_model=request.model,
+    )
 
     try:
         # 1. 새 스레드 생성
-        thread = await svc.create_thread(user_id=user_id, metadata=request.context)
+        thread = await svc.create_thread(user_id=user_id, metadata=agent_metadata)
 
         # 2. 사용자 메시지 저장 (completed)
         user_message = await svc.add_message(
@@ -1250,7 +1362,7 @@ async def create_thread_v2(
             role="assistant",
             content="",  # 빈 내용
             status="queued",  # v1.0.0: queued 상태로 시작
-            metadata={"mode": request.mode},
+            metadata={"mode": request.mode, "context": agent_metadata},
         )
 
         return CreateThreadV2Response(
@@ -1268,6 +1380,7 @@ async def create_thread_v2(
 async def add_message_v2(
     thread_id: str,
     request: AddMessageV2Request,
+    settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
 ):
@@ -1282,7 +1395,14 @@ async def add_message_v2(
 
     클라이언트는 응답 후 GET .../stream으로 SSE 연결
     """
-    logger.info(f"[Thread v1.0.0] Add message: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...'")
+    logger.info(
+        f"[Thread v1.0.0] Add message: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...'"
+    )
+    agent_metadata = _build_agent_metadata(
+        settings=settings,
+        context=request.context,
+        requested_model=request.model,
+    )
 
     # 스레드 존재 및 권한 확인
     thread = await svc.get_thread(thread_id, user_id=user_id)
@@ -1306,7 +1426,7 @@ async def add_message_v2(
             role="assistant",
             content="",
             status="queued",
-            metadata={"mode": request.mode},
+            metadata={"mode": request.mode, "context": agent_metadata},
         )
 
         return AddMessageV2Response(
@@ -1344,7 +1464,9 @@ async def stream_message_v2(
        - done: 완료
     3. 재연결 시 partial_content 복구
     """
-    logger.info(f"[Thread v1.0.0] Stream: thread_id={thread_id}, message_id={message_id}")
+    logger.info(
+        f"[Thread v1.0.0] Stream: thread_id={thread_id}, message_id={message_id}"
+    )
 
     # 스레드 존재 및 권한 확인
     thread = await svc.get_thread(thread_id, user_id=user_id)
@@ -1367,6 +1489,11 @@ async def stream_message_v2(
     query = last_user_message.content
     mode = message.metadata.get("mode", "auto") if message.metadata else "auto"
     context = message.metadata.get("context") if message.metadata else None
+    agent_metadata = _build_agent_metadata(
+        settings=settings,
+        context=context,
+        requested_model=None,
+    )
 
     # 클로저용 변수 캡처
     captured_user_id = user_id
@@ -1374,7 +1501,7 @@ async def stream_message_v2(
     captured_message_id = message_id
     captured_query = query
     captured_mode = mode
-    captured_context = context
+    captured_context = agent_metadata
     captured_settings = settings
 
     # 응답 완료 여부 추적
@@ -1389,7 +1516,9 @@ async def stream_message_v2(
     async def db_update_status(message_id, status, content=None, metadata=None):
         async with async_session_factory() as session:
             svc = get_thread_service(session)
-            await svc.update_message_status(message_id, status=status, content=content, metadata=metadata)
+            await svc.update_message_status(
+                message_id, status=status, content=content, metadata=metadata
+            )
             await session.commit()
 
     async def db_update_metadata(message_id, **kwargs):
@@ -1401,7 +1530,9 @@ async def stream_message_v2(
     async def db_update_partial(message_id, partial_content, status=None):
         async with async_session_factory() as session:
             svc = get_thread_service(session)
-            await svc.update_message_partial_content(message_id, partial_content=partial_content, status=status)
+            await svc.update_message_partial_content(
+                message_id, partial_content=partial_content, status=status
+            )
             await session.commit()
 
     async def generate():
@@ -1428,7 +1559,9 @@ async def stream_message_v2(
             yield f"data: {json.dumps({'type': 'status', 'data': 'analyzing'})}\n\n"
 
             # AI Agent 스트리밍 실행
-            full_response = msg.partial_content or "" if msg else ""  # 재연결 시 기존 내용부터
+            full_response = (
+                msg.partial_content or "" if msg else ""
+            )  # 재연결 시 기존 내용부터
             mode_used = captured_mode
             sources = []
             citations = []
@@ -1483,17 +1616,23 @@ async def stream_message_v2(
                     yield f"data: {json.dumps({'type': 'status', 'data': 'searching'})}\n\n"
 
                     search_queries = event_data if isinstance(event_data, list) else []
-                    await db_update_metadata(captured_message_id, search_queries=search_queries)
+                    await db_update_metadata(
+                        captured_message_id, search_queries=search_queries
+                    )
                     yield f"data: {json.dumps({'type': 'search_queries', 'data': search_queries})}\n\n"
 
                 elif event_type == "search_results":
                     search_results = event_data if isinstance(event_data, list) else []
-                    await db_update_metadata(captured_message_id, search_results=search_results)
+                    await db_update_metadata(
+                        captured_message_id, search_results=search_results
+                    )
                     yield f"data: {json.dumps({'type': 'search_results', 'data': search_results})}\n\n"
 
                 elif event_type == "sources":
                     sources = event_data if isinstance(event_data, list) else []
-                    await db_update_metadata(captured_message_id, sources=sources, mode=mode_used)
+                    await db_update_metadata(
+                        captured_message_id, sources=sources, mode=mode_used
+                    )
                     yield f"data: {json.dumps({'type': 'sources', 'data': sources})}\n\n"
 
                 elif event_type == "citations":
@@ -1508,7 +1647,11 @@ async def stream_message_v2(
                         await db_update_status(captured_message_id, status="generating")
                         yield f"data: {json.dumps({'type': 'status', 'data': 'generating'})}\n\n"
 
-                    token = event_data if isinstance(event_data, str) else str(event_data or "")
+                    token = (
+                        event_data
+                        if isinstance(event_data, str)
+                        else str(event_data or "")
+                    )
                     full_response += token
                     yield f"data: {json.dumps({'type': 'token', 'data': token})}\n\n"
 
@@ -1524,13 +1667,19 @@ async def stream_message_v2(
                         yield f"data: {json.dumps({'type': 'partial_save', 'data': True})}\n\n"
 
                 elif event_type == "content":
-                    full_response = event_data if isinstance(event_data, str) else str(event_data)
+                    full_response = (
+                        event_data if isinstance(event_data, str) else str(event_data)
+                    )
                     yield f"data: {json.dumps({'type': 'content', 'data': full_response})}\n\n"
 
                 elif event_type == "search_retry":
                     if isinstance(event_data, dict):
-                        search_retry_count = event_data.get("retry_count", search_retry_count)
-                        search_quality_score = event_data.get("quality_score", search_quality_score)
+                        search_retry_count = event_data.get(
+                            "retry_count", search_retry_count
+                        )
+                        search_quality_score = event_data.get(
+                            "quality_score", search_quality_score
+                        )
                         retry_reason = event_data.get("reason", retry_reason)
                         if "failed_query" in event_data:
                             failed_queries.append(event_data["failed_query"])
@@ -1554,6 +1703,7 @@ async def stream_message_v2(
                             "search_quality_score": search_quality_score,
                             "failed_queries": failed_queries,
                             "retry_reason": retry_reason,
+                            "context": captured_context,
                         },
                     )
                     # partial_content 클리어 (완료 후 불필요)
@@ -1580,7 +1730,9 @@ async def stream_message_v2(
 
         except asyncio.CancelledError:
             # 클라이언트 연결 끊김 - 백그라운드에서 계속 생성
-            logger.info(f"[Thread v1.0.0] Client disconnected: thread_id={captured_thread_id}, message_id={captured_message_id}")
+            logger.info(
+                f"[Thread v1.0.0] Client disconnected: thread_id={captured_thread_id}, message_id={captured_message_id}"
+            )
             if not response_completed["value"]:
                 # 현재까지 생성된 partial_content 저장
                 await db_update_partial(
