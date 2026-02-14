@@ -16,6 +16,9 @@ from ..schemas.wpi import (
     ScanDetailResponse,
     ScanHistoryItem,
     ScanHistoryListResponse,
+    WpiAiReportEnqueueResponse,
+    WpiAiReportGenerateRequest,
+    WpiAiReportResponse,
     WpiProfileStatus,
     WpiQuestionsResponse,
     WpiSubmitRequest,
@@ -33,7 +36,9 @@ async def get_wpi_service(session: AsyncSession = Depends(get_session)) -> WpiSe
     return WpiService(session)
 
 
-async def get_scan_repository(session: AsyncSession = Depends(get_session)) -> ScanRepository:
+async def get_scan_repository(
+    session: AsyncSession = Depends(get_session),
+) -> ScanRepository:
     return ScanRepository(session)
 
 
@@ -126,6 +131,51 @@ async def get_scan_detail(
     )
 
 
+@router.get("/history/{result_id}/ai-report", response_model=WpiAiReportResponse)
+async def get_wpi_ai_report(
+    result_id: UUID,
+    service: WpiService = Depends(get_wpi_service),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """WPI AI 리포트 상태/결과 조회."""
+
+    try:
+        payload = await service.get_ai_report(user_id=user_id, result_id=result_id)
+        return WpiAiReportResponse(**payload)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post(
+    "/history/{result_id}/ai-report", response_model=WpiAiReportEnqueueResponse
+)
+async def enqueue_wpi_ai_report(
+    result_id: UUID,
+    request: WpiAiReportGenerateRequest | None = None,
+    service: WpiService = Depends(get_wpi_service),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """WPI AI 리포트 생성 작업을 큐에 등록."""
+
+    force_regenerate = request.force_regenerate if request else False
+
+    try:
+        payload = await service.enqueue_ai_report_generation(
+            user_id=user_id,
+            result_id=result_id,
+            force_regenerate=force_regenerate,
+        )
+        return WpiAiReportEnqueueResponse(**payload)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # === WPI 엔드포인트 ===
 
 
@@ -149,7 +199,9 @@ async def submit_wpi_test(
     """WPI 검사 응답 제출 및 채점."""
     try:
         if request.test_type == "i_test":
-            result, scores, dominant = await service.submit_i_test(user_id, request.responses)
+            result, scores, dominant = await service.submit_i_test(
+                user_id, request.responses
+            )
             return WpiSubmitResponse(
                 test_type="i_test",
                 scores=scores,
@@ -158,7 +210,9 @@ async def submit_wpi_test(
                 message="I-Test 완료! Me-Test를 진행해주세요.",
             )
         else:
-            result, scores, dominant, gap_analysis = await service.submit_me_test(user_id, request.responses)
+            result, scores, dominant, gap_analysis = await service.submit_me_test(
+                user_id, request.responses
+            )
             return WpiSubmitResponse(
                 test_type="me_test",
                 scores=scores,

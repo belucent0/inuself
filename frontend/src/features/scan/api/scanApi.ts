@@ -5,6 +5,9 @@ import { httpClient } from "@/shared/services/api/httpClient"
 import type {
   ScanResult,
   ScanHistoryListResponse,
+  WpiAiReportEnqueueResponse,
+  WpiAiReportGenerateRequest,
+  WpiAiReportResponse,
   WpiQuestionsResponse,
   WpiSubmitRequest,
   WpiSubmitResponse,
@@ -39,6 +42,26 @@ export async function getScanHistory(params?: {
  */
 export async function getScanDetail(resultId: string): Promise<ScanResult> {
   return httpClient.get<ScanResult>(`${SCAN_API_PREFIX}/history/${resultId}`)
+}
+
+/**
+ * WPI AI 리포트 상태/결과 조회
+ */
+export async function getWpiAiReport(resultId: string): Promise<WpiAiReportResponse> {
+  return httpClient.get<WpiAiReportResponse>(`${SCAN_API_PREFIX}/history/${resultId}/ai-report`)
+}
+
+/**
+ * WPI AI 리포트 생성 요청
+ */
+export async function enqueueWpiAiReport(
+  resultId: string,
+  data?: WpiAiReportGenerateRequest
+): Promise<WpiAiReportEnqueueResponse> {
+  return httpClient.post<WpiAiReportEnqueueResponse>(
+    `${SCAN_API_PREFIX}/history/${resultId}/ai-report`,
+    data
+  )
 }
 
 /**
@@ -95,6 +118,8 @@ export async function deleteWpiInProgress(): Promise<{ message: string }> {
 export const scanApi = {
   getScanHistory,
   getScanDetail,
+  getWpiAiReport,
+  enqueueWpiAiReport,
   getWpiQuestions,
   submitWpiResponses,
   getWpiStatus,
