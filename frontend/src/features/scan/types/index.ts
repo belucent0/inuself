@@ -49,6 +49,33 @@ export interface WpiData {
     raw_responses: Record<string, number[]>
   } | null
   gap_analysis: WpiGapAnalysis | null
+  ai_report?: {
+    status: WpiAiReportStatus
+    report_md: string | null
+    error: string | null
+    job_id: string | null
+    updated_at: string | null
+  }
+}
+
+export type WpiAiReportStatus = "idle" | "queued" | "processing" | "completed" | "failed"
+
+export interface WpiAiReportResponse {
+  result_id: string
+  status: WpiAiReportStatus
+  report_md: string | null
+  error: string | null
+  job_id: string | null
+  updated_at: string | null
+}
+
+export interface WpiAiReportGenerateRequest {
+  force_regenerate?: boolean
+}
+
+export interface WpiAiReportEnqueueResponse extends WpiAiReportResponse {
+  queued: boolean
+  message: string
 }
 
 // 검사 결과 (범용)

@@ -12,6 +12,7 @@ export {
   useWpiProfile,
   useScanHistory,
   useScanDetail,
+  useWpiAiReport,
   useDeleteWpiInProgress,
 } from "./hooks/useScan"
 
