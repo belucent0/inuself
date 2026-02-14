@@ -1,0 +1,15 @@
+{
+  "min_relative": {
+    "avg_score": 0.95,
+    "avg_quality_score": 0.95,
+    "avg_content_coverage_ratio": 0.9,
+    "avg_second_stage_score": 0.9
+  },
+  "max_relative": {
+    "avg_retry_count": 1.25,
+    "low_content_coverage_rate": 1.25
+  },
+  "absolute_floor": {
+    "avg_result_count": 1.0
+  }
+}
