@@ -1,0 +1,159 @@
+{
+  "test_run_id": "6af48289-680f-47a8-acc5-51e5a48c18b4",
+  "timestamp": 1771056206.635212,
+  "conversations_tested": 5,
+  "evaluations": [
+    {
+      "conversation_id": "excellent-01",
+      "evaluator_name": "SearchQuality",
+      "score": 82.36666666666667,
+      "metrics": {
+        "total_searches": 1,
+        "avg_quality_score": 83.33333333333333,
+        "avg_result_count": 3.0,
+        "avg_retry_count": 0.0,
+        "avg_content_coverage_ratio": 1.0,
+        "avg_second_stage_score": 78.66666666666667,
+        "content_enrichment_rate": 100.0,
+        "retry_reason_distribution": {},
+        "content_signal_enabled": true,
+        "quality_distribution": {
+          "excellent": 100.0,
+          "good": 0.0,
+          "fair": 0.0,
+          "poor": 0.0
+        }
+      },
+      "passed": true,
+      "issues": [],
+      "timestamp": 1771056206.6347601
+    },
+    {
+      "conversation_id": "good-01",
+      "evaluator_name": "SearchQuality",
+      "score": 76.21666666666667,
+      "metrics": {
+        "total_searches": 1,
+        "avg_quality_score": 72.33333333333333,
+        "avg_result_count": 3.0,
+        "avg_retry_count": 0.0,
+        "avg_content_coverage_ratio": 1.0,
+        "avg_second_stage_score": 66.66666666666667,
+        "content_enrichment_rate": 100.0,
+        "retry_reason_distribution": {},
+        "content_signal_enabled": true,
+        "quality_distribution": {
+          "excellent": 0.0,
+          "good": 100.0,
+          "fair": 0.0,
+          "poor": 0.0
+        }
+      },
+      "passed": true,
+      "issues": [],
+      "timestamp": 1771056206.634942
+    },
+    {
+      "conversation_id": "weak-content-coverage",
+      "evaluator_name": "SearchQuality",
+      "score": 45.9,
+      "metrics": {
+        "total_searches": 1,
+        "avg_quality_score": 52.666666666666664,
+        "avg_result_count": 3.0,
+        "avg_retry_count": 2.0,
+        "avg_content_coverage_ratio": 0.0,
+        "avg_second_stage_score": 38.0,
+        "content_enrichment_rate": 100.0,
+        "retry_reason_distribution": {
+          "low_content_coverage": 100.0
+        },
+        "content_signal_enabled": true,
+        "quality_distribution": {
+          "excellent": 0.0,
+          "good": 0.0,
+          "fair": 100.0,
+          "poor": 0.0
+        }
+      },
+      "passed": false,
+      "issues": [
+        "높은 재시도 빈도: 평균 2.0회",
+        "본문 근거 커버리지 낮음: 평균 0.0%",
+        "재시도 원인 편중: low_content_coverage 100.0%"
+      ],
+      "timestamp": 1771056206.6349947
+    },
+    {
+      "conversation_id": "insufficient-results",
+      "evaluator_name": "SearchQuality",
+      "score": 60.35000000000001,
+      "metrics": {
+        "total_searches": 1,
+        "avg_quality_score": 61.0,
+        "avg_result_count": 1.0,
+        "avg_retry_count": 1.0,
+        "avg_content_coverage_ratio": 1.0,
+        "avg_second_stage_score": 57.0,
+        "content_enrichment_rate": 100.0,
+        "retry_reason_distribution": {
+          "insufficient_results": 100.0
+        },
+        "content_signal_enabled": true,
+        "quality_distribution": {
+          "excellent": 0.0,
+          "good": 100.0,
+          "fair": 0.0,
+          "poor": 0.0
+        }
+      },
+      "passed": true,
+      "issues": [],
+      "timestamp": 1771056206.6350193
+    },
+    {
+      "conversation_id": "no-results",
+      "evaluator_name": "SearchQuality",
+      "score": 20.700000000000003,
+      "metrics": {
+        "total_searches": 1,
+        "avg_quality_score": 0,
+        "avg_result_count": 0.0,
+        "avg_retry_count": 1.0,
+        "avg_content_coverage_ratio": 0.5,
+        "avg_second_stage_score": 50.0,
+        "content_enrichment_rate": 0.0,
+        "retry_reason_distribution": {
+          "no_results": 100.0
+        },
+        "content_signal_enabled": false,
+        "quality_distribution": {}
+      },
+      "passed": false,
+      "issues": [
+        "낮은 검색 품질: 평균 0.0점",
+        "검색 결과 부족: 평균 0.0개"
+      ],
+      "timestamp": 1771056206.6350417
+    }
+  ],
+  "summary": {
+    "total_evaluations": 5,
+    "passed": 3,
+    "failed": 2,
+    "pass_rate": 60.0,
+    "by_evaluator": {
+      "SearchQuality": {
+        "total": 5,
+        "passed": 3,
+        "avg_score": 57.10666666666667,
+        "pass_rate": 60.0
+      }
+    }
+  },
+  "config": {
+    "source": "ci-fixture",
+    "fixture_path": ".ci\\quality\\fixtures\\search_quality_cases.json",
+    "threshold": 60.0
+  }
+}

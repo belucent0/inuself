@@ -1,0 +1,44 @@
+name: Quality Baseline Snapshot
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-snapshot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pydantic
+
+      - name: Generate baseline snapshot report
+        run: |
+          mkdir -p quality_test_reports/baseline
+          python scripts/generate_search_quality_report.py \
+            --cases .ci/quality/fixtures/search_quality_cases.json \
+            --output quality_test_reports/baseline/search_quality_baseline_${{ github.sha }}.json
+
+      - name: Upload baseline snapshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-baseline-${{ github.sha }}
+          path: quality_test_reports/baseline/*
+          retention-days: 30
