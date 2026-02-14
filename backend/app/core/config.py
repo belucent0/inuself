@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     litellm_model_summarize: str = Field(
         "tier-simple", validation_alias="LITELLM_MODEL_SUMMARIZE"
     )
+    litellm_allowed_models: str = Field("", validation_alias="LITELLM_ALLOWED_MODELS")
 
     # AI Agent 검색 품질 튜닝 파라미터
     agent_search_web_limit: int = Field(

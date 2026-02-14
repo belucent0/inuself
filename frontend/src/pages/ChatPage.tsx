@@ -313,12 +313,12 @@ export function ChatPage() {
   // ============================================================
   // 이벤트 핸들러
   // ============================================================
-  const handleSendMessage = async (content: string, msgMode?: string) => {
-    await sendMessage(content, msgMode || mode)
+  const handleSendMessage = async (content: string, msgMode?: string, model?: string) => {
+    await sendMessage(content, msgMode || mode, model)
   }
 
-  const handleRegenerate = async () => {
-    await regenerate(mode)
+  const handleRegenerate = async (regenMode?: string, model?: string) => {
+    await regenerate(regenMode || mode, model)
   }
 
   // ============================================================

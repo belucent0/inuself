@@ -62,6 +62,7 @@ export interface CreateThreadRequest {
 export interface SendMessageRequest {
   content: string
   mode?: AIMode
+  model?: string
   metadata?: Record<string, unknown>
 }
 
