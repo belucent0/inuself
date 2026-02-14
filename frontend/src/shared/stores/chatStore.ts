@@ -57,9 +57,9 @@ interface ChatActions {
   switchThread: (threadId: string | null, initialMessages?: Message[]) => void
 
   // 메시지 전송
-  sendMessage: (content: string, mode?: string) => Promise<void>
-  createAndStream: (query: string, mode?: string) => Promise<string | null>
-  regenerate: (mode?: string) => Promise<void>
+  sendMessage: (content: string, mode?: string, model?: string) => Promise<void>
+  createAndStream: (query: string, mode?: string, model?: string) => Promise<string | null>
+  regenerate: (mode?: string, model?: string) => Promise<void>
 
   // 스트리밍 제어
   cancelStreaming: () => void
@@ -166,7 +166,7 @@ export const useChatStore = create<ChatStore>()(
       // --------------------------------------------------------
       // 메시지 전송
       // --------------------------------------------------------
-      sendMessage: async (content, mode = 'auto') => {
+      sendMessage: async (content, mode = 'auto', model) => {
         const { threadId, _startStreaming, _appendToken, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming } = get()
         if (!threadId) return
 
@@ -182,7 +182,7 @@ export const useChatStore = create<ChatStore>()(
         const abortController = _startStreaming()
 
         try {
-          await sendMessageStream(threadId, content, mode, {
+          await sendMessageStream(threadId, content, mode, model, {
             onToken: _appendToken,
             onThinkingStep: _addThinkingStep,
             onSource: _addSource,
@@ -202,7 +202,7 @@ export const useChatStore = create<ChatStore>()(
         }
       },
 
-      createAndStream: async (query, mode = 'auto') => {
+      createAndStream: async (query, mode = 'auto', model) => {
         const { isCreatingThread, switchThread, _startStreaming, _appendToken, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming, _setThreadId } = get()
 
         // 이미 생성 중이면 무시 (중복 호출 방지)
@@ -228,7 +228,7 @@ export const useChatStore = create<ChatStore>()(
         const abortController = _startStreaming()
 
         try {
-          const newThreadId = await createThreadAndStream(query, mode, {
+          const newThreadId = await createThreadAndStream(query, mode, model, {
             onToken: _appendToken,
             onThinkingStep: _addThinkingStep,
             onSource: _addSource,
@@ -253,7 +253,7 @@ export const useChatStore = create<ChatStore>()(
         }
       },
 
-      regenerate: async (mode = 'auto') => {
+      regenerate: async (mode = 'auto', model) => {
         const { threadId, messages, _startStreaming, _appendToken, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming } = get()
         if (!threadId) return
 
@@ -267,7 +267,7 @@ export const useChatStore = create<ChatStore>()(
         const abortController = _startStreaming()
 
         try {
-          await regenerateStream(threadId, mode, {
+          await regenerateStream(threadId, mode, model, {
             onToken: _appendToken,
             onThinkingStep: _addThinkingStep,
             onSource: _addSource,
