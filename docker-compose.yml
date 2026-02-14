@@ -67,6 +67,22 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
+  # CLIProxyAPI - OAuth-based proxy for Codex/Claude-compatible access
+  cli-proxy-api:
+    image: ${CLIPROXY_IMAGE:-eceasy/cli-proxy-api:latest}
+    container_name: asr-cli-proxy-api
+    environment:
+      - DEPLOY=${CLIPROXY_DEPLOY:-}
+    ports:
+      - "${CLIPROXY_PORT:-8317}:8317"
+      - "${CLIPROXY_CODEX_OAUTH_PORT:-1455}:1455"
+      - "${CLIPROXY_CLAUDE_OAUTH_PORT:-54545}:54545"
+    volumes:
+      - ./infra/cliproxy/config.yaml:/CLIProxyAPI/config.yaml:ro
+      - cliproxy-auth-data:/root/.cli-proxy-api
+      - cliproxy-logs-data:/CLIProxyAPI/logs
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -341,6 +357,7 @@ services:
       - prometheus
       - valkey
       - tempo
+      - cli-proxy-api
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:4000/health/liveliness" ]
@@ -424,3 +441,5 @@ volumes:
   prometheus-data:
   grafana-data:
   tempo-data:
+  cliproxy-auth-data:
+  cliproxy-logs-data:
