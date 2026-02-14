@@ -2,11 +2,12 @@
  * MonitoringPage - 모니터링 대시보드 페이지 (/monitoring)
  */
 
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs';
 import { ScrollText, GitBranch, Activity, ListTodo, BarChart3, Bot, Brain, ExternalLink } from 'lucide-react';
 import { cn } from '@/shared/utils/cn';
+import { LangfuseOverviewPanel } from '@/features/monitoring/components/LangfuseOverviewPanel';
 
 interface DashboardTab {
   id: string;
@@ -61,33 +62,54 @@ const DASHBOARD_TABS: DashboardTab[] = [
     description: 'LLM 실시간 메트릭 (OpenLLMetry)',
   },
   {
+    id: 'langfuse-overview',
+    label: 'LLM 품질',
+    icon: Brain,
+    path: '',
+    description: 'Langfuse Trace/Score 기반 내부 품질 대시보드',
+  },
+  {
     id: 'langfuse',
     label: 'LLM 분석',
     icon: Brain,
     path: '/langfuse/',
     description: 'LLM Observability & Prompt Management (Langfuse)',
-    external: true,
   },
 ];
 
 export function MonitoringPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState<string>(tabParam || 'logs');
+  const activeTab =
+    tabParam && DASHBOARD_TABS.some((tab) => tab.id === tabParam)
+      ? tabParam
+      : 'logs';
 
-  // URL 파라미터와 동기화
-  useEffect(() => {
-    if (tabParam && tabParam !== activeTab) {
-      setActiveTab(tabParam);
+  const monitoringBaseUrl = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return '';
     }
-  }, [tabParam]);
+
+    if (window.location.port === '3000') {
+      return `${window.location.protocol}//${window.location.hostname}`;
+    }
+
+    return '';
+  }, []);
 
   const handleTabChange = (value: string) => {
-    setActiveTab(value);
     setSearchParams({ tab: value });
   };
 
+  const resolveTabPath = (path: string) => {
+    if (!path.startsWith('/') || monitoringBaseUrl.length === 0) {
+      return path;
+    }
+    return `${monitoringBaseUrl}${path}`;
+  };
+
   const currentTab = DASHBOARD_TABS.find((tab) => tab.id === activeTab) || DASHBOARD_TABS[0];
+  const currentTabPath = resolveTabPath(currentTab.path);
 
   return (
     <div className="flex flex-col h-full">
@@ -101,7 +123,7 @@ export function MonitoringPage() {
             </div>
             {currentTab.external && (
               <a
-                href={currentTab.path}
+                href={currentTabPath}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
@@ -144,7 +166,9 @@ export function MonitoringPage() {
 
       {/* 대시보드 컨텐츠 */}
       <div className="flex-1 relative bg-muted/30">
-        {currentTab.external ? (
+        {currentTab.id === 'langfuse-overview' ? (
+          <LangfuseOverviewPanel />
+        ) : currentTab.external ? (
           // 외부 링크는 iframe 대신 안내 메시지
           <div className="flex items-center justify-center h-full">
             <div className="text-center space-y-4 p-8">
@@ -153,7 +177,7 @@ export function MonitoringPage() {
                 <h3 className="text-lg font-semibold mb-2">{currentTab.label}</h3>
                 <p className="text-sm text-muted-foreground mb-4">{currentTab.description}</p>
                 <a
-                  href={currentTab.path}
+                  href={currentTabPath}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
@@ -166,12 +190,12 @@ export function MonitoringPage() {
           </div>
         ) : (
           // iframe으로 대시보드 임베드
-          <iframe
-            key={currentTab.id}
-            src={currentTab.path}
-            className="w-full h-full border-0"
-            title={`${currentTab.label} Dashboard`}
-            loading="lazy"
+            <iframe
+              key={currentTab.id}
+              src={currentTabPath}
+              className="w-full h-full border-0"
+              title={`${currentTab.label} Dashboard`}
+              loading="lazy"
             sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
           />
         )}
