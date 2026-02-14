@@ -1,7 +1,6 @@
 """Task Queue 추상화 레이어 - Celery를 사용."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
 import redis
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
@@ -54,6 +53,15 @@ class TaskQueueAdapter(ABC):
         pass
 
     @abstractmethod
+    def enqueue_wpi_report_job(
+        self,
+        scan_result_id: str,
+        messages: list[dict],
+    ) -> str | None:
+        """WPI AI 리포트 생성 작업을 큐에 등록하고 작업 ID를 반환."""
+        pass
+
+    @abstractmethod
     def enqueue_ocr_job(
         self,
         file_id: int,
@@ -78,28 +86,12 @@ class TaskQueueAdapter(ABC):
         pass
 
     @abstractmethod
-    def enqueue_llm_job(self, file_id: int, messages: list[dict]) -> str | None:
-        """LLM 작업을 큐에 등록하고 작업 ID를 반환.
-
-        [Phase 1] 프롬프트 주입 패턴: 완성된 messages 리스트를 받습니다.
-
-        Args:
-            file_id: 파일 ID
-            messages: LLM 호출용 완성된 messages 리스트 (Backend에서 생성)
-
-        Returns:
-            job_id: 작업 ID (성공 시)
-            None: 중복으로 스킵됨
-        """
-        pass
-
-    @abstractmethod
     def get_job_status(self, job_id: str) -> str:
         """작업 상태 조회."""
         pass
 
     @abstractmethod
-    def clear_active_job(self, task_type: str, file_id: int) -> None:
+    def clear_active_job(self, task_type: str, file_id: str | int) -> None:
         """활성 작업 해제 (작업 완료 시 호출)."""
         pass
 
@@ -123,7 +115,7 @@ class CeleryAdapter(TaskQueueAdapter):
     def _enqueue_with_dedup(
         self,
         task_type: str,
-        file_id: int,
+        file_id: str | int,
         task_name: str,
         kwargs: dict,
         queue: str,
@@ -190,7 +182,7 @@ class CeleryAdapter(TaskQueueAdapter):
 
         return result.id
 
-    def clear_active_job(self, task_type: str, file_id: int) -> None:
+    def clear_active_job(self, task_type: str, file_id: str | int) -> None:
         """활성 작업 해제 (작업 완료 시 Worker에서 호출).
 
         Args:
@@ -277,6 +269,38 @@ class CeleryAdapter(TaskQueueAdapter):
             logger.error(
                 "[TaskQueue] Failed to enqueue LLM job: file_id=%s, error=%s",
                 file_id,
+                exc,
+            )
+            raise
+
+    def enqueue_wpi_report_job(
+        self,
+        scan_result_id: str,
+        messages: list[dict],
+    ) -> str | None:
+        """WPI AI 리포트 생성 작업을 큐에 등록합니다."""
+
+        try:
+            headers = {}
+            inject_trace_context(headers)
+            trace_id = get_trace_id()
+            logger.debug("[TaskQueue] WPI report headers: trace_id=%s", trace_id)
+
+            return self._enqueue_with_dedup(
+                task_type="wpi_report",
+                file_id=scan_result_id,
+                task_name="worker.tasks.wpi_report_task.process_wpi_report_task",
+                kwargs={
+                    "scan_result_id": scan_result_id,
+                    "messages": messages,
+                },
+                queue="llm_summary",
+                headers=headers,
+            )
+        except Exception as exc:
+            logger.error(
+                "[TaskQueue] Failed to enqueue WPI report job: result_id=%s, error=%s",
+                scan_result_id,
                 exc,
             )
             raise

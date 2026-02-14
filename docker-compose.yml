@@ -94,6 +94,7 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./backend/data:/app/data
+      - ./docs/wpis:/app/docs/wpis:ro
       # 코드 변경사항 실시간 반영 (개발 환경)
       - ./backend/app:/app/app:ro
     depends_on:
