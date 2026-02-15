@@ -186,10 +186,6 @@ class Settings(BaseSettings):
             return self.ocr_server_mmproj
         return ""
 
-    # 관리자 인증 설정
-    admin_username: str = Field("admin", validation_alias="ADMIN_USERNAME")
-    admin_password: str = Field("", validation_alias="ADMIN_PASSWORD")
-
     # CORS 설정
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://asr.timblo.io,http://asr.timblo.io:3000"
 
