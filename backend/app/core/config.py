@@ -1,3 +1,4 @@
+import secrets
 from functools import lru_cache
 from pathlib import Path
 from pydantic import Field, model_validator
@@ -185,12 +186,20 @@ class Settings(BaseSettings):
             return self.ocr_server_mmproj
         return ""
 
-    # 관리자 인증 설정
-    admin_username: str = Field("admin", validation_alias="ADMIN_USERNAME")
-    admin_password: str = Field("", validation_alias="ADMIN_PASSWORD")
-
     # CORS 설정
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://asr.timblo.io,http://asr.timblo.io:3000"
+
+    # JWT 인증 설정
+    jwt_secret_key: str = Field("", validation_alias="JWT_SECRET_KEY")
+    jwt_algorithm: str = "HS256"
+    jwt_issuer: str = Field("playful-planet", validation_alias="JWT_ISSUER")
+    jwt_audience: str = Field("playful-planet-api", validation_alias="JWT_AUDIENCE")
+    jwt_access_token_ttl_minutes: int = Field(
+        10, validation_alias="JWT_ACCESS_TOKEN_TTL_MINUTES"
+    )
+    jwt_refresh_token_ttl_days: int = Field(
+        14, validation_alias="JWT_REFRESH_TOKEN_TTL_DAYS"
+    )
 
 
 @lru_cache
@@ -205,6 +214,13 @@ def get_settings() -> Settings:
     logger.info("[Config] .env file exists: {}", env_file.exists())
 
     settings = Settings()
+
+    if not settings.jwt_secret_key:
+        settings.jwt_secret_key = secrets.token_urlsafe(64)
+        logger.warning(
+            "[Auth] JWT_SECRET_KEY not set. Generated temporary in-memory key."
+        )
+
     logger.info("[Config] task_queue_type loaded: {}", settings.task_queue_type)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     return settings

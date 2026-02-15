@@ -11,14 +11,15 @@ from .core.config import get_settings
 from .core.logging import logger
 from .core.storage import check_storage_health
 from .controllers import content_controller
+from .controllers import auth_controller
 
 # OpenTelemetry (optional - graceful fallback if not installed)
 try:
     from .core.telemetry import setup_telemetry
 
-    TELEMETRY_AVAILABLE = True
+    telemetry_available = True
 except ImportError:
-    TELEMETRY_AVAILABLE = False
+    telemetry_available = False
 
     def setup_telemetry(*args, **kwargs):
         pass
@@ -209,7 +210,7 @@ def create_app() -> FastAPI:
     )
 
     # OpenTelemetry 분산 추적 초기화 (optional)
-    if TELEMETRY_AVAILABLE:
+    if telemetry_available:
         setup_telemetry(app, service_name="asr-backend")
         logger.info("[FastAPI] OpenTelemetry tracing initialized")
     else:
@@ -225,6 +226,9 @@ def create_app() -> FastAPI:
 
     app.include_router(content_controller.router, prefix=settings.api_prefix)
 
+    # 인증 라우터 추가
+    app.include_router(auth_controller.router, prefix=settings.api_prefix)
+    logger.info("[FastAPI] Auth routes registered at /api/auth")
     # 채팅 라우터 추가
     from .controllers import chat_controller
 
@@ -248,7 +252,6 @@ def create_app() -> FastAPI:
 
     app.include_router(langfuse_controller.router, prefix=settings.api_prefix)
     logger.info("[FastAPI] Langfuse routes registered at /api/admin/langfuse")
-
     # WebSocket 라우터 추가 (별도 경로, prefix 없음)
     from .controllers import websocket_controller
 
