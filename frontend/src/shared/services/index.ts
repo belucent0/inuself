@@ -10,16 +10,19 @@
 
 import { threadsApi } from './endpoints/threads'
 import { contentsApi } from './endpoints/contents'
+import { authApi } from './endpoints/auth'
 import { httpClient } from './api/httpClient'
 
 export const apiService = {
   threads: threadsApi,
   contents: contentsApi,
+  auth: authApi,
 }
 
 export { httpClient }
 export { threadsApi }
 export { contentsApi }
+export { authApi }
 export * from './chatStreamService'
 
 export default apiService
