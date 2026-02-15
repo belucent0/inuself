@@ -3,6 +3,8 @@
  */
 
 export { HomePage } from './HomePage'
+export { LoginPage } from './LoginPage'
+export { SignupPage } from './SignupPage'
 export { ChatPage } from './ChatPage'
 export { ContentsPage } from './ContentsPage'
 export { ContentDetailPage } from './ContentDetailPage'
