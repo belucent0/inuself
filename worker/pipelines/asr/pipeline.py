@@ -193,6 +193,7 @@ def _run_case4_parallel_processing(
                 language="ko",
                 on_resource_acquired=on_asr_resource_acquired,
                 lock_id=lock_id,  # V7.5: Worker측 잠금 ID 전달
+                file_id=str(file_id) if file_id else None,  # Backend 상태 업데이트용
             )
         finally:
             otel_context.detach(token)

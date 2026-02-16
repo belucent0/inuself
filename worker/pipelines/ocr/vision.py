@@ -38,6 +38,8 @@ def _call_ocr_via_litellm(
     model: str = "qwen3vl-it:4b",
     accuracy_mode: str = "speed",
     timeout: float = OCR_REQUEST_TIMEOUT,
+    on_processing_started: callable = None,
+    file_id: str = None,
 ) -> str:
     """V7.0: LiteLLM Proxy를 통해 OCR 요청.
 
@@ -49,6 +51,8 @@ def _call_ocr_via_litellm(
         model: 모델 이름 (사용되지 않음, accuracy_mode로 결정)
         accuracy_mode: "speed" (FLM/NPU) 또는 "accuracy" (GPU)
         timeout: 타임아웃 (초)
+        on_processing_started: Provider가 처리 시작할 때 호출될 콜백
+        file_id: 파일 ID (Backend 상태 업데이트용)
 
     Returns:
         OCR 결과 텍스트
@@ -79,6 +83,13 @@ def _call_ocr_via_litellm(
         logger.error(f"[Telemetry Debug] Failed to inject trace context: {e}")
         pass  # telemetry 미초기화 시 무시
 
+    extra_body = {
+        "accuracy_mode": accuracy_mode,
+        "task_type": "ocr",
+    }
+    if file_id:
+        extra_body["file_id"] = file_id
+
     payload = {
         "model": final_model,
         "messages": [
@@ -96,10 +107,7 @@ def _call_ocr_via_litellm(
         "max_tokens": 4096,
         "temperature": 0.1,
         # custom_handler가 OCR로 라우팅하도록 힌트
-        "extra_body": {
-            "accuracy_mode": accuracy_mode,
-            "task_type": "ocr",
-        },
+        "extra_body": extra_body,
     }
 
     try:
@@ -354,6 +362,7 @@ class OcrVisionProcessor:
                 prompt=prompt,
                 model=model,
                 accuracy_mode=accuracy_mode,
+                file_id=file_id,
             )
             return self._remove_markdown_code_blocks(result)
 
@@ -507,14 +516,16 @@ class OcrVisionProcessor:
         image: Image.Image,
         ocr_mode: OcrMode = "document",
         server_process=None,
+        file_id: str = None,
     ) -> str:
         """단일 이미지를 OCR 처리.
-        
+
         Args:
             image: PIL Image 객체
             ocr_mode: OCR 모드 ("document" 또는 "portray")
             server_process: 이미 시작된 llama-server 프로세스
-            
+            file_id: 파일 ID (Backend 상태 업데이트용)
+
         Returns:
             추출된 텍스트
         """
@@ -567,6 +578,7 @@ class OcrVisionProcessor:
         ocr_mode: OcrMode = "document",
         resource_timeout: float = 120.0,
         on_resource_acquired: callable = None,
+        file_id: str = None,
     ) -> dict[str, Any]:
         """여러 이미지를 OCR 처리.
 
@@ -578,6 +590,7 @@ class OcrVisionProcessor:
             ocr_mode: OCR 모드
             resource_timeout: (미사용, 호환성 유지)
             on_resource_acquired: OCR 처리 시작 시 호출되는 콜백
+            file_id: 파일 ID (Backend 상태 업데이트용)
 
         Returns:
             {
@@ -629,7 +642,13 @@ class OcrVisionProcessor:
                 logger.info(f"Processing page {page_num}/{len(images)}")
 
                 try:
-                    text = self.process_image(image, ocr_mode=ocr_mode, server_process=server_process)
+                    # 첫 페이지만 file_id 전달 (processing_started는 한 번만)
+                    text = self.process_image(
+                        image,
+                        ocr_mode=ocr_mode,
+                        server_process=server_process,
+                        file_id=file_id if idx == 0 else None,
+                    )
                     page_texts.append(text)
 
                     ocr_metadata["pages"].append({

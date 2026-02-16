@@ -2040,6 +2040,7 @@ class PrometheusRouter(CustomLLM):
             audio_base64 = extra_body.get("audio_base64", "")
             language = extra_body.get("language", "ko")
             accuracy_mode = extra_body.get("accuracy_mode", "speed")
+            file_id = extra_body.get("file_id")  # Worker에서 전달한 file_id
 
             if not audio_base64:
                 raise ValueError("No audio_base64 provided for ASR request")
@@ -2095,6 +2096,7 @@ class PrometheusRouter(CustomLLM):
                         model=asr_model,
                         language=language,
                         timeout=1800.0,
+                        file_id=file_id,
                     )
                 finally:
                     # 임시 파일 삭제
@@ -2222,9 +2224,10 @@ class PrometheusRouter(CustomLLM):
         if is_ocr_model or is_vision:
             logger.info(f"[PrometheusRouter V7.0] OCR/Vision request detected: model={requested_model} (extracted: {model_name})")
 
-            # accuracy_mode 추출 (extra_body에서)
+            # accuracy_mode와 file_id 추출 (extra_body에서)
             extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
             accuracy_mode = extra_body.get("accuracy_mode", "speed")
+            file_id = extra_body.get("file_id")  # Worker에서 전달한 file_id
 
             # OCR 모델 결정
             if accuracy_mode == "speed":
@@ -2252,6 +2255,7 @@ class PrometheusRouter(CustomLLM):
                         prompt=text_prompt or "Extract all text from this image.",
                         accuracy_mode=accuracy_mode,
                         timeout=300.0,
+                        file_id=file_id,
                     )
 
                     # OCR 결과를 OpenAI 응답 형식으로 변환

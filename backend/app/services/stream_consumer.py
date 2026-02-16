@@ -272,12 +272,12 @@ class StreamConsumer:
         event = message.get("event")
         progress = PipelineProgress(file_id)
 
-        if event == "started":
+        if event == "started" or event == "processing_started":
             async with AsyncSessionLocal() as session:
                 file_repo = FileRepository(session)
                 await file_repo.update_file_status(file_id, FileStatus.PROCESSING)
                 await session.commit()
-            logger.info(f"ASR started: file_id={file_id}")
+            logger.info(f"ASR started: file_id={file_id}, event={event}")
             progress.asr_started()
 
         elif event == "completed":
@@ -600,12 +600,12 @@ class StreamConsumer:
         event = message.get("event")
         progress = PipelineProgress(file_id)
 
-        if event == "started":
+        if event == "started" or event == "processing_started":
             async with AsyncSessionLocal() as session:
                 file_repo = FileRepository(session)
                 await file_repo.update_file_status(file_id, FileStatus.OCR_PROCESSING)
                 await session.commit()
-            logger.info(f"OCR started: file_id={file_id}")
+            logger.info(f"OCR started: file_id={file_id}, event={event}")
             progress.ocr_started()
 
         elif event == "completed":

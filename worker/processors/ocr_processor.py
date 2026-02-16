@@ -225,6 +225,7 @@ async def _process_job(
             images,
             ocr_mode=ocr_mode,
             on_resource_acquired=on_resource_acquired,
+            file_id=str(file_id),
         )
 
         step_num = "[5/5]" if file_s3_key else "[4/4]"
