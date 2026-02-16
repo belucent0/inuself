@@ -104,7 +104,7 @@ class WpiSubmitResponse(BaseModel):
     message: str
 
 
-WpiAiReportStatus = Literal["idle", "queued", "processing", "completed", "failed"]
+WpiAiReportStatus = Literal["idle", "processing", "completed", "failed"]
 
 
 class WpiAiReportGenerateRequest(BaseModel):
@@ -130,7 +130,7 @@ class WpiAiReportResponse(BaseModel):
 class WpiAiReportEnqueueResponse(WpiAiReportResponse):
     """WPI AI 리포트 생성 큐 등록 응답."""
 
-    queued: bool
+    started: bool
     message: str
 
 

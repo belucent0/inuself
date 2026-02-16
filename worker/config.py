@@ -73,28 +73,6 @@ class WorkerSettings(BaseSettings):
         "tier-simple", validation_alias="LITELLM_MODEL_SUMMARIZE"
     )
 
-    # WPI AI 리포트 생성 전용 타임아웃/재시도 설정
-    wpi_report_llm_request_timeout_seconds: float = Field(
-        45.0,
-        validation_alias="WPI_REPORT_LLM_REQUEST_TIMEOUT_SECONDS",
-    )
-    wpi_report_llm_busy_max_seconds: int = Field(
-        90,
-        validation_alias="WPI_REPORT_LLM_BUSY_MAX_SECONDS",
-    )
-    wpi_report_llm_retry_interval_seconds: int = Field(
-        3,
-        validation_alias="WPI_REPORT_LLM_RETRY_INTERVAL_SECONDS",
-    )
-    wpi_report_graph_timeout_seconds: int = Field(
-        420,
-        validation_alias="WPI_REPORT_GRAPH_TIMEOUT_SECONDS",
-    )
-    wpi_report_single_prompt_timeout_seconds: int = Field(
-        180,
-        validation_alias="WPI_REPORT_SINGLE_PROMPT_TIMEOUT_SECONDS",
-    )
-
     @field_validator("litellm_base_url")
     @classmethod
     def resolve_docker_host(cls, v: str) -> str:

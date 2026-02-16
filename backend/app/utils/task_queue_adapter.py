@@ -53,15 +53,6 @@ class TaskQueueAdapter(ABC):
         pass
 
     @abstractmethod
-    def enqueue_wpi_report_job(
-        self,
-        scan_result_id: str,
-        messages: list[dict],
-    ) -> str | None:
-        """WPI AI 리포트 생성 작업을 큐에 등록하고 작업 ID를 반환."""
-        pass
-
-    @abstractmethod
     def enqueue_ocr_job(
         self,
         file_id: int,
@@ -269,38 +260,6 @@ class CeleryAdapter(TaskQueueAdapter):
             logger.error(
                 "[TaskQueue] Failed to enqueue LLM job: file_id=%s, error=%s",
                 file_id,
-                exc,
-            )
-            raise
-
-    def enqueue_wpi_report_job(
-        self,
-        scan_result_id: str,
-        messages: list[dict],
-    ) -> str | None:
-        """WPI AI 리포트 생성 작업을 큐에 등록합니다."""
-
-        try:
-            headers = {}
-            inject_trace_context(headers)
-            trace_id = get_trace_id()
-            logger.debug("[TaskQueue] WPI report headers: trace_id=%s", trace_id)
-
-            return self._enqueue_with_dedup(
-                task_type="wpi_report",
-                file_id=scan_result_id,
-                task_name="worker.tasks.wpi_report_task.process_wpi_report_task",
-                kwargs={
-                    "scan_result_id": scan_result_id,
-                    "messages": messages,
-                },
-                queue="llm_summary",
-                headers=headers,
-            )
-        except Exception as exc:
-            logger.error(
-                "[TaskQueue] Failed to enqueue WPI report job: result_id=%s, error=%s",
-                scan_result_id,
                 exc,
             )
             raise
