@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings, Settings
+from ..core.auth import get_current_user_id
 from ..db.session import get_session, async_session_factory
 from ..agents import run_ai_agent
 from ..agents.graph import stream_ai_agent
@@ -142,9 +143,7 @@ async def get_svc(session: AsyncSession = Depends(get_session)) -> ThreadService
 
 
 # TODO: 실제 인증 구현 시 교체
-async def get_current_user_id() -> UUID:
-    """현재 사용자 ID 반환 (임시 구현)."""
-    return UUID("01234567-89ab-cdef-0123-456789abcdef")
+# get_current_user_id는 core.auth에서 import됨 (JWT 기반 인증)
 
 
 def _normalize_mode_name(mode: Any) -> str:

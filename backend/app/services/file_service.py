@@ -53,17 +53,17 @@ class FileService:
         self.settings = get_settings()
 
     async def list_files(
-        self, page: int = 1, page_size: int = 10
+        self, user_id: UUID, page: int = 1, page_size: int = 10
     ) -> ContentListResponse:
-        """페이지네이션을 포함한 파일 목록 조회."""
+        """페이지네이션을 포함한 파일 목록 조회 (사용자별 필터링)."""
         if page < 1:
             page = 1
         if page_size < 1:
             page_size = 10
 
         offset = (page - 1) * page_size
-        total = await self.file_repo.count_files()
-        rows = await self.file_repo.list_files(limit=page_size, offset=offset)
+        total = await self.file_repo.count_files(user_id=user_id)
+        rows = await self.file_repo.list_files(user_id=user_id, limit=page_size, offset=offset)
 
         items = []
         for row in rows:
@@ -114,8 +114,8 @@ class FileService:
             total_pages=total_pages,
         )
 
-    async def get_file(self, file_id: UUID) -> ContentDetail:
-        """파일 상세 조회 (UUID)."""
+    async def get_file(self, file_id: UUID, user_id: UUID | None = None) -> ContentDetail:
+        """파일 상세 조회 (UUID). user_id가 제공되면 소유자 검증."""
         file_obj = await self.file_repo.get_file(file_id)
         if not file_obj:
             raise ValueError("File not found")
@@ -124,6 +124,10 @@ class FileService:
         content = file_obj.content
         if not content:
             raise ValueError("Content not found for file")
+
+        # user_id 검증
+        if user_id and content.user_id != user_id:
+            raise ValueError("You don't have permission to access this content")
 
         transcription = content.transcription_result
         document = content.document_result
@@ -211,6 +215,7 @@ class FileService:
     async def upload_and_enqueue(
         self,
         file: UploadFile,
+        user_id: UUID,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         ocr_mode: str = "document",
@@ -278,6 +283,7 @@ class FileService:
             filename=file.filename or "unknown",
             object_key=object_key,
             content_type=content_type,
+            user_id=user_id,
             status=FileStatus.QUEUED,
         )
         await self.session.commit()
@@ -403,17 +409,20 @@ class FileService:
         }
 
     async def delete_files_by_ids(
-        self, file_ids: list[UUID]
+        self, file_ids: list[UUID], user_id: UUID | None = None
     ) -> tuple[list[UUID], list[UUID]]:
         """
         주어진 ID(UUID)의 파일을 상태와 무관하게 삭제하고,
         (deleted_ids, skipped_ids) 튜플을 반환한다.
+        user_id가 제공되면 해당 사용자의 파일만 삭제 가능.
         """
         unique_ids = list(dict.fromkeys(file_ids))
         if not unique_ids:
             return [], []
 
-        deleted_ids, object_keys = await self.file_repo.delete_files_by_ids(unique_ids)
+        deleted_ids, object_keys = await self.file_repo.delete_files_by_ids(
+            unique_ids, user_id=user_id
+        )
         await self._cleanup_queue_and_storage(deleted_ids, object_keys)
         await self.session.commit()
 
@@ -671,12 +680,15 @@ class FileService:
             raise
 
     async def prepare_youtube_placeholder(
-        self, title: str, video_id: str, source_url: str | None = None
+        self, title: str, video_id: str, source_url: str | None = None, user_id: UUID | None = None
     ) -> models.File:
         """
         YouTube 업로드를 위한 플레이스홀더 파일 레코드 생성.
         """
         import re
+
+        if not user_id:
+            raise ValueError("user_id is required for YouTube upload")
 
         # 안전한 파일명
         safe_title = re.sub(r"[^\w\s가-힣-]", "", title)[:50].strip()
@@ -690,6 +702,7 @@ class FileService:
             filename=filename,
             object_key=object_key,
             content_type=ContentType.AUDIO,
+            user_id=user_id,
             status=FileStatus.PULLING,  # 다운로드 상태로 시작
             source_url=source_url,
         )

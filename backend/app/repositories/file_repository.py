@@ -28,13 +28,15 @@ class FileRepository:
 
     async def list_files(
         self,
+        user_id: UUID | None = None,
         limit: int = 20,
         offset: int = 0,
         content_type: models.ContentType | None = None,
     ) -> Sequence[models.File]:
-        """파일 목록 조회 (관계 포함)."""
+        """파일 목록 조회 (관계 포함). user_id가 제공되면 해당 사용자의 파일만 조회."""
         stmt = (
             select(models.File)
+            .join(models.Content, models.File.content)
             .options(
                 selectinload(models.File.content).selectinload(
                     models.Content.transcription_result
@@ -46,6 +48,9 @@ class FileRepository:
             .order_by(models.File.created_at.desc())
         )
 
+        if user_id:
+            stmt = stmt.where(models.Content.user_id == user_id)
+
         if content_type:
             stmt = stmt.where(models.File.content_type == content_type)
 
@@ -54,9 +59,16 @@ class FileRepository:
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
-    async def count_files(self, content_type: models.ContentType | None = None) -> int:
-        """전체 파일 개수 조회."""
-        stmt = select(func.count(models.File.id))
+    async def count_files(
+        self, user_id: UUID | None = None, content_type: models.ContentType | None = None
+    ) -> int:
+        """전체 파일 개수 조회. user_id가 제공되면 해당 사용자의 파일만 카운트."""
+        stmt = select(func.count(models.File.id)).join(
+            models.Content, models.File.content
+        )
+
+        if user_id:
+            stmt = stmt.where(models.Content.user_id == user_id)
 
         if content_type:
             stmt = stmt.where(models.File.content_type == content_type)
@@ -89,6 +101,7 @@ class FileRepository:
         filename: str,
         object_key: str,
         content_type: models.ContentType,
+        user_id: UUID,
         status: models.FileStatus | None = None,
         size_bytes: int | None = None,
         mime_type: str | None = None,
@@ -110,9 +123,10 @@ class FileRepository:
         self.session.add(file)
         await self.session.flush()
 
-        # Content 생성
+        # Content 생성 (user_id 포함)
         content = models.Content(
             file_id=file.id,
+            user_id=user_id,
             status=effective_status,
             created_at=now,
             updated_at=now,
@@ -268,13 +282,22 @@ class FileRepository:
         return count, file_ids, object_keys
 
     async def delete_files_by_ids(
-        self, file_ids: list[UUID]
+        self, file_ids: list[UUID], user_id: UUID | None = None
     ) -> tuple[list[UUID], list[str]]:
-        """지정된 파일을 상태와 무관하게 삭제하고 삭제된 ID, object_key를 반환."""
+        """지정된 파일을 상태와 무관하게 삭제하고 삭제된 ID, object_key를 반환.
+        user_id가 제공되면 해당 사용자의 파일만 삭제 가능."""
         if not file_ids:
             return [], []
 
-        stmt = select(models.File).where(models.File.id.in_(file_ids))
+        stmt = (
+            select(models.File)
+            .join(models.Content, models.File.content)
+            .where(models.File.id.in_(file_ids))
+        )
+
+        if user_id:
+            stmt = stmt.where(models.Content.user_id == user_id)
+
         result = await self.session.execute(stmt)
         files = result.scalars().all()
 
