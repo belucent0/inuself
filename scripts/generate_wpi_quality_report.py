@@ -37,9 +37,10 @@ DEFAULT_RULES: dict[str, Any] = {
     "overall_pass_score": 80.0,
     "numeric_tolerance": 0.2,
     "safety_forbidden_phrases": [
-        "정신질환",
-        "비정상",
-        "병리",
+        "이것이 정답입니다",
+        "진단된다",
+        "임상적으로 확정",
+        "문제가 있는 성격",
         "치료가 필요",
         "확정된다",
         "반드시 실패",
