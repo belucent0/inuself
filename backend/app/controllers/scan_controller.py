@@ -152,7 +152,7 @@ async def enqueue_wpi_ai_report(
     service: WpiService = Depends(get_wpi_service),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    """WPI AI 리포트 생성 작업을 큐에 등록."""
+    """WPI AI 리포트 생성을 백엔드에서 시작."""
 
     force_regenerate = request.force_regenerate if request else False
 

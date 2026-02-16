@@ -19,6 +19,7 @@
     def process_file(file_id: int):
         ...
 """
+
 import os
 import functools
 from contextlib import contextmanager
@@ -39,6 +40,7 @@ from .logging import logger
 # ============================================
 # OpenLLMetry (LLM Observability)
 # ============================================
+
 
 def _init_openllmetry(service_name: str) -> bool:
     """OpenLLMetry 초기화 (LLM 호출 자동 계측).
@@ -61,6 +63,8 @@ def _init_openllmetry(service_name: str) -> bool:
         # Traceloop이 기존 OTEL exporter를 사용하도록 환경변수 설정
         # TRACELOOP_BASE_URL을 설정하면 Traceloop 클라우드 대신 지정된 엔드포인트 사용
         os.environ.setdefault("TRACELOOP_BASE_URL", endpoint)
+        # Tempo는 OTLP metrics endpoint를 제공하지 않으므로 Traceloop metrics 비활성화
+        os.environ.setdefault("TRACELOOP_METRICS_ENABLED", "false")
 
         # 기존 TracerProvider 사용 (Tempo로 전송)
         Traceloop.init(
@@ -72,10 +76,13 @@ def _init_openllmetry(service_name: str) -> bool:
         # Traceloop이 자동으로 Redis를 계측하므로 여기서 uninstrument
         try:
             from opentelemetry.instrumentation.redis import RedisInstrumentor
+
             redis_instrumentor = RedisInstrumentor()
             if redis_instrumentor.is_instrumented_by_opentelemetry:
                 redis_instrumentor.uninstrument()
-                logger.info("[OpenLLMetry] Redis instrumentation disabled (XREADGROUP noise)")
+                logger.info(
+                    "[OpenLLMetry] Redis instrumentation disabled (XREADGROUP noise)"
+                )
         except Exception as redis_err:
             logger.debug(f"[OpenLLMetry] Could not uninstrument Redis: {redis_err}")
 
@@ -83,10 +90,13 @@ def _init_openllmetry(service_name: str) -> bool:
         # OpenTelemetry metrics에서 attributes에 리스트가 있을 때 frozenset 변환 실패
         try:
             from opentelemetry.instrumentation.openai import OpenAIInstrumentor
+
             openai_instrumentor = OpenAIInstrumentor()
             if openai_instrumentor.is_instrumented_by_opentelemetry:
                 openai_instrumentor.uninstrument()
-                logger.info("[OpenLLMetry] OpenAI instrumentation disabled (unhashable type error fix)")
+                logger.info(
+                    "[OpenLLMetry] OpenAI instrumentation disabled (unhashable type error fix)"
+                )
         except Exception as openai_err:
             logger.debug(f"[OpenLLMetry] Could not uninstrument OpenAI: {openai_err}")
 
@@ -94,10 +104,13 @@ def _init_openllmetry(service_name: str) -> bool:
         # MinIO, 내부 HTTP 호출 등이 orphan trace로 노이즈 생성
         try:
             from opentelemetry.instrumentation.urllib3 import URLLib3Instrumentor
+
             urllib3_instrumentor = URLLib3Instrumentor()
             if urllib3_instrumentor.is_instrumented_by_opentelemetry:
                 urllib3_instrumentor.uninstrument()
-                logger.info("[OpenLLMetry] urllib3 instrumentation disabled (internal HTTP noise)")
+                logger.info(
+                    "[OpenLLMetry] urllib3 instrumentation disabled (internal HTTP noise)"
+                )
         except Exception as urllib3_err:
             logger.debug(f"[OpenLLMetry] Could not uninstrument urllib3: {urllib3_err}")
 
@@ -116,29 +129,38 @@ def _init_openllmetry(service_name: str) -> bool:
 # ============================================
 
 # 헬스체크 경로 (추적 제외)
-EXCLUDED_PATHS = frozenset({"/health", "/ready", "/metrics", "/healthz", "/favicon.ico", "/liveliness"})
+EXCLUDED_PATHS = frozenset(
+    {"/health", "/ready", "/metrics", "/healthz", "/favicon.ico", "/liveliness"}
+)
 
 # Redis 노이즈 명령어 (추적 제외) - XREAD/XREADGROUP 폴링 포함
-EXCLUDED_REDIS_COMMANDS = frozenset({
-    "PING", "INFO", "CONFIG", "CLIENT", "CLUSTER",
-    "XREAD", "XREADGROUP",  # Redis Stream 폴링
-})
+EXCLUDED_REDIS_COMMANDS = frozenset(
+    {
+        "PING",
+        "INFO",
+        "CONFIG",
+        "CLIENT",
+        "CLUSTER",
+        "XREAD",
+        "XREADGROUP",  # Redis Stream 폴링
+    }
+)
 
 
 class FilteringSpanProcessor(SpanProcessor):
     """헬스체크 및 노이즈 span 필터링 프로세서.
-    
+
     - /health, /metrics 등 헬스체크 요청 제외
     - Redis PING, XREAD 등 노이즈 명령어 제외
     - 에러 발생 시 항상 수집 (필터 우회)
     """
-    
+
     def __init__(self, next_processor: SpanProcessor):
         self._next = next_processor
-    
+
     def on_start(self, span, parent_context=None):
         self._next.on_start(span, parent_context)
-    
+
     def on_end(self, span):
         from .logging import logger
 
@@ -152,18 +174,31 @@ class FilteringSpanProcessor(SpanProcessor):
 
         # attributes 안전하게 가져오기
         try:
-            http_target = span.attributes.get("http.target", "") if span.attributes else ""
+            http_target = (
+                span.attributes.get("http.target", "") if span.attributes else ""
+            )
             http_url = span.attributes.get("http.url", "") if span.attributes else ""
-            http_route = span.attributes.get("http.route", "") if span.attributes else ""
-            db_statement = span.attributes.get("db.statement", "") if span.attributes else ""
+            http_route = (
+                span.attributes.get("http.route", "") if span.attributes else ""
+            )
+            db_statement = (
+                span.attributes.get("db.statement", "") if span.attributes else ""
+            )
         except Exception:
             # attributes 접근 실패 시 빈 문자열
             http_target = http_url = http_route = db_statement = ""
 
         # 헬스체크 필터링 - span 이름, target, url, route 모두 체크
         for path in EXCLUDED_PATHS:
-            if path in span_name or path in http_target or path in http_url or path in http_route:
-                logger.info(f"[Filter] Dropped health span: name={span_name}, target={http_target}, route={http_route}")
+            if (
+                path in span_name
+                or path in http_target
+                or path in http_url
+                or path in http_route
+            ):
+                logger.info(
+                    f"[Filter] Dropped health span: name={span_name}, target={http_target}, route={http_route}"
+                )
                 return  # span 드롭
 
         # Redis 명령어 필터링
@@ -174,10 +209,10 @@ class FilteringSpanProcessor(SpanProcessor):
                 return  # span 드롭
 
         self._next.on_end(span)
-    
+
     def shutdown(self):
         self._next.shutdown()
-    
+
     def force_flush(self, timeout_millis=30000):
         return self._next.force_flush(timeout_millis)
 
@@ -207,24 +242,30 @@ def setup_telemetry(app=None, service_name: str = None) -> None:
     # OTLP 엔드포인트 확인
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
     if not endpoint:
-        logger.warning("[Telemetry] OTEL_EXPORTER_OTLP_ENDPOINT not set, tracing disabled")
+        logger.warning(
+            "[Telemetry] OTEL_EXPORTER_OTLP_ENDPOINT not set, tracing disabled"
+        )
         _initialized = True
         return
 
     try:
         # Resource 생성 (서비스 메타데이터)
-        resource = Resource.create({
-            SERVICE_NAME: service,
-            "service.version": os.getenv("APP_VERSION", "1.0.0"),
-            "deployment.environment": os.getenv("ENVIRONMENT", "development"),
-        })
+        resource = Resource.create(
+            {
+                SERVICE_NAME: service,
+                "service.version": os.getenv("APP_VERSION", "1.0.0"),
+                "deployment.environment": os.getenv("ENVIRONMENT", "development"),
+            }
+        )
 
         # TracerProvider 설정
         _tracer_provider = TracerProvider(resource=resource)
 
         # OTLP Exporter 설정 (HTTP)
         # Jaeger HTTP endpoint는 /v1/traces 경로 필요
-        http_endpoint = f"{endpoint}/v1/traces" if not endpoint.endswith("/v1/traces") else endpoint
+        http_endpoint = (
+            f"{endpoint}/v1/traces" if not endpoint.endswith("/v1/traces") else endpoint
+        )
         exporter = OTLPSpanExporter(
             endpoint=http_endpoint,
         )
@@ -234,7 +275,9 @@ def setup_telemetry(app=None, service_name: str = None) -> None:
         batch_processor = BatchSpanProcessor(exporter)
         _tracer_provider.add_span_processor(batch_processor)
 
-        logger.info("[Telemetry] Span processor configured (filtering via instrumentation)")
+        logger.info(
+            "[Telemetry] Span processor configured (filtering via instrumentation)"
+        )
 
         # 전역 TracerProvider 설정
         trace.set_tracer_provider(_tracer_provider)
@@ -276,7 +319,9 @@ def _instrument_fastapi(app) -> None:
             app,
             excluded_urls=excluded_urls,
         )
-        logger.info(f"[Telemetry] FastAPI instrumented with excluded URLs: {excluded_urls}")
+        logger.info(
+            f"[Telemetry] FastAPI instrumented with excluded URLs: {excluded_urls}"
+        )
     except Exception as e:
         logger.warning(f"[Telemetry] Failed to instrument FastAPI: {e}")
 
@@ -290,13 +335,16 @@ def _instrument_common_libraries() -> None:
         # Redis 계측 비활성화 (XREADGROUP 등 폴링 명령어가 너무 많은 노이즈 생성)
         # 필요시 중요한 Redis 작업만 수동으로 trace 추가
         # RedisInstrumentor().instrument()
-        logger.debug("[Telemetry] Redis instrumentation disabled (too noisy with XREADGROUP)")
+        logger.debug(
+            "[Telemetry] Redis instrumentation disabled (too noisy with XREADGROUP)"
+        )
     except Exception as e:
         logger.debug(f"[Telemetry] Redis instrumentation skipped: {e}")
 
     # HTTPX
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
         HTTPXClientInstrumentor().instrument()
         logger.debug("[Telemetry] HTTPX instrumented")
     except Exception as e:
@@ -305,6 +353,7 @@ def _instrument_common_libraries() -> None:
     # SQLAlchemy
     try:
         from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
         SQLAlchemyInstrumentor().instrument()
         logger.debug("[Telemetry] SQLAlchemy instrumented")
     except Exception as e:
@@ -318,7 +367,9 @@ def _instrument_common_libraries() -> None:
             """Celery Producer span에 Service Graph용 속성 추가."""
             span.set_attribute("peer.service", "asr-worker")
             span.set_attribute("messaging.system", "celery")
-            span.set_attribute("messaging.destination", task.name if task else "unknown")
+            span.set_attribute(
+                "messaging.destination", task.name if task else "unknown"
+            )
 
         CeleryInstrumentor().instrument(
             request_hook=celery_producer_hook,
@@ -349,7 +400,7 @@ def get_trace_id() -> Optional[str]:
     """현재 trace_id 반환 (hex string)."""
     span = get_current_span()
     if span and span.get_span_context().is_valid:
-        return format(span.get_span_context().trace_id, '032x')
+        return format(span.get_span_context().trace_id, "032x")
     return None
 
 
@@ -357,13 +408,14 @@ def get_span_id() -> Optional[str]:
     """현재 span_id 반환 (hex string)."""
     span = get_current_span()
     if span and span.get_span_context().is_valid:
-        return format(span.get_span_context().span_id, '016x')
+        return format(span.get_span_context().span_id, "016x")
     return None
 
 
 # ============================================
 # 병목 분석용 확장 기능
 # ============================================
+
 
 class BottleneckAttributes:
     """병목 분석을 위한 표준 속성 키."""
@@ -375,7 +427,9 @@ class BottleneckAttributes:
     FILE_SIZE_BYTES = "file.size_bytes"
 
     # 처리 단계
-    PIPELINE_STAGE = "pipeline.stage"  # upload, preprocessing, asr, diarization, llm, ocr
+    PIPELINE_STAGE = (
+        "pipeline.stage"  # upload, preprocessing, asr, diarization, llm, ocr
+    )
     PROCESSING_MODE = "processing.mode"  # speed, accuracy, case1-4
 
     # 리소스 사용
@@ -399,7 +453,7 @@ def set_bottleneck_attributes(
     provider_type: str = None,
     model_name: str = None,
     queue_name: str = None,
-    **extra_attributes
+    **extra_attributes,
 ) -> None:
     """병목 분석용 속성을 span에 설정.
 
@@ -435,11 +489,7 @@ def set_bottleneck_attributes(
 
 
 @contextmanager
-def trace_pipeline_stage(
-    stage_name: str,
-    file_id: int = None,
-    **attributes
-):
+def trace_pipeline_stage(stage_name: str, file_id: int = None, **attributes):
     """파이프라인 단계 추적용 컨텍스트 매니저.
 
     사용 예:
@@ -449,10 +499,7 @@ def trace_pipeline_stage(
     tracer = get_tracer("pipeline")
     with tracer.start_as_current_span(stage_name) as span:
         set_bottleneck_attributes(
-            span,
-            file_id=file_id,
-            pipeline_stage=stage_name,
-            **attributes
+            span, file_id=file_id, pipeline_stage=stage_name, **attributes
         )
         try:
             yield span
@@ -462,10 +509,7 @@ def trace_pipeline_stage(
             raise
 
 
-def trace_operation(
-    operation_name: str = None,
-    attributes: dict = None
-) -> Callable:
+def trace_operation(operation_name: str = None, attributes: dict = None) -> Callable:
     """함수/메서드 추적용 데코레이터.
 
     사용 예:
@@ -473,6 +517,7 @@ def trace_operation(
         def process_file(file_id: int):
             ...
     """
+
     def decorator(func: Callable) -> Callable:
         name = operation_name or func.__name__
 
@@ -486,8 +531,8 @@ def trace_operation(
                         span.set_attribute(key, value)
 
                 # file_id가 인자에 있으면 자동 추가
-                if 'file_id' in kwargs:
-                    span.set_attribute(BottleneckAttributes.FILE_ID, kwargs['file_id'])
+                if "file_id" in kwargs:
+                    span.set_attribute(BottleneckAttributes.FILE_ID, kwargs["file_id"])
 
                 try:
                     result = func(*args, **kwargs)
@@ -505,8 +550,8 @@ def trace_operation(
                     for key, value in attributes.items():
                         span.set_attribute(key, value)
 
-                if 'file_id' in kwargs:
-                    span.set_attribute(BottleneckAttributes.FILE_ID, kwargs['file_id'])
+                if "file_id" in kwargs:
+                    span.set_attribute(BottleneckAttributes.FILE_ID, kwargs["file_id"])
 
                 try:
                     result = await func(*args, **kwargs)
@@ -517,6 +562,7 @@ def trace_operation(
                     raise
 
         import asyncio
+
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
         return wrapper
@@ -527,6 +573,7 @@ def trace_operation(
 # ============================================
 # Trace Context 전파 (서비스 간 연결)
 # ============================================
+
 
 def inject_trace_context(carrier: dict) -> dict:
     """현재 trace context를 carrier에 주입.
@@ -568,9 +615,7 @@ def extract_trace_context(carrier: dict) -> trace.Context:
 
 
 def create_linked_span(
-    name: str,
-    parent_context: trace.Context = None,
-    **attributes
+    name: str, parent_context: trace.Context = None, **attributes
 ) -> trace.Span:
     """부모 context와 연결된 새 span 생성.
 
@@ -583,6 +628,7 @@ def create_linked_span(
 # ============================================
 # run_in_executor용 Context 전파 유틸리티
 # ============================================
+
 
 def preserve_otel_context(func: Callable) -> Callable:
     """run_in_executor에서 OpenTelemetry context를 유지하는 래퍼 생성.
@@ -620,13 +666,7 @@ def preserve_otel_context(func: Callable) -> Callable:
     return wrapper
 
 
-async def run_in_executor_with_otel(
-    loop,
-    executor,
-    func: Callable,
-    *args,
-    **kwargs
-):
+async def run_in_executor_with_otel(loop, executor, func: Callable, *args, **kwargs):
     """OpenTelemetry context를 유지하며 executor에서 함수 실행.
 
     asyncio.run_in_executor()의 OTEL-aware 대체 함수.

@@ -6,13 +6,10 @@
 """
 
 import asyncio
-from copy import deepcopy
 import json
 import socket
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
 
 from redis.asyncio import Redis
 from opentelemetry import context as otel_context, trace
@@ -24,7 +21,6 @@ from ..core.telemetry import extract_trace_context, get_tracer
 from ..db.models import FileStatus
 from ..db.session import AsyncSessionLocal
 from ..repositories.file_repository import FileRepository
-from ..repositories.scan_repository import ScanRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
 from ..utils.task_queue_adapter import get_task_queue
@@ -206,8 +202,6 @@ class StreamConsumer:
                 await self._handle_llm_result(message)
             elif msg_type == "ocr":
                 await self._handle_ocr_result(message)
-            elif msg_type == "wpi_report":
-                await self._handle_wpi_report_result(message)
             else:
                 logger.warning(f"Unknown message type: {msg_type}")
 
@@ -798,63 +792,6 @@ class StreamConsumer:
                 logger.warning(
                     f"Failed to delete temp OCR images: file_id={file_id}, error={e}"
                 )
-
-    async def _handle_wpi_report_result(self, message: dict[str, Any]) -> None:
-        """WPI AI 리포트 결과를 처리합니다."""
-
-        event = message.get("event")
-        raw_result_id = message.get("scan_result_id")
-        if not raw_result_id:
-            logger.warning("WPI report message missing scan_result_id: %s", message)
-            return
-
-        try:
-            result_id = UUID(str(raw_result_id))
-        except ValueError:
-            logger.warning(
-                "Invalid scan_result_id in WPI report message: %s", raw_result_id
-            )
-            return
-
-        async with AsyncSessionLocal() as session:
-            scan_repo = ScanRepository(session)
-            result = await scan_repo.get_by_id(result_id)
-            if result is None:
-                logger.warning("WPI report target result not found: %s", result_id)
-                return
-
-            payload = deepcopy(result.data) if isinstance(result.data, dict) else {}
-            ai_report_raw = payload.get("ai_report")
-            ai_report = dict(ai_report_raw) if isinstance(ai_report_raw, dict) else {}
-
-            ai_report["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-            if event == "started":
-                ai_report["status"] = "processing"
-                ai_report["error"] = None
-            elif event == "completed":
-                result_s3_key = message.get("result_s3_key")
-                if not result_s3_key:
-                    logger.warning("WPI report completed event missing result_s3_key")
-                    return
-
-                result_data = download_json(result_s3_key)
-                ai_report["status"] = "completed"
-                ai_report["report_md"] = result_data.get("raw_response", "")
-                ai_report["error"] = None
-            elif event == "failed":
-                ai_report["status"] = "failed"
-                ai_report["error"] = message.get("error", "Unknown error")
-            else:
-                logger.warning("Unknown WPI report event: %s", event)
-                return
-
-            payload["ai_report"] = ai_report
-            await scan_repo.update(result, data=payload)
-            await session.commit()
-
-            task_queue = get_task_queue()
-            task_queue.clear_active_job("wpi_report", str(result_id))
 
 
 # 싱글톤 인스턴스

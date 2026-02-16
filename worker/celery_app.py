@@ -46,7 +46,6 @@ celery_app = Celery(
     include=[
         "worker.tasks.asr_task",
         "worker.tasks.llm_task",
-        "worker.tasks.wpi_report_task",
         "worker.tasks.ocr_task",
         "worker.tasks.cleanup_task",
     ],
@@ -71,9 +70,6 @@ celery_app.conf.update(
     task_routes={
         "worker.tasks.asr_task.process_asr_task": {"queue": "asr"},
         "worker.tasks.llm_task.process_llm_task": {"queue": "llm_summary"},
-        "worker.tasks.wpi_report_task.process_wpi_report_task": {
-            "queue": "llm_summary"
-        },
         "worker.tasks.ocr_task.process_ocr_task": {"queue": "ocr_tasks"},
         "worker.tasks.search_task.process_search_task": {"queue": "search"},
     },

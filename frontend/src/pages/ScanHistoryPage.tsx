@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/shared/components/ui/select"
 import { useScanHistory, useScanDetail, useWpiAiReport, WpiResultChart } from "@/features/scan"
+import { MarkdownContent } from "@/features/chat/components/MarkdownContent"
 import type {
   WpiAiReportStatus,
   WpiData,
@@ -347,7 +348,7 @@ export function ScanDetailPage() {
               </p>
             ) : aiReportStatus === "completed" && aiReport?.report_md ? (
               <div className="rounded-lg border bg-muted/20 p-3 md:p-4">
-                <p className="whitespace-pre-wrap text-sm leading-6">{aiReport.report_md}</p>
+                <MarkdownContent content={aiReport.report_md} className="text-sm" />
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
