@@ -31,6 +31,17 @@ import { cn } from '@/shared/utils/cn'
 const ADMIN_USERNAME = import.meta.env.VITE_ADMIN_USERNAME || 'admin'
 const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || 'admin123'
 
+const LEGACY_ADMIN_USERNAME = 'nature'
+const LEGACY_ADMIN_PASSWORD = 'nature'
+
+function isValidAdminCredential(username: string, password: string): boolean {
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    return true
+  }
+
+  return username === LEGACY_ADMIN_USERNAME && password === LEGACY_ADMIN_PASSWORD
+}
+
 function DynamicHeader({ pathname }: { pathname: string | null }) {
   const { threadTitle, onEditTitle, onDeleteThread } = useThreadTitle()
   const isThreadPage = pathname?.startsWith('/chat/')
@@ -111,7 +122,7 @@ export function RootLayout() {
     e.preventDefault()
     setError('')
 
-    if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    if (isValidAdminCredential(username, password)) {
       localStorage.setItem('admin_auth', 'true')
       setIsAuthenticated(true)
     } else {
