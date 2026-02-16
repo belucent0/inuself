@@ -160,6 +160,7 @@ class ContentService:
         self,
         content_id: int,
         retry_type: str,
+        user_id: UUID | None = None,
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         ocr_mode: str = "document",
@@ -172,6 +173,7 @@ class ContentService:
         Args:
             content_id: 콘텐츠 ID (또는 File ID)
             retry_type: "asr", "summary", 또는 "ocr"
+            user_id: 사용자 ID (소유자 검증용)
             min_speakers: 최소 화자 수 (선택사항, ASR 재처리 시에만 사용)
             max_speakers: 최대 화자 수 (선택사항, ASR 재처리 시에만 사용)
             ocr_mode: OCR 처리 모드 ("document", "portray")
@@ -193,6 +195,10 @@ class ContentService:
         if file_obj:
             # File 기반 처리 (상태는 Content에서 조회)
             file_content = file_obj.content
+
+            # user_id 검증
+            if user_id and file_content and file_content.user_id != user_id:
+                raise ValueError("You don't have permission to retry this content")
             if retry_type == "ocr":
                 # OCR 재처리
                 # 허용되는 content_type: DOCUMENT, PORTRAY
@@ -694,6 +700,7 @@ class ContentService:
     async def recluster_speakers(
         self,
         file_id: UUID,
+        user_id: UUID | None = None,
         num_speakers: int | None = None,
         similarity_threshold: float = 0.7,
     ) -> dict[str, Any]:
@@ -702,6 +709,7 @@ class ContentService:
 
         Args:
             file_id: 파일 ID
+            user_id: 사용자 ID (소유자 검증용)
             num_speakers: 목표 화자 수 (None이면 자동 결정)
             similarity_threshold: 코사인 유사도 임계값
 
@@ -712,6 +720,10 @@ class ContentService:
         content = await self.repo.get_by_file_id(file_id)
         if not content:
             raise ValueError("Content not found")
+
+        # user_id 검증
+        if user_id and content.user_id != user_id:
+            raise ValueError("You don't have permission to access this content")
 
         if content.status != ContentStatus.COMPLETED:
             raise ValueError(
