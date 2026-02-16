@@ -339,7 +339,7 @@ class OcrVisionProcessor:
             logger.warning(f"Table detection failed, assuming no table: {e}")
             return False
 
-    def _call_llm_api(self, prompt: str, image_base64: str | None = None, server_process=None) -> str:
+    def _call_llm_api(self, prompt: str, image_base64: str | None = None, server_process=None, file_id: str = None) -> str:
         """LLM API를 호출하여 OCR 수행."""
         from contextlib import nullcontext
         from worker.pipelines.llm.llamacpp_client import _llama_server_process
@@ -566,7 +566,7 @@ class OcrVisionProcessor:
                 prompt = self._get_default_ocr_prompt()
             
             # LLM API 호출
-            text = self._call_llm_api(prompt, image_base64, server_process=server_process)
+            text = self._call_llm_api(prompt, image_base64, server_process=server_process, file_id=file_id)
             return text
             
         finally:

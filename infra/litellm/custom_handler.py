@@ -2582,9 +2582,10 @@ class PrometheusRouter(CustomLLM):
         if is_ocr_model or is_vision:
             logger.info(f"[PrometheusRouter V7.5] OCR/Vision request detected (async): model={requested_model} (extracted: {model_name})")
 
-            # accuracy_mode 추출 (extra_body에서)
+            # accuracy_mode와 file_id 추출 (extra_body에서)
             extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
             accuracy_mode = extra_body.get("accuracy_mode", "speed")
+            file_id = extra_body.get("file_id")  # Worker에서 전달한 file_id
 
             # OCR 모델 결정
             if accuracy_mode == "speed":
@@ -2623,6 +2624,7 @@ class PrometheusRouter(CustomLLM):
                         prompt=text_prompt or "Extract all text from this image.",
                         accuracy_mode=accuracy_mode,
                         timeout=300.0,
+                        file_id=file_id,
                     )
 
                     # OCR 결과를 OpenAI 응답 형식으로 변환

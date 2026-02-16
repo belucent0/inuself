@@ -774,6 +774,7 @@ class AsyncGPUStreamClient:
         accuracy_mode: str = "speed",
         timeout: float = 300.0,
         on_processing_started: Optional[callable] = None,
+        file_id: str = None,
     ) -> dict:
         """OCR Vision 요청 (비동기).
 
@@ -784,6 +785,7 @@ class AsyncGPUStreamClient:
             accuracy_mode: 'speed' (FLM NPU) 또는 'accuracy' (GPU llama-ocr)
             timeout: 타임아웃 (초)
             on_processing_started: Provider가 처리 시작할 때 호출될 콜백
+            file_id: 파일 ID (Backend 상태 업데이트용)
 
         Returns:
             OCR 결과 {text, model, ...}
@@ -802,6 +804,8 @@ class AsyncGPUStreamClient:
             "accuracy_mode": accuracy_mode,
             "timestamp": str(time.time()),
         }
+        if file_id:
+            request_data["file_id"] = file_id
 
         # Service Graph용 CLIENT span 생성
         with self._create_client_span("ocr", MEDIA_STREAM):
