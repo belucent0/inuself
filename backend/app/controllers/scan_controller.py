@@ -10,6 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.auth import get_current_user_id
 from ..db.session import get_session
 from ..repositories.scan_repository import ScanRepository
 from ..schemas.wpi import (
@@ -40,12 +41,6 @@ async def get_scan_repository(
     session: AsyncSession = Depends(get_session),
 ) -> ScanRepository:
     return ScanRepository(session)
-
-
-# TODO: 실제 인증 구현 시 교체
-async def get_current_user_id() -> UUID:
-    """현재 사용자 ID 반환 (임시 구현)."""
-    return UUID("01234567-89ab-cdef-0123-456789abcdef")
 
 
 # === 범용 이력 API ===

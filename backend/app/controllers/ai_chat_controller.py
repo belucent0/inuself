@@ -214,6 +214,41 @@ def _build_agent_metadata(
     return metadata or None
 
 
+def _build_langfuse_trace_metadata(
+    *,
+    base_context: dict | None,
+    thread_id: str,
+    user_id: UUID,
+    mode: str | None,
+    route_name: str,
+    turn_index: int,
+    user_message_id: str | None = None,
+    assistant_message_id: str | None = None,
+) -> dict:
+    """Langfuse trace metadata를 구성합니다.
+
+    기존 context를 보존하면서, 대화/턴 연결에 필요한 식별자를 추가합니다.
+    """
+
+    metadata = dict(base_context) if isinstance(base_context, dict) else {}
+    metadata.update(
+        {
+            "thread_id": thread_id,
+            "user_id": str(user_id),
+            "mode_requested": _normalize_mode_name(mode),
+            "route_name": route_name,
+            "turn_index": max(1, int(turn_index)),
+        }
+    )
+
+    if user_message_id:
+        metadata["user_message_id"] = user_message_id
+    if assistant_message_id:
+        metadata["assistant_message_id"] = assistant_message_id
+
+    return metadata
+
+
 # === 백그라운드 AI 응답 생성 ===
 
 
@@ -251,6 +286,7 @@ async def generate_ai_response_background(
                 metadata=context,
                 enable_retry=True,
                 max_retries=3,
+                user_id=str(user_id),
             )
 
             response_content = result.get("response", "")
@@ -359,11 +395,21 @@ async def create_thread(
         thread = await svc.create_thread(user_id=user_id, metadata=agent_metadata)
 
         # 사용자 메시지 저장
-        await svc.add_message(
+        user_message = await svc.add_message(
             thread.thread_id,
             user_id=user_id,
             role="user",
             content=request.query,
+        )
+
+        trace_metadata = _build_langfuse_trace_metadata(
+            base_context=agent_metadata,
+            thread_id=thread.thread_id,
+            user_id=user_id,
+            mode=request.mode,
+            route_name="threads.create",
+            turn_index=1,
+            user_message_id=user_message.message_id,
         )
 
         # AI Agent 실행 (V8.4: 재시도 기능 활성화)
@@ -372,9 +418,10 @@ async def create_thread(
             query=request.query,
             thread_id=thread.thread_id,
             mode=request.mode,
-            metadata=agent_metadata,
+            metadata=trace_metadata,
             enable_retry=True,  # V8.4: 검색 재시도 활성화
             max_retries=3,
+            user_id=str(user_id),
         )
 
         # AI 응답 저장 (V8.4: 재시도 메타데이터 포함)
@@ -384,6 +431,9 @@ async def create_thread(
             role="assistant",
             content=result.get("response", ""),
             metadata={
+                "thread_id": thread.thread_id,
+                "turn_index": 1,
+                "user_message_id": user_message.message_id,
                 "mode": _normalize_mode_name(result.get("mode", "simple")),
                 "sources": result.get("sources", []),
                 "citations": result.get("citations", []),  # Phase 4
@@ -444,7 +494,7 @@ async def create_thread_stream(
     thread = await svc.create_thread(user_id=user_id, metadata=agent_metadata)
 
     # 사용자 메시지 저장 (완료 상태)
-    await svc.add_message(
+    user_message = await svc.add_message(
         thread.thread_id,
         user_id=user_id,
         role="user",
@@ -461,12 +511,23 @@ async def create_thread_stream(
         status="generating",
     )
 
+    trace_metadata = _build_langfuse_trace_metadata(
+        base_context=agent_metadata,
+        thread_id=thread.thread_id,
+        user_id=user_id,
+        mode=request.mode,
+        route_name="threads.create_stream",
+        turn_index=1,
+        user_message_id=user_message.message_id,
+        assistant_message_id=ai_message.message_id,
+    )
+
     # 클로저에서 사용할 변수 캡처
     captured_user_id = user_id
     captured_thread_id = thread.thread_id
     captured_query = request.query
     captured_mode = request.mode
-    captured_context = agent_metadata
+    captured_trace_metadata = trace_metadata
     captured_settings = settings
     captured_ai_message_id = ai_message.message_id
 
@@ -501,7 +562,7 @@ async def create_thread_stream(
                 query=captured_query,
                 thread_id=captured_thread_id,
                 mode=captured_mode,
-                metadata=captured_context,
+                metadata=captured_trace_metadata,
                 enable_retry=True,  # V8.4: 재시도 활성화
                 max_retries=3,
                 user_id=str(captured_user_id),
@@ -630,7 +691,10 @@ async def create_thread_stream(
                                 "search_quality_score": search_quality_score,
                                 "failed_queries": failed_queries,
                                 "retry_reason": retry_reason,
-                                "context": captured_context,
+                                "thread_id": captured_thread_id,
+                                "turn_index": 1,
+                                "user_message_id": user_message.message_id,
+                                "context": captured_trace_metadata,
                             },
                         )
                     response_completed["value"] = True
@@ -658,7 +722,7 @@ async def create_thread_stream(
                         user_id=captured_user_id,
                         query=captured_query,
                         mode=captured_mode,
-                        context=captured_context,
+                        context=captured_trace_metadata,
                         settings=captured_settings,
                         message_id=captured_ai_message_id,  # 기존 메시지 ID 전달
                     )
@@ -770,13 +834,28 @@ async def add_message(
     if not thread:
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
 
+    existing_user_turns = sum(
+        1 for message in thread.messages if message.role == "user"
+    )
+    current_turn_index = existing_user_turns + 1
+
     try:
         # 사용자 메시지 저장
-        await svc.add_message(
+        user_message = await svc.add_message(
             thread_id,
             user_id=user_id,
             role="user",
             content=request.query,
+        )
+
+        trace_metadata = _build_langfuse_trace_metadata(
+            base_context=agent_metadata,
+            thread_id=thread_id,
+            user_id=user_id,
+            mode=request.mode,
+            route_name="threads.add_message",
+            turn_index=current_turn_index,
+            user_message_id=user_message.message_id,
         )
 
         # AI Agent 실행
@@ -785,9 +864,10 @@ async def add_message(
             query=request.query,
             thread_id=thread_id,
             mode=request.mode,
-            metadata=agent_metadata,
+            metadata=trace_metadata,
             enable_retry=True,
             max_retries=3,
+            user_id=str(user_id),
         )
 
         # AI 응답 저장
@@ -797,6 +877,9 @@ async def add_message(
             role="assistant",
             content=result.get("response", ""),
             metadata={
+                "thread_id": thread_id,
+                "turn_index": current_turn_index,
+                "user_message_id": user_message.message_id,
                 "mode": _normalize_mode_name(result.get("mode", "simple")),
                 "sources": result.get("sources", []),
                 "citations": result.get("citations", []),
@@ -856,16 +939,35 @@ async def add_message_stream(
     if not thread:
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
 
+    existing_user_turns = sum(
+        1 for message in thread.messages if message.role == "user"
+    )
+    current_turn_index = max(1, existing_user_turns)
+    user_message_id: str | None = None
+
     # 사용자 메시지 저장 (skip_user_message가 False일 때만)
     # HomePage에서 이미 저장된 경우 skip_user_message=True로 중복 저장 방지
     if not request.skip_user_message:
-        await svc.add_message(
+        user_message = await svc.add_message(
             thread_id,
             user_id=user_id,
             role="user",
             content=request.query,
             status="completed",
         )
+        user_message_id = user_message.message_id
+        current_turn_index = existing_user_turns + 1
+    else:
+        last_user_message = next(
+            (
+                message
+                for message in reversed(thread.messages)
+                if message.role == "user"
+            ),
+            None,
+        )
+        if last_user_message:
+            user_message_id = last_user_message.message_id
 
     # V9.2: AI 응답 메시지를 "generating" 상태로 미리 생성
     ai_message = await svc.add_message(
@@ -876,12 +978,23 @@ async def add_message_stream(
         status="generating",
     )
 
+    trace_metadata = _build_langfuse_trace_metadata(
+        base_context=agent_metadata,
+        thread_id=thread_id,
+        user_id=user_id,
+        mode=request.mode,
+        route_name="threads.add_message_stream",
+        turn_index=current_turn_index,
+        user_message_id=user_message_id,
+        assistant_message_id=ai_message.message_id,
+    )
+
     # 클로저에서 사용할 변수 캡처
     captured_user_id = user_id
     captured_thread_id = thread_id
     captured_query = request.query
     captured_mode = request.mode
-    captured_context = agent_metadata
+    captured_trace_metadata = trace_metadata
     captured_settings = settings
     captured_ai_message_id = ai_message.message_id
 
@@ -915,7 +1028,7 @@ async def add_message_stream(
                 query=captured_query,
                 thread_id=captured_thread_id,
                 mode=captured_mode,
-                metadata=captured_context,
+                metadata=captured_trace_metadata,
                 enable_retry=True,
                 max_retries=3,
                 user_id=str(captured_user_id),
@@ -1036,7 +1149,10 @@ async def add_message_stream(
                                 "search_quality_score": search_quality_score,
                                 "failed_queries": failed_queries,
                                 "retry_reason": retry_reason,
-                                "context": captured_context,
+                                "thread_id": captured_thread_id,
+                                "turn_index": current_turn_index,
+                                "user_message_id": user_message_id,
+                                "context": captured_trace_metadata,
                             },
                         )
                     response_completed["value"] = True
@@ -1064,7 +1180,7 @@ async def add_message_stream(
                         user_id=captured_user_id,
                         query=captured_query,
                         mode=captured_mode,
-                        context=captured_context,
+                        context=captured_trace_metadata,
                         settings=captured_settings,
                         message_id=captured_ai_message_id,  # 기존 메시지 ID 전달
                     )

@@ -14,6 +14,8 @@ import { ChatInput, type AIMode, AI_MODE_CONFIG } from '@/features/chat'
 import { cn } from '@/shared/utils/cn'
 import { toast } from 'sonner'
 import { useChatStore } from '@/shared/stores/chatStore'
+import { httpClient } from '@/shared/services'
+import { getAccessToken } from '@/shared/services/authToken'
 
 const suggestedQueries = [
   { text: '최근 AI 기술 트렌드는?', mode: 'search' as AIMode },
@@ -35,9 +37,13 @@ export function HomePage() {
 
     try {
       // v1.0.0: POST로 스레드+메시지 먼저 생성
-      const response = await fetch('/api/threads/v2', {
+      const accessToken = getAccessToken()
+      const response = await fetch(`${httpClient.getBaseUrl()}/threads/v2`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
         body: JSON.stringify({ query: text, mode }),
       })
 

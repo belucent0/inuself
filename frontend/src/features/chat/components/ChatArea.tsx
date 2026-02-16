@@ -73,14 +73,6 @@ const MODEL_OPTIONS = [
   'codex-low',
 ] as const
 
-function normalizeMode(mode?: string): AIMode | undefined {
-  if (!mode) return undefined
-  if (mode in AI_MODE_CONFIG) {
-    return mode as AIMode
-  }
-  return undefined
-}
-
 // 출처 모달 컴포넌트
 function SourcesModal({ sources }: { sources: SearchSource[] }) {
   if (sources.length === 0) return null
@@ -184,7 +176,10 @@ function MessageItem({
   const sources = message.metadata?.sources || []
   const thinkingSteps = message.metadata?.thinking_steps || []
   const mode = message.metadata?.mode
-  const normalizedMode = normalizeMode(typeof mode === 'string' ? mode : undefined)
+  const normalizedMode =
+    typeof mode === 'string' && mode in AI_MODE_CONFIG
+      ? (mode as AIMode)
+      : undefined
   const modeLabel = normalizedMode ? AI_MODE_CONFIG[normalizedMode].label : mode
 
   // v1.0.0: AI 응답 대기/생성 중 상태 감지

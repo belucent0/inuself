@@ -5,6 +5,8 @@
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import {
   HomePage,
+  LoginPage,
+  SignupPage,
   ChatPage,
   ContentsPage,
   ContentDetailPage,
@@ -20,6 +22,14 @@ import {
 import { RootLayout } from '@/shared/components/layout'
 
 const router = createBrowserRouter([
+  {
+    path: '/login',
+    element: <LoginPage />,
+  },
+  {
+    path: '/signup',
+    element: <SignupPage />,
+  },
   {
     path: '/',
     element: <RootLayout />,

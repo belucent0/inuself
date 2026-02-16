@@ -2,21 +2,12 @@
  * RootLayout - 애플리케이션 루트 레이아웃
  */
 
-import { useEffect, useState } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
+import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { MoreVertical, Edit2, Trash2 } from 'lucide-react'
 
 import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/shared/components/ui/sidebar'
 import { Separator } from '@/shared/components/ui/separator'
 import { Button } from '@/shared/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/shared/components/ui/dialog'
-import { Input } from '@/shared/components/ui/input'
-import { Label } from '@/shared/components/ui/label'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,23 +16,9 @@ import {
 } from '@/shared/components/ui/dropdown-menu'
 import { AppSidebar } from './AppSidebar'
 import { ThreadTitleProvider, useThreadTitle } from '@/shared/contexts/ThreadTitleContext'
+import { useAuth } from '@/shared/contexts'
 import { getPageTitle } from '@/shared/config/navigation'
 import { cn } from '@/shared/utils/cn'
-
-const ADMIN_USERNAME = import.meta.env.VITE_ADMIN_USERNAME || 'admin'
-const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || 'admin123'
-
-const LEGACY_ADMIN_USERNAME = 'nature'
-const LEGACY_ADMIN_PASSWORD = 'nature'
-
-function isValidAdminCredential(username: string, password: string): boolean {
-  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-    return true
-  }
-
-  return username === LEGACY_ADMIN_USERNAME && password === LEGACY_ADMIN_PASSWORD
-}
-
 function DynamicHeader({ pathname }: { pathname: string | null }) {
   const { threadTitle, onEditTitle, onDeleteThread } = useThreadTitle()
   const isThreadPage = pathname?.startsWith('/chat/')
@@ -104,33 +81,10 @@ function AuthenticatedLayout() {
 }
 
 export function RootLayout() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [isChecking, setIsChecking] = useState(true)
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
+  const location = useLocation()
+  const { isAuthenticated, isLoading } = useAuth()
 
-  useEffect(() => {
-    const authFlag = localStorage.getItem('admin_auth')
-    if (authFlag === 'true') {
-      setIsAuthenticated(true)
-    }
-    setIsChecking(false)
-  }, [])
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-
-    if (isValidAdminCredential(username, password)) {
-      localStorage.setItem('admin_auth', 'true')
-      setIsAuthenticated(true)
-    } else {
-      setError('인증 실패')
-    }
-  }
-
-  if (isChecking) {
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <p className="text-muted-foreground">로딩 중...</p>
@@ -139,44 +93,7 @@ export function RootLayout() {
   }
 
   if (!isAuthenticated) {
-    return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-        <Dialog open={true}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>관리자 로그인</DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="username">계정</Label>
-                <Input
-                  id="username"
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                  autoFocus
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="password">비밀번호</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
-              </div>
-              {error && <p className="text-sm text-destructive">{error}</p>}
-              <Button type="submit" className="w-full">
-                로그인
-              </Button>
-            </form>
-          </DialogContent>
-        </Dialog>
-      </div>
-    )
+    return <Navigate to="/login" replace state={{ from: location }} />
   }
 
   return <AuthenticatedLayout />

@@ -1,16 +1,15 @@
 /**
  * HTTP Client - 공통 API 요청 처리
- *
- * SOLID 원칙:
- * - Single Responsibility: HTTP 요청/응답 처리만 담당
- * - Open/Closed: 새로운 HTTP 메서드 추가 시 확장 가능
- * - Dependency Inversion: 구체적인 fetch 대신 추상화된 인터페이스
  */
+
+import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from '../authToken'
 
 export interface RequestConfig {
   headers?: Record<string, string>
   timeout?: number
   signal?: AbortSignal
+  skipAuth?: boolean
+  retryOnAuthFailure?: boolean
 }
 
 export interface ApiError extends Error {
@@ -19,11 +18,21 @@ export interface ApiError extends Error {
   data?: unknown
 }
 
+interface RefreshResponse {
+  access_token: string
+  refresh_token: string
+}
+
 /**
  * 기본 API URL을 가져옵니다
  */
 export function getBaseUrl(): string {
   return import.meta.env.VITE_API_BASE_URL || '/api'
+}
+
+function resolveUrl(endpoint: string): string {
+  const baseUrl = getBaseUrl()
+  return endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`
 }
 
 /**
@@ -61,7 +70,6 @@ async function handleResponse<T>(response: Response): Promise<T> {
     )
   }
 
-  // 204 No Content 처리
   if (response.status === 204) {
     return undefined as T
   }
@@ -69,15 +77,78 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json()
 }
 
-/**
- * 기본 헤더를 생성합니다
- */
-function createHeaders(customHeaders?: Record<string, string>): Headers {
+async function refreshAccessToken(): Promise<boolean> {
+  const refreshToken = getRefreshToken()
+  if (!refreshToken) {
+    return false
+  }
+
+  const response = await fetch(resolveUrl('/auth/refresh'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  })
+
+  if (!response.ok) {
+    clearAuthTokens()
+    return false
+  }
+
+  const data = (await response.json()) as RefreshResponse
+  setAuthTokens({
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+  })
+
+  return true
+}
+
+function createHeaders(config?: RequestConfig): Headers {
   const headers = new Headers({
     'Content-Type': 'application/json',
-    ...customHeaders,
+    ...config?.headers,
   })
+
+  if (!config?.skipAuth) {
+    const accessToken = getAccessToken()
+    if (accessToken) {
+      headers.set('Authorization', `Bearer ${accessToken}`)
+    }
+  }
+
   return headers
+}
+
+async function request<T>(
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  endpoint: string,
+  data?: unknown,
+  config?: RequestConfig,
+  retried = false
+): Promise<T> {
+  const response = await fetch(resolveUrl(endpoint), {
+    method,
+    headers: createHeaders(config),
+    body: data ? JSON.stringify(data) : undefined,
+    signal: config?.signal,
+  })
+
+  const shouldRetry =
+    response.status === 401 &&
+    !retried &&
+    !config?.skipAuth &&
+    config?.retryOnAuthFailure !== false
+
+  if (shouldRetry) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) {
+      return request<T>(method, endpoint, data, config, true)
+    }
+  }
+
+  return handleResponse<T>(response)
 }
 
 /**
@@ -87,16 +158,7 @@ export async function get<T>(
   endpoint: string,
   config?: RequestConfig
 ): Promise<T> {
-  const baseUrl = getBaseUrl()
-  const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: createHeaders(config?.headers),
-    signal: config?.signal,
-  })
-
-  return handleResponse<T>(response)
+  return request<T>('GET', endpoint, undefined, config)
 }
 
 /**
@@ -107,17 +169,7 @@ export async function post<T>(
   data?: unknown,
   config?: RequestConfig
 ): Promise<T> {
-  const baseUrl = getBaseUrl()
-  const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: createHeaders(config?.headers),
-    body: data ? JSON.stringify(data) : undefined,
-    signal: config?.signal,
-  })
-
-  return handleResponse<T>(response)
+  return request<T>('POST', endpoint, data, config)
 }
 
 /**
@@ -128,17 +180,7 @@ export async function patch<T>(
   data?: unknown,
   config?: RequestConfig
 ): Promise<T> {
-  const baseUrl = getBaseUrl()
-  const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`
-
-  const response = await fetch(url, {
-    method: 'PATCH',
-    headers: createHeaders(config?.headers),
-    body: data ? JSON.stringify(data) : undefined,
-    signal: config?.signal,
-  })
-
-  return handleResponse<T>(response)
+  return request<T>('PATCH', endpoint, data, config)
 }
 
 /**
@@ -149,37 +191,31 @@ export async function del<T>(
   data?: unknown,
   config?: RequestConfig
 ): Promise<T> {
-  const baseUrl = getBaseUrl()
-  const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`
-
-  const response = await fetch(url, {
-    method: 'DELETE',
-    headers: createHeaders(config?.headers),
-    body: data ? JSON.stringify(data) : undefined,
-    signal: config?.signal,
-  })
-
-  return handleResponse<T>(response)
+  return request<T>('DELETE', endpoint, data, config)
 }
 
 /**
  * SSE 스트리밍 요청
- * @returns ReadableStream for SSE events
  */
 export async function postStream(
   endpoint: string,
   data?: unknown,
-  config?: RequestConfig
+  config?: RequestConfig,
+  retried = false
 ): Promise<ReadableStream<Uint8Array>> {
-  const baseUrl = getBaseUrl()
-  const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`
-
-  const response = await fetch(url, {
+  const response = await fetch(resolveUrl(endpoint), {
     method: 'POST',
-    headers: createHeaders(config?.headers),
+    headers: createHeaders(config),
     body: data ? JSON.stringify(data) : undefined,
     signal: config?.signal,
   })
+
+  if (response.status === 401 && !retried && !config?.skipAuth && config?.retryOnAuthFailure !== false) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) {
+      return postStream(endpoint, data, config, true)
+    }
+  }
 
   if (!response.ok) {
     let errorData: unknown
@@ -202,7 +238,6 @@ export async function postStream(
 
   return response.body
 }
-
 
 /**
  * HTTP Client 객체

@@ -399,13 +399,21 @@ async def run_ai_agent(
     # LLM Observability 콜백 핸들러 설정 (Langfuse)
     callbacks = []
 
+    trace_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    if thread_id and "thread_id" not in trace_metadata:
+        trace_metadata["thread_id"] = thread_id
+    if user_id and "user_id" not in trace_metadata:
+        trace_metadata["user_id"] = user_id
+    if mode and "mode_requested" not in trace_metadata:
+        trace_metadata["mode_requested"] = mode
+
     # Langfuse 핸들러
     langfuse_handler = get_langfuse_handler(
         user_id=user_id,
         session_id=thread_id,
         trace_name="ai-chat",
         tags=["ai-chat-mode", f"mode:{mode or 'auto'}"],
-        metadata=metadata,
+        metadata=trace_metadata,
     )
     if langfuse_handler:
         callbacks.append(langfuse_handler)
@@ -494,6 +502,14 @@ async def stream_ai_agent(
     try:
         from ..core.langfuse import get_langfuse_client, is_langfuse_enabled
 
+        trace_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        if thread_id and "thread_id" not in trace_metadata:
+            trace_metadata["thread_id"] = thread_id
+        if user_id and "user_id" not in trace_metadata:
+            trace_metadata["user_id"] = user_id
+        if mode and "mode_requested" not in trace_metadata:
+            trace_metadata["mode_requested"] = mode
+
         if is_langfuse_enabled():
             langfuse_client = get_langfuse_client()
             if langfuse_client:
@@ -503,7 +519,7 @@ async def stream_ai_agent(
                     session_id=thread_id,
                     input={"query": query, "mode": mode},
                     tags=["ai-chat-mode", "streaming", f"mode:{mode or 'auto'}"],
-                    metadata=metadata or {},
+                    metadata=trace_metadata,
                 )
                 logger.debug(
                     f"[Langfuse] Trace created: {langfuse_trace.id if langfuse_trace else 'none'}"
