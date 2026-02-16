@@ -9,7 +9,8 @@ WPI_REPORT_SYSTEM_PROMPT = """
 3) 낙인/단정 표현을 피하고, 관찰 기반 문장으로 작성합니다.
 4) 의료적 진단/치료 지시를 하지 않습니다.
 5) 점수, 축(gap), 프로파일 근거를 문장에 명시합니다.
-6) 최종 출력은 마크다운 본문만 반환합니다.
+6) routing/pair_gap_profile/selected_block_ids를 우선 근거로 사용합니다.
+7) 최종 출력은 마크다운 본문만 반환합니다.
 """.strip()
 
 
@@ -18,6 +19,12 @@ WPI_REPORT_USER_TEMPLATE = """
 
 ## 입력 데이터
 {context_json}
+
+## 해석 제약
+- routing.key와 routing.rule_id, pair_gap_profile.bucket을 종합 해석/주의 포인트/제안 섹션에 반영하세요.
+- pair_gap_block.summary_focus/caution_focus/action_focus를 대응 섹션에 반영하세요.
+- selected_block_ids에 포함된 블록 근거를 우선 사용하고, 근거 없는 일반론은 피하세요.
+- pair_gap_profile.gap 또는 gap_ratio를 최소 1회 이상 명시하세요.
 
 ## 작성 형식
 아래 섹션 순서를 유지하고 최소 분량 규칙을 지키세요.

@@ -76,5 +76,7 @@ router_settings:
 
 general_settings:
   master_key: "os.environ/LITELLM_API_KEY"
+  disable_auth: true
+  allow_requests_on_db_unavailable: true
   background_health_checks: False
   health_check_interval: 86400

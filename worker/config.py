@@ -3,7 +3,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -71,6 +71,13 @@ class WorkerSettings(BaseSettings):
     litellm_model: str = Field("tier-simple", validation_alias="LITELLM_MODEL")
     litellm_model_summarize: str = Field(
         "tier-simple", validation_alias="LITELLM_MODEL_SUMMARIZE"
+    )
+    wpi_report_litellm_model: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "LITELLM_MODEL_WPI_REPORT",
+            "WPI_REPORT_LITELLM_MODEL",
+        ),
     )
 
     # WPI AI 리포트 생성 전용 타임아웃/재시도 설정

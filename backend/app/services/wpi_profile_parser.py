@@ -77,8 +77,14 @@ class WpiAutoReport:
     strengths: str
     weaknesses: str
     personality_description: str
+    me_specific_analysis: str
+    me_common_analysis: str | None
     me_context_analysis: str
     full_text: str
+    default_block_id: str
+    specific_block_id: str
+    common_block_id: str | None
+    block_ids: tuple[str, ...]
 
 
 def _normalize_type(value: str) -> str:
@@ -144,18 +150,28 @@ def _load_default_profile(i_type: str) -> tuple[str, str, str, str]:
     return basic_need, strengths, weaknesses, personality_description
 
 
-def _load_me_context(i_type: str, me_type: str) -> str:
+def _load_me_context_parts(i_type: str, me_type: str) -> tuple[str, str | None]:
     specific_path = _profile_path(i_type, f"{me_type}.txt")
     if not specific_path.exists():
         raise FileNotFoundError(f"Missing combination profile: {specific_path}")
 
-    segments = [_read_text(specific_path)]
+    specific_text = _read_text(specific_path)
 
     common_path = WPI_REPORT_ROOT / "_common" / f"{me_type}_base.txt"
+    common_text: str | None = None
     if common_path.exists():
-        common_text = _read_text(common_path)
-        if common_text:
-            segments.append(common_text)
+        maybe_common_text = _read_text(common_path)
+        if maybe_common_text:
+            common_text = maybe_common_text
+
+    return specific_text, common_text
+
+
+def _load_me_context(i_type: str, me_type: str) -> str:
+    specific_text, common_text = _load_me_context_parts(i_type, me_type)
+    segments = [specific_text]
+    if common_text:
+        segments.append(common_text)
 
     return "\n\n".join(segment for segment in segments if segment)
 
@@ -203,8 +219,20 @@ def load_all_auto_reports() -> dict[tuple[str, str], WpiAutoReport]:
                 logger.warning(f"WPI profile file missing: {specific_path}")
                 continue
 
-            me_context = _load_me_context(i_type_key, me_type_key)
+            me_specific, me_common = _load_me_context_parts(i_type_key, me_type_key)
+            segments = [me_specific]
+            if me_common:
+                segments.append(me_common)
+            me_context = "\n\n".join(segment for segment in segments if segment)
+
             full_text = _load_full_text(i_type_key, me_type_key)
+            default_block_id = f"base:{i_type_key}:default"
+            specific_block_id = f"pair:{i_type_key}:{me_type_key}:specific"
+            common_block_id = f"common:{me_type_key}:base" if me_common else None
+
+            block_ids_list = [default_block_id, specific_block_id]
+            if common_block_id:
+                block_ids_list.append(common_block_id)
 
             reports[(i_type_key, me_type_key)] = WpiAutoReport(
                 i_type=i_type_key,
@@ -215,8 +243,14 @@ def load_all_auto_reports() -> dict[tuple[str, str], WpiAutoReport]:
                 strengths=strengths,
                 weaknesses=weaknesses,
                 personality_description=personality,
+                me_specific_analysis=me_specific,
+                me_common_analysis=me_common,
                 me_context_analysis=me_context,
                 full_text=full_text,
+                default_block_id=default_block_id,
+                specific_block_id=specific_block_id,
+                common_block_id=common_block_id,
+                block_ids=tuple(block_ids_list),
             )
 
     if len(reports) < 25:

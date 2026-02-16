@@ -45,7 +45,7 @@ SECTION_SPECS: tuple[SectionSpec, ...] = (
         min_chars=360,
         min_bullets=0,
         format_hint="2~3개 문단으로 작성",
-        focus_hint="우세형/보조형, gap_highlights, score_insights를 함께 해석",
+        focus_hint="우세형/보조형, gap_highlights, pair_gap_profile, score_insights를 함께 해석",
     ),
     SectionSpec(
         id="strengths",
@@ -61,7 +61,7 @@ SECTION_SPECS: tuple[SectionSpec, ...] = (
         min_chars=320,
         min_bullets=4,
         format_hint="'- ' 불릿 4개 이상",
-        focus_hint="gap이 큰 축, 약한 유형, 과잉 적응 리스크를 구체적으로 서술",
+        focus_hint="pair_gap_profile bucket과 gap이 큰 축, 약한 유형, 과잉 적응 리스크를 구체적으로 서술",
     ),
     SectionSpec(
         id="actions",
@@ -162,6 +162,12 @@ class WpiReportGraphExecutor:
         self.max_retries = max_retries
         self.graph = self._build_graph()
 
+    def _wpi_model_name(self) -> str:
+        return (
+            self.settings.wpi_report_litellm_model
+            or self.settings.litellm_model_summarize
+        )
+
     async def execute(self, context: dict[str, Any]) -> str:
         initial_state: WpiReportState = {
             "context": context,
@@ -241,8 +247,12 @@ class WpiReportGraphExecutor:
                 "me_test": me_margin,
             },
             "gap_highlights": _extract_gap_highlights(context.get("gap_analysis", {})),
+            "pair_gap_profile": context.get("pair_gap_profile"),
+            "pair_gap_block": context.get("pair_gap_block"),
+            "routing": context.get("routing"),
             "auto_profile": context.get("auto_profile"),
             "secondary_profiles": context.get("secondary_profiles", []),
+            "selected_block_ids": context.get("selected_block_ids", []),
         }
 
     def _plan_node(self, state: WpiReportState) -> WpiReportState:
@@ -314,7 +324,7 @@ class WpiReportGraphExecutor:
             request_litellm_completion,
             settings=self.settings,
             messages=messages,
-            model=self.settings.litellm_model_summarize,
+            model=self._wpi_model_name(),
             request_timeout_seconds=self.settings.wpi_report_llm_request_timeout_seconds,
             max_retry_time=self.settings.wpi_report_llm_busy_max_seconds,
             retry_interval=self.settings.wpi_report_llm_retry_interval_seconds,

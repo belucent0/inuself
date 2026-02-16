@@ -54,6 +54,60 @@ class WpiService:
     AI_REPORT_STATUS_VALUES = {"idle", "queued", "processing", "completed", "failed"}
     AI_REPORT_PENDING_STATUSES = {"queued", "processing"}
     AI_REPORT_STALE_SECONDS = 15 * 60
+    PAIR_ME_BY_I = {
+        str(i_type): str(me_type) for i_type, me_type in GAP_AXIS_MAP.values()
+    }
+    PAIR_AXIS_BY_I = {
+        str(i_type): str(axis_name)
+        for axis_name, (i_type, _me_type) in GAP_AXIS_MAP.items()
+    }
+    PAIR_GAP_BLOCK_LIBRARY = {
+        "very_me_dominant": {
+            "summary_focus": "외적 표현/기대가 자기 인식보다 앞서며 내적 피로가 누적될 수 있는 구간",
+            "caution_focus": "관계/성과를 맞추려는 과정에서 자기 기준이 약화되지 않도록 점검",
+            "action_focus": [
+                "하루 1회 자기 기준 확인 질문을 작성",
+                "요청 수락 전 우선순위 기준 3개를 확인",
+                "타인 반응과 별개로 자기 만족 지표를 기록",
+            ],
+        },
+        "me_dominant": {
+            "summary_focus": "외적 조율이 자기 인식보다 조금 앞서는 구간",
+            "caution_focus": "설명 없이 맞추는 패턴이 반복되면 피로와 오해가 누적될 수 있음",
+            "action_focus": [
+                "회의 전 기대 결과를 문장으로 먼저 정리",
+                "요청 수락 시 범위/기한을 명시",
+                "하루 종료 시 자기 관점 회고 3줄 작성",
+            ],
+        },
+        "balanced": {
+            "summary_focus": "자기 인식과 사회적 표현이 비교적 정렬된 구간",
+            "caution_focus": "정렬 상태를 유지하기 위해 우선순위와 경계 조건을 명확히 유지",
+            "action_focus": [
+                "주간 목표를 자기/협업 지표로 분리 관리",
+                "갈등 상황에서 사실-감정-요청 순으로 정리",
+                "좋았던 조율 사례를 재사용 템플릿으로 기록",
+            ],
+        },
+        "i_dominant": {
+            "summary_focus": "자기 인식이 사회적 표현보다 앞서는 구간",
+            "caution_focus": "의도는 분명하지만 전달 부족으로 오해가 생기기 쉬움",
+            "action_focus": [
+                "결론 전달 전 배경/의도 2문장 추가",
+                "피드백 요청 문장을 명시적으로 포함",
+                "결정 후 이해 확인 질문 1개를 남김",
+            ],
+        },
+        "very_i_dominant": {
+            "summary_focus": "자기 인식 우세가 매우 큰 구간으로 단독 판단으로 보일 위험이 큼",
+            "caution_focus": "빠른 실행이 강점이지만 맥락 공유 누락 시 협업 저항이 커질 수 있음",
+            "action_focus": [
+                "중요 의사결정에 사전 공유 단계 추가",
+                "핵심 근거 3개를 시각적으로 정리해 전달",
+                "결정 후 반대 관점 1개를 검토하는 루틴 운영",
+            ],
+        },
+    }
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -206,6 +260,9 @@ class WpiService:
         if auto_report is None:
             return None
 
+        raw_block_ids = getattr(auto_report, "block_ids", ())
+        block_ids = [str(block_id) for block_id in raw_block_ids if block_id]
+
         return {
             "i_type_kr": auto_report.i_type_kr,
             "me_type_kr": auto_report.me_type_kr,
@@ -213,7 +270,13 @@ class WpiService:
             "strengths": auto_report.strengths,
             "weaknesses": auto_report.weaknesses,
             "personality_description": auto_report.personality_description,
+            "me_specific_analysis": getattr(auto_report, "me_specific_analysis", None),
+            "me_common_analysis": getattr(auto_report, "me_common_analysis", None),
             "me_context_analysis": auto_report.me_context_analysis,
+            "default_block_id": getattr(auto_report, "default_block_id", None),
+            "specific_block_id": getattr(auto_report, "specific_block_id", None),
+            "common_block_id": getattr(auto_report, "common_block_id", None),
+            "block_ids": block_ids,
         }
 
     def _sort_scores(
@@ -263,6 +326,114 @@ class WpiService:
 
         highlights.sort(key=lambda item: item["abs_gap"], reverse=True)
         return highlights[:top_k]
+
+    def _bucketize_pair_gap_ratio(self, pair_gap_ratio: float) -> str:
+        if pair_gap_ratio <= -0.35:
+            return "very_me_dominant"
+        if pair_gap_ratio <= -0.15:
+            return "me_dominant"
+        if pair_gap_ratio < 0.15:
+            return "balanced"
+        if pair_gap_ratio < 0.35:
+            return "i_dominant"
+        return "very_i_dominant"
+
+    def _build_pair_gap_profile(
+        self,
+        i_dom: str | None,
+        i_scores: dict[str, float],
+        me_scores: dict[str, float],
+    ) -> dict[str, Any] | None:
+        if not i_dom:
+            return None
+
+        pair_me_type = self.PAIR_ME_BY_I.get(str(i_dom))
+        if not pair_me_type:
+            return None
+
+        i_dom_score = float(i_scores.get(str(i_dom), 0.0))
+        me_pair_score = float(me_scores.get(pair_me_type, 0.0))
+        pair_gap = i_dom_score - me_pair_score
+        pair_total = i_dom_score + me_pair_score
+        pair_gap_ratio = pair_gap / pair_total if pair_total > 0 else 0.0
+        bucket = self._bucketize_pair_gap_ratio(pair_gap_ratio)
+
+        direction = "balanced"
+        if pair_gap > 0:
+            direction = "i_test_dominant"
+        elif pair_gap < 0:
+            direction = "me_test_dominant"
+
+        confidence = "low" if pair_total < 8.0 else "normal"
+
+        return {
+            "axis": self.PAIR_AXIS_BY_I.get(str(i_dom)),
+            "i_type": str(i_dom),
+            "me_type": pair_me_type,
+            "i_score": i_dom_score,
+            "me_score": me_pair_score,
+            "gap": pair_gap,
+            "pair_total": pair_total,
+            "gap_ratio": pair_gap_ratio,
+            "bucket": bucket,
+            "direction": direction,
+            "confidence": confidence,
+        }
+
+    def _build_routing_key(self, i_dom: str, me_dom: str, bucket: str) -> str:
+        return f"rk_v1:{i_dom}:{me_dom}:{bucket}"
+
+    def _to_type_code(self, value: str) -> str:
+        normalized = value.strip().lower()
+        return normalized[:3] if normalized else "unk"
+
+    def _build_routing_rule_id(self, i_dom: str, me_dom: str, bucket: str) -> str:
+        return f"R1-{self._to_type_code(i_dom)}-{self._to_type_code(me_dom)}-{bucket}"
+
+    def _build_pair_gap_block(self, pair_gap_bucket: str) -> dict[str, Any]:
+        payload = self.PAIR_GAP_BLOCK_LIBRARY.get(
+            pair_gap_bucket,
+            self.PAIR_GAP_BLOCK_LIBRARY["balanced"],
+        )
+        return {
+            "block_id": f"gap:{pair_gap_bucket}",
+            "bucket": pair_gap_bucket,
+            **payload,
+        }
+
+    def _collect_selected_block_ids(
+        self,
+        primary_profile: dict[str, Any] | None,
+        secondary_profiles: list[dict[str, Any]],
+        pair_gap_bucket: str,
+    ) -> list[str]:
+        block_ids: list[str] = []
+
+        if isinstance(primary_profile, dict):
+            raw_block_ids = primary_profile.get("block_ids")
+            if isinstance(raw_block_ids, list):
+                block_ids.extend(str(item) for item in raw_block_ids if item)
+
+        for secondary in secondary_profiles:
+            profile = secondary.get("profile")
+            if not isinstance(profile, dict):
+                continue
+            raw_block_ids = profile.get("block_ids")
+            if not isinstance(raw_block_ids, list):
+                continue
+            block_ids.extend(str(item) for item in raw_block_ids if item)
+
+        block_ids.append(f"gap:{pair_gap_bucket}")
+
+        # 순서 보존 dedupe
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for block_id in block_ids:
+            if block_id in seen:
+                continue
+            seen.add(block_id)
+            deduped.append(block_id)
+        return deduped
 
     def _read_ai_report_state(self, data: dict[str, Any]) -> dict[str, Any]:
         payload = data.get("ai_report") if isinstance(data, dict) else None
@@ -436,6 +607,7 @@ class WpiService:
             )
 
         primary_auto_report = get_auto_report(str(i_type), str(me_type))
+        primary_serialized_profile = self._serialize_auto_profile(primary_auto_report)
 
         secondary_profiles: list[dict[str, Any]] = []
         candidate_pairs: list[tuple[str | None, str | None]] = [
@@ -467,6 +639,29 @@ class WpiService:
             )
 
         gap_analysis = enriched_data.get("gap_analysis", {})
+        pair_gap_profile = self._build_pair_gap_profile(
+            str(i_type), i_scores, me_scores
+        )
+        pair_gap_bucket = "balanced"
+        if isinstance(pair_gap_profile, dict):
+            pair_gap_bucket = str(pair_gap_profile.get("bucket", "balanced"))
+
+        routing_key = self._build_routing_key(
+            str(i_type),
+            str(me_type),
+            pair_gap_bucket,
+        )
+        routing_rule_id = self._build_routing_rule_id(
+            str(i_type),
+            str(me_type),
+            pair_gap_bucket,
+        )
+        pair_gap_block = self._build_pair_gap_block(pair_gap_bucket)
+        selected_block_ids = self._collect_selected_block_ids(
+            primary_profile=primary_serialized_profile,
+            secondary_profiles=secondary_profiles,
+            pair_gap_bucket=pair_gap_bucket,
+        )
 
         context = {
             "i_test": {
@@ -481,6 +676,7 @@ class WpiService:
             },
             "gap_analysis": gap_analysis,
             "gap_highlights": self._extract_gap_highlights(gap_analysis),
+            "pair_gap_profile": pair_gap_profile,
             "score_insights": {
                 "dominant_margin": {
                     "i_test": dominant_i_margin,
@@ -491,8 +687,16 @@ class WpiService:
                     "me_test": secondary_me_type,
                 },
             },
-            "auto_profile": self._serialize_auto_profile(primary_auto_report),
+            "routing": {
+                "version": "v1",
+                "key": routing_key,
+                "rule_id": routing_rule_id,
+                "pair_gap_bucket": pair_gap_bucket,
+            },
+            "pair_gap_block": pair_gap_block,
+            "auto_profile": primary_serialized_profile,
             "secondary_profiles": secondary_profiles,
+            "selected_block_ids": selected_block_ids,
         }
 
         user_prompt = WPI_REPORT_USER_TEMPLATE.format(
