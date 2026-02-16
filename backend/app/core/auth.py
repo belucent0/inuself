@@ -109,6 +109,9 @@ async def _get_user_token_version(user_id: str) -> int:
     value = await redis.get(f"{USER_TOKEN_VERSION_PREFIX}{user_id}")
     if value is None:
         return 0
+    # Decode bytes to string if needed
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -225,6 +228,10 @@ async def rotate_refresh_token(refresh_token: str) -> dict[str, Any]:
             detail="유효하지 않은 리프레시 토큰입니다.",
         )
 
+    # Decode bytes to string if needed
+    if isinstance(refresh_record_raw, bytes):
+        refresh_record_raw = refresh_record_raw.decode('utf-8')
+
     try:
         refresh_record = json.loads(refresh_record_raw)
     except json.JSONDecodeError as exc:
@@ -235,6 +242,9 @@ async def rotate_refresh_token(refresh_token: str) -> dict[str, Any]:
 
     family_current_key = f"{REFRESH_FAMILY_KEY_PREFIX}{family_id}"
     current_jti = await redis.get(family_current_key)
+    # Decode bytes to string if needed
+    if isinstance(current_jti, bytes):
+        current_jti = current_jti.decode('utf-8')
     if current_jti != refresh_jti or refresh_record.get("status") != "active":
         refresh_ttl = await redis.ttl(record_key)
         if refresh_ttl > 0:
@@ -288,6 +298,10 @@ async def validate_access_token(access_token: str) -> dict[str, Any]:
     user_id = str(payload["sub"])
 
     exists_user_id = await redis.get(f"{ACCESS_KEY_PREFIX}{access_jti}")
+    # Decode bytes to string if needed
+    if isinstance(exists_user_id, bytes):
+        exists_user_id = exists_user_id.decode('utf-8')
+
     if exists_user_id != user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
