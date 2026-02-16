@@ -110,6 +110,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - TASK_QUEUE_TYPE=celery
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
       - REDIS_URL=redis://asr-valkey:6379/0
