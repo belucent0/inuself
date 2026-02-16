@@ -115,6 +115,7 @@ infra/provider_manager/_legacy/
 test_*.py
 debug_*.py
 backups/
+!backend/tests/services/test_wpi_routing.py
 
 #docs
 docs/recab/*
