@@ -15,13 +15,41 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/shared/components/ui/select"
-import { useScanHistory, useScanDetail, WpiResultChart } from "@/features/scan"
-import type { WpiData, WpiITestScores, WpiMeTestScores } from "@/features/scan"
+import { useScanHistory, useScanDetail, useWpiAiReport, WpiResultChart } from "@/features/scan"
+import { MarkdownContent } from "@/features/chat/components/MarkdownContent"
+import type {
+  WpiAiReportStatus,
+  WpiData,
+  WpiITestScores,
+  WpiMeTestScores,
+} from "@/features/scan"
 import { formatToKST } from "@/shared/utils/cn"
 import { getScanTypeDisplayName } from "@/shared/config"
-import { ArrowLeft, History, ChevronLeft, ChevronRight } from "lucide-react"
+import {
+  ArrowLeft,
+  History,
+  ChevronLeft,
+  ChevronRight,
+  Sparkles,
+  Loader2,
+  RotateCcw,
+} from "lucide-react"
 
 const PAGE_SIZE = 10
+
+const WPI_AI_REPORT_STATUS_LABEL: Record<WpiAiReportStatus, string> = {
+  idle: "대기",
+  queued: "큐 대기",
+  processing: "생성 중",
+  completed: "완료",
+  failed: "실패",
+}
+
+function getAiReportStatusVariant(status: WpiAiReportStatus): "default" | "secondary" | "destructive" {
+  if (status === "completed") return "default"
+  if (status === "failed") return "destructive"
+  return "secondary"
+}
 
 export function ScanHistoryPage() {
   const [scanType, setScanType] = useState<string | undefined>(undefined)
@@ -180,6 +208,13 @@ export function ScanHistoryPage() {
 export function ScanDetailPage() {
   const { resultId } = useParams<{ resultId: string }>()
   const { detail, loading, error } = useScanDetail(resultId || null)
+  const {
+    aiReport,
+    loading: aiReportLoading,
+    generating: aiReportGenerating,
+    error: aiReportError,
+    enqueueAiReport,
+  } = useWpiAiReport(detail?.scan_type === "wpi" ? detail.id : null)
 
   if (loading) {
     return (
@@ -210,6 +245,11 @@ export function ScanDetailPage() {
   // WPI 검사인 경우
   if (detail.scan_type === "wpi") {
     const data = detail.data as WpiData
+    const aiReportStatus: WpiAiReportStatus = aiReport?.status ?? "idle"
+    const isAiReportRunning = aiReportStatus === "queued" || aiReportStatus === "processing"
+    const canGenerateAiReport = detail.completed && !isAiReportRunning
+    const aiReportButtonLabel =
+      aiReportStatus === "completed" ? "AI 리포트 다시 생성" : "AI 리포트 생성"
 
     return (
       <div className="container mx-auto py-4 px-2 md:px-4 md:py-6 space-y-4 md:space-y-6 max-w-4xl">
@@ -255,6 +295,68 @@ export function ScanDetailPage() {
             </CardContent>
           </Card>
         )}
+
+        {/* AI 리포트 */}
+        <Card>
+          <CardHeader className="px-3 md:px-6 py-3 md:py-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-amber-500" />
+                <CardTitle className="text-base md:text-lg">AI 리포트</CardTitle>
+                <Badge variant={getAiReportStatusVariant(aiReportStatus)}>
+                  {WPI_AI_REPORT_STATUS_LABEL[aiReportStatus]}
+                </Badge>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => void enqueueAiReport(aiReportStatus === "completed")}
+                disabled={!canGenerateAiReport || aiReportGenerating}
+              >
+                {aiReportGenerating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    요청 중...
+                  </>
+                ) : aiReportStatus === "completed" ? (
+                  <>
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    {aiReportButtonLabel}
+                  </>
+                ) : (
+                  aiReportButtonLabel
+                )}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="px-3 md:px-6 py-2 md:py-4">
+            {!detail.completed ? (
+              <p className="text-sm text-muted-foreground">
+                검사 완료 후 AI 리포트를 생성할 수 있습니다.
+              </p>
+            ) : aiReportLoading && !aiReport ? (
+              <Skeleton className="h-24 w-full" />
+            ) : aiReportError ? (
+              <p className="text-sm text-red-500">{aiReportError.message}</p>
+            ) : isAiReportRunning ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                AI 리포트 생성 중입니다. 잠시만 기다려주세요.
+              </div>
+            ) : aiReportStatus === "failed" ? (
+              <p className="text-sm text-red-500">
+                {aiReport?.error || "AI 리포트 생성에 실패했습니다. 다시 시도해주세요."}
+              </p>
+            ) : aiReportStatus === "completed" && aiReport?.report_md ? (
+              <div className="rounded-lg border bg-muted/20 p-3 md:p-4">
+                <MarkdownContent content={aiReport.report_md} className="text-sm" />
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                아직 생성된 AI 리포트가 없습니다. 버튼을 눌러 생성하세요.
+              </p>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Gap 분석 */}
         {data.gap_analysis && (

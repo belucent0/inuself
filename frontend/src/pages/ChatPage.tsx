@@ -13,8 +13,10 @@ import { useThread } from '@/shared/hooks/useThreads'
 import { useChatStore } from '@/shared/stores/chatStore'
 import { useThreadTitle } from '@/shared/contexts/ThreadTitleContext'
 import { threadsApi } from '@/shared/services'
+import { httpClient } from '@/shared/services'
 import { ChatArea } from '@/features/chat/components/ChatArea'
 import { toast } from 'sonner'
+import { getAccessToken } from '@/shared/services/authToken'
 
 // v1.0.0: 메시지 상태 타입
 type MessageStatus = 'queued' | 'analyzing' | 'searching' | 'thinking' | 'generating' | 'completed' | 'failed'
@@ -151,9 +153,11 @@ export function ChatPage() {
     console.log('[ChatPage v1.0.0] Connecting SSE:', { threadId, messageId })
 
     // SSE 연결
-    const eventSource = new EventSource(
-      `/api/threads/${threadId}/messages/${messageId}/stream`
-    )
+    const accessToken = getAccessToken()
+    const streamUrl = `${httpClient.getBaseUrl()}/threads/${threadId}/messages/${messageId}/stream${
+      accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : ''
+    }`
+    const eventSource = new EventSource(streamUrl)
     eventSourceRef.current = eventSource
 
     // 스트리밍 모드 시작 (UI 상태 업데이트)
@@ -313,12 +317,12 @@ export function ChatPage() {
   // ============================================================
   // 이벤트 핸들러
   // ============================================================
-  const handleSendMessage = async (content: string, msgMode?: string) => {
-    await sendMessage(content, msgMode || mode)
+  const handleSendMessage = async (content: string, msgMode?: string, model?: string) => {
+    await sendMessage(content, msgMode || mode, model)
   }
 
-  const handleRegenerate = async () => {
-    await regenerate(mode)
+  const handleRegenerate = async (regenMode?: string, model?: string) => {
+    await regenerate(regenMode || mode, model)
   }
 
   // ============================================================

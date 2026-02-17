@@ -226,6 +226,41 @@ class StreamProcessor:
         await self.redis.xadd(settings.response_stream, response)
         logger.error(f"Published error for request_id={request_id}: {error}")
 
+    async def publish_processing_started(self, request_id: str, task_type: str, file_id: str = None):
+        """작업 처리 시작 이벤트를 Response Stream에 발행.
+
+        Provider가 실제로 GPU/NPU 서버에 요청을 보내기 직전에 호출되어
+        Worker/Backend가 '인식 중' 상태로 변경할 수 있도록 합니다.
+
+        Args:
+            request_id: 요청 ID
+            task_type: 작업 타입 (ocr, transcription, llm_completion 등)
+            file_id: 파일 ID (선택적, Backend 상태 업데이트용)
+        """
+        response = {
+            "request_id": request_id,
+            "event": "processing_started",
+            "task_type": task_type,
+            "timestamp": time.time(),
+        }
+        if file_id:
+            response["file_id"] = file_id
+
+        # GPU Stream 응답 (LiteLLM/Worker용)
+        await self.redis.xadd(settings.response_stream, response)
+
+        # Worker Results Stream에도 발행 (Backend용)
+        if file_id:
+            worker_event = {
+                "type": task_type,
+                "event": "processing_started",
+                "file_id": file_id,
+                "timestamp": time.time(),
+            }
+            await self.redis.xadd(settings.worker_result_stream, {"data": json.dumps(worker_event)})
+
+        logger.info(f"Published processing_started event for request_id={request_id}, task_type={task_type}, file_id={file_id}")
+
     # ==========================================
     # Control API Methods
     # ==========================================
@@ -592,8 +627,9 @@ class StreamProcessor:
         file_content_b64 = data.get("file_content")
         model = data.get("model", "whisper-turbo")
         language = data.get("language")
+        file_id = data.get("file_id")  # Worker에서 전달한 file_id
 
-        logger.info(f"[{request_id}] Starting transcription (model={model})...")
+        logger.info(f"[{request_id}] Starting transcription (model={model}, file_id={file_id})...")
 
         # On-Demand: 모델에 따라 해당 서버 준비
         if model in ("whisper-large-v3", "whisper", "openai/whisper-large-v3"):
@@ -627,6 +663,9 @@ class StreamProcessor:
                 url = f"{settings.whisper_cpp_url}/v1/audio/transcriptions"
                 actual_model = "whisper-turbo"
                 provider_name = "whisper-server"
+
+            # Provider가 실제 작업을 시작하기 직전에 이벤트 발행
+            await self.publish_processing_started(request_id, "transcription", file_id)
 
             file_bytes = base64.b64decode(file_content_b64)
 
@@ -944,9 +983,10 @@ class StreamProcessor:
         model = data.get("model", "qwen3vl-4b")
         prompt = data.get("prompt", "Extract all text from this image.")
         accuracy_mode = data.get("accuracy_mode", "speed")
+        file_id = data.get("file_id")  # Worker에서 전달한 file_id
 
         logger.info(
-            f"[{request_id}] Starting OCR (model={model}, mode={accuracy_mode})..."
+            f"[{request_id}] Starting OCR (model={model}, mode={accuracy_mode}, file_id={file_id})..."
         )
 
         use_npu = accuracy_mode == "speed"
@@ -973,6 +1013,9 @@ class StreamProcessor:
                 ocr_model = model if model != "qwen3vl-4b" else "qwen3-vl"
                 provider_name = "llama-ocr-server"
 
+            # Provider가 실제 작업을 시작하기 직전에 이벤트 발행
+            await self.publish_processing_started(request_id, "ocr", file_id)
+
             payload = {
                 "model": ocr_model,
                 "messages": [
@@ -989,7 +1032,7 @@ class StreamProcessor:
                         ],
                     }
                 ],
-                "max_tokens": 4096,
+                "max_tokens": 8192,
                 "temperature": 0.1,
             }
 

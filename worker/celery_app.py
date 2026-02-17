@@ -1,6 +1,8 @@
 """Celery 애플리케이션 설정."""
+
 import os
 import logging
+
 
 # ==========================================
 # OpenTelemetry 초기화 (다른 import 전에 실행)
@@ -10,10 +12,14 @@ def _early_telemetry_init():
     """모듈 로드 시점에 telemetry 초기화 (instrumentor 사전 적용)."""
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
         HTTPXClientInstrumentor().instrument()
         logging.getLogger(__name__).info("[Telemetry] HTTPX instrumented (early init)")
     except Exception as e:
-        logging.getLogger(__name__).debug(f"[Telemetry] Early HTTPX instrument failed: {e}")
+        logging.getLogger(__name__).debug(
+            f"[Telemetry] Early HTTPX instrument failed: {e}"
+        )
+
 
 # 다른 모듈 import 전에 httpx instrumentor 적용
 _early_telemetry_init()
@@ -69,7 +75,6 @@ celery_app.conf.update(
     },
     task_default_queue="asr",
     task_create_missing_queues=True,
-
     # Celery Beat 스케줄
     # V6.5: cleanup-stale-resources 제거됨 (리소스 게이트 제거)
     beat_schedule={
@@ -119,23 +124,25 @@ def configure_worker_logging(**kwargs):
 def configure_worker_telemetry(**kwargs):
     """워커 프로세스가 시작될 때 OpenTelemetry 초기화."""
     from .telemetry import setup_worker_telemetry
+
     setup_worker_telemetry(service_name="asr-worker")
 
 
 # V6.5: 리소스 게이트 제거됨 - LiteLLM Custom Handler가 직접 라우팅 및 메모리 관리
 # 태스크 실패/취소 시 로깅만 수행
 
+
 @task_failure.connect
 def log_task_failure(sender, task_id, exception, traceback, **kwargs):
     """Task 실패 시 로깅."""
     task_name = sender.name
-    logging.error(
-        f"[Task Failed] {task_name} (task_id={task_id}): {exception}"
-    )
+    logging.error(f"[Task Failed] {task_name} (task_id={task_id}): {exception}")
 
 
 @task_revoked.connect
-def log_task_revoked(sender, request=None, terminated=None, signum=None, expired=None, **kwargs):
+def log_task_revoked(
+    sender, request=None, terminated=None, signum=None, expired=None, **kwargs
+):
     """Task 강제 종료 시 로깅."""
     task_name = sender.name if sender else "unknown"
     task_id = request.id if request else kwargs.get("task_id", "unknown")

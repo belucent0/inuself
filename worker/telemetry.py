@@ -16,6 +16,7 @@ Celery 태스크 추적 및 LiteLLM/GPU 호출 추적을 위한 모듈.
             span.set_attribute("custom", "value")
             ...
 """
+
 import os
 import functools
 import time
@@ -38,6 +39,7 @@ from .logging_config import logger
 # OpenLLMetry (LLM Observability)
 # ============================================
 
+
 def _init_openllmetry(service_name: str) -> bool:
     """OpenLLMetry 초기화 (LLM 호출 자동 계측).
 
@@ -58,6 +60,8 @@ def _init_openllmetry(service_name: str) -> bool:
 
         # Traceloop이 기존 OTEL exporter를 사용하도록 환경변수 설정
         os.environ.setdefault("TRACELOOP_BASE_URL", endpoint)
+        # Tempo는 OTLP metrics endpoint를 제공하지 않으므로 Traceloop metrics 비활성화
+        os.environ.setdefault("TRACELOOP_METRICS_ENABLED", "false")
 
         # 기존 TracerProvider 사용 (Tempo로 전송)
         Traceloop.init(
@@ -79,46 +83,53 @@ def _init_openllmetry(service_name: str) -> bool:
 # ============================================
 
 EXCLUDED_PATHS = frozenset({"/health", "/ready", "/metrics", "/healthz", "/liveliness"})
-EXCLUDED_REDIS_COMMANDS = frozenset({
-    "PING", "INFO", "CONFIG", "CLIENT", "CLUSTER",
-    "XREAD", "XREADGROUP",
-})
+EXCLUDED_REDIS_COMMANDS = frozenset(
+    {
+        "PING",
+        "INFO",
+        "CONFIG",
+        "CLIENT",
+        "CLUSTER",
+        "XREAD",
+        "XREADGROUP",
+    }
+)
 
 
 class FilteringSpanProcessor(SpanProcessor):
     """헬스체크 및 노이즈 span 필터링."""
-    
+
     def __init__(self, next_processor: SpanProcessor):
         self._next = next_processor
-    
+
     def on_start(self, span, parent_context=None):
         self._next.on_start(span, parent_context)
-    
+
     def on_end(self, span):
         if span.status.status_code == StatusCode.ERROR:
             self._next.on_end(span)
             return
-        
+
         # span 이름에서도 경로 체크
         span_name = span.name or ""
         http_target = span.attributes.get("http.target", "")
         http_url = span.attributes.get("http.url", "")
-        
+
         for path in EXCLUDED_PATHS:
             if path in span_name or path in http_target or path in http_url:
                 return
-        
+
         db_statement = span.attributes.get("db.statement", "")
         if db_statement:
             cmd = db_statement.split()[0].upper() if db_statement.split() else ""
             if cmd in EXCLUDED_REDIS_COMMANDS:
                 return
-        
+
         self._next.on_end(span)
-    
+
     def shutdown(self):
         self._next.shutdown()
-    
+
     def force_flush(self, timeout_millis=30000):
         return self._next.force_flush(timeout_millis)
 
@@ -145,24 +156,30 @@ def setup_worker_telemetry(service_name: str = None) -> None:
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 
     if not endpoint:
-        logger.warning("[Telemetry] OTEL_EXPORTER_OTLP_ENDPOINT not set, tracing disabled")
+        logger.warning(
+            "[Telemetry] OTEL_EXPORTER_OTLP_ENDPOINT not set, tracing disabled"
+        )
         _initialized = True
         return
 
     try:
         # Resource 생성
-        resource = Resource.create({
-            SERVICE_NAME: service,
-            "service.version": os.getenv("APP_VERSION", "1.0.0"),
-            "deployment.environment": os.getenv("ENVIRONMENT", "development"),
-        })
+        resource = Resource.create(
+            {
+                SERVICE_NAME: service,
+                "service.version": os.getenv("APP_VERSION", "1.0.0"),
+                "deployment.environment": os.getenv("ENVIRONMENT", "development"),
+            }
+        )
 
         # TracerProvider 설정
         _tracer_provider = TracerProvider(resource=resource)
 
         # OTLP Exporter (HTTP)
         # Jaeger HTTP endpoint는 /v1/traces 경로 필요
-        http_endpoint = f"{endpoint}/v1/traces" if not endpoint.endswith("/v1/traces") else endpoint
+        http_endpoint = (
+            f"{endpoint}/v1/traces" if not endpoint.endswith("/v1/traces") else endpoint
+        )
         exporter = OTLPSpanExporter(
             endpoint=http_endpoint,
         )
@@ -171,7 +188,7 @@ def setup_worker_telemetry(service_name: str = None) -> None:
         batch_processor = BatchSpanProcessor(exporter)
         filtering_processor = FilteringSpanProcessor(batch_processor)
         _tracer_provider.add_span_processor(filtering_processor)
-        
+
         logger.info("[Telemetry] Noise filtering enabled")
 
         trace.set_tracer_provider(_tracer_provider)
@@ -187,7 +204,9 @@ def setup_worker_telemetry(service_name: str = None) -> None:
         _init_openllmetry(service)
 
         _initialized = True
-        logger.info(f"[Telemetry] Worker initialized: service={service}, endpoint={endpoint}")
+        logger.info(
+            f"[Telemetry] Worker initialized: service={service}, endpoint={endpoint}"
+        )
 
     except Exception as e:
         logger.error(f"[Telemetry] Failed to initialize: {e}")
@@ -203,7 +222,9 @@ def _instrument_celery() -> None:
             """Celery Consumer span에 Service Graph용 속성 추가."""
             span.set_attribute("peer.service", "asr-backend")
             span.set_attribute("messaging.system", "celery")
-            span.set_attribute("messaging.destination", task.name if task else "unknown")
+            span.set_attribute(
+                "messaging.destination", task.name if task else "unknown"
+            )
 
         CeleryInstrumentor().instrument(
             request_hook=celery_consumer_hook,
@@ -218,6 +239,7 @@ def _instrument_common_libraries() -> None:
     # Redis
     try:
         from opentelemetry.instrumentation.redis import RedisInstrumentor
+
         RedisInstrumentor().instrument()
         logger.debug("[Telemetry] Redis instrumented")
     except Exception:
@@ -226,6 +248,7 @@ def _instrument_common_libraries() -> None:
     # HTTPX
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
         HTTPXClientInstrumentor().instrument()
         logger.debug("[Telemetry] HTTPX instrumented")
     except Exception:
@@ -246,13 +269,14 @@ def get_trace_id() -> Optional[str]:
     """현재 trace_id 반환 (hex string)."""
     span = get_current_span()
     if span and span.get_span_context().is_valid:
-        return format(span.get_span_context().trace_id, '032x')
+        return format(span.get_span_context().trace_id, "032x")
     return None
 
 
 # ============================================
 # 병목 분석용 속성 키 (Backend와 동일)
 # ============================================
+
 
 class BottleneckAttributes:
     """병목 분석을 위한 표준 속성 키."""
@@ -284,12 +308,10 @@ class BottleneckAttributes:
 # Celery Task 추적
 # ============================================
 
+
 @contextmanager
 def trace_celery_task(
-    task_instance,
-    file_id: int = None,
-    pipeline_stage: str = None,
-    **extra_attributes
+    task_instance, file_id: int = None, pipeline_stage: str = None, **extra_attributes
 ):
     """Celery 태스크 내에서 상세 추적을 위한 컨텍스트 매니저.
 
@@ -305,15 +327,17 @@ def trace_celery_task(
                 ...
     """
     tracer = get_tracer("celery-task")
-    task_name = task_instance.name if hasattr(task_instance, 'name') else 'unknown'
+    task_name = task_instance.name if hasattr(task_instance, "name") else "unknown"
     span_name = f"task.{task_name.split('.')[-1]}"
 
     # Backend에서 주입한 trace context 추출 (분산 추적 연결)
     parent_context = None
     raw_headers = None
-    if hasattr(task_instance, 'request'):
+    if hasattr(task_instance, "request"):
         raw_headers = task_instance.request.headers
-        logger.info(f"[Telemetry] Celery request.headers type={type(raw_headers)}, value={raw_headers}")
+        logger.info(
+            f"[Telemetry] Celery request.headers type={type(raw_headers)}, value={raw_headers}"
+        )
         if raw_headers:
             headers = dict(raw_headers)
             logger.info(f"[Telemetry] Celery headers dict: {headers}")
@@ -335,14 +359,23 @@ def trace_celery_task(
         current_span = trace.get_current_span()
         if current_span and current_span.get_span_context().is_valid:
             ctx = current_span.get_span_context()
-            logger.info(f"[Telemetry] Span started: trace_id={format(ctx.trace_id, '032x')}, span_id={format(ctx.span_id, '016x')}")
+            logger.info(
+                f"[Telemetry] Span started: trace_id={format(ctx.trace_id, '032x')}, span_id={format(ctx.span_id, '016x')}"
+            )
         else:
-            logger.warning(f"[Telemetry] Span NOT started or invalid! current_span={current_span}")
+            logger.warning(
+                f"[Telemetry] Span NOT started or invalid! current_span={current_span}"
+            )
 
         # Celery 메타데이터
-        if hasattr(task_instance, 'request'):
-            span.set_attribute(BottleneckAttributes.CELERY_TASK_ID, task_instance.request.id or "")
-            span.set_attribute(BottleneckAttributes.CELERY_RETRY_COUNT, task_instance.request.retries or 0)
+        if hasattr(task_instance, "request"):
+            span.set_attribute(
+                BottleneckAttributes.CELERY_TASK_ID, task_instance.request.id or ""
+            )
+            span.set_attribute(
+                BottleneckAttributes.CELERY_RETRY_COUNT,
+                task_instance.request.retries or 0,
+            )
 
         # 파이프라인 속성
         if file_id is not None:
@@ -367,12 +400,10 @@ def trace_celery_task(
 # LiteLLM/GPU 호출 추적
 # ============================================
 
+
 @contextmanager
 def trace_llm_call(
-    model: str,
-    provider_type: str = "gpu",
-    file_id: int = None,
-    **extra_attributes
+    model: str, provider_type: str = "gpu", file_id: int = None, **extra_attributes
 ):
     """LiteLLM API 호출 추적.
 
@@ -414,7 +445,7 @@ def trace_pipeline_operation(
     file_id: int = None,
     chunk_index: int = None,
     chunk_total: int = None,
-    **extra_attributes
+    **extra_attributes,
 ):
     """파이프라인 내 개별 작업 추적.
 
@@ -450,6 +481,7 @@ def trace_pipeline_operation(
 # Trace Context 전파
 # ============================================
 
+
 def inject_trace_context(carrier: dict) -> dict:
     """현재 trace context를 carrier에 주입."""
     inject(carrier)
@@ -469,6 +501,7 @@ def trace_operation(operation_name: str = None, **default_attributes) -> Callabl
         def process_audio(file_id: int, ...):
             ...
     """
+
     def decorator(func: Callable) -> Callable:
         name = operation_name or func.__name__
 
@@ -479,8 +512,8 @@ def trace_operation(operation_name: str = None, **default_attributes) -> Callabl
                 for key, value in default_attributes.items():
                     span.set_attribute(key, value)
 
-                if 'file_id' in kwargs:
-                    span.set_attribute(BottleneckAttributes.FILE_ID, kwargs['file_id'])
+                if "file_id" in kwargs:
+                    span.set_attribute(BottleneckAttributes.FILE_ID, kwargs["file_id"])
 
                 try:
                     return func(*args, **kwargs)
@@ -496,8 +529,8 @@ def trace_operation(operation_name: str = None, **default_attributes) -> Callabl
                 for key, value in default_attributes.items():
                     span.set_attribute(key, value)
 
-                if 'file_id' in kwargs:
-                    span.set_attribute(BottleneckAttributes.FILE_ID, kwargs['file_id'])
+                if "file_id" in kwargs:
+                    span.set_attribute(BottleneckAttributes.FILE_ID, kwargs["file_id"])
 
                 try:
                     return await func(*args, **kwargs)
@@ -507,6 +540,7 @@ def trace_operation(operation_name: str = None, **default_attributes) -> Callabl
                     raise
 
         import asyncio
+
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
         return wrapper

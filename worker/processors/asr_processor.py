@@ -24,7 +24,6 @@ from worker.utils.storage import download_file, upload_json
 #     rebuild_transcription_text,
 # )
 from worker.utils.result_publisher import (
-    publish_asr_started,
     publish_asr_completed,
     publish_asr_failed,
 )
@@ -125,13 +124,6 @@ async def _process_job(
         )
         from functools import partial
 
-        # ASR 리소스 획득 후 "started" 이벤트 발행 콜백
-        def on_asr_resource_acquired():
-            publish_asr_started(file_id)
-            logger.info(
-                f"[Worker] ASR resource acquired, published 'started' event for file_id={file_id}"
-            )
-
         pipeline_func = partial(
             run_asr_diarization_pipeline,
             temp_path,
@@ -143,7 +135,6 @@ async def _process_job(
             max_speakers=max_speakers,
             file_id=file_id,
             accuracy_mode=accuracy_mode,
-            on_asr_resource_acquired=on_asr_resource_acquired,
         )
 
         # OpenTelemetry context를 executor 스레드로 전파

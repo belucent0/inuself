@@ -38,6 +38,8 @@ def _call_ocr_via_litellm(
     model: str = "qwen3vl-it:4b",
     accuracy_mode: str = "speed",
     timeout: float = OCR_REQUEST_TIMEOUT,
+    on_processing_started: callable = None,
+    file_id: str = None,
 ) -> str:
     """V7.0: LiteLLM Proxy를 통해 OCR 요청.
 
@@ -49,6 +51,8 @@ def _call_ocr_via_litellm(
         model: 모델 이름 (사용되지 않음, accuracy_mode로 결정)
         accuracy_mode: "speed" (FLM/NPU) 또는 "accuracy" (GPU)
         timeout: 타임아웃 (초)
+        on_processing_started: Provider가 처리 시작할 때 호출될 콜백
+        file_id: 파일 ID (Backend 상태 업데이트용)
 
     Returns:
         OCR 결과 텍스트
@@ -79,6 +83,13 @@ def _call_ocr_via_litellm(
         logger.error(f"[Telemetry Debug] Failed to inject trace context: {e}")
         pass  # telemetry 미초기화 시 무시
 
+    extra_body = {
+        "accuracy_mode": accuracy_mode,
+        "task_type": "ocr",
+    }
+    if file_id:
+        extra_body["file_id"] = file_id
+
     payload = {
         "model": final_model,
         "messages": [
@@ -93,13 +104,10 @@ def _call_ocr_via_litellm(
                 ],
             }
         ],
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0.1,
         # custom_handler가 OCR로 라우팅하도록 힌트
-        "extra_body": {
-            "accuracy_mode": accuracy_mode,
-            "task_type": "ocr",
-        },
+        "extra_body": extra_body,
     }
 
     try:
@@ -189,10 +197,12 @@ class OcrVisionProcessor:
 
     def _get_default_ocr_prompt(self) -> str:
         """기본 OCR 프롬프트.
-        
+
         System message에서 형식 규칙을 정의하므로, 여기서는 구체적인 작업 지시만 포함합니다.
         """
-        return """이 이미지에서 모든 텍스트를 정확하게 추출해주세요.
+        return """이 이미지의 **모든 텍스트**를 위에서 아래로 순서대로 추출해주세요.
+
+**중요**: 이미지 상단부터 하단까지 모든 내용을 빠짐없이 추출하세요.
 
 요구사항:
 1. 제목은 <h1>, <h2>, <h3> 등 HTML 헤더 태그 사용
@@ -204,10 +214,14 @@ class OcrVisionProcessor:
 
     def _get_table_ocr_prompt(self) -> str:
         """표 전용 OCR 프롬프트.
-        
+
         System message에서 형식 규칙을 정의하므로, 여기서는 표 처리 요구사항만 포함합니다.
         """
-        return """이 이미지에는 표(table)가 포함되어 있습니다. 표 구조를 정확히 인식하는 것이 매우 중요합니다.
+        return """이 이미지의 **모든 텍스트**를 위에서 아래로 순서대로 추출해주세요.
+
+**중요**: 이미지 상단부터 하단까지 모든 내용을 빠짐없이 추출하세요.
+- 제목, 날짜, 금액, 설명 텍스트 등 표 외의 내용도 모두 포함
+- 표가 있다면 표 구조도 정확히 추출
 
 표 처리 요구사항:
 1. 표는 반드시 HTML <table> 태그 사용
@@ -331,7 +345,7 @@ class OcrVisionProcessor:
             logger.warning(f"Table detection failed, assuming no table: {e}")
             return False
 
-    def _call_llm_api(self, prompt: str, image_base64: str | None = None, server_process=None) -> str:
+    def _call_llm_api(self, prompt: str, image_base64: str | None = None, server_process=None, file_id: str = None) -> str:
         """LLM API를 호출하여 OCR 수행."""
         from contextlib import nullcontext
         from worker.pipelines.llm.llamacpp_client import _llama_server_process
@@ -354,6 +368,7 @@ class OcrVisionProcessor:
                 prompt=prompt,
                 model=model,
                 accuracy_mode=accuracy_mode,
+                file_id=file_id,
             )
             return self._remove_markdown_code_blocks(result)
 
@@ -444,7 +459,7 @@ class OcrVisionProcessor:
                 "model": api_model_name,
                 "messages": messages,
                 "temperature": 0.1,
-                "max_tokens": 4096,
+                "max_tokens": 8192,
             }
             
             # OCR provider에 따라 Authorization 헤더 추가
@@ -507,14 +522,16 @@ class OcrVisionProcessor:
         image: Image.Image,
         ocr_mode: OcrMode = "document",
         server_process=None,
+        file_id: str = None,
     ) -> str:
         """단일 이미지를 OCR 처리.
-        
+
         Args:
             image: PIL Image 객체
             ocr_mode: OCR 모드 ("document" 또는 "portray")
             server_process: 이미 시작된 llama-server 프로세스
-            
+            file_id: 파일 ID (Backend 상태 업데이트용)
+
         Returns:
             추출된 텍스트
         """
@@ -555,7 +572,7 @@ class OcrVisionProcessor:
                 prompt = self._get_default_ocr_prompt()
             
             # LLM API 호출
-            text = self._call_llm_api(prompt, image_base64, server_process=server_process)
+            text = self._call_llm_api(prompt, image_base64, server_process=server_process, file_id=file_id)
             return text
             
         finally:
@@ -566,7 +583,7 @@ class OcrVisionProcessor:
         images: list[Image.Image],
         ocr_mode: OcrMode = "document",
         resource_timeout: float = 120.0,
-        on_resource_acquired: callable = None,
+        file_id: str = None,
     ) -> dict[str, Any]:
         """여러 이미지를 OCR 처리.
 
@@ -577,7 +594,7 @@ class OcrVisionProcessor:
             images: PIL Image 객체 목록
             ocr_mode: OCR 모드
             resource_timeout: (미사용, 호환성 유지)
-            on_resource_acquired: OCR 처리 시작 시 호출되는 콜백
+            file_id: 파일 ID (Backend 상태 업데이트용)
 
         Returns:
             {
@@ -619,17 +636,18 @@ class OcrVisionProcessor:
             server_context = nullcontext(None)
 
         with server_context as server_process:
-            # V7.2: OCR 처리 시작 전에 콜백 호출 (상태를 OCR_PROCESSING으로 업데이트)
-            if on_resource_acquired:
-                on_resource_acquired()
-                logger.info("[OCR Vision] on_resource_acquired callback invoked (OCR processing started)")
-
             for idx, image in enumerate(images):
                 page_num = idx + 1
                 logger.info(f"Processing page {page_num}/{len(images)}")
 
                 try:
-                    text = self.process_image(image, ocr_mode=ocr_mode, server_process=server_process)
+                    # 첫 페이지만 file_id 전달 (processing_started는 한 번만)
+                    text = self.process_image(
+                        image,
+                        ocr_mode=ocr_mode,
+                        server_process=server_process,
+                        file_id=file_id if idx == 0 else None,
+                    )
                     page_texts.append(text)
 
                     ocr_metadata["pages"].append({

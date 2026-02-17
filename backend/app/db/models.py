@@ -127,6 +127,14 @@ class Content(Base):
         index=True,
     )
 
+    # User FK (1:N - 사용자별 콘텐츠 분리)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
     # 처리 상태 및 결과
     status: Mapped[ContentStatus] = mapped_column(
         Enum(ContentStatus),
@@ -156,6 +164,7 @@ class Content(Base):
     )
 
     # 관계
+    user: Mapped["User"] = relationship("User", back_populates="contents")
     file: Mapped["File | None"] = relationship("File", back_populates="content")
     transcription_result: Mapped["Transcription | None"] = relationship(
         "Transcription",
@@ -333,6 +342,11 @@ class User(Base):
     )
     last_login_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
+    )
+
+    # 콘텐츠 관계 (1:N - 사용자별 콘텐츠 분리)
+    contents: Mapped[list["Content"]] = relationship(
+        "Content", back_populates="user", cascade="all, delete-orphan"
     )
 
     # 검사 결과 관계 (1:N - 검사 이력 누적)

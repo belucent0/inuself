@@ -64,6 +64,15 @@ const MESSAGE_STATUS_CONFIG: Record<string, { icon: typeof Loader2; text: string
   generating: { icon: Loader2, text: '답변 작성 중...' },
 }
 
+const MODEL_OPTIONS = [
+  'tier-simple',
+  'tier-thinking',
+  'tier-recap',
+  'codex-high',
+  'codex-medium',
+  'codex-low',
+] as const
+
 // 출처 모달 컴포넌트
 function SourcesModal({ sources }: { sources: SearchSource[] }) {
   if (sources.length === 0) return null
@@ -145,8 +154,8 @@ interface ChatAreaProps {
   currentStreamingMessage: string
   currentThinkingSteps?: ThinkingStep[]
   currentSources?: SearchSource[]
-  onSendMessage: (content: string, mode?: string) => void
-  onRegenerate?: () => void
+  onSendMessage: (content: string, mode?: string, model?: string) => void
+  onRegenerate?: (mode?: string, model?: string) => void
 }
 
 function MessageItem({
@@ -167,7 +176,10 @@ function MessageItem({
   const sources = message.metadata?.sources || []
   const thinkingSteps = message.metadata?.thinking_steps || []
   const mode = message.metadata?.mode
-  const normalizedMode = normalizeMode(typeof mode === 'string' ? mode : undefined)
+  const normalizedMode =
+    typeof mode === 'string' && mode in AI_MODE_CONFIG
+      ? (mode as AIMode)
+      : undefined
   const modeLabel = normalizedMode ? AI_MODE_CONFIG[normalizedMode].label : mode
 
   // v1.0.0: AI 응답 대기/생성 중 상태 감지
@@ -336,6 +348,7 @@ export function ChatArea({
 }: ChatAreaProps) {
   const [inputValue, setInputValue] = useState('')
   const [mode, setMode] = useState<AIMode>('hybrid')
+  const [model, setModel] = useState<string | undefined>(undefined)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
   const [inputHeight, setInputHeight] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -482,7 +495,7 @@ export function ChatArea({
   const handleSubmit = () => {
     if (!inputValue.trim() || isStreaming) return
 
-    onSendMessage(inputValue, mode)
+    onSendMessage(inputValue, mode, model)
     setInputValue('')
     setShowScrollBottom(false)
 
@@ -537,7 +550,7 @@ export function ChatArea({
                   message={message}
                   isLastInTurn={isLastInTurn}
                   isLastAssistant={isLastAssistant}
-                  onRegenerate={onRegenerate}
+                  onRegenerate={onRegenerate ? () => onRegenerate(mode, model) : undefined}
                   isStreaming={isStreaming}
                 />
               </div>
@@ -609,6 +622,37 @@ export function ChatArea({
                       </DropdownMenuItem>
                     )
                   })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild disabled={isStreaming}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-3 rounded-full text-xs font-medium gap-1 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                  >
+                    <Bot className="h-3 w-3" />
+                    {model || '자동 모델'}
+                    <ChevronDown className="h-3 w-3 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="top" align="start" className="min-w-[180px]">
+                  <DropdownMenuItem
+                    onClick={() => setModel(undefined)}
+                    className={cn('cursor-pointer', !model && 'bg-accent')}
+                  >
+                    자동 모델
+                  </DropdownMenuItem>
+                  {MODEL_OPTIONS.map((option) => (
+                    <DropdownMenuItem
+                      key={option}
+                      onClick={() => setModel(option)}
+                      className={cn('cursor-pointer', model === option && 'bg-accent')}
+                    >
+                      {option}
+                    </DropdownMenuItem>
+                  ))}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>

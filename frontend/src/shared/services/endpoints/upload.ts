@@ -3,6 +3,7 @@
  */
 
 import { httpClient, getBaseUrl } from '../api/httpClient'
+import { getAccessToken } from '../authToken'
 import type { UploadOptions, UploadResponse } from '@/features/upload/types'
 
 /**
@@ -38,8 +39,16 @@ export async function uploadContent(
     ? `${baseUrl}/contents/upload?${queryString}`
     : `${baseUrl}/contents/upload`
 
+  // JWT 토큰 헤더 추가
+  const headers: HeadersInit = {}
+  const accessToken = getAccessToken()
+  if (accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`
+  }
+
   const response = await fetch(url, {
     method: 'POST',
+    headers,
     body: formData,
   })
 

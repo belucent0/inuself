@@ -17,7 +17,6 @@ from worker.logging_config import logger
 from worker.utils.event_loop import setup_worker_event_loop, cleanup_worker_event_loop
 from worker.utils.storage import download_file, upload_json
 from worker.utils.result_publisher import (
-    publish_ocr_started,
     publish_ocr_completed,
     publish_ocr_failed,
 )
@@ -114,11 +113,6 @@ async def _process_job(
 
     ocr_processor = OcrVisionProcessor(ocr_provider=ocr_provider)
     logger.info(f"[OCR] OcrVisionProcessor created with provider override: {ocr_processor._ocr_provider_override}")
-
-    # 리소스 획득 후 started 이벤트 발행 콜백
-    def on_resource_acquired():
-        publish_ocr_started(file_id)
-        logger.info(f"[OCR] Resource acquired, published 'started' event for file_id={file_id}")
 
     images: list[Image.Image] = []
     temp_dir = settings.temp_dir / f"ocr_{file_id}_{uuid4().hex[:8]}"
@@ -220,11 +214,11 @@ async def _process_job(
             logger.info("[OCR] OK Text file processing completed")
             return
 
-        # OCR 처리 (process_images 내에서 리소스 획득 → on_resource_acquired 호출 → OCR 수행)
+        # OCR 처리 (Provider Manager에서 processing_started 이벤트 발행)
         result = ocr_processor.process_images(
             images,
             ocr_mode=ocr_mode,
-            on_resource_acquired=on_resource_acquired,
+            file_id=str(file_id),
         )
 
         step_num = "[5/5]" if file_s3_key else "[4/4]"

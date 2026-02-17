@@ -12,6 +12,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.session import get_session
+from ..core.auth import get_current_user_id
 from ..schemas.content import (
     BulkDeleteRequest,
     BulkDeleteResponse,
@@ -49,18 +50,21 @@ async def get_file_service(session: AsyncSession = Depends(get_session)) -> File
 async def list_contents(
     page: int = Query(1, ge=1, description="페이지 번호 (1부터 시작)"),
     page_size: int = Query(10, ge=1, le=100, description="페이지당 항목 수 (최대 100)"),
+    user_id: UUID = Depends(get_current_user_id),
     file_service: FileService = Depends(get_file_service),
 ):
-    return await file_service.list_files(page=page, page_size=page_size)
+    return await file_service.list_files(user_id=user_id, page=page, page_size=page_size)
 
 
 @router.get("/{content_id}", response_model=ContentDetail)
 async def get_content(
-    content_id: UUID, file_service: FileService = Depends(get_file_service)
+    content_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    file_service: FileService = Depends(get_file_service),
 ):
     """content_id (UUID)로 콘텐츠 상세 조회."""
     try:
-        return await file_service.get_file(content_id)
+        return await file_service.get_file(content_id, user_id=user_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -80,6 +84,7 @@ async def upload_content(
     accuracy_mode: str = Query(
         "speed", description="전사 모드 ('speed' 또는 'accuracy')"
     ),
+    user_id: UUID = Depends(get_current_user_id),
     file_service: FileService = Depends(get_file_service),
 ):
     """파일 업로드 (오디오 및 문서 지원)."""
@@ -121,6 +126,7 @@ async def upload_content(
     try:
         result = await file_service.upload_and_enqueue(
             file,
+            user_id=user_id,
             min_speakers=min_speakers,
             max_speakers=max_speakers,
             ocr_mode=ocr_mode,
@@ -172,6 +178,7 @@ async def upload_from_youtube(
     request: YouTubeUploadRequest,
     background_tasks: BackgroundTasks,
     http_request: Request,
+    user_id: UUID = Depends(get_current_user_id),
     file_service: FileService = Depends(get_file_service),
 ):
     """
@@ -229,7 +236,7 @@ async def upload_from_youtube(
     try:
         # 1. 플레이스홀더 파일 생성 (PROCESSING 상태)
         file_obj = await file_service.prepare_youtube_placeholder(
-            title=title, video_id=video_id, source_url=request.url
+            title=title, video_id=video_id, source_url=request.url, user_id=user_id
         )
 
         # 2. 백그라운드 태스크 등록
@@ -283,12 +290,14 @@ async def delete_queued_contents(service: ContentService = Depends(get_service))
 
 @router.post("/bulk-delete", response_model=BulkDeleteResponse, tags=["contents"])
 async def bulk_delete_contents(
-    payload: BulkDeleteRequest, file_service: FileService = Depends(get_file_service)
+    payload: BulkDeleteRequest,
+    user_id: UUID = Depends(get_current_user_id),
+    file_service: FileService = Depends(get_file_service),
 ):
     """체크박스로 선택된 콘텐츠를 상태에 관계없이 삭제."""
     try:
         deleted_ids, skipped_ids = await file_service.delete_files_by_ids(
-            payload.content_ids
+            payload.content_ids, user_id=user_id
         )
         message = "선택된 콘텐츠를 삭제했습니다."
         if not deleted_ids:
@@ -332,6 +341,7 @@ async def retry_processing(
     accuracy_mode: str = Query(
         "speed", description="전사 모드 ('speed' 또는 'accuracy')"
     ),
+    user_id: UUID = Depends(get_current_user_id),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     service: ContentService = Depends(get_service),
     file_service: FileService = Depends(get_file_service),
@@ -354,6 +364,11 @@ async def retry_processing(
             file_obj = await file_service.file_repo.get_file(content_id)
             if not file_obj:
                 raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
+
+            # user_id 검증
+            if file_obj.content and file_obj.content.user_id != user_id:
+                raise HTTPException(status_code=403, detail="해당 콘텐츠에 대한 권한이 없습니다")
+
             if not file_obj.source_url:
                 raise HTTPException(status_code=400, detail="다운로드 재시도 불가: 원본 URL 없음")
 
@@ -383,6 +398,7 @@ async def retry_processing(
         result = await service.retry_processing(
             content_id,
             type,
+            user_id=user_id,
             min_speakers=min_speakers,
             max_speakers=max_speakers,
             ocr_mode=ocr_mode,
@@ -408,6 +424,7 @@ async def retry_processing(
 async def recluster_speakers(
     content_id: UUID,
     request: ReclusterSpeakersRequest,
+    user_id: UUID = Depends(get_current_user_id),
     service: ContentService = Depends(get_service),
 ):
     """
@@ -419,6 +436,7 @@ async def recluster_speakers(
     try:
         result = await service.recluster_speakers(
             file_id=content_id,  # UUID
+            user_id=user_id,
             num_speakers=request.num_speakers,
             similarity_threshold=request.similarity_threshold,
         )

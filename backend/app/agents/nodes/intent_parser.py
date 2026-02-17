@@ -624,6 +624,25 @@ class IntentParserNode:
             f"[IntentParser] Initialized with {len(self.transformers)} query transformers"
         )
 
+    def _resolve_selected_model(self, state: GraphState, fallback_tier: str) -> str:
+        """요청 메타데이터 모델 오버라이드를 우선 적용한다.
+
+        우선순위:
+        1. metadata.model 또는 metadata.llm_model
+        2. tier router가 선택한 fallback_tier
+        """
+        metadata = state.get("metadata")
+        if isinstance(metadata, dict):
+            requested = metadata.get("model") or metadata.get("llm_model")
+            if isinstance(requested, str):
+                normalized = requested.strip()
+                if normalized:
+                    logger.info(
+                        f"[IntentParser] Using requested model override: {normalized}"
+                    )
+                    return normalized
+        return fallback_tier
+
     async def __call__(self, state: GraphState) -> dict:
         """의도 분석 실행.
 
@@ -683,9 +702,10 @@ class IntentParserNode:
                     timestamp=time.time(),
                 )
             )
+            selected_model = self._resolve_selected_model(state, selected_tier)
             return {
                 "mode": current_mode,
-                "selected_model": selected_tier,  # tier명이 LiteLLM으로 전달됨
+                "selected_model": selected_model,
                 "intent_confidence": 1.0,
                 "requires_clarification": False,
                 "query_analysis": query_analysis,
@@ -739,9 +759,10 @@ class IntentParserNode:
                     timestamp=time.time(),
                 )
             )
+            selected_model = self._resolve_selected_model(state, selected_tier)
             return {
                 "mode": quick_mode,
-                "selected_model": selected_tier,  # tier명이 LiteLLM으로 전달됨
+                "selected_model": selected_model,
                 "intent_confidence": 0.9,
                 "requires_clarification": False,
                 "query_analysis": query_analysis,
@@ -802,9 +823,10 @@ class IntentParserNode:
                 )
             )
 
+            selected_model = self._resolve_selected_model(state, selected_tier)
             return {
                 "mode": mode,
-                "selected_model": selected_tier,  # tier명이 LiteLLM으로 전달됨
+                "selected_model": selected_model,
                 "intent_confidence": confidence,
                 "requires_clarification": confidence < 0.7,
                 "query_analysis": query_analysis,
@@ -823,9 +845,10 @@ class IntentParserNode:
                     timestamp=time.time(),
                 )
             )
+            selected_model = self._resolve_selected_model(state, "tier-simple")
             return {
                 "mode": AIMode.SIMPLE,
-                "selected_model": "tier-simple",  # 기본 티어
+                "selected_model": selected_model,
                 "intent_confidence": 0.5,
                 "requires_clarification": False,
                 "query_analysis": None,

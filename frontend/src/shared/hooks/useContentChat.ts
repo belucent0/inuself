@@ -153,7 +153,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
   )
 
   const sendMessage = useCallback(
-    async (content: string, mode?: string) => {
+    async (content: string, mode?: string, model?: string) => {
       const effectiveMode = mode || 'hybrid'
 
       const userMessage: ContentMessage = {
@@ -178,6 +178,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
             query: content,
             mode: effectiveMode,
             context: { content_id: contentId },
+            model,
           })
         } else {
           stream = await httpClient.postStream(
@@ -186,6 +187,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
               query: content,
               mode: effectiveMode,
               context: { content_id: contentId },
+              model,
             }
           )
         }
@@ -201,7 +203,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
   )
 
   const regenerate = useCallback(
-    async (mode?: string) => {
+    async (mode?: string, model?: string) => {
       if (!threadIdRef.current || messages.length === 0) return
       if (messages[messages.length - 1].role !== 'assistant') return
 
@@ -216,7 +218,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
       try {
         const stream = await httpClient.postStream(
           `/threads/${threadIdRef.current}/regenerate`,
-          { mode: mode || 'hybrid' }
+          { mode: mode || 'hybrid', model }
         )
         await processSSEStream(stream, mode || 'hybrid')
       } catch (err) {

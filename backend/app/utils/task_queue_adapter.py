@@ -1,7 +1,6 @@
 """Task Queue 추상화 레이어 - Celery를 사용."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
 import redis
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
@@ -78,28 +77,12 @@ class TaskQueueAdapter(ABC):
         pass
 
     @abstractmethod
-    def enqueue_llm_job(self, file_id: int, messages: list[dict]) -> str | None:
-        """LLM 작업을 큐에 등록하고 작업 ID를 반환.
-
-        [Phase 1] 프롬프트 주입 패턴: 완성된 messages 리스트를 받습니다.
-
-        Args:
-            file_id: 파일 ID
-            messages: LLM 호출용 완성된 messages 리스트 (Backend에서 생성)
-
-        Returns:
-            job_id: 작업 ID (성공 시)
-            None: 중복으로 스킵됨
-        """
-        pass
-
-    @abstractmethod
     def get_job_status(self, job_id: str) -> str:
         """작업 상태 조회."""
         pass
 
     @abstractmethod
-    def clear_active_job(self, task_type: str, file_id: int) -> None:
+    def clear_active_job(self, task_type: str, file_id: str | int) -> None:
         """활성 작업 해제 (작업 완료 시 호출)."""
         pass
 
@@ -123,7 +106,7 @@ class CeleryAdapter(TaskQueueAdapter):
     def _enqueue_with_dedup(
         self,
         task_type: str,
-        file_id: int,
+        file_id: str | int,
         task_name: str,
         kwargs: dict,
         queue: str,
@@ -190,7 +173,7 @@ class CeleryAdapter(TaskQueueAdapter):
 
         return result.id
 
-    def clear_active_job(self, task_type: str, file_id: int) -> None:
+    def clear_active_job(self, task_type: str, file_id: str | int) -> None:
         """활성 작업 해제 (작업 완료 시 Worker에서 호출).
 
         Args:

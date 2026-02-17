@@ -27,14 +27,14 @@ export function ContentChatPanel({
   } = useContentChat(contentId, contentTitle)
 
   const handleSendMessage = useCallback(
-    (content: string, mode?: string) => {
-      sendMessage(content, mode)
+    (content: string, mode?: string, model?: string) => {
+      sendMessage(content, mode, model)
     },
     [sendMessage]
   )
 
-  const handleRegenerate = useCallback(() => {
-    regenerate()
+  const handleRegenerate = useCallback((mode?: string, model?: string) => {
+    regenerate(mode, model)
   }, [regenerate])
 
   return (

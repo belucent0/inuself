@@ -153,8 +153,8 @@ def call_litellm_transcription(
     language: str = "ko",
     timeout: float = 1800.0,
     resource_timeout: float = 120.0,
-    on_resource_acquired: callable = None,
     lock_id: str | None = None,  # V7.5: Worker에서 획득한 GPU 잠금 ID
+    file_id: str = None,  # Backend 상태 업데이트용
 ) -> tuple[dict[str, Any], float, float, ASRProvider]:
     """LiteLLM chat completion 엔드포인트를 통한 ASR 요청.
 
@@ -168,8 +168,8 @@ def call_litellm_transcription(
         language: 언어 코드
         timeout: ASR 요청 타임아웃 (초)
         resource_timeout: (미사용, 호환성 유지)
-        on_resource_acquired: ASR 요청 직전 호출되는 콜백 (상태 업데이트용)
         lock_id: Worker에서 획득한 GPU 잠금 ID (V7.5: LiteLLM에서 재획득 스킵)
+        file_id: 파일 ID (Backend 상태 업데이트용)
 
     Returns:
         (전사 결과, 대기 시간, 전사 시간, 사용된 Provider)
@@ -217,6 +217,10 @@ def call_litellm_transcription(
         extra_body["lock_id"] = lock_id
         logger.info(f"[LiteLLM ASR] Passing lock_id to LiteLLM: {lock_id[:8]}...")
 
+    # file_id 전달 (Backend 상태 업데이트용)
+    if file_id:
+        extra_body["file_id"] = file_id
+
     payload = {
         "model": model,
         "messages": [
@@ -227,11 +231,6 @@ def call_litellm_transcription(
         ],
         "extra_body": extra_body,
     }
-
-    # LiteLLM 요청 직전에 콜백 호출하여 "started" 이벤트 발행
-    if on_resource_acquired:
-        on_resource_acquired()
-        logger.info(f"[LiteLLM ASR] Resource acquired callback invoked")
 
     try:
         with httpx.Client(timeout=timeout) as client:

@@ -103,10 +103,25 @@ class GPUStreamClient:
             },
         )
 
-    def _wait_for_response(self, request_id: str, timeout: float) -> dict:
-        """Response Stream에서 결과 대기."""
+    def _wait_for_response(
+        self,
+        request_id: str,
+        timeout: float,
+        on_processing_started: Optional[callable] = None,
+    ) -> dict:
+        """Response Stream에서 결과 대기.
+
+        Args:
+            request_id: 요청 ID
+            timeout: 타임아웃 (초)
+            on_processing_started: Provider가 처리 시작할 때 호출될 콜백
+
+        Returns:
+            처리 결과
+        """
         start_time = time.time()
         last_id = "0"
+        processing_started_called = False
 
         while time.time() - start_time < timeout:
             try:
@@ -124,6 +139,18 @@ class GPUStreamClient:
 
                             # 우리 request_id인지 확인
                             if message_data.get("request_id") == request_id:
+                                # processing_started 이벤트 처리
+                                if (
+                                    message_data.get("event") == "processing_started"
+                                    and not processing_started_called
+                                    and on_processing_started
+                                ):
+                                    on_processing_started()
+                                    processing_started_called = True
+                                    logger.info(
+                                        f"[GPUStream] Processing started for request_id={request_id}"
+                                    )
+
                                 if "error" in message_data:
                                     raise Exception(message_data["error"])
                                 if "result" in message_data:
@@ -197,6 +224,8 @@ class GPUStreamClient:
         model: str = "whisper-turbo",
         language: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
+        on_processing_started: Optional[callable] = None,
+        file_id: str = None,
     ) -> dict:
         """ASR Transcription 요청.
 
@@ -205,6 +234,8 @@ class GPUStreamClient:
             model: 모델 이름
             language: 언어 코드
             timeout: 타임아웃 (초)
+            on_processing_started: Provider가 처리 시작할 때 호출될 콜백
+            file_id: 파일 ID (Backend 상태 업데이트용)
 
         Returns:
             Transcription 결과
@@ -223,6 +254,8 @@ class GPUStreamClient:
         }
         if language:
             request_data["language"] = language
+        if file_id:
+            request_data["file_id"] = file_id
 
         # Service Graph용 CLIENT span 생성
         with self._create_client_span("transcription", MEDIA_STREAM):
@@ -235,7 +268,7 @@ class GPUStreamClient:
 
             self.redis_client.xadd(MEDIA_STREAM, request_data)
 
-        result = self._wait_for_response(request_id, timeout)
+        result = self._wait_for_response(request_id, timeout, on_processing_started)
 
         logger.info(f"[GPUStream] Transcription completed: request_id={request_id}")
         return result
@@ -301,6 +334,8 @@ class GPUStreamClient:
         prompt: str = "Extract all text from this image.",
         accuracy_mode: str = "speed",
         timeout: float = 300.0,
+        on_processing_started: Optional[callable] = None,
+        file_id: str = None,
     ) -> dict:
         """OCR Vision 요청.
 
@@ -310,6 +345,8 @@ class GPUStreamClient:
             prompt: OCR 프롬프트
             accuracy_mode: 'speed' (FLM NPU) 또는 'accuracy' (GPU llama-ocr)
             timeout: 타임아웃 (초)
+            on_processing_started: Provider가 처리 시작할 때 호출될 콜백
+            file_id: 파일 ID (Backend 상태 업데이트용)
 
         Returns:
             OCR 결과 {text, model, ...}
@@ -325,6 +362,8 @@ class GPUStreamClient:
             "accuracy_mode": accuracy_mode,
             "timestamp": str(time.time()),
         }
+        if file_id:
+            request_data["file_id"] = file_id
 
         # Service Graph용 CLIENT span 생성
         with self._create_client_span("ocr", MEDIA_STREAM):
@@ -337,7 +376,7 @@ class GPUStreamClient:
 
             self.redis_client.xadd(MEDIA_STREAM, request_data)
 
-        result = self._wait_for_response(request_id, timeout)
+        result = self._wait_for_response(request_id, timeout, on_processing_started)
 
         logger.info(f"[GPUStream] OCR completed: request_id={request_id}")
         return result
@@ -432,11 +471,26 @@ class AsyncGPUStreamClient:
             },
         )
 
-    async def _wait_for_response(self, request_id: str, timeout: float) -> dict:
-        """Response Stream에서 결과 대기 (비동기)."""
+    async def _wait_for_response(
+        self,
+        request_id: str,
+        timeout: float,
+        on_processing_started: Optional[callable] = None,
+    ) -> dict:
+        """Response Stream에서 결과 대기 (비동기).
+
+        Args:
+            request_id: 요청 ID
+            timeout: 타임아웃 (초)
+            on_processing_started: Provider가 처리 시작할 때 호출될 콜백
+
+        Returns:
+            처리 결과
+        """
         redis_client = await self.get_redis()
         start_time = time.time()
         last_id = "0"
+        processing_started_called = False
 
         while time.time() - start_time < timeout:
             try:
@@ -454,6 +508,21 @@ class AsyncGPUStreamClient:
 
                             # 우리 request_id인지 확인
                             if message_data.get("request_id") == request_id:
+                                # processing_started 이벤트 처리
+                                if (
+                                    message_data.get("event") == "processing_started"
+                                    and not processing_started_called
+                                    and on_processing_started
+                                ):
+                                    if asyncio.iscoroutinefunction(on_processing_started):
+                                        await on_processing_started()
+                                    else:
+                                        on_processing_started()
+                                    processing_started_called = True
+                                    logger.info(
+                                        f"[GPUStream/Async] Processing started for request_id={request_id}"
+                                    )
+
                                 if "error" in message_data:
                                     raise Exception(message_data["error"])
                                 if "result" in message_data:
@@ -608,8 +677,20 @@ class AsyncGPUStreamClient:
         model: str = "whisper-turbo",
         language: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
+        on_processing_started: Optional[callable] = None,
     ) -> dict:
-        """ASR Transcription 요청 (비동기)."""
+        """ASR Transcription 요청 (비동기).
+
+        Args:
+            audio_file_path: 오디오 파일 경로
+            model: 모델 이름
+            language: 언어 코드
+            timeout: 타임아웃 (초)
+            on_processing_started: Provider가 처리 시작할 때 호출될 콜백
+
+        Returns:
+            Transcription 결과
+        """
         redis_client = await self.get_redis()
         request_id = self._generate_request_id()
 
@@ -637,7 +718,7 @@ class AsyncGPUStreamClient:
 
             await redis_client.xadd(MEDIA_STREAM, request_data)
 
-        result = await self._wait_for_response(request_id, timeout)
+        result = await self._wait_for_response(request_id, timeout, on_processing_started)
 
         logger.info(f"[GPUStream] Transcription completed: request_id={request_id}")
         return result
@@ -692,6 +773,8 @@ class AsyncGPUStreamClient:
         prompt: str = "Extract all text from this image.",
         accuracy_mode: str = "speed",
         timeout: float = 300.0,
+        on_processing_started: Optional[callable] = None,
+        file_id: str = None,
     ) -> dict:
         """OCR Vision 요청 (비동기).
 
@@ -701,6 +784,8 @@ class AsyncGPUStreamClient:
             prompt: OCR 프롬프트
             accuracy_mode: 'speed' (FLM NPU) 또는 'accuracy' (GPU llama-ocr)
             timeout: 타임아웃 (초)
+            on_processing_started: Provider가 처리 시작할 때 호출될 콜백
+            file_id: 파일 ID (Backend 상태 업데이트용)
 
         Returns:
             OCR 결과 {text, model, ...}
@@ -719,6 +804,8 @@ class AsyncGPUStreamClient:
             "accuracy_mode": accuracy_mode,
             "timestamp": str(time.time()),
         }
+        if file_id:
+            request_data["file_id"] = file_id
 
         # Service Graph용 CLIENT span 생성
         with self._create_client_span("ocr", MEDIA_STREAM):
@@ -731,7 +818,7 @@ class AsyncGPUStreamClient:
 
             await redis_client.xadd(MEDIA_STREAM, request_data)
 
-        result = await self._wait_for_response(request_id, timeout)
+        result = await self._wait_for_response(request_id, timeout, on_processing_started)
 
         logger.info(f"[GPUStream] OCR completed: request_id={request_id}")
         return result

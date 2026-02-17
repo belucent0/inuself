@@ -80,10 +80,14 @@ export async function retryProcessing(
     accuracyMode?: string
   }
 ): Promise<{ message: string }> {
-  return httpClient.post<{ message: string }>(`/contents/${id}/retry`, {
-    type,
-    ...options,
-  })
+  // Backend expects type as query parameter, others can be in body or query
+  const params = new URLSearchParams({ type })
+  if (options?.minSpeakers) params.append('min_speakers', String(options.minSpeakers))
+  if (options?.maxSpeakers) params.append('max_speakers', String(options.maxSpeakers))
+  if (options?.ocrMode) params.append('ocr_mode', options.ocrMode)
+  if (options?.accuracyMode) params.append('accuracy_mode', options.accuracyMode)
+
+  return httpClient.post<{ message: string }>(`/contents/${id}/retry?${params.toString()}`)
 }
 
 export const contentsApi = {

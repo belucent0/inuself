@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     # Stream names (GPU 작업용)
     request_stream: str = "stream:chat:requests"  # Deprecated: use specific streams below. Defaulting to chat for backward compatibility.
     response_stream: str = "stream:gpu:responses"
+    worker_result_stream: str = "stream:worker:results"  # Worker results stream (Backend가 구독)
     consumer_group: str = "gpu-workers"
 
     # New Topic-based Streams (V8.1)

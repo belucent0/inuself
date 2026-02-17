@@ -6,11 +6,20 @@ import { scanApi } from "../api/scanApi"
 import type {
   ScanResult,
   ScanHistoryItem,
+  WpiAiReportEnqueueResponse,
+  WpiAiReportResponse,
   WpiQuestionsResponse,
   WpiSubmitRequest,
   WpiSubmitResponse,
   WpiProfileStatus,
 } from "../types"
+
+function toError(err: unknown, fallback: string): Error {
+  if (err instanceof Error) {
+    return err
+  }
+  return new Error(fallback)
+}
 
 /**
  * WPI 진행 상태 조회 훅
@@ -189,6 +198,88 @@ export function useScanDetail(resultId: string | null) {
   }, [fetchDetail])
 
   return { detail, loading, error, refetch: fetchDetail }
+}
+
+/**
+ * WPI AI 리포트 조회/생성 훅
+ */
+export function useWpiAiReport(resultId: string | null) {
+  const [aiReport, setAiReport] = useState<WpiAiReportResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
+
+  const fetchAiReport = useCallback(async () => {
+    if (!resultId) {
+      setAiReport(null)
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await scanApi.getWpiAiReport(resultId)
+      setAiReport(data)
+    } catch (err) {
+      setError(toError(err, "Failed to fetch AI report"))
+    } finally {
+      setLoading(false)
+    }
+  }, [resultId])
+
+  const enqueueAiReport = useCallback(
+    async (forceRegenerate = false): Promise<WpiAiReportEnqueueResponse> => {
+      if (!resultId) {
+        throw new Error("Missing result ID")
+      }
+
+      setGenerating(true)
+      setError(null)
+      try {
+        const data = await scanApi.enqueueWpiAiReport(resultId, {
+          force_regenerate: forceRegenerate,
+        })
+        setAiReport(data)
+        return data
+      } catch (err) {
+        const nextError = toError(err, "Failed to enqueue AI report")
+        setError(nextError)
+        throw nextError
+      } finally {
+        setGenerating(false)
+      }
+    },
+    [resultId]
+  )
+
+  useEffect(() => {
+    fetchAiReport()
+  }, [fetchAiReport])
+
+  useEffect(() => {
+    if (!resultId || !aiReport) {
+      return
+    }
+
+    if (aiReport.status !== "queued" && aiReport.status !== "processing") {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      void fetchAiReport()
+    }, 2000)
+
+    return () => window.clearInterval(timer)
+  }, [resultId, aiReport, fetchAiReport])
+
+  return {
+    aiReport,
+    loading,
+    generating,
+    error,
+    refetch: fetchAiReport,
+    enqueueAiReport,
+  }
 }
 
 /**

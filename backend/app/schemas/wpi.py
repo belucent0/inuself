@@ -4,7 +4,7 @@ WPI(Whang's Personality Inventory) API 요청/응답 스키마 정의.
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -30,9 +30,15 @@ GAP_AXIS_MAP = {
 class WpiResponses(BaseModel):
     """WPI 응답 스키마 (순위 배정)."""
 
-    rank_1: list[int] = Field(..., min_length=3, max_length=3, description="1순위 3개 문항 ID")
-    rank_2: list[int] = Field(..., min_length=4, max_length=4, description="2순위 4개 문항 ID")
-    rank_3: list[int] = Field(..., min_length=5, max_length=5, description="3순위 5개 문항 ID")
+    rank_1: list[int] = Field(
+        ..., min_length=3, max_length=3, description="1순위 3개 문항 ID"
+    )
+    rank_2: list[int] = Field(
+        ..., min_length=4, max_length=4, description="2순위 4개 문항 ID"
+    )
+    rank_3: list[int] = Field(
+        ..., min_length=5, max_length=5, description="3순위 5개 문항 ID"
+    )
 
     @field_validator("rank_1", "rank_2", "rank_3")
     @classmethod
@@ -71,7 +77,7 @@ class WpiQuestionsResponse(BaseModel):
 
     test_type: Literal["i_test", "me_test"]
     questions: list[WpiQuestion]
-    instructions: dict = Field(
+    instructions: dict[str, str | int] = Field(
         default={
             "rank_1_count": 3,
             "rank_2_count": 4,
@@ -98,6 +104,36 @@ class WpiSubmitResponse(BaseModel):
     message: str
 
 
+WpiAiReportStatus = Literal["idle", "processing", "completed", "failed"]
+
+
+class WpiAiReportGenerateRequest(BaseModel):
+    """WPI AI 리포트 생성 요청."""
+
+    force_regenerate: bool = Field(
+        False,
+        description="이미 생성된 리포트가 있어도 강제로 다시 생성할지 여부",
+    )
+
+
+class WpiAiReportResponse(BaseModel):
+    """WPI AI 리포트 조회 응답."""
+
+    result_id: UUID
+    status: WpiAiReportStatus
+    report_md: str | None = None
+    error: str | None = None
+    job_id: str | None = None
+    updated_at: datetime | None = None
+
+
+class WpiAiReportEnqueueResponse(WpiAiReportResponse):
+    """WPI AI 리포트 생성 큐 등록 응답."""
+
+    started: bool
+    message: str
+
+
 class WpiAxisGap(BaseModel):
     """개별 축의 갭 정보."""
 
@@ -121,7 +157,7 @@ class WpiProfileResponse(BaseModel):
     user_id: UUID
     i_test_scores: dict[str, float] | None = None
     me_test_scores: dict[str, float] | None = None
-    gap_analysis: dict | None = None
+    gap_analysis: dict[str, Any] | None = None
     i_test_completed: bool
     me_test_completed: bool
     created_at: datetime
@@ -131,15 +167,16 @@ class WpiProfileResponse(BaseModel):
     dominant_i_type: str | None = None
     dominant_me_type: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class WpiProfileStatus(BaseModel):
     """프로필 상태 간략 조회."""
 
     has_incomplete: bool = Field(False, description="미완료 검사 존재 여부")
-    in_progress_id: str | None = Field(None, description="진행 중인 검사 ID (이어하기용)")
+    in_progress_id: str | None = Field(
+        None, description="진행 중인 검사 ID (이어하기용)"
+    )
     created_at: datetime | None = Field(None, description="진행 중인 검사 생성 시간")
     i_test_completed: bool = False
     me_test_completed: bool = False
@@ -156,10 +193,9 @@ class ScanHistoryItem(BaseModel):
     scan_type: str = Field(..., description="검사 유형 (wpi, wsi, mcdc 등)")
     completed: bool
     created_at: datetime
-    summary: dict | None = Field(None, description="검사 요약 정보")
+    summary: dict[str, Any] | None = Field(None, description="검사 요약 정보")
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class ScanHistoryListResponse(BaseModel):
@@ -183,4 +219,4 @@ class ScanDetailResponse(BaseModel):
     completed: bool
     created_at: datetime
     updated_at: datetime | None = None
-    data: dict = Field(..., description="검사 유형별 상세 데이터")
+    data: dict[str, Any] = Field(..., description="검사 유형별 상세 데이터")

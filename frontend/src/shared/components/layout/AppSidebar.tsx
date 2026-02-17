@@ -53,6 +53,7 @@ import { toast } from 'sonner'
 import { useThreads } from '@/shared/hooks/useThreads'
 import { dispatchContentsRefresh } from '@/shared/hooks/useContents'
 import type { Thread } from '@/shared/types'
+import { useAuth } from '@/shared/contexts'
 
 function groupThreadsByDate(threads: Thread[]) {
   const now = new Date()
@@ -94,6 +95,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const [searchQuery, setSearchQuery] = useState('')
 
   const { threads, removeThread, loadThreads } = useThreads()
+  const { logout } = useAuth()
 
   useEffect(() => {
     if (pathname?.startsWith('/chat/')) {
@@ -118,10 +120,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     fileInput?.click()
   }
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     if (confirm('로그아웃하시겠습니까?')) {
-      localStorage.removeItem('admin_auth')
-      window.location.reload()
+      await logout()
+      navigate('/login')
     }
   }
 

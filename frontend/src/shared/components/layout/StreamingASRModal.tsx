@@ -15,6 +15,27 @@ interface StreamingASRModalProps {
     onOpenChange: (open: boolean) => void
 }
 
+const toWebSocketBaseUrl = (httpUrl: string): string => {
+    const normalized = httpUrl.replace(/\/$/, '')
+    try {
+        const parsed = new URL(normalized)
+        parsed.protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:'
+        return `${parsed.protocol}//${parsed.host}`
+    } catch {
+        return normalized
+    }
+}
+
+const getAsrWebSocketBaseUrl = (): string => {
+    const apiBaseFromEnv = import.meta.env.VITE_API_BASE_URL as string | undefined
+    if (apiBaseFromEnv && apiBaseFromEnv.startsWith('http')) {
+        return toWebSocketBaseUrl(apiBaseFromEnv)
+    }
+
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${wsProtocol}//${window.location.host}`
+}
+
 export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps) {
     const [isRecording, setIsRecording] = useState(false)
     const [committedLines, setCommittedLines] = useState<Array<{ id: number; text: string; processedText?: string; segmentId?: string }>>([])
@@ -77,18 +98,8 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
             setIsServerReady(false);
 
             const connectWebSocket = () => {
-                let wsHost = window.location.hostname;
-                if (wsHost === 'localhost') {
-                    wsHost = '127.0.0.1';
-                }
-
-                let wsUrl = '';
-                if (window.location.port === '3000') {
-                    wsUrl = `ws://${wsHost}:8000/ws/asr-stream/${newSessionId}?lang=${selectedLanguage}`;
-                } else {
-                    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    wsUrl = `${wsProtocol}//${window.location.host}/ws/asr-stream/${newSessionId}?lang=${selectedLanguage}`;
-                }
+                const wsBaseUrl = getAsrWebSocketBaseUrl();
+                const wsUrl = `${wsBaseUrl}/ws/asr-stream/${newSessionId}?lang=${selectedLanguage}`;
 
                 console.log('Connecting to WebSocket:', wsUrl);
                 ws = new WebSocket(wsUrl);
@@ -146,7 +157,7 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
                             setTimeout(() => {
                                 if (isRecordingRef.current) {
                                     setStatus("녹음 중...");
-                                } else if (isServerReady) {
+                                } else {
                                     setStatus('준비 완료');
                                 }
                             }, 2000);
@@ -197,7 +208,7 @@ export function StreamingASRModal({ open, onOpenChange }: StreamingASRModalProps
             pendingTimeoutsRef.current.forEach(timeoutId => clearTimeout(timeoutId));
             pendingTimeoutsRef.current.clear();
         };
-    }, [open, selectedLanguage, isServerReady]);
+    }, [open, selectedLanguage]);
 
 
     useEffect(() => {

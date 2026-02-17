@@ -51,7 +51,6 @@ def run_asr_diarization_pipeline(
     max_speakers: int | None = None,
     file_id: int | None = None,  # 락 회복을 위한 file_id
     accuracy_mode: str = "speed",  # "speed" (FLM/NPU) or "accuracy" (whisper.cpp/GPU)
-    on_asr_resource_acquired: callable = None,  # ASR 리소스 획득 후 호출할 콜백
 ) -> PipelineResult:
     """
     ASR + 화자분리 파이프라인 실행.
@@ -115,7 +114,6 @@ def run_asr_diarization_pipeline(
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
                 accuracy_mode=accuracy_mode,
-                on_asr_resource_acquired=on_asr_resource_acquired,
             )
         else:
             raise ValueError(f"Unsupported processing mode: {processing_mode}")
@@ -133,7 +131,6 @@ def _run_case4_parallel_processing(
     min_speakers: int | None = None,
     max_speakers: int | None = None,
     accuracy_mode: str = "speed",  # "speed" (whisper.cpp/GPU) or "accuracy" (insanely-fast/GPU)
-    on_asr_resource_acquired: callable = None,  # ASR 리소스 획득 후 호출할 콜백 (호환성 유지)
 ) -> PipelineResult:
     """
     V7.0: ASR + 화자분리 병렬 처리.
@@ -191,8 +188,8 @@ def _run_case4_parallel_processing(
                 audio_file_path=audio_file_path,
                 accuracy_mode=accuracy_mode,
                 language="ko",
-                on_resource_acquired=on_asr_resource_acquired,
                 lock_id=lock_id,  # V7.5: Worker측 잠금 ID 전달
+                file_id=str(file_id) if file_id else None,  # Backend 상태 업데이트용
             )
         finally:
             otel_context.detach(token)
