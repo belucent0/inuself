@@ -1,6 +1,6 @@
 /**
  * OCR/문서 텍스트 표시
- * - HTML 콘텐츠 감지 → dangerouslySetInnerHTML (prose 렌더링)
+ * - HTML 콘텐츠 감지 → dangerouslySetInnerHTML (markdown-content 스타일)
  * - 일반 텍스트 → pre 렌더링
  * - TranscriptionSegments와 동일한 flex 레이아웃으로 전체 공간 활용
  */
@@ -42,7 +42,7 @@ export function OcrTextDisplay({ document }: OcrTextDisplayProps) {
       <div className="flex-1 overflow-y-auto p-4">
         {shouldRenderAsHtml ? (
           <div
-            className="prose prose-sm dark:prose-invert max-w-none"
+            className="markdown-content max-w-none"
             dangerouslySetInnerHTML={{ __html: content }}
           />
         ) : (
