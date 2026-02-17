@@ -577,7 +577,6 @@ class OcrVisionProcessor:
         images: list[Image.Image],
         ocr_mode: OcrMode = "document",
         resource_timeout: float = 120.0,
-        on_resource_acquired: callable = None,
         file_id: str = None,
     ) -> dict[str, Any]:
         """여러 이미지를 OCR 처리.
@@ -589,7 +588,6 @@ class OcrVisionProcessor:
             images: PIL Image 객체 목록
             ocr_mode: OCR 모드
             resource_timeout: (미사용, 호환성 유지)
-            on_resource_acquired: OCR 처리 시작 시 호출되는 콜백
             file_id: 파일 ID (Backend 상태 업데이트용)
 
         Returns:
@@ -632,11 +630,6 @@ class OcrVisionProcessor:
             server_context = nullcontext(None)
 
         with server_context as server_process:
-            # V7.2: OCR 처리 시작 전에 콜백 호출 (상태를 OCR_PROCESSING으로 업데이트)
-            if on_resource_acquired:
-                on_resource_acquired()
-                logger.info("[OCR Vision] on_resource_acquired callback invoked (OCR processing started)")
-
             for idx, image in enumerate(images):
                 page_num = idx + 1
                 logger.info(f"Processing page {page_num}/{len(images)}")

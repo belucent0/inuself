@@ -361,12 +361,11 @@ def _generate_title_fallback(text: str) -> str:
 # 메인 함수
 # ============================================================
 
-def summarize_transcription(text: str, on_resource_acquired: callable = None) -> tuple[str, str]:
+def summarize_transcription(text: str) -> tuple[str, str]:
     """전사 텍스트를 3회 분리 호출 파이프라인으로 요약합니다.
 
     Args:
         text: 요약할 전사 텍스트
-        on_resource_acquired: 리소스 획득 후 콜백
 
     Returns:
         (title, summary_md) 튜플
@@ -377,13 +376,6 @@ def summarize_transcription(text: str, on_resource_acquired: callable = None) ->
 
     settings = get_settings()
     use_litellm = settings.llm_provider == "litellm"
-
-    # 콜백 호출 (UI 상태 업데이트)
-    if on_resource_acquired:
-        try:
-            on_resource_acquired()
-        except Exception as e:
-            logger.warning("on_resource_acquired callback failed: %s", e)
 
     # 청크 분할
     max_chunk_chars = 25000
@@ -447,15 +439,14 @@ def summarize_transcription(text: str, on_resource_acquired: callable = None) ->
         raise RuntimeError(f"요약 실패: {e}") from e
 
 
-def summarize_text(text: str, on_resource_acquired: callable = None) -> str:
+def summarize_text(text: str) -> str:
     """전사 텍스트를 요약합니다 (제목 없이 반환).
 
     Args:
         text: 요약할 전사 텍스트
-        on_resource_acquired: 리소스 획득 후 콜백
 
     Returns:
         마크다운 형식의 요약
     """
-    _, summary_md = summarize_transcription(text, on_resource_acquired)
+    _, summary_md = summarize_transcription(text)
     return summary_md
