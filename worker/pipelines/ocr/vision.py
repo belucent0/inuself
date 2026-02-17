@@ -104,7 +104,7 @@ def _call_ocr_via_litellm(
                 ],
             }
         ],
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0.1,
         # custom_handler가 OCR로 라우팅하도록 힌트
         "extra_body": extra_body,
@@ -197,10 +197,12 @@ class OcrVisionProcessor:
 
     def _get_default_ocr_prompt(self) -> str:
         """기본 OCR 프롬프트.
-        
+
         System message에서 형식 규칙을 정의하므로, 여기서는 구체적인 작업 지시만 포함합니다.
         """
-        return """이 이미지에서 모든 텍스트를 정확하게 추출해주세요.
+        return """이 이미지의 **모든 텍스트**를 위에서 아래로 순서대로 추출해주세요.
+
+**중요**: 이미지 상단부터 하단까지 모든 내용을 빠짐없이 추출하세요.
 
 요구사항:
 1. 제목은 <h1>, <h2>, <h3> 등 HTML 헤더 태그 사용
@@ -212,10 +214,14 @@ class OcrVisionProcessor:
 
     def _get_table_ocr_prompt(self) -> str:
         """표 전용 OCR 프롬프트.
-        
+
         System message에서 형식 규칙을 정의하므로, 여기서는 표 처리 요구사항만 포함합니다.
         """
-        return """이 이미지에는 표(table)가 포함되어 있습니다. 표 구조를 정확히 인식하는 것이 매우 중요합니다.
+        return """이 이미지의 **모든 텍스트**를 위에서 아래로 순서대로 추출해주세요.
+
+**중요**: 이미지 상단부터 하단까지 모든 내용을 빠짐없이 추출하세요.
+- 제목, 날짜, 금액, 설명 텍스트 등 표 외의 내용도 모두 포함
+- 표가 있다면 표 구조도 정확히 추출
 
 표 처리 요구사항:
 1. 표는 반드시 HTML <table> 태그 사용
@@ -453,7 +459,7 @@ class OcrVisionProcessor:
                 "model": api_model_name,
                 "messages": messages,
                 "temperature": 0.1,
-                "max_tokens": 4096,
+                "max_tokens": 8192,
             }
             
             # OCR provider에 따라 Authorization 헤더 추가
