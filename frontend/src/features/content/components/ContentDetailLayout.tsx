@@ -25,6 +25,7 @@ import {
 import { useIsMobile } from '@/shared/hooks/use-mobile'
 import { ClipboardList, MessageSquare, Eye } from 'lucide-react'
 import { cn } from '@/shared/utils/cn'
+import { toast } from 'sonner'
 
 interface ContentDetailLayoutProps {
   content: ContentDetail
@@ -55,14 +56,23 @@ export function ContentDetailLayout({
   const [asrRetryOpen, setAsrRetryOpen] = useState(false)
   const [isRetrying, setIsRetrying] = useState(false)
 
-  const handleRetryClick = (type: 'asr' | 'ocr' | 'summary') => {
+  const handleRetryClick = async (type: 'asr' | 'ocr' | 'summary') => {
     if (type === 'asr') {
       setAsrRetryOpen(true)
     } else if (type === 'ocr') {
       setOcrRetryOpen(true)
     } else {
       if (confirm('LLM 요약을 다시 시도하시겠습니까?')) {
-        onRetry('summary').then(() => refetch())
+        setIsRetrying(true)
+        try {
+          await onRetry('summary')
+          toast.success('요약 재처리가 시작되었습니다')
+          refetch()
+        } catch {
+          toast.error('요약 재처리 요청에 실패했습니다')
+        } finally {
+          setIsRetrying(false)
+        }
       }
     }
   }

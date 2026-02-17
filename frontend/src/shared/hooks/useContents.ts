@@ -197,6 +197,9 @@ interface UseContentResult {
 }
 
 export function useContent(id: string): UseContentResult {
+  const queryClient = useQueryClient()
+  const { addListener, removeListener } = useFileProgressSSE()
+
   const {
     data: content,
     isLoading,
@@ -208,6 +211,21 @@ export function useContent(id: string): UseContentResult {
     enabled: !!id,
     staleTime: 30 * 1000, // 30초
   })
+
+  // SSE로 해당 콘텐츠의 상태 변경 감지
+  useEffect(() => {
+    if (!id) return
+
+    const handleProgress = (event: FileProgressEvent) => {
+      if (event.file_id === id) {
+        // 상태 변경 시 캐시 무효화하여 refetch 트리거
+        queryClient.invalidateQueries({ queryKey: contentKeys.detail(id) })
+      }
+    }
+
+    addListener(handleProgress)
+    return () => removeListener(handleProgress)
+  }, [id, queryClient, addListener, removeListener])
 
   return {
     content: content || null,
