@@ -46,7 +46,6 @@ export function ChatPage() {
     messages,
     streaming,
     switchThread,
-    sendMessage,
     regenerate,
   } = useChatStore()
 
@@ -318,7 +317,53 @@ export function ChatPage() {
   // 이벤트 핸들러
   // ============================================================
   const handleSendMessage = async (content: string, msgMode?: string, model?: string) => {
-    await sendMessage(content, msgMode || mode, model)
+    // v1.0.0: 두 번째 메시지도 확인 후 라우팅 흐름 사용
+    if (!threadId || streaming.isStreaming) return
+
+    const effectiveMode = msgMode || mode
+
+    try {
+      // 1. 사용자 메시지를 optimistic update로 store에 추가
+      const tempUserMessage = {
+        role: 'user' as const,
+        content,
+        timestamp: Date.now() / 1000,
+        status: 'completed' as const,
+        metadata: { mode: effectiveMode },
+      }
+      useChatStore.getState().switchThread(threadId, [...messages, tempUserMessage])
+
+      // 2. POST /api/threads/{threadId}/messages/v2 (auth 헤더 포함)
+      const accessToken = getAccessToken()
+      const response = await fetch(`${httpClient.getBaseUrl()}/threads/${threadId}/messages/v2`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({ query: content, mode: effectiveMode, model }),
+      })
+
+      if (!response.ok) {
+        throw new Error('메시지 전송 실패')
+      }
+
+      const { message_id } = await response.json()
+
+      // 3. connectedMessageIdRef 리셋하여 SSE 재연결 허용
+      connectedMessageIdRef.current = null
+
+      // 4. messageId 파라미터 설정하여 SSE 연결 트리거
+      setSearchParams((prev) => {
+        prev.set('messageId', message_id)
+        return prev
+      })
+    } catch (err) {
+      console.error('[ChatPage v1.0.0] Failed to send message:', err)
+      toast.error('메시지 전송에 실패했습니다')
+      // 에러 시 optimistic update 롤백
+      useChatStore.getState().switchThread(threadId, messages)
+    }
   }
 
   const handleRegenerate = async (regenMode?: string, model?: string) => {

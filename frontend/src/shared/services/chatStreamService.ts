@@ -6,6 +6,7 @@
  */
 
 import type { Message, Source, ThinkingStep } from '@/shared/types'
+import { getAccessToken } from './authToken'
 
 // ============================================================
 // Types
@@ -179,6 +180,22 @@ export async function processSSEStream(
 }
 
 // ============================================================
+// Helper Functions
+// ============================================================
+
+/**
+ * 인증 헤더를 포함한 기본 헤더를 생성합니다.
+ */
+function createAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const accessToken = getAccessToken()
+  if (accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`
+  }
+  return headers
+}
+
+// ============================================================
 // API Functions
 // ============================================================
 
@@ -191,7 +208,7 @@ export async function createThreadAndStream(
 ): Promise<string | null> {
   const response = await fetch('/api/threads/stream', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: createAuthHeaders(),
     body: JSON.stringify({ query, mode, model }),
     signal: abortSignal,
   })
@@ -214,7 +231,7 @@ export async function sendMessageStream(
 ): Promise<void> {
   const response = await fetch(`/api/threads/${threadId}/messages/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: createAuthHeaders(),
     body: JSON.stringify({ query, mode, model }),
     signal: abortSignal,
   })
@@ -235,7 +252,7 @@ export async function regenerateStream(
 ): Promise<void> {
   const response = await fetch(`/api/threads/${threadId}/regenerate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: createAuthHeaders(),
     body: JSON.stringify({ mode, model }),
     signal: abortSignal,
   })

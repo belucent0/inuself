@@ -71,6 +71,50 @@ class GeneratorNode:
         self.settings = settings
         self.citation_manager = CitationManager()
 
+    def _build_conversation_history(self, state: GraphState) -> list[dict]:
+        """대화 히스토리를 LLM 메시지 형식으로 변환합니다.
+
+        state["messages"]에서 이전 대화 턴을 추출하여 LLM 컨텍스트로 제공합니다.
+        현재 쿼리(마지막 HumanMessage)는 제외하고, 최근 8개 메시지(4턴)로 제한합니다.
+
+        Args:
+            state: 현재 그래프 상태 (messages 포함)
+
+        Returns:
+            LLM용 메시지 리스트 [{"role": "user/assistant", "content": "..."}]
+        """
+        from langchain_core.messages import HumanMessage
+
+        state_messages = state.get("messages", [])
+
+        # 히스토리를 구성하려면 최소 2개 메시지 필요 (이전 메시지 1개 + 현재 쿼리)
+        if len(state_messages) < 2:
+            return []
+
+        # 마지막 메시지(현재 쿼리) 제외
+        history_messages = state_messages[:-1]
+
+        # 최근 8개 메시지(4턴)로 제한하여 토큰 예산 관리
+        history_messages = history_messages[-8:]
+
+        result = []
+        for msg in history_messages:
+            if isinstance(msg, HumanMessage):
+                # 사용자 메시지는 500자로 truncate
+                content = msg.content[:500] if len(msg.content) > 500 else msg.content
+                result.append({"role": "user", "content": content})
+            elif isinstance(msg, AIMessage):
+                # AI 응답은 800자로 truncate
+                content = msg.content[:800] if len(msg.content) > 800 else msg.content
+                result.append({"role": "assistant", "content": content})
+
+        if result:
+            logger.info(
+                f"[Generator] Including {len(result)} history messages for context"
+            )
+
+        return result
+
     async def __call__(self, state: GraphState) -> dict:
         """응답 생성 실행.
 
@@ -98,12 +142,16 @@ class GeneratorNode:
         context = self._build_context(mode, search_results)
         system_prompt = SYSTEM_PROMPTS.get(mode, SYSTEM_PROMPTS[AIMode.SIMPLE])
 
-        # 메시지 구성
+        # 메시지 구성 - 시스템 프롬프트 + 대화 히스토리 + 현재 쿼리
         messages = [
             {"role": "system", "content": system_prompt},
         ]
 
-        # 컨텍스트가 있으면 추가
+        # 대화 히스토리 추가 (이전 턴들)
+        conversation_history = self._build_conversation_history(state)
+        messages.extend(conversation_history)
+
+        # 현재 쿼리 추가 (컨텍스트 포함 또는 단독)
         if context:
             messages.append(
                 {"role": "user", "content": f"참고 자료:\n{context}\n\n질문: {query}"}
@@ -200,11 +248,16 @@ class GeneratorNode:
         context = self._build_context(mode, search_results)
         system_prompt = SYSTEM_PROMPTS.get(mode, SYSTEM_PROMPTS[AIMode.SIMPLE])
 
-        # 메시지 구성
+        # 메시지 구성 - 시스템 프롬프트 + 대화 히스토리 + 현재 쿼리
         messages = [
             {"role": "system", "content": system_prompt},
         ]
 
+        # 대화 히스토리 추가 (이전 턴들)
+        conversation_history = self._build_conversation_history(state)
+        messages.extend(conversation_history)
+
+        # 현재 쿼리 추가 (컨텍스트 포함 또는 단독)
         if context:
             messages.append(
                 {"role": "user", "content": f"참고 자료:\n{context}\n\n질문: {query}"}
