@@ -17,6 +17,7 @@ from worker.logging_config import logger
 from worker.utils.event_loop import setup_worker_event_loop, cleanup_worker_event_loop
 from worker.utils.storage import download_file, upload_json
 from worker.utils.result_publisher import (
+    publish_ocr_started,
     publish_ocr_completed,
     publish_ocr_failed,
 )
@@ -89,6 +90,10 @@ async def _process_job(
     # 파라미터 검증
     if not file_s3_key and not image_s3_keys:
         raise ValueError("Either file_s3_key or image_s3_keys must be provided")
+
+    # Redis Stream: 처리 시작 이벤트 발행
+    publish_ocr_started(file_id)
+    logger.info(f"[OCR] Published processing_started event: file_id={file_id}")
 
     if file_s3_key:
         logger.info(f"[OCR] [1/5] Starting OCR job (Worker preprocessing): file_id={file_id}, file_s3_key={file_s3_key}")
@@ -203,7 +208,6 @@ async def _process_job(
             logger.info(f"[OCR] Results saved to S3: {result_s3_key}")
 
             # Redis Stream: 완료 알림
-            publish_ocr_started(file_id)
             publish_ocr_completed(
                 file_id,
                 result_s3_key=result_s3_key,

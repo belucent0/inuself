@@ -240,7 +240,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
         # GPU ASR 서버들 (Python)
         "whisper-server": ProviderConfig(
             name="whisper-server",
-            cmd=[ROCM_PYTHON, "-u", str(SCRIPTS_DIR / "whisper_cpp_server.py")],
+            cmd=[ROCM_PYTHON, "-u", str(SCRIPTS_DIR / "whisper_cpp_server.py"), "8001"],
             port=8001,
             health="/health",
             estimated_ram=2.0,

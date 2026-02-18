@@ -113,6 +113,7 @@ def run_asr_diarization_pipeline(
                 logs=logs,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
+                file_id=file_id,
                 accuracy_mode=accuracy_mode,
             )
         else:
@@ -130,6 +131,7 @@ def _run_case4_parallel_processing(
     logs: list[dict[str, Any]],
     min_speakers: int | None = None,
     max_speakers: int | None = None,
+    file_id: int | None = None,
     accuracy_mode: str = "speed",  # "speed" (whisper.cpp/GPU) or "accuracy" (insanely-fast/GPU)
 ) -> PipelineResult:
     """
