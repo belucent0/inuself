@@ -28,8 +28,9 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("WhisperCppServer")
 
-# Environment variables
-PORT = int(os.getenv("PORT", 8001))
+# Port configuration - hardcoded to avoid conflicts
+PORT = 8001
+print(f"[Whisper Server] Starting on port {PORT}", flush=True)
 WHISPER_CLI_PATH = os.getenv(
     "WHISPER_CLI_PATH",
     "C:/whisper-cpp/build/bin/Release/whisper-cli.exe"
