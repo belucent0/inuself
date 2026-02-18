@@ -26,7 +26,7 @@ const suggestedQueries = [
 export function HomePage() {
   const navigate = useNavigate()
   const [input, setInput] = useState('')
-  const [mode, setMode] = useState<AIMode>('search')
+  const [mode, setMode] = useState<AIMode>('auto')
   const [isNavigating, setIsNavigating] = useState(false)
 
   const handleSendMessage = async (text: string) => {

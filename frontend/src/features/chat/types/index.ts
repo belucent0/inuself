@@ -2,7 +2,7 @@
  * Chat Feature 타입 정의
  */
 
-export type AIMode = 'simple' | 'search' | 'rag' | 'reasoning' | 'hybrid'
+export type AIMode = 'auto' | 'simple' | 'search' | 'rag' | 'reasoning' | 'hybrid'
 
 export interface SearchSource {
   position: number
@@ -55,6 +55,12 @@ export interface AIModeConfig {
 }
 
 export const AI_MODE_CONFIG: Record<AIMode, AIModeConfig> = {
+  auto: {
+    label: '자동 모델',
+    description: 'AI가 질문 유형에 맞게 자동 판단',
+    color: 'text-gray-500',
+    bgColor: 'bg-gray-500/10',
+  },
   simple: {
     label: '대화',
     description: '일반 AI 대화',

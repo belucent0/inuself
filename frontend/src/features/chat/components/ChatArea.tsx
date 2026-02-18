@@ -378,7 +378,7 @@ export function ChatArea({
   onRegenerate,
 }: ChatAreaProps) {
   const [inputValue, setInputValue] = useState('')
-  const [mode, setMode] = useState<AIMode>('hybrid')
+  const [mode, setMode] = useState<AIMode>('auto')
   const [model, setModel] = useState<string | undefined>(undefined)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
   const [inputHeight, setInputHeight] = useState(0)
