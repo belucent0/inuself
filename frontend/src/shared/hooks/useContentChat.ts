@@ -1,13 +1,14 @@
 /**
  * 콘텐츠용 채팅 훅
- * - 첫 메시지: 스레드 생성 + 메시지 전송 (SSE)
- * - 이후 메시지: 기존 스레드에 메시지 추가
- * - thread_created SSE 이벤트로 스레드 ID 수신
+ * - 첫 메시지: 스레드 생성 + 메시지 queued → SSE 스트리밍
+ * - 이후 메시지: 기존 스레드에 메시지 추가 → SSE 스트리밍
+ * - v1.0.0: POST → message_id → EventSource 패턴 사용
  */
 
 import { useState, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 import { httpClient } from '@/shared/services'
+import { getAccessToken } from '@/shared/services/authToken'
 import type { SearchSource, ThinkingStep, AIMode } from '@/features/chat/types'
 
 interface ContentMessage {
@@ -32,6 +33,12 @@ interface SSEChunk {
   data: unknown
 }
 
+interface QueuedMessageResponse {
+  thread_id: string
+  message_id: string
+  user_message_id: string
+}
+
 export function useContentChat(contentId: string, _contentTitle: string) {
   const [messages, setMessages] = useState<ContentMessage[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -54,6 +61,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
     }
   }
 
+  // ReadableStream 기반 SSE 처리 (regenerate 엔드포인트용)
   const processSSEStream = useCallback(
     async (stream: ReadableStream<Uint8Array>, mode: string) => {
       const reader = stream.getReader()
@@ -76,11 +84,6 @@ export function useContentChat(contentId: string, _contentTitle: string) {
           if (!chunk) continue
 
           switch (chunk.type) {
-            case 'thread_created': {
-              const data = chunk.data as { thread_id: string }
-              threadIdRef.current = data.thread_id
-              break
-            }
             case 'thinking':
               thinkingSteps.push(chunk.data as ThinkingStep)
               setStreamingMetadata((prev) => ({
@@ -152,6 +155,100 @@ export function useContentChat(contentId: string, _contentTitle: string) {
     []
   )
 
+  // EventSource 기반 SSE 처리 (v1.0.0 queued flow용)
+  const connectEventSource = useCallback(
+    (threadId: string, messageId: string, mode: string): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        const accessToken = getAccessToken()
+        const streamUrl = `${httpClient.getBaseUrl()}/threads/${threadId}/messages/${messageId}/stream${
+          accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : ''
+        }`
+
+        const eventSource = new EventSource(streamUrl)
+        let fullContent = ''
+        let sources: SearchSource[] = []
+        let thinkingSteps: ThinkingStep[] = []
+
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data)
+            const eventType = data.type
+            const eventData = data.data
+
+            switch (eventType) {
+              case 'thinking_step':
+              case 'query_analysis':
+                thinkingSteps = [...thinkingSteps, eventData as ThinkingStep]
+                setStreamingMetadata((prev) => ({
+                  ...prev,
+                  thinkingSteps,
+                }))
+                break
+
+              case 'sources':
+                sources = eventData || []
+                setStreamingMetadata((prev) => ({
+                  ...prev,
+                  sources,
+                }))
+                break
+
+              case 'token':
+                fullContent += eventData || ''
+                setStreamingMetadata((prev) => ({
+                  ...prev,
+                  currentMessage: fullContent,
+                }))
+                break
+
+              case 'content':
+                fullContent = eventData || ''
+                setStreamingMetadata((prev) => ({
+                  ...prev,
+                  currentMessage: fullContent,
+                }))
+                break
+
+              case 'done': {
+                const finalContent = eventData?.content || fullContent
+                const assistantMessage: ContentMessage = {
+                  role: 'assistant',
+                  content: finalContent,
+                  timestamp: Date.now() / 1000,
+                  metadata: { sources, thinking_steps: thinkingSteps, mode: mode as AIMode },
+                }
+                setMessages((prev) => [...prev, assistantMessage])
+                setIsLoading(false)
+                setStreamingMetadata({
+                  currentMessage: '',
+                  thinkingSteps: [],
+                  sources: [],
+                })
+                eventSource.close()
+                resolve()
+                break
+              }
+
+              case 'error':
+                eventSource.close()
+                reject(new Error(eventData))
+                break
+            }
+          } catch (err) {
+            eventSource.close()
+            reject(err)
+          }
+        }
+
+        eventSource.onerror = () => {
+          eventSource.close()
+          reject(new Error('SSE connection error'))
+        }
+      })
+    },
+    []
+  )
+
   const sendMessage = useCallback(
     async (content: string, mode?: string, model?: string) => {
       const effectiveMode = mode || 'hybrid'
@@ -171,18 +268,25 @@ export function useContentChat(contentId: string, _contentTitle: string) {
       })
 
       try {
-        let stream: ReadableStream<Uint8Array>
+        let threadId: string
+        let messageId: string
 
         if (!threadIdRef.current) {
-          stream = await httpClient.postStream('/threads/stream', {
+          // 새 스레드 생성
+          const resp = await httpClient.post<QueuedMessageResponse>('/threads', {
             query: content,
             mode: effectiveMode,
             context: { content_id: contentId },
             model,
           })
+          threadId = resp.thread_id
+          messageId = resp.message_id
+          threadIdRef.current = threadId
         } else {
-          stream = await httpClient.postStream(
-            `/threads/${threadIdRef.current}/messages/stream`,
+          // 기존 스레드에 메시지 추가
+          threadId = threadIdRef.current
+          const resp = await httpClient.post<QueuedMessageResponse>(
+            `/threads/${threadId}/messages`,
             {
               query: content,
               mode: effectiveMode,
@@ -190,16 +294,17 @@ export function useContentChat(contentId: string, _contentTitle: string) {
               model,
             }
           )
+          messageId = resp.message_id
         }
 
-        await processSSEStream(stream, effectiveMode)
+        await connectEventSource(threadId, messageId, effectiveMode)
       } catch (err) {
         const error = err as Error
         setIsLoading(false)
         toast.error('메시지 전송 실패', { description: error.message })
       }
     },
-    [contentId, processSSEStream]
+    [contentId, connectEventSource]
   )
 
   const regenerate = useCallback(

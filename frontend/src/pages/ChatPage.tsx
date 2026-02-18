@@ -28,14 +28,9 @@ export function ChatPage() {
 
   // v1.0.0: messageId 파라미터 (SSE 스트리밍 시작용)
   const messageId = searchParams.get('messageId')
-
-  // 하위 호환: 레거시 /chat/new 경로 처리
-  const isLegacyNewThread = paramThreadId === 'new'
-  const legacyQuery = searchParams.get('query')
   const mode = searchParams.get('mode') || 'auto'
 
-  // 실제 threadId
-  const threadId = isLegacyNewThread ? '' : (paramThreadId || '')
+  const threadId = paramThreadId || ''
 
   // TanStack Query로 스레드 로드 (기존 스레드일 때만)
   const { thread, isLoading: isThreadLoading } = useThread(threadId || null)
@@ -100,9 +95,6 @@ export function ChatPage() {
   // 핵심: TanStack Query 데이터 → Zustand store 동기화
   // ============================================================
   useEffect(() => {
-    // 레거시 새 스레드 모드면 스킵 (createAndStream이 처리)
-    if (isLegacyNewThread) return
-
     // 로딩 중이면 스킵
     if (isThreadLoading) return
 
@@ -131,7 +123,7 @@ export function ChatPage() {
     })) || []
 
     switchThread(threadId, formattedMessages)
-  }, [thread, threadId, isLegacyNewThread, isThreadLoading, storeThreadId, messages.length, streaming.isStreaming, switchThread])
+  }, [thread, threadId, isThreadLoading, storeThreadId, messages.length, streaming.isStreaming, switchThread])
 
   // ============================================================
   // v1.0.0: SSE 스트리밍 연결 (messageId가 있을 때)
@@ -274,38 +266,9 @@ export function ChatPage() {
   }, [])
 
   // ============================================================
-  // 하위 호환: 레거시 /chat/new 경로 처리
-  // (v0.11.x 이하 호환, 나중에 제거 가능)
-  // ============================================================
-  const hasStartedLegacyRef = useRef(false)
-
-  useEffect(() => {
-    if (!isLegacyNewThread || !legacyQuery) return
-    if (hasStartedLegacyRef.current) return
-
-    hasStartedLegacyRef.current = true
-    const decodedQuery = decodeURIComponent(legacyQuery)
-
-    // store에서 직접 함수 호출 (의존성 배열에서 제거하여 재실행 방지)
-    useChatStore.getState().createAndStream(decodedQuery, mode)
-      .catch((err) => {
-        console.error('[ChatPage] Legacy create failed:', err)
-        toast.error('대화 생성에 실패했습니다')
-        navigate('/')
-      })
-  }, [isLegacyNewThread, legacyQuery, mode, navigate])
-
-  // 레거시: thread_id 수신 시 URL 변경
-  useEffect(() => {
-    if (isLegacyNewThread && storeThreadId) {
-      navigate(`/chat/${storeThreadId}`, { replace: true })
-    }
-  }, [isLegacyNewThread, storeThreadId, navigate])
-
-  // ============================================================
   // 로딩 상태
   // ============================================================
-  if (!isLegacyNewThread && isThreadLoading) {
+  if (isThreadLoading) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
@@ -333,9 +296,9 @@ export function ChatPage() {
       }
       useChatStore.getState().switchThread(threadId, [...messages, tempUserMessage])
 
-      // 2. POST /api/threads/{threadId}/messages/v2 (auth 헤더 포함)
+      // 2. POST /api/threads/{threadId}/messages (auth 헤더 포함)
       const accessToken = getAccessToken()
-      const response = await fetch(`${httpClient.getBaseUrl()}/threads/${threadId}/messages/v2`, {
+      const response = await fetch(`${httpClient.getBaseUrl()}/threads/${threadId}/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

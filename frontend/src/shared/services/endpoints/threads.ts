@@ -11,7 +11,6 @@ import type {
   Thread,
   ThreadListResponse,
   CreateThreadRequest,
-  SendMessageRequest,
 } from '@/shared/types'
 
 /**
@@ -60,39 +59,6 @@ export async function updateThreadTitle(
 }
 
 /**
- * 새 스레드 생성 및 첫 메시지 전송 (SSE 스트리밍)
- *
- * @returns ReadableStream for SSE events
- */
-export async function createThreadWithMessage(
-  data: SendMessageRequest
-): Promise<ReadableStream<Uint8Array>> {
-  return httpClient.postStream('/threads/stream', {
-    query: data.content,
-    mode: data.mode || 'auto',
-    context: data.metadata,
-    model: data.model,
-  })
-}
-
-/**
- * 기존 스레드에 메시지 추가 (SSE 스트리밍)
- *
- * @returns ReadableStream for SSE events
- */
-export async function sendMessage(
-  threadId: string,
-  data: SendMessageRequest
-): Promise<ReadableStream<Uint8Array>> {
-  return httpClient.postStream(`/threads/${threadId}/messages/stream`, {
-    query: data.content,
-    mode: data.mode || 'auto',
-    context: data.metadata,
-    model: data.model,
-  })
-}
-
-/**
  * 메시지 재생성 (SSE 스트리밍)
  *
  * @returns ReadableStream for SSE events
@@ -117,8 +83,6 @@ export const threadsApi = {
   createThread,
   deleteThread,
   updateThreadTitle,
-  createThreadWithMessage,
-  sendMessage,
   regenerateMessage,
 }
 

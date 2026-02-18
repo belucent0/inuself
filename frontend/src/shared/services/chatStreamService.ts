@@ -199,50 +199,6 @@ function createAuthHeaders(): Record<string, string> {
 // API Functions
 // ============================================================
 
-export async function createThreadAndStream(
-  query: string,
-  mode: string,
-  model: string | undefined,
-  callbacks: StreamingCallbacks,
-  abortSignal?: AbortSignal
-): Promise<string | null> {
-  const response = await fetch('/api/threads/stream', {
-    method: 'POST',
-    headers: createAuthHeaders(),
-    body: JSON.stringify({ query, mode, model }),
-    signal: abortSignal,
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to create thread: ${response.statusText}`)
-  }
-
-  const result = await processSSEStream(response, mode, callbacks, abortSignal)
-  return result.threadId || null
-}
-
-export async function sendMessageStream(
-  threadId: string,
-  query: string,
-  mode: string,
-  model: string | undefined,
-  callbacks: StreamingCallbacks,
-  abortSignal?: AbortSignal
-): Promise<void> {
-  const response = await fetch(`/api/threads/${threadId}/messages/stream`, {
-    method: 'POST',
-    headers: createAuthHeaders(),
-    body: JSON.stringify({ query, mode, model }),
-    signal: abortSignal,
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to send message: ${response.statusText}`)
-  }
-
-  await processSSEStream(response, mode, callbacks, abortSignal)
-}
-
 export async function regenerateStream(
   threadId: string,
   mode: string,
