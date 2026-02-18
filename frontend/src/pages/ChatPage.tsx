@@ -294,7 +294,10 @@ export function ChatPage() {
         status: 'completed' as const,
         metadata: { mode: effectiveMode },
       }
-      useChatStore.getState().switchThread(threadId, [...messages, tempUserMessage])
+      // switchThread는 같은 스레드에 메시지가 있으면 스킵하므로 setState로 직접 추가
+      useChatStore.setState((state) => ({
+        messages: [...state.messages, tempUserMessage],
+      }))
 
       // 2. POST /api/threads/{threadId}/messages (auth 헤더 포함)
       const accessToken = getAccessToken()
@@ -324,8 +327,8 @@ export function ChatPage() {
     } catch (err) {
       console.error('[ChatPage v1.0.0] Failed to send message:', err)
       toast.error('메시지 전송에 실패했습니다')
-      // 에러 시 optimistic update 롤백
-      useChatStore.getState().switchThread(threadId, messages)
+      // 에러 시 optimistic update 롤백 (추가한 사용자 메시지 제거)
+      useChatStore.setState({ messages })
     }
   }
 
