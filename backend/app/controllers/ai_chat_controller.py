@@ -6,8 +6,9 @@ V8.6: RESTful API 구조 개선 - /api/threads로 통일
 V9.0: Phase 1 - user_id 기반 스레드 관리, DB 영속화
 V9.1: 백그라운드 AI 응답 생성 - 클라이언트 연결 끊김에도 서버에서 계속 생성
 
-v1.0.0: 확인 후 라우팅 + SSE 재연결 + 메시지 상태 세분화
-- POST /api/threads/v2 - 스레드+메시지 생성 (AI 실행 없음)
+확인 후 라우팅 + SSE 재연결 + 메시지 상태 세분화:
+- POST /api/threads - 스레드+메시지 생성 (AI 실행 없음)
+- POST /api/threads/{thread_id}/messages - 메시지 추가 (AI 실행 없음)
 - GET /api/threads/{thread_id}/messages/{message_id}/stream - SSE 스트리밍
 - 메시지 상태: queued → analyzing → searching → thinking → generating → completed
 - 2초마다 partial_content DB 저장
@@ -24,7 +25,7 @@ import time
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -43,43 +44,6 @@ from ..services.thread_service import (
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 
 
-class CreateThreadRequest(BaseModel):
-    """새 스레드 생성 요청 (첫 메시지 포함)."""
-
-    query: str = Field(..., description="사용자 질문", min_length=1)
-    mode: str = Field(
-        default="auto",
-        description="AI 모드 (auto, simple, search, rag, reasoning, hybrid)",
-    )
-    context: dict | None = Field(
-        default=None, description="추가 컨텍스트 (RAG용 content_ids 등)"
-    )
-    model: str | None = Field(
-        default=None,
-        description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
-    )
-
-
-class AddMessageRequest(BaseModel):
-    """기존 스레드에 메시지 추가 요청."""
-
-    query: str = Field(..., description="사용자 질문", min_length=1)
-    mode: str = Field(
-        default="auto",
-        description="AI 모드 (auto, simple, search, rag, reasoning, hybrid)",
-    )
-    context: dict | None = Field(
-        default=None, description="추가 컨텍스트 (RAG용 content_ids 등)"
-    )
-    model: str | None = Field(
-        default=None,
-        description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
-    )
-    skip_user_message: bool = Field(
-        default=False, description="사용자 메시지 저장 건너뛰기 (이미 저장된 경우)"
-    )
-
-
 class RegenerateRequest(BaseModel):
     """답변 재생성 요청."""
 
@@ -92,29 +56,6 @@ class RegenerateRequest(BaseModel):
         default=None,
         description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
     )
-
-
-class CitationModel(BaseModel):
-    """Citation (출처 표시) 모델 - Phase 4."""
-
-    id: int = Field(..., description="출처 번호")
-    title: str = Field(..., description="출처 제목")
-    url: str = Field(..., description="출처 URL")
-    snippet: str = Field(default="", description="인용된 부분")
-    verified: bool = Field(default=True, description="검증 여부")
-
-
-class ThreadResponse(BaseModel):
-    """스레드 응답 (생성/메시지 추가 후)."""
-
-    response: str = Field(..., description="AI 응답")
-    thread_id: str = Field(..., description="스레드 ID")
-    mode: str = Field(..., description="사용된 AI 모드")
-    sources: list[dict] = Field(default=[], description="참조 소스 목록")
-    citations: list[CitationModel] = Field(
-        default=[], description="출처 표시 목록 (Phase 4)"
-    )
-    thinking_steps: list[dict] = Field(default=[], description="사고 과정")
 
 
 class ThreadListResponse(BaseModel):
@@ -369,386 +310,6 @@ async def generate_ai_response_background(
             logger.exception(f"[Thread] Failed to save error message: {save_error}")
 
 
-@router.post("", response_model=ThreadResponse)
-async def create_thread(
-    request: CreateThreadRequest,
-    settings: Settings = Depends(get_settings),
-    svc: ThreadService = Depends(get_svc),
-    user_id: UUID = Depends(get_current_user_id),
-):
-    """새 스레드 생성 (첫 메시지 포함, 비스트리밍).
-
-    POST /api/threads - 새 대화 시작
-    """
-    logger.info(
-        f"[Thread] Create: user={user_id}, query='{request.query[:50]}...', mode={request.mode}"
-    )
-    agent_metadata = _build_agent_metadata(
-        settings=settings,
-        context=request.context,
-        requested_model=request.model,
-    )
-
-    try:
-        # 새 스레드 생성 (user_id 포함)
-        thread = await svc.create_thread(user_id=user_id, metadata=agent_metadata)
-
-        # 사용자 메시지 저장
-        user_message = await svc.add_message(
-            thread.thread_id,
-            user_id=user_id,
-            role="user",
-            content=request.query,
-        )
-
-        trace_metadata = _build_langfuse_trace_metadata(
-            base_context=agent_metadata,
-            thread_id=thread.thread_id,
-            user_id=user_id,
-            mode=request.mode,
-            route_name="threads.create",
-            turn_index=1,
-            user_message_id=user_message.message_id,
-        )
-
-        # AI Agent 실행 (V8.4: 재시도 기능 활성화)
-        result = await run_ai_agent(
-            settings=settings,
-            query=request.query,
-            thread_id=thread.thread_id,
-            mode=request.mode,
-            metadata=trace_metadata,
-            enable_retry=True,  # V8.4: 검색 재시도 활성화
-            max_retries=3,
-            user_id=str(user_id),
-        )
-
-        # AI 응답 저장 (V8.4: 재시도 메타데이터 포함)
-        await svc.add_message(
-            thread.thread_id,
-            user_id=user_id,
-            role="assistant",
-            content=result.get("response", ""),
-            metadata={
-                "thread_id": thread.thread_id,
-                "turn_index": 1,
-                "user_message_id": user_message.message_id,
-                "mode": _normalize_mode_name(result.get("mode", "simple")),
-                "sources": result.get("sources", []),
-                "citations": result.get("citations", []),  # Phase 4
-                "intent": result.get("query_analysis"),  # Intent Parser 결과
-                "search_queries": result.get("search_queries", []),  # 생성된 검색 쿼리
-                "search_results": result.get(
-                    "search_results", []
-                ),  # 검색 결과 (품질 점수 포함)
-                "thinking_steps": result.get("thinking_steps", []),  # 사고 과정
-                # V8.4: 재시도 정보
-                "search_retry_count": result.get("search_retry_count", 0),
-                "search_quality_score": result.get("search_quality_score", 0.0),
-                "failed_queries": result.get("failed_queries", []),
-                "retry_reason": result.get("retry_reason", ""),
-                "context": agent_metadata,
-            },
-        )
-
-        return ThreadResponse(
-            response=result.get("response", ""),
-            thread_id=thread.thread_id,
-            mode=_normalize_mode_name(result.get("mode", "simple")),
-            sources=result.get("sources", []),
-            citations=result.get("citations", []),  # Phase 4: Citation 추가
-            thinking_steps=result.get("thinking_steps", []),
-        )
-
-    except Exception as e:
-        logger.exception(f"[Thread] Create error: {e}")
-        raise HTTPException(status_code=500, detail=f"AI 처리 실패: {str(e)}")
-
-
-@router.post("/stream")
-async def create_thread_stream(
-    request: CreateThreadRequest,
-    background_tasks: BackgroundTasks,
-    settings: Settings = Depends(get_settings),
-    svc: ThreadService = Depends(get_svc),
-    user_id: UUID = Depends(get_current_user_id),
-):
-    """새 스레드 생성 (첫 메시지 포함, SSE 스트리밍).
-
-    POST /api/threads/stream - 새 대화 시작 (스트리밍)
-
-    V9.1: 클라이언트 연결 끊김 시 백그라운드에서 응답 생성 계속
-    V9.2: 메시지 상태 관리 - generating → completed
-    """
-    logger.info(
-        f"[Thread] Create stream: user={user_id}, query='{request.query[:50]}...', mode={request.mode}"
-    )
-    agent_metadata = _build_agent_metadata(
-        settings=settings,
-        context=request.context,
-        requested_model=request.model,
-    )
-
-    # 스레드 먼저 생성 (generate 함수 밖에서)
-    thread = await svc.create_thread(user_id=user_id, metadata=agent_metadata)
-
-    # 사용자 메시지 저장 (완료 상태)
-    user_message = await svc.add_message(
-        thread.thread_id,
-        user_id=user_id,
-        role="user",
-        content=request.query,
-        status="completed",
-    )
-
-    # AI 응답 메시지를 "generating" 상태로 미리 생성
-    ai_message = await svc.add_message(
-        thread.thread_id,
-        user_id=user_id,
-        role="assistant",
-        content="",  # 빈 내용으로 시작
-        status="generating",
-    )
-
-    trace_metadata = _build_langfuse_trace_metadata(
-        base_context=agent_metadata,
-        thread_id=thread.thread_id,
-        user_id=user_id,
-        mode=request.mode,
-        route_name="threads.create_stream",
-        turn_index=1,
-        user_message_id=user_message.message_id,
-        assistant_message_id=ai_message.message_id,
-    )
-
-    # 클로저에서 사용할 변수 캡처
-    captured_user_id = user_id
-    captured_thread_id = thread.thread_id
-    captured_query = request.query
-    captured_mode = request.mode
-    captured_trace_metadata = trace_metadata
-    captured_settings = settings
-    captured_ai_message_id = ai_message.message_id
-
-    # 응답 완료 여부 추적
-    response_completed = {"value": False}
-
-    async def generate():
-        nonlocal response_completed
-        try:
-            # 스레드 ID 먼저 전송
-            yield f"data: {json.dumps({'type': 'thread_id', 'data': captured_thread_id})}\n\n"
-            # AI 메시지 ID도 전송 (스트림 재연결용)
-            yield f"data: {json.dumps({'type': 'message_id', 'data': captured_ai_message_id})}\n\n"
-
-            # AI Agent 스트리밍 실행 (V8.4: 재시도 메타데이터 수집)
-            full_response = ""
-            mode_used = "simple"
-            sources = []
-            citations = []
-            intent = None
-            search_queries = []
-            search_results = []
-            thinking_steps = []
-            # V8.4: 재시도 정보
-            search_retry_count = 0
-            search_quality_score = 0.0
-            failed_queries = []
-            retry_reason = ""
-
-            async for event in stream_ai_agent(
-                settings=captured_settings,
-                query=captured_query,
-                thread_id=captured_thread_id,
-                mode=captured_mode,
-                metadata=captured_trace_metadata,
-                enable_retry=True,  # V8.4: 재시도 활성화
-                max_retries=3,
-                user_id=str(captured_user_id),
-            ):
-                event_type = event.get("type", "")
-                event_data = event.get("data")
-
-                # 이벤트 타입에 따른 처리
-                if event_type == "thinking":
-                    yield f"data: {json.dumps({'type': 'thinking', 'data': event_data})}\n\n"
-                    # thinking_steps에 추가하여 DB 저장용으로 수집
-                    if isinstance(event_data, dict):
-                        thinking_steps.append(event_data)
-                        if "mode" in event_data:
-                            mode_used = _normalize_mode_name(event_data["mode"])
-                        # V8.4: 재시도 정보 수집
-                        if "search_retry_count" in event_data:
-                            search_retry_count = event_data["search_retry_count"]
-                        if "search_quality_score" in event_data:
-                            search_quality_score = event_data["search_quality_score"]
-                        if "retry_reason" in event_data:
-                            retry_reason = event_data["retry_reason"]
-                        # H-2: thinking_steps 주기적 저장 (3개마다)
-                        if len(thinking_steps) % 3 == 0:
-                            await svc.update_message_metadata(
-                                captured_ai_message_id,
-                                thinking_steps=thinking_steps,
-                            )
-
-                elif event_type == "query_analysis":
-                    # 쿼리 재정의 결과 전송 (Perplexity 스타일 UI용)
-                    intent = event_data  # 저장용
-                    # H-2: intent 즉시 DB 저장
-                    await svc.update_message_metadata(
-                        captured_ai_message_id,
-                        intent=intent,
-                    )
-                    yield f"data: {json.dumps({'type': 'query_analysis', 'data': event_data})}\n\n"
-
-                elif event_type == "token":
-                    # 토큰 단위 스트리밍 - 점진적으로 응답 축적
-                    token = (
-                        event_data
-                        if isinstance(event_data, str)
-                        else str(event_data or "")
-                    )
-                    full_response += token
-                    yield f"data: {json.dumps({'type': 'token', 'data': token})}\n\n"
-
-                elif event_type == "content":
-                    # 전체 콘텐츠 업데이트 (non-streaming fallback)
-                    full_response = (
-                        event_data if isinstance(event_data, str) else str(event_data)
-                    )
-                    yield f"data: {json.dumps({'type': 'content', 'data': full_response})}\n\n"
-
-                elif event_type == "sources":
-                    sources = event_data if isinstance(event_data, list) else []
-                    # H-2: sources 즉시 DB 저장 (연결 끊김에도 보존)
-                    await svc.update_message_metadata(
-                        captured_ai_message_id,
-                        sources=sources,
-                        mode=mode_used,
-                    )
-                    yield f"data: {json.dumps({'type': 'sources', 'data': sources})}\n\n"
-
-                elif event_type == "citations":  # Phase 4
-                    citations = event_data if isinstance(event_data, list) else []
-                    # H-2: citations 즉시 DB 저장
-                    await svc.update_message_metadata(
-                        captured_ai_message_id,
-                        citations=citations,
-                    )
-                    yield f"data: {json.dumps({'type': 'citations', 'data': citations})}\n\n"
-
-                elif event_type == "search_queries":  # V8.3
-                    search_queries = event_data if isinstance(event_data, list) else []
-                    # H-2: search_queries 즉시 DB 저장
-                    await svc.update_message_metadata(
-                        captured_ai_message_id,
-                        search_queries=search_queries,
-                    )
-                    yield f"data: {json.dumps({'type': 'search_queries', 'data': search_queries})}\n\n"
-
-                elif event_type == "search_results":  # V8.3
-                    search_results = event_data if isinstance(event_data, list) else []
-                    # H-2: search_results 즉시 DB 저장
-                    await svc.update_message_metadata(
-                        captured_ai_message_id,
-                        search_results=search_results,
-                    )
-                    yield f"data: {json.dumps({'type': 'search_results', 'data': search_results})}\n\n"
-
-                elif event_type == "search_retry":  # V8.4: 재시도 이벤트
-                    # 재시도 정보 업데이트
-                    if isinstance(event_data, dict):
-                        search_retry_count = event_data.get(
-                            "retry_count", search_retry_count
-                        )
-                        search_quality_score = event_data.get(
-                            "quality_score", search_quality_score
-                        )
-                        retry_reason = event_data.get("reason", retry_reason)
-                        if "failed_query" in event_data:
-                            failed_queries.append(event_data["failed_query"])
-                    # 클라이언트에 재시도 정보 전송
-                    yield f"data: {json.dumps({'type': 'search_retry', 'data': event_data})}\n\n"
-
-                elif event_type == "done":
-                    # V9.2: AI 응답 완료 - generating → completed 상태로 업데이트
-                    if full_response:
-                        # 기존에 생성한 메시지의 상태, 내용, 메타데이터 업데이트
-                        await svc.update_message_status(
-                            captured_ai_message_id,
-                            status="completed",
-                            content=full_response,
-                            metadata={
-                                "mode": mode_used,
-                                "sources": sources,
-                                "citations": citations,
-                                "intent": intent,
-                                "search_queries": search_queries,
-                                "search_results": search_results,
-                                "thinking_steps": thinking_steps,
-                                "search_retry_count": search_retry_count,
-                                "search_quality_score": search_quality_score,
-                                "failed_queries": failed_queries,
-                                "retry_reason": retry_reason,
-                                "thread_id": captured_thread_id,
-                                "turn_index": 1,
-                                "user_message_id": user_message.message_id,
-                                "context": captured_trace_metadata,
-                            },
-                        )
-                    response_completed["value"] = True
-                    yield f"data: {json.dumps({'type': 'done', 'data': None})}\n\n"
-
-                elif event_type == "error":
-                    # 에러 시 failed 상태로 업데이트
-                    await svc.update_message_status(
-                        captured_ai_message_id,
-                        status="failed",
-                        content=f"오류 발생: {str(event_data)}",
-                    )
-                    yield f"data: {json.dumps({'type': 'error', 'data': str(event_data)})}\n\n"
-
-        except asyncio.CancelledError:
-            # 클라이언트 연결 끊김 - 백그라운드에서 계속 생성
-            logger.info(
-                f"[Thread] Client disconnected, continuing in background: thread_id={captured_thread_id}, message_id={captured_ai_message_id}"
-            )
-            if not response_completed["value"]:
-                # 백그라운드 태스크로 응답 생성 계속
-                asyncio.create_task(
-                    generate_ai_response_background(
-                        thread_id=captured_thread_id,
-                        user_id=captured_user_id,
-                        query=captured_query,
-                        mode=captured_mode,
-                        context=captured_trace_metadata,
-                        settings=captured_settings,
-                        message_id=captured_ai_message_id,  # 기존 메시지 ID 전달
-                    )
-                )
-            raise  # CancelledError 다시 발생시켜 정상 종료
-
-        except Exception as e:
-            logger.exception(f"[Thread] Create stream error: {e}")
-            # 에러 시 메시지 상태를 failed로 업데이트
-            await svc.update_message_status(
-                captured_ai_message_id,
-                status="failed",
-                content=f"스트리밍 오류: {str(e)}",
-            )
-            yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 @router.get("", response_model=ThreadListResponse)
 async def list_threads(
     limit: int = 20,
@@ -805,406 +366,6 @@ async def delete_thread(
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
 
     return {"message": "스레드가 삭제되었습니다", "thread_id": thread_id}
-
-
-@router.post("/{thread_id}/messages", response_model=ThreadResponse)
-async def add_message(
-    thread_id: str,
-    request: AddMessageRequest,
-    settings: Settings = Depends(get_settings),
-    svc: ThreadService = Depends(get_svc),
-    user_id: UUID = Depends(get_current_user_id),
-):
-    """기존 스레드에 메시지 추가 (비스트리밍).
-
-    POST /api/threads/{thread_id}/messages
-    """
-    logger.info(
-        f"[Thread] Add message: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}"
-    )
-    agent_metadata = _build_agent_metadata(
-        settings=settings,
-        context=request.context,
-        requested_model=request.model,
-    )
-
-    # 스레드 존재 확인 (권한 검증 포함)
-    thread = await svc.get_thread(thread_id, user_id=user_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
-
-    existing_user_turns = sum(
-        1 for message in thread.messages if message.role == "user"
-    )
-    current_turn_index = existing_user_turns + 1
-
-    try:
-        # 사용자 메시지 저장
-        user_message = await svc.add_message(
-            thread_id,
-            user_id=user_id,
-            role="user",
-            content=request.query,
-        )
-
-        trace_metadata = _build_langfuse_trace_metadata(
-            base_context=agent_metadata,
-            thread_id=thread_id,
-            user_id=user_id,
-            mode=request.mode,
-            route_name="threads.add_message",
-            turn_index=current_turn_index,
-            user_message_id=user_message.message_id,
-        )
-
-        # AI Agent 실행
-        result = await run_ai_agent(
-            settings=settings,
-            query=request.query,
-            thread_id=thread_id,
-            mode=request.mode,
-            metadata=trace_metadata,
-            enable_retry=True,
-            max_retries=3,
-            user_id=str(user_id),
-        )
-
-        # AI 응답 저장
-        await svc.add_message(
-            thread_id,
-            user_id=user_id,
-            role="assistant",
-            content=result.get("response", ""),
-            metadata={
-                "thread_id": thread_id,
-                "turn_index": current_turn_index,
-                "user_message_id": user_message.message_id,
-                "mode": _normalize_mode_name(result.get("mode", "simple")),
-                "sources": result.get("sources", []),
-                "citations": result.get("citations", []),
-                "intent": result.get("query_analysis"),
-                "search_queries": result.get("search_queries", []),
-                "search_results": result.get("search_results", []),
-                "thinking_steps": result.get("thinking_steps", []),
-                "search_retry_count": result.get("search_retry_count", 0),
-                "search_quality_score": result.get("search_quality_score", 0.0),
-                "failed_queries": result.get("failed_queries", []),
-                "retry_reason": result.get("retry_reason", ""),
-                "context": agent_metadata,
-            },
-        )
-
-        return ThreadResponse(
-            response=result.get("response", ""),
-            thread_id=thread_id,
-            mode=_normalize_mode_name(result.get("mode", "simple")),
-            sources=result.get("sources", []),
-            citations=result.get("citations", []),
-            thinking_steps=result.get("thinking_steps", []),
-        )
-
-    except Exception as e:
-        logger.exception(f"[Thread] Add message error: {e}")
-        raise HTTPException(status_code=500, detail=f"AI 처리 실패: {str(e)}")
-
-
-@router.post("/{thread_id}/messages/stream")
-async def add_message_stream(
-    thread_id: str,
-    request: AddMessageRequest,
-    background_tasks: BackgroundTasks,
-    settings: Settings = Depends(get_settings),
-    svc: ThreadService = Depends(get_svc),
-    user_id: UUID = Depends(get_current_user_id),
-):
-    """기존 스레드에 메시지 추가 (SSE 스트리밍).
-
-    POST /api/threads/{thread_id}/messages/stream
-
-    V9.1: 클라이언트 연결 끊김 시 백그라운드에서 응답 생성 계속
-    V9.2: 메시지 상태 관리 - generating → completed
-    """
-    logger.info(
-        f"[Thread] Add message stream: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...', mode={request.mode}"
-    )
-    agent_metadata = _build_agent_metadata(
-        settings=settings,
-        context=request.context,
-        requested_model=request.model,
-    )
-
-    # 스레드 존재 확인 (권한 검증 포함)
-    thread = await svc.get_thread(thread_id, user_id=user_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
-
-    existing_user_turns = sum(
-        1 for message in thread.messages if message.role == "user"
-    )
-    current_turn_index = max(1, existing_user_turns)
-    user_message_id: str | None = None
-
-    # 사용자 메시지 저장 (skip_user_message가 False일 때만)
-    # HomePage에서 이미 저장된 경우 skip_user_message=True로 중복 저장 방지
-    if not request.skip_user_message:
-        user_message = await svc.add_message(
-            thread_id,
-            user_id=user_id,
-            role="user",
-            content=request.query,
-            status="completed",
-        )
-        user_message_id = user_message.message_id
-        current_turn_index = existing_user_turns + 1
-    else:
-        last_user_message = next(
-            (
-                message
-                for message in reversed(thread.messages)
-                if message.role == "user"
-            ),
-            None,
-        )
-        if last_user_message:
-            user_message_id = last_user_message.message_id
-
-    # V9.2: AI 응답 메시지를 "generating" 상태로 미리 생성
-    ai_message = await svc.add_message(
-        thread_id,
-        user_id=user_id,
-        role="assistant",
-        content="",  # 빈 내용으로 시작
-        status="generating",
-    )
-
-    trace_metadata = _build_langfuse_trace_metadata(
-        base_context=agent_metadata,
-        thread_id=thread_id,
-        user_id=user_id,
-        mode=request.mode,
-        route_name="threads.add_message_stream",
-        turn_index=current_turn_index,
-        user_message_id=user_message_id,
-        assistant_message_id=ai_message.message_id,
-    )
-
-    # 클로저에서 사용할 변수 캡처
-    captured_user_id = user_id
-    captured_thread_id = thread_id
-    captured_query = request.query
-    captured_mode = request.mode
-    captured_trace_metadata = trace_metadata
-    captured_settings = settings
-    captured_ai_message_id = ai_message.message_id
-
-    # 응답 완료 여부 추적
-    response_completed = {"value": False}
-
-    async def generate():
-        nonlocal response_completed
-        try:
-            # 스레드 ID 전송
-            yield f"data: {json.dumps({'type': 'thread_id', 'data': captured_thread_id})}\n\n"
-            # AI 메시지 ID도 전송 (스트림 재연결용)
-            yield f"data: {json.dumps({'type': 'message_id', 'data': captured_ai_message_id})}\n\n"
-
-            # AI Agent 스트리밍 실행
-            full_response = ""
-            mode_used = _normalize_mode_name(request.mode)
-            sources = []
-            citations = []
-            intent = None
-            search_queries = []
-            search_results = []
-            thinking_steps = []
-            search_retry_count = 0
-            search_quality_score = 0.0
-            failed_queries = []
-            retry_reason = ""
-
-            async for event in stream_ai_agent(
-                settings=captured_settings,
-                query=captured_query,
-                thread_id=captured_thread_id,
-                mode=captured_mode,
-                metadata=captured_trace_metadata,
-                enable_retry=True,
-                max_retries=3,
-                user_id=str(captured_user_id),
-            ):
-                event_type = event.get("type", "")
-                event_data = event.get("data")
-
-                if event_type == "thinking":
-                    yield f"data: {json.dumps({'type': 'thinking', 'data': event_data})}\n\n"
-                    # thinking_steps에 추가하여 DB 저장용으로 수집
-                    if isinstance(event_data, dict):
-                        thinking_steps.append(event_data)
-                        if "mode" in event_data:
-                            mode_used = _normalize_mode_name(event_data["mode"])
-                        if "search_retry_count" in event_data:
-                            search_retry_count = event_data["search_retry_count"]
-                        if "search_quality_score" in event_data:
-                            search_quality_score = event_data["search_quality_score"]
-                        if "retry_reason" in event_data:
-                            retry_reason = event_data["retry_reason"]
-                        # H-2: thinking_steps 주기적 저장 (3개마다)
-                        if len(thinking_steps) % 3 == 0:
-                            await svc.update_message_metadata(
-                                captured_ai_message_id,
-                                thinking_steps=thinking_steps,
-                            )
-
-                elif event_type == "query_analysis":
-                    intent = event_data
-                    # H-2: intent 즉시 DB 저장
-                    await svc.update_message_metadata(
-                        captured_ai_message_id,
-                        intent=intent,
-                    )
-                    yield f"data: {json.dumps({'type': 'query_analysis', 'data': event_data})}\n\n"
-
-                elif event_type == "token":
-                    token = (
-                        event_data
-                        if isinstance(event_data, str)
-                        else str(event_data or "")
-                    )
-                    full_response += token
-                    yield f"data: {json.dumps({'type': 'token', 'data': token})}\n\n"
-
-                elif event_type == "content":
-                    full_response = (
-                        event_data if isinstance(event_data, str) else str(event_data)
-                    )
-                    yield f"data: {json.dumps({'type': 'content', 'data': full_response})}\n\n"
-
-                elif event_type == "sources":
-                    sources = event_data if isinstance(event_data, list) else []
-                    # H-2: sources 즉시 DB 저장 (연결 끊김에도 보존)
-                    await svc.update_message_metadata(
-                        captured_ai_message_id,
-                        sources=sources,
-                        mode=mode_used,
-                    )
-                    yield f"data: {json.dumps({'type': 'sources', 'data': sources})}\n\n"
-
-                elif event_type == "citations":
-                    citations = event_data if isinstance(event_data, list) else []
-                    # H-2: citations 즉시 DB 저장
-                    await svc.update_message_metadata(
-                        captured_ai_message_id,
-                        citations=citations,
-                    )
-                    yield f"data: {json.dumps({'type': 'citations', 'data': citations})}\n\n"
-
-                elif event_type == "search_queries":
-                    search_queries = event_data if isinstance(event_data, list) else []
-                    # H-2: search_queries 즉시 DB 저장
-                    await svc.update_message_metadata(
-                        captured_ai_message_id,
-                        search_queries=search_queries,
-                    )
-                    yield f"data: {json.dumps({'type': 'search_queries', 'data': search_queries})}\n\n"
-
-                elif event_type == "search_results":
-                    search_results = event_data if isinstance(event_data, list) else []
-                    # H-2: search_results 즉시 DB 저장
-                    await svc.update_message_metadata(
-                        captured_ai_message_id,
-                        search_results=search_results,
-                    )
-                    yield f"data: {json.dumps({'type': 'search_results', 'data': search_results})}\n\n"
-
-                elif event_type == "search_retry":
-                    if isinstance(event_data, dict):
-                        search_retry_count = event_data.get(
-                            "retry_count", search_retry_count
-                        )
-                        search_quality_score = event_data.get(
-                            "quality_score", search_quality_score
-                        )
-                        retry_reason = event_data.get("reason", retry_reason)
-                        if "failed_query" in event_data:
-                            failed_queries.append(event_data["failed_query"])
-                    yield f"data: {json.dumps({'type': 'search_retry', 'data': event_data})}\n\n"
-
-                elif event_type == "done":
-                    # V9.2: AI 응답 완료 - generating → completed 상태로 업데이트
-                    if full_response:
-                        await svc.update_message_status(
-                            captured_ai_message_id,
-                            status="completed",
-                            content=full_response,
-                            metadata={
-                                "mode": mode_used,
-                                "sources": sources,
-                                "citations": citations,
-                                "intent": intent,
-                                "search_queries": search_queries,
-                                "search_results": search_results,
-                                "thinking_steps": thinking_steps,
-                                "search_retry_count": search_retry_count,
-                                "search_quality_score": search_quality_score,
-                                "failed_queries": failed_queries,
-                                "retry_reason": retry_reason,
-                                "thread_id": captured_thread_id,
-                                "turn_index": current_turn_index,
-                                "user_message_id": user_message_id,
-                                "context": captured_trace_metadata,
-                            },
-                        )
-                    response_completed["value"] = True
-                    yield f"data: {json.dumps({'type': 'done', 'data': None})}\n\n"
-
-                elif event_type == "error":
-                    # 에러 시 failed 상태로 업데이트
-                    await svc.update_message_status(
-                        captured_ai_message_id,
-                        status="failed",
-                        content=f"오류 발생: {str(event_data)}",
-                    )
-                    yield f"data: {json.dumps({'type': 'error', 'data': str(event_data)})}\n\n"
-
-        except asyncio.CancelledError:
-            # 클라이언트 연결 끊김 - 백그라운드에서 계속 생성
-            logger.info(
-                f"[Thread] Client disconnected, continuing in background: thread_id={captured_thread_id}, message_id={captured_ai_message_id}"
-            )
-            if not response_completed["value"]:
-                # 백그라운드 태스크로 응답 생성 계속
-                asyncio.create_task(
-                    generate_ai_response_background(
-                        thread_id=captured_thread_id,
-                        user_id=captured_user_id,
-                        query=captured_query,
-                        mode=captured_mode,
-                        context=captured_trace_metadata,
-                        settings=captured_settings,
-                        message_id=captured_ai_message_id,  # 기존 메시지 ID 전달
-                    )
-                )
-            raise  # CancelledError 다시 발생시켜 정상 종료
-
-        except Exception as e:
-            logger.exception(f"[Thread] Add message stream error: {e}")
-            # 에러 시 메시지 상태를 failed로 업데이트
-            await svc.update_message_status(
-                captured_ai_message_id,
-                status="failed",
-                content=f"스트리밍 오류: {str(e)}",
-            )
-            yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
 
 
 @router.post("/{thread_id}/regenerate")
@@ -1383,13 +544,8 @@ async def regenerate_response(
     )
 
 
-# ============================================================================
-# v1.0.0 API 엔드포인트 - 확인 후 라우팅 + SSE 재연결
-# ============================================================================
-
-
-class CreateThreadV2Request(BaseModel):
-    """v1.0.0: 스레드+메시지 생성 요청 (AI 실행 없음)."""
+class CreateThreadRequest(BaseModel):
+    """스레드+메시지 생성 요청 (AI 실행 없음)."""
 
     query: str = Field(..., description="사용자 질문", min_length=1)
     mode: str = Field(default="auto", description="AI 모드")
@@ -1400,16 +556,16 @@ class CreateThreadV2Request(BaseModel):
     )
 
 
-class CreateThreadV2Response(BaseModel):
-    """v1.0.0: 스레드+메시지 생성 응답."""
+class CreateThreadResponse(BaseModel):
+    """스레드+메시지 생성 응답."""
 
     thread_id: str = Field(..., description="스레드 ID")
     message_id: str = Field(..., description="AI 메시지 ID (queued 상태)")
     user_message_id: str = Field(..., description="사용자 메시지 ID")
 
 
-class AddMessageV2Request(BaseModel):
-    """v1.0.0: 기존 스레드에 메시지 추가 요청 (AI 실행 없음)."""
+class AddMessageRequest(BaseModel):
+    """기존 스레드에 메시지 추가 요청 (AI 실행 없음)."""
 
     query: str = Field(..., description="사용자 질문", min_length=1)
     mode: str = Field(default="auto", description="AI 모드")
@@ -1420,24 +576,24 @@ class AddMessageV2Request(BaseModel):
     )
 
 
-class AddMessageV2Response(BaseModel):
-    """v1.0.0: 메시지 추가 응답."""
+class AddMessageResponse(BaseModel):
+    """메시지 추가 응답."""
 
     thread_id: str = Field(..., description="스레드 ID")
     message_id: str = Field(..., description="AI 메시지 ID (queued 상태)")
     user_message_id: str = Field(..., description="사용자 메시지 ID")
 
 
-@router.post("/v2", response_model=CreateThreadV2Response)
-async def create_thread_v2(
-    request: CreateThreadV2Request,
+@router.post("", response_model=CreateThreadResponse)
+async def create_thread(
+    request: CreateThreadRequest,
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    """v1.0.0: 새 스레드 생성 (AI 실행 없음, 확인 후 라우팅용).
+    """새 스레드 생성 (AI 실행 없음, 확인 후 라우팅용).
 
-    POST /api/threads/v2
+    POST /api/threads
 
     HomePage에서 호출:
     1. 스레드 생성
@@ -1449,7 +605,7 @@ async def create_thread_v2(
     ChatPage에서 GET .../stream으로 SSE 연결
     """
     logger.info(
-        f"[Thread v1.0.0] Create: user={user_id}, query='{request.query[:50]}...', mode={request.mode}"
+        f"[Thread] Create: user={user_id}, query='{request.query[:50]}...', mode={request.mode}"
     )
     agent_metadata = _build_agent_metadata(
         settings=settings,
@@ -1476,32 +632,32 @@ async def create_thread_v2(
             user_id=user_id,
             role="assistant",
             content="",  # 빈 내용
-            status="queued",  # v1.0.0: queued 상태로 시작
+            status="queued",  # queued 상태로 시작
             metadata={"mode": request.mode, "context": agent_metadata},
         )
 
-        return CreateThreadV2Response(
+        return CreateThreadResponse(
             thread_id=thread.thread_id,
             message_id=ai_message.message_id,
             user_message_id=user_message.message_id,
         )
 
     except Exception as e:
-        logger.exception(f"[Thread v1.0.0] Create error: {e}")
+        logger.exception(f"[Thread] Create error: {e}")
         raise HTTPException(status_code=500, detail=f"스레드 생성 실패: {str(e)}")
 
 
-@router.post("/{thread_id}/messages/v2", response_model=AddMessageV2Response)
-async def add_message_v2(
+@router.post("/{thread_id}/messages", response_model=AddMessageResponse)
+async def add_message(
     thread_id: str,
-    request: AddMessageV2Request,
+    request: AddMessageRequest,
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    """v1.0.0: 기존 스레드에 메시지 추가 (AI 실행 없음).
+    """기존 스레드에 메시지 추가 (AI 실행 없음).
 
-    POST /api/threads/{thread_id}/messages/v2
+    POST /api/threads/{thread_id}/messages
 
     기존 스레드에서 추가 질문 시:
     1. 사용자 메시지 저장 (completed)
@@ -1511,7 +667,7 @@ async def add_message_v2(
     클라이언트는 응답 후 GET .../stream으로 SSE 연결
     """
     logger.info(
-        f"[Thread v1.0.0] Add message: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...'"
+        f"[Thread] Add message: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...'"
     )
     agent_metadata = _build_agent_metadata(
         settings=settings,
@@ -1544,14 +700,14 @@ async def add_message_v2(
             metadata={"mode": request.mode, "context": agent_metadata},
         )
 
-        return AddMessageV2Response(
+        return AddMessageResponse(
             thread_id=thread_id,
             message_id=ai_message.message_id,
             user_message_id=user_message.message_id,
         )
 
     except Exception as e:
-        logger.exception(f"[Thread v1.0.0] Add message error: {e}")
+        logger.exception(f"[Thread] Add message error: {e}")
         raise HTTPException(status_code=500, detail=f"메시지 추가 실패: {str(e)}")
 
 
@@ -1564,7 +720,7 @@ async def stream_message_v2(
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    """v1.0.0: 메시지 SSE 스트리밍 (재연결 지원).
+    """메시지 SSE 스트리밍 (재연결 지원).
 
     GET /api/threads/{thread_id}/messages/{message_id}/stream
 
@@ -1580,7 +736,7 @@ async def stream_message_v2(
     3. 재연결 시 partial_content 복구
     """
     logger.info(
-        f"[Thread v1.0.0] Stream: thread_id={thread_id}, message_id={message_id}"
+        f"[Thread] Stream: thread_id={thread_id}, message_id={message_id}"
     )
 
     # 스레드 존재 및 권한 확인
@@ -1846,7 +1002,7 @@ async def stream_message_v2(
         except asyncio.CancelledError:
             # 클라이언트 연결 끊김 - 백그라운드에서 계속 생성
             logger.info(
-                f"[Thread v1.0.0] Client disconnected: thread_id={captured_thread_id}, message_id={captured_message_id}"
+                f"[Thread] Client disconnected: thread_id={captured_thread_id}, message_id={captured_message_id}"
             )
             if not response_completed["value"]:
                 # 현재까지 생성된 partial_content 저장
@@ -1870,7 +1026,7 @@ async def stream_message_v2(
             raise
 
         except Exception as e:
-            logger.exception(f"[Thread v1.0.0] Stream error: {e}")
+            logger.exception(f"[Thread] Stream error: {e}")
             await db_update_status(
                 captured_message_id,
                 status="failed",

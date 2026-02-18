@@ -6,6 +6,7 @@
  */
 
 import type { Message, Source, ThinkingStep } from '@/shared/types'
+import { getAccessToken } from './authToken'
 
 // ============================================================
 // Types
@@ -179,52 +180,24 @@ export async function processSSEStream(
 }
 
 // ============================================================
-// API Functions
+// Helper Functions
 // ============================================================
 
-export async function createThreadAndStream(
-  query: string,
-  mode: string,
-  model: string | undefined,
-  callbacks: StreamingCallbacks,
-  abortSignal?: AbortSignal
-): Promise<string | null> {
-  const response = await fetch('/api/threads/stream', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, mode, model }),
-    signal: abortSignal,
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to create thread: ${response.statusText}`)
+/**
+ * 인증 헤더를 포함한 기본 헤더를 생성합니다.
+ */
+function createAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const accessToken = getAccessToken()
+  if (accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`
   }
-
-  const result = await processSSEStream(response, mode, callbacks, abortSignal)
-  return result.threadId || null
+  return headers
 }
 
-export async function sendMessageStream(
-  threadId: string,
-  query: string,
-  mode: string,
-  model: string | undefined,
-  callbacks: StreamingCallbacks,
-  abortSignal?: AbortSignal
-): Promise<void> {
-  const response = await fetch(`/api/threads/${threadId}/messages/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, mode, model }),
-    signal: abortSignal,
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to send message: ${response.statusText}`)
-  }
-
-  await processSSEStream(response, mode, callbacks, abortSignal)
-}
+// ============================================================
+// API Functions
+// ============================================================
 
 export async function regenerateStream(
   threadId: string,
@@ -235,7 +208,7 @@ export async function regenerateStream(
 ): Promise<void> {
   const response = await fetch(`/api/threads/${threadId}/regenerate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: createAuthHeaders(),
     body: JSON.stringify({ mode, model }),
     signal: abortSignal,
   })

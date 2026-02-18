@@ -12,8 +12,6 @@ import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 import { httpClient } from '@/shared/services'
 import {
-  createThreadAndStream,
-  sendMessageStream,
   regenerateStream,
 } from '@/shared/services/chatStreamService'
 import type { Message, Source, ThinkingStep } from '@/shared/types'
@@ -57,8 +55,6 @@ interface ChatActions {
   switchThread: (threadId: string | null, initialMessages?: Message[]) => void
 
   // 메시지 전송
-  sendMessage: (content: string, mode?: string, model?: string) => Promise<void>
-  createAndStream: (query: string, mode?: string, model?: string) => Promise<string | null>
   regenerate: (mode?: string, model?: string) => Promise<void>
 
   // 스트리밍 제어
@@ -166,93 +162,6 @@ export const useChatStore = create<ChatStore>()(
       // --------------------------------------------------------
       // 메시지 전송
       // --------------------------------------------------------
-      sendMessage: async (content, mode = 'auto', model) => {
-        const { threadId, _startStreaming, _appendToken, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming } = get()
-        if (!threadId) return
-
-        // 사용자 메시지 즉시 추가
-        set((state) => ({
-          messages: [...state.messages, {
-            role: 'user' as const,
-            content,
-            timestamp: Date.now() / 1000,
-          }],
-        }), false, 'addUserMessage')
-
-        const abortController = _startStreaming()
-
-        try {
-          await sendMessageStream(threadId, content, mode, model, {
-            onToken: _appendToken,
-            onThinkingStep: _addThinkingStep,
-            onSource: _addSource,
-            onSources: _setSources,
-            onSearchQueries: _setSearchQueries,
-            onComplete: _finishStreaming,
-            onError: (err) => {
-              set({ error: err, isLoading: false }, false, 'sendMessageError')
-            },
-          }, abortController.signal)
-        } catch (err) {
-          if (err instanceof DOMException && err.name === 'AbortError') {
-            // 취소된 경우 무시
-            return
-          }
-          set({ error: err as Error, isLoading: false }, false, 'sendMessageError')
-        }
-      },
-
-      createAndStream: async (query, mode = 'auto', model) => {
-        const { isCreatingThread, switchThread, _startStreaming, _appendToken, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming, _setThreadId } = get()
-
-        // 이미 생성 중이면 무시 (중복 호출 방지)
-        if (isCreatingThread) {
-          console.warn('[chatStore] Thread creation already in progress, ignoring duplicate call')
-          return null
-        }
-
-        set({ isCreatingThread: true }, false, 'startCreatingThread')
-
-        // 새 스레드 시작: 이전 상태 클리어
-        switchThread(null)
-
-        // 사용자 메시지 추가
-        set({
-          messages: [{
-            role: 'user' as const,
-            content: query,
-            timestamp: Date.now() / 1000,
-          }],
-        }, false, 'addUserMessageForNewThread')
-
-        const abortController = _startStreaming()
-
-        try {
-          const newThreadId = await createThreadAndStream(query, mode, model, {
-            onToken: _appendToken,
-            onThinkingStep: _addThinkingStep,
-            onSource: _addSource,
-            onSources: _setSources,
-            onSearchQueries: _setSearchQueries,
-            onComplete: _finishStreaming,
-            onError: (err) => {
-              set({ error: err, isLoading: false, isCreatingThread: false }, false, 'createAndStreamError')
-            },
-            onThreadId: _setThreadId,
-          }, abortController.signal)
-
-          set({ isCreatingThread: false }, false, 'finishCreatingThread')
-          return newThreadId
-        } catch (err) {
-          set({ isCreatingThread: false }, false, 'finishCreatingThread')
-          if (err instanceof DOMException && err.name === 'AbortError') {
-            return null
-          }
-          set({ error: err as Error, isLoading: false }, false, 'createAndStreamError')
-          return null
-        }
-      },
-
       regenerate: async (mode = 'auto', model) => {
         const { threadId, messages, _startStreaming, _appendToken, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming } = get()
         if (!threadId) return
@@ -488,8 +397,6 @@ export const useChatActions = () => {
   return {
     setThread: (threadId: string, messages: Message[]) => store.switchThread(threadId, messages),
     clearThread: () => store.switchThread(null),
-    sendMessage: store.sendMessage,
-    createAndStream: store.createAndStream,
     regenerate: store.regenerate,
     cancelStreaming: store.cancelStreaming,
   }
