@@ -5,7 +5,10 @@
 
 import { useMemo, useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Brain, ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
+import remarkGfm from 'remark-gfm'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { Brain, ChevronDown, ChevronUp, Loader2, Copy, Check } from 'lucide-react'
 import { cn } from '@/shared/utils/cn'
 import type { SearchSource } from '../types'
 
@@ -126,6 +129,42 @@ function ThinkingBlock({
   )
 }
 
+function CodeBlock({ language, children }: { language: string; children: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(children)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="relative group my-4 rounded-lg overflow-hidden border border-border/50">
+      <div className="flex items-center justify-between px-4 py-2 bg-zinc-800 text-zinc-400 text-xs">
+        <span>{language || 'code'}</span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1.5 hover:text-zinc-100 transition-colors"
+        >
+          {copied ? (
+            <><Check className="h-3.5 w-3.5 text-green-400" /><span className="text-green-400">복사됨</span></>
+          ) : (
+            <><Copy className="h-3.5 w-3.5" /><span>복사</span></>
+          )}
+        </button>
+      </div>
+      <SyntaxHighlighter
+        style={oneDark}
+        language={language}
+        PreTag="div"
+        customStyle={{ margin: 0, borderRadius: 0, fontSize: '0.875rem' }}
+      >
+        {children}
+      </SyntaxHighlighter>
+    </div>
+  )
+}
+
 export function MarkdownContent({
   content,
   className,
@@ -168,6 +207,7 @@ export function MarkdownContent({
       {mainContent && (
         <div className="markdown-content prose dark:prose-invert max-w-none break-words animate-in fade-in duration-300">
           <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
             components={{
               a: ({ ...props }) => (
                 <a
@@ -183,6 +223,29 @@ export function MarkdownContent({
                   className="border-l-4 border-primary/20 pl-4 py-1 my-4 bg-muted/30 rounded-r-lg italic"
                 />
               ),
+              code: ({ className, children, ...props }) => {
+                const match = /language-(\w+)/.exec(className || '')
+                const isInline = !match && !(props as { node?: { type?: string } }).node?.type?.includes('code')
+                if (match) {
+                  return (
+                    <CodeBlock language={match[1]}>
+                      {String(children).replace(/\n$/, '')}
+                    </CodeBlock>
+                  )
+                }
+                return (
+                  <code
+                    className={cn(
+                      'bg-muted px-1.5 py-0.5 rounded text-sm font-mono',
+                      isInline && 'text-foreground/90',
+                      className
+                    )}
+                    {...props}
+                  >
+                    {children}
+                  </code>
+                )
+              },
             }}
           >
             {processedContent}
