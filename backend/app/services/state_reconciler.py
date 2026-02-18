@@ -166,7 +166,7 @@ class StateReconciler:
 
         elif status == FileStatus.SUMMARY_QUEUED:
             # 요약 대기 중 stuck - LLM 작업 재큐잉 시도
-            return await self._requeue_llm_job(file, retry_count)
+            return await self._requeue_llm_job(file, status, retry_count)
 
         elif status == FileStatus.QUEUED:
             # 초기 대기 중 stuck - 파일 타입에 따라 처리
@@ -191,7 +191,7 @@ class StateReconciler:
             )
 
         if status == FileStatus.SUMMARY_QUEUED:
-            return await self._requeue_llm_job(file, retry_count)
+            return await self._requeue_llm_job(file, status, retry_count)
 
         return ReconcileAction(
             file_id=file.id,
@@ -286,7 +286,9 @@ class StateReconciler:
             success=True,
         )
 
-    async def _requeue_llm_job(self, file: File, retry_count: int) -> ReconcileAction:
+    async def _requeue_llm_job(
+        self, file: File, status: FileStatus, retry_count: int
+    ) -> ReconcileAction:
         """LLM 작업을 직접 실행합니다 (직접 실행 패턴)."""
         from .section_executor import SectionGraphExecutor, PhaseExecutionError
         from ..utils.progress_tracker import PipelineProgress
@@ -306,6 +308,7 @@ class StateReconciler:
         if not text_to_summarize:
             return await self._mark_as_failed(
                 file,
+                status,
                 "Cannot run LLM job: no text found",
             )
 
@@ -355,7 +358,11 @@ class StateReconciler:
                 message=f"[Reconciler] LLM failed: {e}",
             )
             await self.session.commit()
-            return await self._mark_as_failed(file, f"LLM execution failed: {e}")
+            return await self._mark_as_failed(
+                file,
+                status,
+                f"LLM execution failed: {e}",
+            )
 
     async def _requeue_initial_job(self, file: File, retry_count: int) -> ReconcileAction:
         """초기 작업을 재큐잉합니다 (ASR 또는 OCR)."""
@@ -363,6 +370,7 @@ class StateReconciler:
         # (재큐잉하려면 원본 파라미터가 필요한데 저장하지 않음)
         return await self._mark_as_failed(
             file,
+            FileStatus.QUEUED,
             f"QUEUED state stuck for too long. Cannot requeue initial job without original parameters.",
         )
 
