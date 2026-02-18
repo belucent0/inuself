@@ -344,22 +344,29 @@ async def run_ai_agent(
     messages = [HumanMessage(content=query)]
     if thread_id:
         try:
-            thread_svc = get_thread_service()
-            thread = await thread_svc.get_thread(thread_id)
-            if thread and thread.messages:
-                # 최근 10개 메시지만 (5턴) - 너무 긴 히스토리는 성능 저하
-                recent_messages = thread.messages[-10:]
-                messages = []
-                for msg in recent_messages:
-                    if msg.role == "user":
-                        messages.append(HumanMessage(content=msg.content))
-                    elif msg.role == "assistant":
-                        messages.append(AIMessage(content=msg.content))
-                # 현재 쿼리 추가
-                messages.append(HumanMessage(content=query))
-                logger.info(
-                    f"[AIAgent] Loaded {len(messages) - 1} previous messages for thread {thread_id}"
-                )
+            from ..db.session import async_session_factory
+            async with async_session_factory() as session:
+                thread_svc = get_thread_service(session)
+                thread = await thread_svc.get_thread(thread_id)
+                if thread and thread.messages:
+                    # completed 상태이고 content가 있는 메시지만 (queued/generating 제외)
+                    completed_messages = [
+                        m for m in thread.messages
+                        if m.content and getattr(m, "status", "completed") == "completed"
+                    ]
+                    # 최근 10개 메시지만 (5턴) - 너무 긴 히스토리는 성능 저하
+                    recent_messages = completed_messages[-10:]
+                    messages = []
+                    for msg in recent_messages:
+                        if msg.role == "user":
+                            messages.append(HumanMessage(content=msg.content))
+                        elif msg.role == "assistant":
+                            messages.append(AIMessage(content=msg.content))
+                    # 현재 쿼리 추가
+                    messages.append(HumanMessage(content=query))
+                    logger.info(
+                        f"[AIAgent] Loaded {len(messages) - 1} previous messages for thread {thread_id}"
+                    )
         except Exception as e:
             logger.warning(f"[AIAgent] Failed to load thread history: {e}")
             messages = [HumanMessage(content=query)]
@@ -560,22 +567,29 @@ async def stream_ai_agent(
     messages = [HumanMessage(content=query)]
     if thread_id:
         try:
-            thread_svc = get_thread_service()
-            thread = await thread_svc.get_thread(thread_id)
-            if thread and thread.messages:
-                # 최근 10개 메시지만 (5턴)
-                recent_messages = thread.messages[-10:]
-                messages = []
-                for msg in recent_messages:
-                    if msg.role == "user":
-                        messages.append(HumanMessage(content=msg.content))
-                    elif msg.role == "assistant":
-                        messages.append(AIMessage(content=msg.content))
-                # 현재 쿼리 추가
-                messages.append(HumanMessage(content=query))
-                logger.info(
-                    f"[AIAgent] Stream: Loaded {len(messages) - 1} previous messages"
-                )
+            from ..db.session import async_session_factory
+            async with async_session_factory() as session:
+                thread_svc = get_thread_service(session)
+                thread = await thread_svc.get_thread(thread_id)
+                if thread and thread.messages:
+                    # completed 상태이고 content가 있는 메시지만 (queued/generating 제외)
+                    completed_messages = [
+                        m for m in thread.messages
+                        if m.content and getattr(m, "status", "completed") == "completed"
+                    ]
+                    # 최근 10개 메시지만 (5턴)
+                    recent_messages = completed_messages[-10:]
+                    messages = []
+                    for msg in recent_messages:
+                        if msg.role == "user":
+                            messages.append(HumanMessage(content=msg.content))
+                        elif msg.role == "assistant":
+                            messages.append(AIMessage(content=msg.content))
+                    # 현재 쿼리 추가
+                    messages.append(HumanMessage(content=query))
+                    logger.info(
+                        f"[AIAgent] Stream: Loaded {len(messages) - 1} previous messages"
+                    )
         except Exception as e:
             logger.warning(f"[AIAgent] Stream: Failed to load thread history: {e}")
             messages = [HumanMessage(content=query)]
