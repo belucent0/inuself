@@ -1,7 +1,7 @@
 """E2E 테스트용 HTTP + SSE 클라이언트 래퍼.
 
 백엔드 API 흐름:
-  login()          → POST /auth/login         → access_token
+  login()          → POST /api/auth/login      → access_token
   create_thread()  → POST /api/threads        → {thread_id, message_id}
   add_message()    → POST /api/threads/{id}/messages → {thread_id, message_id}
   stream_response()→ GET  /api/threads/{id}/messages/{mid}/stream → TurnResult
@@ -55,7 +55,7 @@ class ChatClient:
     async def login(self, login_id: str, password: str) -> None:
         """이메일/비밀번호로 로그인하고 access_token을 저장합니다."""
         resp = await self._client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"login_id": login_id, "password": password},
         )
         if resp.status_code != 200:

@@ -162,8 +162,8 @@ async def run_suite(
                     comment="; ".join(failures) if failures else "통과",
                 )
 
-                # 데이터셋 항목에 연결
-                item.link(trace.id, run_name=run_name)
+                # 데이터셋 항목에 연결 (trace 객체 직접 전달)
+                item.link(trace, run_name=run_name)
 
                 status = "PASS" if score == 1.0 else "FAIL"
                 print(f"→ {status} (mode={result.mode_used}, {elapsed:.1f}s)")
@@ -180,7 +180,7 @@ async def run_suite(
             except Exception as e:
                 trace.update(output={"error": str(e)}, level="ERROR")
                 langfuse.score(trace_id=trace.id, name="quality_pass", value=0.0, comment=str(e))
-                item.link(trace.id, run_name=run_name)
+                item.link(trace, run_name=run_name)
                 print(f"→ ERROR: {e}")
                 results["total"] += 1
                 results["failed"] += 1
