@@ -8,18 +8,42 @@ CI 환경에서는 sys.modules 패치로 대체합니다.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-# ── 1. kiwipiepy mock ──────────────────────────────────────────────────────────
-# intent_parser.py가 top-level에서 `from kiwipiepy import Kiwi`를 사용하므로
+
+def _mock_if_missing(module: str, *submodules: str) -> None:
+    """패키지가 설치되지 않은 경우에만 MagicMock으로 대체합니다 (CI 대응)."""
+    if importlib.util.find_spec(module) is None:
+        sys.modules[module] = MagicMock()
+        for sub in submodules:
+            sys.modules[sub] = MagicMock()
+
+
+# ── 1. 무거운 패키지 mock (설치되지 않은 경우에만) ─────────────────────────────
 # backend 모듈을 import하기 전에 sys.modules에 등록해야 합니다.
-if "kiwipiepy" not in sys.modules:
-    _kiwi_mock = MagicMock()
-    _kiwi_mock.Kiwi = MagicMock()
-    sys.modules["kiwipiepy"] = _kiwi_mock
-    sys.modules["kiwipiepy.Kiwi"] = MagicMock()
+
+# kiwipiepy (한국어 형태소 분석기)
+_mock_if_missing("kiwipiepy", "kiwipiepy.Kiwi")
+
+# redis (web_search.py가 top-level에서 import)
+_mock_if_missing("redis", "redis.asyncio")
+
+# sqlalchemy (rag_search.py → db/models.py, db/session.py가 top-level에서 import)
+_mock_if_missing(
+    "sqlalchemy",
+    "sqlalchemy.orm",
+    "sqlalchemy.ext",
+    "sqlalchemy.ext.asyncio",
+    "sqlalchemy.dialects",
+    "sqlalchemy.dialects.postgresql",
+    "sqlalchemy.dialects.postgresql.base",
+)
+
+# pgvector (db/models.py가 top-level에서 import)
+_mock_if_missing("pgvector", "pgvector.sqlalchemy")
 
 # ── 2. backend를 Python path에 추가 ────────────────────────────────────────────
 _backend_path = str(Path(__file__).parents[3] / "backend")

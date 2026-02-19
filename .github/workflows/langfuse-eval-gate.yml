@@ -43,7 +43,8 @@ jobs:
 
       - name: Python 의존성 설치
         run: |
-          python3 -m pip install --quiet \
+          python3 -m venv .eval-venv
+          .eval-venv/bin/pip install --quiet \
             langfuse>=2.0.0 \
             httpx>=0.27.0 \
             pydantic>=2.0.0
@@ -57,7 +58,7 @@ jobs:
           E2E_LOGIN_ID: ${{ secrets.E2E_LOGIN_ID }}
           E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
           RUN_NAME: pr-${{ github.event.pull_request.number || 'manual' }}-${{ github.sha }}
-        run: python3 scripts/run_eval.py
+        run: .eval-venv/bin/python scripts/run_eval.py
 
       - name: Langfuse UI 링크 출력
         if: always()
