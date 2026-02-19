@@ -1,0 +1,72 @@
+name: E2E Chat Quality Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "백엔드 URL (예: http://your-server:8000)"
+        required: false
+        default: "http://localhost:8000"
+      login_id:
+        description: "테스트 계정 아이디 (기본: Secrets.E2E_LOGIN_ID)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-chat:
+    name: E2E 멀티턴 채팅 품질 검증
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install httpx pytest pytest-asyncio pydantic
+
+      - name: Health check
+        env:
+          BASE_URL: ${{ inputs.base_url || 'http://localhost:8000' }}
+        run: |
+          echo "백엔드 헬스 체크: $BASE_URL"
+          for i in 1 2 3 4 5; do
+            if curl -sf "$BASE_URL/health" > /dev/null 2>&1; then
+              echo "헬스 체크 성공"
+              exit 0
+            fi
+            echo "시도 $i/5 실패, 5초 대기..."
+            sleep 5
+          done
+          echo "백엔드가 응답하지 않습니다: $BASE_URL"
+          exit 1
+
+      - name: Run E2E chat quality tests
+        env:
+          E2E_BASE_URL: ${{ inputs.base_url || 'http://localhost:8000' }}
+          E2E_LOGIN_ID: ${{ inputs.login_id || secrets.E2E_LOGIN_ID }}
+          E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+        run: |
+          python -m pytest tests/e2e/ -v \
+            --tb=short \
+            --timeout=120 \
+            -p no:cacheprovider
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-chat-results-${{ github.run_id }}
+          path: |
+            .pytest_cache/
+          retention-days: 7
+          if-no-files-found: ignore

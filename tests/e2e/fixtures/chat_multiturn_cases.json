@@ -1,0 +1,45 @@
+{
+  "test_suites": [
+    {
+      "id": "greeting-context-flow",
+      "name": "인사 → 사실 질문 → 맥락 참조 (3-turn)",
+      "turns": [
+        {
+          "turn": 1,
+          "query": "안녕하세요",
+          "assertions": {
+            "mode": { "expected": ["simple"] },
+            "content_contains_any": ["안녕", "반갑", "도움", "무엇", "어떻게"],
+            "content_not_contains": [],
+            "no_error": true,
+            "max_response_time_seconds": 30
+          }
+        },
+        {
+          "turn": 2,
+          "query": "대한민국의 수도는?",
+          "assertions": {
+            "mode": { "expected": ["simple", "search", "reasoning"] },
+            "content_contains_any": ["서울"],
+            "content_not_contains": ["도쿄", "베이징", "평양"],
+            "no_error": true,
+            "max_response_time_seconds": 60
+          }
+        },
+        {
+          "turn": 3,
+          "query": "그 도시의 인구는?",
+          "assertions": {
+            "content_contains_any": ["서울", "인구", "만", "천만", "Seoul"],
+            "content_not_contains": ["도쿄", "베이징", "경기도"],
+            "context_check": {
+              "must_reference_any": ["서울", "Seoul"]
+            },
+            "no_error": true,
+            "max_response_time_seconds": 60
+          }
+        }
+      ]
+    }
+  ]
+}
