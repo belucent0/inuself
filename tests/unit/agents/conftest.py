@@ -45,7 +45,14 @@ _mock_if_missing(
 # pgvector (db/models.py가 top-level에서 import)
 _mock_if_missing("pgvector", "pgvector.sqlalchemy")
 
-# ── 2. backend를 Python path에 추가 ────────────────────────────────────────────
+# ── 2. 모듈 레벨 부작용이 있는 내부 모듈 mock ──────────────────────────────────
+# app.db.session은 import 시 get_settings() 호출 → pydantic_settings + .env 필요
+# backend path 추가 전에 등록해야 실제 파일이 로드되지 않습니다.
+for _mod in ["app.db.session", "app.db.base", "app.core.config"]:
+    if _mod not in sys.modules:
+        sys.modules[_mod] = MagicMock()
+
+# ── 3. backend를 Python path에 추가 ────────────────────────────────────────────
 _backend_path = str(Path(__file__).parents[3] / "backend")
 if _backend_path not in sys.path:
     sys.path.insert(0, _backend_path)
