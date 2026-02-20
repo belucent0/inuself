@@ -1,6 +1,6 @@
 """Whisper.cpp Server - OpenAI-compatible wrapper for whisper.cpp.
 
-Port 8001에서 실행되며 whisper-cli.exe를 사용하여 ASR을 수행합니다.
+Port 12010에서 실행되며 whisper-cli.exe를 사용하여 ASR을 수행합니다.
 OpenAI-compatible /v1/audio/transcriptions 엔드포인트를 제공합니다.
 """
 import sys
@@ -28,8 +28,8 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("WhisperCppServer")
 
-# Port configuration - hardcoded to avoid conflicts
-PORT = 8001
+# Port configuration: argv[1] (from manager) > env var > default 12010
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.getenv("WHISPER_CPP_PORT", "12010"))
 print(f"[Whisper Server] Starting on port {PORT}", flush=True)
 WHISPER_CLI_PATH = os.getenv(
     "WHISPER_CLI_PATH",
