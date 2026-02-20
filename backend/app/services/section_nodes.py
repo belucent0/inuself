@@ -171,7 +171,7 @@ async def create_section_node(
 
         # tier-recap 모델 사용
         recap_settings = settings.model_copy(
-            update={"llm_model": settings.litellm_model_summarize}
+            update={"litellm_model": settings.litellm_model_summarize}
         )
 
         # LLM 호출 (비동기)
@@ -370,7 +370,7 @@ async def fallback_section_node(
         ]
 
         recap_settings = settings.model_copy(
-            update={"llm_model": settings.litellm_model_summarize}
+            update={"litellm_model": settings.litellm_model_summarize}
         )
 
         response = await request_litellm_completion_async(

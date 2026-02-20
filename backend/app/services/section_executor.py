@@ -176,7 +176,7 @@ class SectionGraphExecutor:
 
                 # Phase 1도 tier-recap 사용 (법률/전문 용어 처리 향상)
                 recap_settings = self.settings.model_copy(
-                    update={"llm_model": self.settings.litellm_model_summarize}
+                    update={"litellm_model": self.settings.litellm_model_summarize}
                 )
 
                 response = await request_litellm_completion_async(

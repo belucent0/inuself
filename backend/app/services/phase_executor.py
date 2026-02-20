@@ -165,7 +165,7 @@ class PhaseExecutor:
 
                 # tier-recap 사용
                 recap_settings = self.settings.model_copy(
-                    update={"llm_model": self.settings.litellm_model_summarize}
+                    update={"litellm_model": self.settings.litellm_model_summarize}
                 )
 
                 response = request_litellm_completion(

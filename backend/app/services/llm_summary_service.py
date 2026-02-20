@@ -617,7 +617,7 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
     try:
         # tier-recap 모델 사용
         recap_settings = settings.model_copy(
-            update={"llm_model": settings.litellm_model_summarize}
+            update={"litellm_model": settings.litellm_model_summarize}
         )
 
         if toc:
