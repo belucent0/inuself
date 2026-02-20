@@ -1,0 +1,4 @@
+{
+  "extraPaths": ["backend"],
+  "exclude": ["**/rocm_env/**", "**/node_modules/**", "**/.venv/**"]
+}

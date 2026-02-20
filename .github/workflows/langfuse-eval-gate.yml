@@ -1,0 +1,77 @@
+name: Langfuse Eval Gate
+
+# PR 머지 전 실제 서버에서 멀티턴 채팅 품질을 검증합니다.
+# self-hosted runner (WSL)에서 실행 → localhost:8000 직접 접근 가능
+# 소요 시간: ~60초 (3-turn 대화)
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  langfuse-eval:
+    name: 멀티턴 채팅 품질 검증 (Langfuse)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 백엔드 헬스 체크
+        run: |
+          for i in 1 2 3 4 5; do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "헬스 체크 성공"
+              exit 0
+            fi
+            echo "시도 $i/5 실패, 5초 대기..."
+            sleep 5
+          done
+          echo "백엔드가 응답하지 않습니다: http://localhost:8000"
+          exit 1
+
+      - name: Python 의존성 설치
+        run: |
+          python3 -m venv .eval-venv
+          .eval-venv/bin/pip install --quiet \
+            "langfuse>=2.0.0,<3.0.0" \
+            httpx>=0.27.0 \
+            pydantic>=2.0.0
+
+      - name: Langfuse 데이터셋 동기화
+        env:
+          LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        run: .eval-venv/bin/python scripts/setup_eval_dataset.py
+
+      - name: Langfuse Eval 실행
+        env:
+          LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          E2E_BASE_URL: http://localhost:8000
+          E2E_LOGIN_ID: ${{ secrets.E2E_LOGIN_ID }}
+          E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+          RUN_NAME: pr-${{ github.event.pull_request.number || 'manual' }}-${{ github.sha }}
+        run: .eval-venv/bin/python scripts/run_eval.py
+
+      - name: Langfuse UI 링크 출력
+        if: always()
+        env:
+          LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+        run: |
+          echo "결과 확인: $LANGFUSE_HOST"
+          echo "Datasets > chat-quality-golden-set > Runs"

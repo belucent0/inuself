@@ -251,8 +251,14 @@ class StreamProcessor:
 
         # Worker Results Stream에도 발행 (Backend용)
         if file_id:
+            # Backend StreamConsumer uses canonical types: asr/llm/ocr.
+            worker_result_type = {
+                "transcription": "asr",
+                "llm_completion": "llm",
+                "ocr": "ocr",
+            }.get(task_type, task_type)
             worker_event = {
-                "type": task_type,
+                "type": worker_result_type,
                 "event": "processing_started",
                 "file_id": file_id,
                 "timestamp": time.time(),

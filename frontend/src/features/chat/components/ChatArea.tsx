@@ -32,7 +32,10 @@ import {
   Loader2,
   FileText,
   RefreshCw,
+  Copy,
+  Check,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { MarkdownContent } from './MarkdownContent'
 import { ThinkingProcessAccordion } from './ThinkingDisplay'
 import { cn } from '@/shared/utils/cn'
@@ -172,6 +175,18 @@ function MessageItem({
   isStreaming?: boolean
 }) {
   const isUser = message.role === 'user'
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content)
+      setCopied(true)
+      toast.success('답변이 복사되었습니다')
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast.error('복사에 실패했습니다')
+    }
+  }
 
   const sources = message.metadata?.sources || []
   const thinkingSteps = message.metadata?.thinking_steps || []
@@ -270,6 +285,22 @@ function MessageItem({
         {/* 출처 버튼 */}
         {sources.length > 0 && <SourcesModal sources={sources} />}
 
+        {/* 복사 버튼 */}
+        {message.content && !isProcessing && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground"
+            onClick={handleCopy}
+          >
+            {copied ? (
+              <><Check className="h-3 w-3 text-green-500" /><span className="text-green-500">복사됨</span></>
+            ) : (
+              <><Copy className="h-3 w-3" />복사</>
+            )}
+          </Button>
+        )}
+
         {/* F-3: 재생성 버튼 - 마지막 AI 메시지에만 표시 (processing 중이 아닐 때만) */}
         {isLastAssistant && onRegenerate && !isStreaming && !isProcessing && (
           <Button
@@ -347,7 +378,7 @@ export function ChatArea({
   onRegenerate,
 }: ChatAreaProps) {
   const [inputValue, setInputValue] = useState('')
-  const [mode, setMode] = useState<AIMode>('hybrid')
+  const [mode, setMode] = useState<AIMode>('auto')
   const [model, setModel] = useState<string | undefined>(undefined)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
   const [inputHeight, setInputHeight] = useState(0)

@@ -82,6 +82,17 @@ def _publish_result(data: dict[str, Any]) -> str:
 # =============================================================================
 
 
+def publish_asr_started(file_id: int) -> str:
+    """ASR 작업 시작을 발행합니다."""
+    return _publish_result(
+        {
+            "type": "asr",
+            "event": "started",
+            "file_id": file_id,
+        }
+    )
+
+
 def publish_asr_completed(
     file_id: int,
     *,
@@ -223,6 +234,17 @@ def publish_wpi_report_failed(scan_result_id: str, *, error: str) -> str:
 # =============================================================================
 # OCR 결과 발행
 # =============================================================================
+
+
+def publish_ocr_started(file_id: int) -> str:
+    """OCR 작업 시작을 발행합니다."""
+    return _publish_result(
+        {
+            "type": "ocr",
+            "event": "started",
+            "file_id": file_id,
+        }
+    )
 
 
 def publish_ocr_completed(

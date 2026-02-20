@@ -29,6 +29,7 @@ interface ChatInputProps {
 }
 
 const placeholders: Record<AIMode, string> = {
+  auto: '무엇이든 물어보세요...',
   simple: '무엇이든 물어보세요...',
   search: '웹에서 검색할 내용을 입력하세요...',
   rag: '내 문서에서 검색할 내용을 입력하세요...',

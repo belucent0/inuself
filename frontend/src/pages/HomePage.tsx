@@ -2,7 +2,7 @@
  * HomePage - 랜딩 페이지 (/)
  *
  * v1.0.0: 확인 후 라우팅
- * - POST /api/threads/v2로 스레드+메시지 먼저 생성
+ * - POST /api/threads로 스레드+메시지 먼저 생성
  * - 응답 받은 후 /chat/{thread_id}?messageId={message_id} 로 이동
  */
 
@@ -26,7 +26,7 @@ const suggestedQueries = [
 export function HomePage() {
   const navigate = useNavigate()
   const [input, setInput] = useState('')
-  const [mode, setMode] = useState<AIMode>('search')
+  const [mode, setMode] = useState<AIMode>('auto')
   const [isNavigating, setIsNavigating] = useState(false)
 
   const handleSendMessage = async (text: string) => {
@@ -36,9 +36,9 @@ export function HomePage() {
     setIsNavigating(true)
 
     try {
-      // v1.0.0: POST로 스레드+메시지 먼저 생성
+      // POST로 스레드+메시지 먼저 생성
       const accessToken = getAccessToken()
-      const response = await fetch(`${httpClient.getBaseUrl()}/threads/v2`, {
+      const response = await fetch(`${httpClient.getBaseUrl()}/threads`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

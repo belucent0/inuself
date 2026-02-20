@@ -24,6 +24,7 @@ from worker.utils.storage import download_file, upload_json
 #     rebuild_transcription_text,
 # )
 from worker.utils.result_publisher import (
+    publish_asr_started,
     publish_asr_completed,
     publish_asr_failed,
 )
@@ -99,8 +100,9 @@ async def _process_job(
         f"[Worker] [1/5] Starting job: file_id={file_id}, file={original_filename}"
     )
 
-    # Note: "started" 이벤트는 ASR 리소스 획득 후 pipeline에서 발행
-    # (UI에 정확한 처리 상태 표시를 위해)
+    # Redis Stream: 처리 시작 이벤트 발행
+    publish_asr_started(file_id)
+    logger.info(f"[Worker] Published processing_started event: file_id={file_id}")
 
     # 파일 다운로드
     logger.info(f"[Worker] [2/5] Downloading file: {storage_key}")
