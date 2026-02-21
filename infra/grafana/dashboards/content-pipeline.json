@@ -258,7 +258,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT 'ASR (오디오)' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status IN ('QUEUED', 'PULLING') THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'PROCESSING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'ASR_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE f.content_type = 'AUDIO'\nUNION ALL\nSELECT 'OCR (문서)' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status = 'QUEUED' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'OCR_PROCESSING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'OCR_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE f.content_type = 'DOCUMENT'\nUNION ALL\nSELECT 'LLM 요약' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARY_QUEUED' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARIZING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARY_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status = 'COMPLETED' THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nWHERE c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED');",
+          "rawSql": "SELECT 'ASR (오디오)' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status IN ('QUEUED', 'PULLING') THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'PROCESSING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'ASR_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE f.content_type = 'AUDIO'\n  AND $__timeFilter(c.created_at)\nUNION ALL\nSELECT 'OCR (문서)' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status = 'QUEUED' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'OCR_PROCESSING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'OCR_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE f.content_type = 'DOCUMENT'\n  AND $__timeFilter(c.created_at)\nUNION ALL\nSELECT 'LLM 요약' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARY_QUEUED' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARIZING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARY_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status = 'COMPLETED' THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nWHERE c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED')\n  AND $__timeFilter(c.created_at);",
           "refId": "A"
         }
       ],
@@ -369,7 +369,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  COUNT(*) AS total_files,\n  SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_files,\n  ROUND(SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS completion_rate\nFROM content c;",
+          "rawSql": "SELECT\n  COUNT(*) AS total_files,\n  SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_files,\n  ROUND(SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS completion_rate\nFROM content c\nWHERE $__timeFilter(c.created_at);",
           "refId": "A"
         }
       ],
@@ -516,11 +516,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  date_trunc('hour', c.updated_at) AS time,\n  SUM(CASE WHEN f.content_type = 'AUDIO' AND c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END) AS asr_count,\n  SUM(CASE WHEN f.content_type = 'DOCUMENT' AND c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END) AS ocr_count,\n  SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END) AS summary_count\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE c.updated_at >= NOW() - INTERVAL '24 hours'\nGROUP BY 1\nORDER BY 1;",
+          "rawSql": "SELECT\n  date_trunc('hour', c.updated_at) AS time,\n  SUM(CASE WHEN f.content_type = 'AUDIO' AND c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END) AS asr_count,\n  SUM(CASE WHEN f.content_type = 'DOCUMENT' AND c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END) AS ocr_count,\n  SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END) AS summary_count\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE $__timeFilter(c.updated_at)\nGROUP BY 1\nORDER BY 1;",
           "refId": "A"
         }
       ],
-      "title": "시간대별 처리량 (24시간)",
+      "title": "시간대별 처리량",
       "type": "timeseries"
     },
     {
@@ -588,7 +588,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  CASE\n    WHEN f.content_type = 'AUDIO' THEN 'AUDIO'\n    WHEN f.content_type = 'DOCUMENT' THEN 'DOCUMENT'\n    WHEN f.content_type = 'PORTRAY' THEN 'PORTRAY'\n    ELSE 'OTHER'\n  END AS content_type,\n  COUNT(*) AS count\nFROM content c\nJOIN file f ON f.id = c.file_id\nGROUP BY 1\nORDER BY 2 DESC;",
+          "rawSql": "SELECT\n  CASE\n    WHEN f.content_type = 'AUDIO' THEN 'AUDIO'\n    WHEN f.content_type = 'DOCUMENT' THEN 'DOCUMENT'\n    WHEN f.content_type = 'PORTRAY' THEN 'PORTRAY'\n    ELSE 'OTHER'\n  END AS content_type,\n  COUNT(*) AS count\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE $__timeFilter(c.created_at)\nGROUP BY 1\nORDER BY 2 DESC;",
           "refId": "A"
         }
       ],
@@ -724,7 +724,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  f.name AS filename,\n  f.content_type AS type,\n  c.status,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 86400) || '일 전'\n  END AS elapsed\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE c.status IN ('ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED')\nORDER BY c.updated_at DESC\nLIMIT 10;",
+          "rawSql": "SELECT\n  f.name AS filename,\n  f.content_type AS type,\n  c.status,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 86400) || '일 전'\n  END AS elapsed\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE c.status IN ('ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED')\n  AND $__timeFilter(c.updated_at)\nORDER BY c.updated_at DESC\nLIMIT 10;",
           "refId": "A"
         }
       ],
@@ -901,6 +901,25 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "대기중"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "대기중"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "처리중"
             },
             "properties": [
@@ -920,12 +939,12 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "완료 (24h)"
+              "options": "완료"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "완료 (24h)"
+                "value": "완료"
               },
               {
                 "id": "color",
@@ -939,12 +958,12 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "실패 (24h)"
+              "options": "실패"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "실패 (24h)"
+                "value": "실패"
               },
               {
                 "id": "thresholds",
@@ -952,7 +971,7 @@
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
+                      "color": "blue",
                       "value": null
                     },
                     {
@@ -967,12 +986,12 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "스레드 (24h)"
+              "options": "스레드"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "스레드 (24h)"
+                "value": "스레드"
               },
               {
                 "id": "color",
@@ -987,11 +1006,11 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 24,
+        "w": 16,
         "x": 0,
         "y": 22
       },
-      "id": 7,
+      "id": 10,
       "options": {
         "colorMode": "background",
         "graphMode": "none",
@@ -1014,7 +1033,7 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  COUNT(CASE WHEN m.status IN ('queued', 'analyzing', 'searching', 'thinking', 'generating') THEN 1 END) AS \"처리중\",\n  COUNT(CASE WHEN m.status = 'completed' AND m.created_at >= NOW() - INTERVAL '24 hours' THEN 1 END) AS \"완료 (24h)\",\n  COUNT(CASE WHEN m.status = 'failed' AND m.created_at >= NOW() - INTERVAL '24 hours' THEN 1 END) AS \"실패 (24h)\",\n  COUNT(DISTINCT CASE WHEN t.created_at >= NOW() - INTERVAL '24 hours' THEN t.id END) AS \"스레드 (24h)\"\nFROM ai_message m\nJOIN ai_thread t ON t.id = m.thread_id\nWHERE m.role = 'assistant'\n  AND NOT t.is_archived;",
+          "rawSql": "SELECT\n  COUNT(CASE WHEN m.status = 'queued' THEN 1 END) AS \"대기중\",\n  COUNT(CASE WHEN m.status IN ('analyzing', 'searching', 'thinking', 'generating') THEN 1 END) AS \"처리중\",\n  COUNT(CASE WHEN m.status = 'completed' AND m.created_at >= $__timeFrom() AND m.created_at <= $__timeTo() THEN 1 END) AS \"완료\",\n  COUNT(CASE WHEN m.status = 'failed' AND m.created_at >= $__timeFrom() AND m.created_at <= $__timeTo() THEN 1 END) AS \"실패\",\n  COUNT(DISTINCT CASE WHEN m.created_at >= $__timeFrom() AND m.created_at <= $__timeTo() THEN m.thread_id END) AS \"스레드\"\nFROM ai_message m\nJOIN ai_thread t ON t.id = m.thread_id\nWHERE m.role = 'assistant'\n  AND NOT t.is_archived;",
           "refId": "A"
         }
       ],
@@ -1137,7 +1156,7 @@
         "x": 0,
         "y": 27
       },
-      "id": 8,
+      "id": 11,
       "options": {
         "footer": {
           "show": false
@@ -1251,11 +1270,11 @@
           },
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  COALESCE(t.title, '(제목 없음)') AS thread,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - m.created_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - m.created_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - m.created_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - m.created_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - m.created_at)) / 86400) || '일 전'\n  END AS elapsed,\n  CASE WHEN m.partial_content IS NOT NULL THEN LEFT(m.partial_content, 60) || '...' ELSE '없음' END AS partial\nFROM ai_message m\nJOIN ai_thread t ON t.id = m.thread_id\nWHERE m.role = 'assistant'\n  AND m.status = 'failed'\n  AND m.created_at >= NOW() - INTERVAL '24 hours'\n  AND NOT t.is_archived\nORDER BY m.created_at DESC\nLIMIT 10;",
+          "rawSql": "SELECT\n  COALESCE(t.title, '(제목 없음)') AS thread,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - m.created_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - m.created_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - m.created_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - m.created_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - m.created_at)) / 86400) || '일 전'\n  END AS elapsed,\n  CASE WHEN m.partial_content IS NOT NULL THEN LEFT(m.partial_content, 60) || '...' ELSE '없음' END AS partial\nFROM ai_message m\nJOIN ai_thread t ON t.id = m.thread_id\nWHERE m.role = 'assistant'\n  AND m.status = 'failed'\n  AND $__timeFilter(m.created_at)\n  AND NOT t.is_archived\nORDER BY m.created_at DESC\nLIMIT 10;",
           "refId": "A"
         }
       ],
-      "title": "채팅 실패 (24h)",
+      "title": "채팅 실패",
       "type": "table"
     }
   ],
