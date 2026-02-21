@@ -10,6 +10,19 @@
   "liveNow": true,
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "파일 처리 파이프라인",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "postgres",
         "uid": "postgresql"
@@ -232,9 +245,9 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 12,
+        "w": 16,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "id": 1,
       "options": {
@@ -341,9 +354,9 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 0
+        "w": 8,
+        "x": 16,
+        "y": 1
       },
       "id": 8,
       "options": {
@@ -490,9 +503,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
-        "y": 7
+        "y": 8
       },
       "id": 4,
       "options": {
@@ -615,14 +628,40 @@
                 "value": 80
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "content_id"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "content_id"
+              },
+              {
+                "id": "custom.width",
+                "value": 280
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Tempo에서 보기",
+                    "url": "/grafana/explore?orgId=1&schemaVersion=1&panes={\"tp\":{\"datasource\":\"tempo\",\"queries\":[{\"refId\":\"A\",\"queryType\":\"traceql\",\"expr\":\"{resource[\\\"file.id\\\"]=\\\"${__value.raw}\\\"}\"}],\"range\":{\"from\":\"now-7d\",\"to\":\"now\"}}}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
       "gridPos": {
         "h": 7,
-        "w": 12,
+        "w": 8,
         "x": 0,
-        "y": 15
+        "y": 16
       },
       "id": 6,
       "options": {
@@ -652,11 +691,153 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  COALESCE(f.filename, '(파일 없음)') AS filename,\n  COALESCE(f.content_type::text, '-') AS type,\n  c.status,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 86400) || '일 전'\n  END AS elapsed\nFROM content c\nLEFT JOIN file f ON f.id = c.file_id\nWHERE c.status IN ('ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED', 'DOWNLOAD_FAILED', 'CANCELLED')\nORDER BY c.updated_at DESC\nLIMIT 10;",
+          "rawSql": "SELECT\n  COALESCE(f.filename, '(파일 없음)') AS filename,\n  COALESCE(f.content_type::text, '-') AS type,\n  c.status,\n  c.id::text AS content_id,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 86400) || '일 전'\n  END AS elapsed\nFROM content c\nLEFT JOIN file f ON f.id = c.file_id\nWHERE c.status IN ('ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED', 'DOWNLOAD_FAILED', 'CANCELLED')\nORDER BY c.updated_at DESC\nLIMIT 10;",
           "refId": "A"
         }
       ],
       "title": "최근 실패 작업",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgresql"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "filename"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "파일명"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "type"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "타입"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "elapsed"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "완료 경과"
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "content_id"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "content_id"
+              },
+              {
+                "id": "custom.width",
+                "value": 280
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Tempo에서 보기",
+                    "url": "/grafana/explore?orgId=1&schemaVersion=1&panes={\"tp\":{\"datasource\":\"tempo\",\"queries\":[{\"refId\":\"A\",\"queryType\":\"traceql\",\"expr\":\"{resource[\\\"file.id\\\"]=\\\"${__value.raw}\\\"}\"}],\"range\":{\"from\":\"now-7d\",\"to\":\"now\"}}}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
+      "id": 12,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "완료 경과"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgresql"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  COALESCE(f.filename, '(파일 없음)') AS filename,\n  COALESCE(f.content_type::text, '-') AS type,\n  c.id::text AS content_id,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.completed_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.completed_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.completed_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.completed_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - c.completed_at)) / 86400) || '일 전'\n  END AS elapsed\nFROM content c\nLEFT JOIN file f ON f.id = c.file_id\nWHERE c.status = 'COMPLETED'\nORDER BY c.completed_at DESC NULLS LAST\nLIMIT 10;",
+          "refId": "A"
+        }
+      ],
+      "title": "최근 성공 작업",
       "type": "table"
     },
     {
@@ -760,9 +941,9 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 15
+        "w": 8,
+        "x": 16,
+        "y": 16
       },
       "id": 7,
       "options": {
@@ -800,6 +981,19 @@
       "type": "table"
     },
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "id": 101,
+      "panels": [],
+      "title": "LLM 채팅",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "postgres",
         "uid": "postgresql"
@@ -809,6 +1003,13 @@
           "color": {
             "mode": "thresholds"
           },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -816,32 +1017,32 @@
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
               }
             ]
-          },
-          "unit": "short"
+          }
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "대기중"
+              "options": "파이프라인"
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "대기중"
-              },
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "대기"
+            },
+            "properties": [
               {
-                "id": "color",
-                "value": {
-                  "fixedColor": "yellow",
-                  "mode": "fixed"
-                }
+                "id": "custom.width",
+                "value": 80
               }
             ]
           },
@@ -852,8 +1053,8 @@
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "처리중"
+                "id": "custom.width",
+                "value": 80
               },
               {
                 "id": "color",
@@ -871,8 +1072,8 @@
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "완료"
+                "id": "custom.width",
+                "value": 80
               },
               {
                 "id": "color",
@@ -890,8 +1091,8 @@
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "실패"
+                "id": "custom.width",
+                "value": 80
               },
               {
                 "id": "thresholds",
@@ -918,40 +1119,31 @@
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "스레드"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "purple",
-                  "mode": "fixed"
-                }
+                "id": "custom.width",
+                "value": 80
               }
             ]
           }
         ]
       },
       "gridPos": {
-        "h": 5,
-        "w": 16,
+        "h": 3,
+        "w": 24,
         "x": 0,
-        "y": 22
+        "y": 24
       },
       "id": 10,
       "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
           "fields": "",
-          "values": false
+          "reducer": [
+            "sum"
+          ],
+          "show": false
         },
-        "textMode": "auto"
+        "showHeader": true
       },
       "targets": [
         {
@@ -959,14 +1151,15 @@
             "type": "postgres",
             "uid": "postgresql"
           },
+          "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  COUNT(CASE WHEN m.status = 'queued' THEN 1 END) AS \"대기중\",\n  COUNT(CASE WHEN m.status IN ('analyzing', 'searching', 'thinking', 'generating') THEN 1 END) AS \"처리중\",\n  COUNT(CASE WHEN m.status = 'completed' AND m.created_at >= $__timeFrom() AND m.created_at <= $__timeTo() THEN 1 END) AS \"완료\",\n  COUNT(CASE WHEN m.status = 'failed' AND m.created_at >= $__timeFrom() AND m.created_at <= $__timeTo() THEN 1 END) AS \"실패\",\n  COUNT(DISTINCT CASE WHEN m.created_at >= $__timeFrom() AND m.created_at <= $__timeTo() THEN m.thread_id END) AS \"스레드\"\nFROM ai_message m\nJOIN ai_thread t ON t.id = m.thread_id\nWHERE m.role = 'assistant'\n  AND NOT t.is_archived;",
+          "rawSql": "SELECT 'LLM 채팅' AS \"파이프라인\",\n  COALESCE(SUM(CASE WHEN m.status = 'queued' THEN 1 ELSE 0 END), 0) AS \"대기\",\n  COALESCE(SUM(CASE WHEN m.status IN ('analyzing', 'searching', 'thinking', 'generating') THEN 1 ELSE 0 END), 0) AS \"처리중\",\n  COALESCE(SUM(CASE WHEN m.status = 'completed' THEN 1 ELSE 0 END), 0) AS \"완료\",\n  COALESCE(SUM(CASE WHEN m.status = 'failed' THEN 1 ELSE 0 END), 0) AS \"실패\",\n  COUNT(DISTINCT m.thread_id) AS \"스레드\"\nFROM ai_message m\nJOIN ai_thread t ON t.id = m.thread_id\nWHERE m.role = 'assistant'\n  AND NOT t.is_archived\n  AND $__timeFilter(m.created_at);",
           "refId": "A"
         }
       ],
       "title": "LLM 채팅 현황",
-      "type": "stat"
+      "type": "table"
     },
     {
       "datasource": {
@@ -1227,6 +1420,6 @@
   "timezone": "browser",
   "title": "Content Pipeline",
   "uid": "content-pipeline",
-  "version": 3,
+  "version": 5,
   "weekStart": ""
 }
