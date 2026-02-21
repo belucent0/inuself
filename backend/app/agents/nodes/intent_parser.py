@@ -35,6 +35,7 @@ from loguru import logger
 from ..state import GraphState, AIMode, ThinkingStep, QueryAnalysis
 from ..tools.llm_client import async_llm_completion
 from ..tools.model_router import TierRouter
+from ..tools.datetime_tool import get_current_datetime
 from ...core.llm_tier import LLMTier
 
 # Kiwi 형태소 분석기 싱글톤 (로딩 시간 절약)
@@ -140,6 +141,8 @@ LOW_SIGNAL_NOUNS = {
 # 의도 분석 프롬프트
 INTENT_ANALYSIS_PROMPT = """당신은 사용자 질문의 의도를 분석하는 전문가입니다.
 
+오늘 날짜: {current_date}
+
 다음 질문을 분석하여 가장 적합한 모드를 선택하세요:
 
 사용자 질문: {query}
@@ -147,6 +150,7 @@ INTENT_ANALYSIS_PROMPT = """당신은 사용자 질문의 의도를 분석하는
 모드 선택 기준:
 - simple: 인사, 일반 대화, 간단한 질문 (최신 정보나 검색이 필요 없는 경우)
 - search: 최신 뉴스, 실시간 정보, 특정 웹사이트 검색이 필요한 경우
+  (오늘 날짜 기준으로 학습 데이터에 없을 가능성이 높은 정보 포함)
 - rag: 사용자의 기존 콘텐츠나 문서를 참조해야 하는 경우
 - reasoning: 복잡한 분석, 비교, 추론, 단계별 설명이 필요한 경우
 - hybrid: 웹 검색과 내부 문서 검색을 모두 활용해야 하는 경우
@@ -773,7 +777,10 @@ class IntentParserNode:
 
         # LLM을 사용한 정밀 분류
         try:
-            prompt = INTENT_ANALYSIS_PROMPT.format(query=query)
+            prompt = INTENT_ANALYSIS_PROMPT.format(
+                query=query,
+                current_date=get_current_datetime(),
+            )
             response = await async_llm_completion(
                 settings=self.settings,
                 messages=[{"role": "user", "content": prompt}],

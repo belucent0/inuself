@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import copy
 import time
+from datetime import datetime
 from typing import Any
 
 from loguru import logger
 
 from ..state import GraphState, ThinkingStep
 from ..tools.llm_client import async_llm_completion
+from ..tools.datetime_tool import get_current_datetime
 
 
 class QueryRewriterNode:
@@ -208,13 +210,14 @@ class QueryRewriterNode:
             새로운 검색 쿼리 목록
         """
         # 전략별 프롬프트
+        current_year = str(datetime.now().year)
         strategy_instructions = {
-            "broaden": """더 넓은 범위의 일반적인 용어를 사용하세요.
+            "broaden": f"""더 넓은 범위의 일반적인 용어를 사용하세요.
 예: "FastAPI 성능 벤치마크" → "파이썬 웹 프레임워크 성능 비교"
-예: "TSMC 2026 투자 계획" → "TSMC 투자", "반도체 투자 2026" """,
-            "narrow": """더 구체적이고 특정한 용어를 사용하세요.
+예: "TSMC {current_year} 투자 계획" → "TSMC 투자", "반도체 투자 {current_year}" """,
+            "narrow": f"""더 구체적이고 특정한 용어를 사용하세요.
 예: "파이썬 웹 프레임워크" → "FastAPI vs Flask 성능"
-예: "TSMC 투자" → "TSMC 2026년 설비 투자 계획 82조" """,
+예: "TSMC 투자" → "TSMC {current_year}년 설비 투자 계획 82조" """,
             "synonym": """동의어나 관련어를 사용하세요.
 예: "투자 계획" → "투자 전략", "자본 지출 계획"
 예: "성능" → "속도", "처리량", "응답 시간" """,
@@ -224,8 +227,8 @@ class QueryRewriterNode:
             "keyword_boost": """핵심 키워드를 강조하고 명확히 하세요.
 예: "그거" → 원본 주제를 명확히 명시
 예: "빠른 것" → "성능이 빠른 프레임워크" """,
-            "source_depth": """본문이 풍부한 문서/리포트/공식 자료를 찾도록 쿼리를 만드세요.
-예: "AI 동향" → "AI 동향 보고서 분석", "AI 산업 리포트 2026"
+            "source_depth": f"""본문이 풍부한 문서/리포트/공식 자료를 찾도록 쿼리를 만드세요.
+예: "AI 동향" → "AI 동향 보고서 분석", "AI 산업 리포트 {current_year}"
 예: "성능 비교" → "공식 벤치마크 보고서", "technical deep dive" """,
         }
 
@@ -254,7 +257,9 @@ class QueryRewriterNode:
             "\n".join(constraint_lines) if constraint_lines else "- 제약 없음"
         )
 
-        rewrite_prompt = f"""검색 결과가 만족스럽지 않아 쿼리를 재작성해야 합니다.
+        rewrite_prompt = f"""오늘 날짜: {get_current_datetime()}
+
+검색 결과가 만족스럽지 않아 쿼리를 재작성해야 합니다.
 
 **원본 질문**: {query}
 

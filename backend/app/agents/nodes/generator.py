@@ -14,11 +14,12 @@ from langchain_core.messages import AIMessage
 
 from ..state import GraphState, AIMode, ThinkingStep, SearchResult
 from ..tools.llm_client import async_llm_completion_stream
+from ..tools.datetime_tool import get_current_datetime
 from ...utils.citation_manager import CitationManager
 
 
-# 모드별 시스템 프롬프트
-SYSTEM_PROMPTS = {
+# 모드별 시스템 프롬프트 베이스 (날짜는 get_system_prompt()에서 동적 주입)
+_SYSTEM_PROMPT_BASES = {
     AIMode.SIMPLE: """당신은 친절하고 도움이 되는 AI 어시스턴트입니다.
 사용자의 질문에 명확하고 간결하게 답변하세요.
 한국어로 자연스럽게 대화하세요.""",
@@ -57,6 +58,13 @@ SYSTEM_PROMPTS = {
 출처를 명확히 구분하여 표시하세요.
 한국어로 답변하세요.""",
 }
+
+
+def get_system_prompt(mode: AIMode) -> str:
+    """모드별 시스템 프롬프트를 현재 날짜와 함께 반환합니다."""
+    base = _SYSTEM_PROMPT_BASES.get(mode, _SYSTEM_PROMPT_BASES[AIMode.SIMPLE])
+    current_date = get_current_datetime()
+    return f"오늘 날짜: {current_date}\n\n{base}"
 
 
 class GeneratorNode:
@@ -140,7 +148,7 @@ class GeneratorNode:
 
         # 컨텍스트 구성
         context = self._build_context(mode, search_results)
-        system_prompt = SYSTEM_PROMPTS.get(mode, SYSTEM_PROMPTS[AIMode.SIMPLE])
+        system_prompt = get_system_prompt(mode)
 
         # 메시지 구성 - 시스템 프롬프트 + 대화 히스토리 + 현재 쿼리
         messages = [
@@ -246,7 +254,7 @@ class GeneratorNode:
 
         # 컨텍스트 구성
         context = self._build_context(mode, search_results)
-        system_prompt = SYSTEM_PROMPTS.get(mode, SYSTEM_PROMPTS[AIMode.SIMPLE])
+        system_prompt = get_system_prompt(mode)
 
         # 메시지 구성 - 시스템 프롬프트 + 대화 히스토리 + 현재 쿼리
         messages = [

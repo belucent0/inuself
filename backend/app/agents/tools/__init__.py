@@ -2,6 +2,7 @@
 from .llm_client import async_llm_completion, async_llm_completion_stream
 from .web_search import search_web, format_search_context, WebSearchError
 from .rag_search import search_internal_content, get_content_context, RAGSearchError
+from .datetime_tool import get_current_datetime
 
 __all__ = [
     "async_llm_completion",
@@ -12,4 +13,5 @@ __all__ = [
     "search_internal_content",
     "get_content_context",
     "RAGSearchError",
+    "get_current_datetime",
 ]
