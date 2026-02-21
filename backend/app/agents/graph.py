@@ -14,6 +14,7 @@ from loguru import logger
 
 from .state import GraphState, AIMode
 from ..core.langfuse import get_langfuse_handler
+from ..core.llm_tier import TIER_DISPLAY_MAP, LLMTier
 from .nodes import (
     IntentParserNode,
     GeneratorNode,
@@ -34,12 +35,6 @@ MODE_DISPLAY_MAP = {
     AIMode.RAG: "문서 검색",
     AIMode.HYBRID: "하이브리드",
     AIMode.SIMPLE: "일반",
-}
-
-TIER_DISPLAY_MAP = {
-    "tier-simple": "간단",
-    "tier-medium": "보통",
-    "tier-complex": "복잡",
 }
 
 
@@ -645,7 +640,7 @@ async def stream_ai_agent(
 
             detected_mode = state["mode"]
             selected_tier = state.get(
-                "selected_model", "tier-simple"
+                "selected_model", LLMTier.SIMPLE
             )  # tier명이 selected_model에 저장됨
             query_analysis = state.get("query_analysis")
 

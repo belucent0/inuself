@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     litellm_api_key: str = Field("", validation_alias="LITELLM_API_KEY")
     litellm_model: str = Field("tier-simple", validation_alias="LITELLM_MODEL")
     litellm_model_summarize: str = Field(
-        "tier-simple", validation_alias="LITELLM_MODEL_SUMMARIZE"
+        "tier-summarize", validation_alias="LITELLM_MODEL_SUMMARIZE"
     )
     litellm_allowed_models: str = Field("", validation_alias="LITELLM_ALLOWED_MODELS")
 

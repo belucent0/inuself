@@ -84,6 +84,7 @@ class StreamProcessor:
         "diarization-server": "gpu",
         "whisper-server": "gpu",
         "insanely-fast-server": "gpu",
+        "lemonade-server": "gpu",  # tier-summarize 전용
         "llama-server": "gpu",
         "llama-ocr-server": "gpu",
         # NPU 프로바이더
@@ -729,9 +730,14 @@ class StreamProcessor:
             f"[{request_id}] Starting LLM completion (model={model}, target={target_server})..."
         )
 
+        # tier-summarize는 lemonade-server (GPU) 전용
+        use_lemonade = (original_tier == "tier-summarize")
+
         # 서버 선택 로직 (On-Demand 로드 전에 결정)
         use_npu = False
-        if target_server in ("flm", "npu"):
+        if use_lemonade:
+            pass  # lemonade-server 고정
+        elif target_server in ("flm", "npu"):
             use_npu = True
         elif target_server in ("llama", "gpu"):
             use_npu = False
@@ -746,16 +752,17 @@ class StreamProcessor:
         ):
             use_npu = True
 
-        # On-Demand: 필요한 서버가 준비될 때까지 대기
-        # thinking model 감지 (-tk 접미사: qwen3-tk, lfm2.5-tk 등)
-        is_thinking_model = model and "-tk" in model
-
         # thinking 모델 감지: -tk 접미사 OR tier-thinking 요청
         is_thinking_model = model and (
             "-tk" in model or original_tier == "tier-thinking"
         )
 
-        if use_npu:
+        # On-Demand: 필요한 서버가 준비될 때까지 대기
+        if use_lemonade:
+            if not await self._ensure_provider_ready("lemonade-server"):
+                await self.publish_error(request_id, "Lemonade server failed to start")
+                return
+        elif use_npu:
             if is_thinking_model:
                 if not await self._ensure_provider_ready("flm-llm-thinking"):
                     await self.publish_error(
@@ -774,7 +781,14 @@ class StreamProcessor:
                 return
 
         try:
-            if use_npu:
+            if use_lemonade:
+                logger.info(
+                    f"[{request_id}] Using lemonade-server (GPU, summarize, model={model})..."
+                )
+                url = f"{settings.lemonade_server_url}/api/v1/chat/completions"
+                actual_model = model
+                provider_name = "lemonade-server"
+            elif use_npu:
                 if is_thinking_model:
                     logger.info(
                         f"[{request_id}] Using FLM LLM Thinking server (NPU, model={model})..."
@@ -1094,6 +1108,7 @@ class StreamProcessor:
             "flm-llm": f"{settings.flm_llm_url}/v1/models",
             "flm-llm-thinking": f"{settings.flm_llm_thinking_url}/v1/models",
             "flm-ocr": f"{settings.flm_ocr_url}/v1/models",
+            "lemonade": f"{settings.lemonade_server_url}/api/v1/models",
         }
 
         if service != "all":

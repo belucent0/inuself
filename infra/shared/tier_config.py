@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 TIER_MODEL_MAP = {
     "tier-simple": os.getenv("FLM_LLM_SIMPLE_MODEL", "lfm2:2.6b"),
     "tier-thinking": os.getenv("FLM_THINKING_MODEL", "qwen3-tk:4b"),
-    "tier-summarize": os.getenv("FLM_LLM_SUMMARIZE_MODEL", "lfm2-trans:2.6b"),
+    "tier-summarize": os.getenv("LEMONADE_SUMMARIZE_MODEL", "gpt-oss-20b-mxfp4-GGUF"),
 }
 
 
@@ -65,12 +65,12 @@ TIER_ROUTING_POLICY = {
         "queue_on_busy": True,
     },
     "tier-thinking": {
-        "primary": "gpu",   # Thinking은 GPU 우선 (더 큰 모델 사용)
-        "fallback": "npu",
+        "primary": "npu",   # 실제 동작에 맞춤: qwen3-tk:4b는 FLM(NPU)에서 실행
+        "fallback": "gpu",  # GPU llama-server는 fallback으로 유지
         "queue_on_busy": True,
     },
     "tier-summarize": {
-        "primary": "npu",
+        "primary": "gpu",   # lemonade-server (GPU) 전용
         "fallback": "gpu",
         "queue_on_busy": True,
     },

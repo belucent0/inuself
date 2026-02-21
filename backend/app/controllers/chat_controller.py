@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 
 from ..core.logging import logger
+from ..core.llm_tier import LLMTier
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -28,7 +29,7 @@ def get_litellm_api_key() -> str:
 def get_litellm_model() -> str:
     """FLM 모델명 반환."""
     # 티어 기반 라우팅 사용
-    return os.getenv("LITELLM_MODEL", "tier-simple")
+    return os.getenv("LITELLM_MODEL", LLMTier.SIMPLE)
 
 
 @lru_cache(maxsize=1)
