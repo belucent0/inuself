@@ -97,6 +97,8 @@ async def run_suite(
     client: ChatClient,
     items: list,
     run_name: str,
+    fixture_suite_order: list[str] | None = None,
+    fixture_assertions: dict | None = None,
 ) -> dict:
     """한 데이터셋의 모든 케이스를 순서대로 실행합니다."""
     results = {"total": 0, "passed": 0, "failed": 0, "skipped": 0}
@@ -108,7 +110,13 @@ async def run_suite(
         suites.setdefault(sid, [])
         suites[sid].append(item)
 
-    for suite_id, suite_items in suites.items():
+    # fixture JSON 순서대로 suite 실행 (Langfuse는 최신순 반환이라 역순 방지)
+    ordered_suite_ids = fixture_suite_order if fixture_suite_order else list(suites.keys())
+
+    for suite_id in ordered_suite_ids:
+        if suite_id not in suites:
+            continue
+        suite_items = suites[suite_id]
         suite_items.sort(key=lambda x: x.input.get("turn", 1))
         print(f"\n[Suite] {suite_id} ({len(suite_items)}턴)")
 
@@ -138,11 +146,18 @@ async def run_suite(
                 result = await client.stream_response(thread_id, message_id)
                 elapsed = time.monotonic() - start
 
+                # fixture가 source of truth — Langfuse item.expected_output은 구버전일 수 있음
+                case_id = item.metadata.get("case_id") if item.metadata else None
+                expected = (
+                    (fixture_assertions or {}).get(case_id)
+                    or item.expected_output
+                    or {}
+                )
                 score, failures = _score_result(
                     result.full_content,
                     result.mode_used,
                     elapsed,
-                    item.expected_output or {},
+                    expected,
                 )
 
                 # Langfuse trace 업데이트
@@ -233,7 +248,21 @@ async def main() -> int:
     await client.login(E2E_LOGIN_ID, E2E_PASSWORD)
 
     try:
-        results = await run_suite(langfuse, client, active_items, RUN_NAME)
+        fixture_suite_order = [s["id"] for s in fixtures["test_suites"]]
+        # fixture를 assertions source of truth로 사용 (Langfuse expected_output 구버전 방지)
+        fixture_assertions: dict = {}
+        for suite in fixtures["test_suites"]:
+            for turn in suite["turns"]:
+                cid = f"{suite['id']}__turn{turn['turn']}"
+                a = turn["assertions"]
+                fixture_assertions[cid] = {
+                    "mode": a.get("mode", {}).get("expected", []),
+                    "content_contains_any": a.get("content_contains_any", []),
+                    "content_not_contains": a.get("content_not_contains", []),
+                    "context_check": a.get("context_check"),
+                    "max_response_time_seconds": a.get("max_response_time_seconds", 60),
+                }
+        results = await run_suite(langfuse, client, active_items, RUN_NAME, fixture_suite_order, fixture_assertions)
     finally:
         await client.cleanup_all()
         await client.close()
