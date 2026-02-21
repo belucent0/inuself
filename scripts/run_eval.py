@@ -98,6 +98,7 @@ async def run_suite(
     items: list,
     run_name: str,
     fixture_suite_order: list[str] | None = None,
+    fixture_assertions: dict | None = None,
 ) -> dict:
     """한 데이터셋의 모든 케이스를 순서대로 실행합니다."""
     results = {"total": 0, "passed": 0, "failed": 0, "skipped": 0}
@@ -145,11 +146,18 @@ async def run_suite(
                 result = await client.stream_response(thread_id, message_id)
                 elapsed = time.monotonic() - start
 
+                # fixture가 source of truth — Langfuse item.expected_output은 구버전일 수 있음
+                case_id = item.metadata.get("case_id") if item.metadata else None
+                expected = (
+                    (fixture_assertions or {}).get(case_id)
+                    or item.expected_output
+                    or {}
+                )
                 score, failures = _score_result(
                     result.full_content,
                     result.mode_used,
                     elapsed,
-                    item.expected_output or {},
+                    expected,
                 )
 
                 # Langfuse trace 업데이트
@@ -241,7 +249,20 @@ async def main() -> int:
 
     try:
         fixture_suite_order = [s["id"] for s in fixtures["test_suites"]]
-        results = await run_suite(langfuse, client, active_items, RUN_NAME, fixture_suite_order)
+        # fixture를 assertions source of truth로 사용 (Langfuse expected_output 구버전 방지)
+        fixture_assertions: dict = {}
+        for suite in fixtures["test_suites"]:
+            for turn in suite["turns"]:
+                cid = f"{suite['id']}__turn{turn['turn']}"
+                a = turn["assertions"]
+                fixture_assertions[cid] = {
+                    "mode": a.get("mode", {}).get("expected", []),
+                    "content_contains_any": a.get("content_contains_any", []),
+                    "content_not_contains": a.get("content_not_contains", []),
+                    "context_check": a.get("context_check"),
+                    "max_response_time_seconds": a.get("max_response_time_seconds", 60),
+                }
+        results = await run_suite(langfuse, client, active_items, RUN_NAME, fixture_suite_order, fixture_assertions)
     finally:
         await client.cleanup_all()
         await client.close()
