@@ -54,6 +54,7 @@ RUN_NAME = os.environ.get(
 JUDGE_LITELLM_BASE_URL = os.environ.get("JUDGE_LITELLM_BASE_URL", "http://localhost:4000")
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "tier-simple")
 JUDGE_ENABLED = os.environ.get("JUDGE_ENABLED", "true").lower() == "true"
+JUDGE_LITELLM_API_KEY = os.environ.get("JUDGE_LITELLM_API_KEY", os.environ.get("LITELLM_API_KEY", ""))
 
 
 def _score_result(
@@ -133,9 +134,11 @@ async def _llm_judge(
     )
 
     try:
+        headers = {"Authorization": f"Bearer {JUDGE_LITELLM_API_KEY}"} if JUDGE_LITELLM_API_KEY else {}
         async with httpx.AsyncClient() as http:
             resp = await http.post(
                 f"{JUDGE_LITELLM_BASE_URL}/chat/completions",
+                headers=headers,
                 json={
                     "model": JUDGE_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
@@ -267,7 +270,7 @@ async def run_suite(
                         )
                         judge_tag = f" [judge={j_score:.2f}]"
                     else:
-                        judge_tag = " [judge=ERR]"
+                        judge_tag = f" [judge=ERR: {j_reason[:60]}]"
 
                 # 이번 턴 대화 맥락 저장 (다음 턴 judge용)
                 conversation_history.append({"query": query, "response": result.full_content})
