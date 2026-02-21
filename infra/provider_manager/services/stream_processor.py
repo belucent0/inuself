@@ -84,7 +84,7 @@ class StreamProcessor:
         "diarization-server": "gpu",
         "whisper-server": "gpu",
         "insanely-fast-server": "gpu",
-        "lemonade-server": "gpu",  # tier-summarize 전용
+        "lemonade-server": "gpu",  # tier-recap 전용
         "llama-server": "gpu",
         "llama-ocr-server": "gpu",
         # NPU 프로바이더
@@ -730,8 +730,8 @@ class StreamProcessor:
             f"[{request_id}] Starting LLM completion (model={model}, target={target_server})..."
         )
 
-        # tier-summarize는 lemonade-server (GPU) 전용
-        use_lemonade = (original_tier == "tier-summarize")
+        # tier-recap은 lemonade-server (GPU) 전용
+        use_lemonade = (original_tier == "tier-recap")
 
         # 서버 선택 로직 (On-Demand 로드 전에 결정)
         use_npu = False

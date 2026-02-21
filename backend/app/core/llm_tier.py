@@ -21,11 +21,11 @@ class LLMTier(str, Enum):
 
     SIMPLE = "tier-simple"
     THINKING = "tier-thinking"
-    SUMMARIZE = "tier-summarize"
+    RECAP = "tier-recap"
 
 
 TIER_DISPLAY_MAP: dict[str, str] = {
     LLMTier.SIMPLE: "간단",
     LLMTier.THINKING: "복잡",
-    LLMTier.SUMMARIZE: "요약",
+    LLMTier.RECAP: "요약",
 }

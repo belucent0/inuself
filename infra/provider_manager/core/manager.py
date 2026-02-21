@@ -176,7 +176,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
 
     logger.info(f"[Config] FLM Models - Simple: {FLM_LLM_SIMPLE_MODEL}, Thinking: {FLM_THINKING_MODEL}, OCR: {FLM_OCR_MODEL}")
 
-    # Lemonade 서버 설정 (tier-summarize 전용 GPU 서버)
+    # Lemonade 서버 설정 (tier-recap 전용 GPU 서버)
     LEMONADE_SERVER_PORT = env_vars.get("LEMONADE_SERVER_PORT", "8084")
 
     return {

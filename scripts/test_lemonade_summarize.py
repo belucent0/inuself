@@ -1,4 +1,4 @@
-"""tier-summarize → lemonade-server 라우팅 E2E 테스트.
+"""tier-recap → lemonade-server 라우팅 E2E 테스트.
 
 실제 요청 흐름:
   이 스크립트 → Redis stream:chat:requests
@@ -49,7 +49,7 @@ async def test_via_redis():
     payload = {
         "request_id": request_id,
         "type": "llm_completion",
-        "model": "tier-summarize",
+        "model": "tier-recap",
         "messages": json.dumps(messages),
         "max_tokens": "512",
         "temperature": "0.3",
@@ -57,7 +57,7 @@ async def test_via_redis():
 
     print(f"[→] Redis stream 요청 전송 (request_id={request_id[:8]}...)")
     print(f"    stream: {REQUEST_STREAM}")
-    print(f"    model:  tier-summarize\n")
+    print(f"    model:  tier-recap\n")
 
     await redis.xadd(REQUEST_STREAM, payload)
     sent_at = time.time()
@@ -189,7 +189,7 @@ async def main():
     if args.direct:
         print("  lemonade-server 직접 HTTP 테스트")
     else:
-        print("  tier-summarize → lemonade-server E2E 테스트 (Redis)")
+        print("  tier-recap → lemonade-server E2E 테스트 (Redis)")
     print("=" * 60 + "\n")
 
     if args.direct:
