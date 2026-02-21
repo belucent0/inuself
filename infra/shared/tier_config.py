@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 # 티어 종류:
 # - tier-simple: 간단한 작업 (인사, 짧은 질문)
 # - tier-thinking: 복잡한 분석 + Chain-of-Thought 추론
-# - tier-summarize: 전사 텍스트 요약 (Transcript 특화 모델)
+# - tier-recap: 전사 텍스트 요약 (Transcript 특화 모델)
 # ============================================================
 
 TIER_MODEL_MAP = {
     "tier-simple": os.getenv("FLM_LLM_SIMPLE_MODEL", "lfm2:2.6b"),
     "tier-thinking": os.getenv("FLM_THINKING_MODEL", "qwen3-tk:4b"),
-    "tier-summarize": os.getenv("LEMONADE_SUMMARIZE_MODEL", "gpt-oss-20b-mxfp4-GGUF"),
+    "tier-recap": os.getenv("LEMONADE_SUMMARIZE_MODEL", "gpt-oss-20b-mxfp4-GGUF"),
 }
 
 
@@ -69,7 +69,7 @@ TIER_ROUTING_POLICY = {
         "fallback": "gpu",  # GPU llama-server는 fallback으로 유지
         "queue_on_busy": True,
     },
-    "tier-summarize": {
+    "tier-recap": {
         "primary": "gpu",   # lemonade-server (GPU) 전용
         "fallback": "gpu",
         "queue_on_busy": True,

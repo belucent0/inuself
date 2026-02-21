@@ -56,7 +56,7 @@ export interface AIModeConfig {
 
 export const AI_MODE_CONFIG: Record<AIMode, AIModeConfig> = {
   auto: {
-    label: '자동 모델',
+    label: '자동',
     description: 'AI가 질문 유형에 맞게 자동 판단',
     color: 'text-gray-500',
     bgColor: 'bg-gray-500/10',

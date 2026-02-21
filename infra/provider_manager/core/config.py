@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     )
     flm_ocr_url: str = "http://localhost:11436"
 
-    # Lemonade Server URL (GPU, tier-summarize 전용)
+    # Lemonade Server URL (GPU, tier-recap 전용)
     lemonade_server_url: str = "http://localhost:12000"
 
     # Server paths (from environment)

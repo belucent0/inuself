@@ -126,6 +126,23 @@ export function ChatPage() {
   }, [thread, threadId, isThreadLoading, storeThreadId, messages.length, streaming.isStreaming, switchThread])
 
   // ============================================================
+  // stuck 메시지 자동 재연결
+  // messages가 로드된 후 in-progress 상태 메시지가 있으면 SSE 재연결 트리거
+  // ============================================================
+  useEffect(() => {
+    if (!threadId || messageId || streaming.isStreaming) return
+
+    const IN_PROGRESS_STATUSES = ['queued', 'analyzing', 'searching', 'thinking', 'generating']
+    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant')
+    if (lastAssistant?.message_id && IN_PROGRESS_STATUSES.includes(lastAssistant.status || '')) {
+      setSearchParams(prev => {
+        prev.set('messageId', lastAssistant.message_id!)
+        return prev
+      }, { replace: true })
+    }
+  }, [messages, threadId, messageId, streaming.isStreaming, setSearchParams])
+
+  // ============================================================
   // v1.0.0: SSE 스트리밍 연결 (messageId가 있을 때)
   // ============================================================
   const connectedMessageIdRef = useRef<string | null>(null)

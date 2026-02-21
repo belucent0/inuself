@@ -148,12 +148,13 @@ export const useChatStore = create<ChatStore>()(
           pollingInterval: null,
         }, false, 'switchThread')
 
-        // 4. generating 상태 메시지가 있으면 폴링 시작
+        // 4. in-progress 상태 메시지가 있으면 폴링 시작
         if (threadId) {
-          const hasGenerating = initialMessages.some(
-            m => m.role === 'assistant' && m.status === 'generating'
+          const IN_PROGRESS_STATUSES = ['queued', 'analyzing', 'searching', 'thinking', 'generating']
+          const hasInProgress = initialMessages.some(
+            m => m.role === 'assistant' && IN_PROGRESS_STATUSES.includes(m.status || '')
           )
-          if (hasGenerating) {
+          if (hasInProgress) {
             get()._startPolling(threadId)
           }
         }
@@ -349,12 +350,13 @@ export const useChatStore = create<ChatStore>()(
               return
             }
 
-            const serverGenerating = response.messages.find(
-              m => m.role === 'assistant' && m.status === 'generating'
+            const IN_PROGRESS_STATUSES = ['queued', 'analyzing', 'searching', 'thinking', 'generating']
+            const serverInProgress = response.messages.find(
+              m => m.role === 'assistant' && IN_PROGRESS_STATUSES.includes(m.status || '')
             )
 
-            if (!serverGenerating) {
-              // 완료됨
+            if (!serverInProgress) {
+              // 모든 메시지 처리 완료
               set({ messages: response.messages, isLoading: false }, false, 'pollingComplete')
               currentState._stopPolling()
             }
