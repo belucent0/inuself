@@ -58,13 +58,11 @@ def main() -> None:
 
     dataset = langfuse.get_dataset(DATASET_NAME)
 
-    # 기존 항목 ID 수집 (중복 방지)
-    # --reset 시엔 비워서 전체 재등록 허용 (구 항목은 run_eval.py에서 fixture 기준 필터링)
+    # 기존 항목 ID 수집 (중복 방지 — reset 여부와 무관하게 항상 적용)
+    # 구 항목 제거는 run_eval.py의 fixture 기준 필터링으로 처리
+    existing_ids = {item.metadata.get("case_id") for item in dataset.items if item.metadata}
     if args.reset:
-        existing_ids: set = set()
-        print("[reset] 전체 재등록 모드 — fixture 기준으로 누락 항목 추가")
-    else:
-        existing_ids = {item.metadata.get("case_id") for item in dataset.items if item.metadata}
+        print(f"[reset] 기존 {len(existing_ids)}개 항목 유지, 누락 항목만 추가")
 
     # fixtures 파일에서 케이스 로드
     fixtures = json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
