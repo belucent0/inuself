@@ -209,6 +209,7 @@ services:
       - prometheus
       - loki
       - tempo
+      - postgres
     restart: unless-stopped
 
   # Loki - 로그 집계 시스템

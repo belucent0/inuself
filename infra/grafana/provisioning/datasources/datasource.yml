@@ -58,16 +58,18 @@ datasources:
       maxLines: 1000
 
   - name: PostgreSQL
-    type: grafana-postgresql-datasource
+    type: postgres
     uid: postgresql
     access: proxy
     url: postgres:5432
-    database: ${POSTGRES_DB}
     user: ${POSTGRES_USER}
     editable: true
     secureJsonData:
       password: ${POSTGRES_PASSWORD}
     jsonData:
+      database: ${POSTGRES_DB}
       sslmode: disable
       maxOpenConns: 5
       maxIdleConns: 2
+      postgresVersion: 1500
+      timescaledb: false
