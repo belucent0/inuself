@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from tests.e2e.chat_client import ChatClient
 
 DATASET_NAME = "chat-quality-golden-set"
+FIXTURES_PATH = Path(__file__).parent.parent / "tests" / "e2e" / "fixtures" / "chat_multiturn_cases.json"
 E2E_BASE_URL = os.environ.get("E2E_BASE_URL", "http://localhost:8000")
 E2E_LOGIN_ID = os.environ.get("E2E_LOGIN_ID", "")
 E2E_PASSWORD = os.environ.get("E2E_PASSWORD", "")
@@ -207,15 +208,32 @@ async def main() -> int:
         print("먼저 실행하세요: python scripts/setup_eval_dataset.py")
         return 1
 
+    # fixture 기준 유효한 case_id만 실행 (Langfuse에 잔존하는 구 항목 제외)
+    import json as _json
+    fixtures = _json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
+    valid_case_ids = {
+        f"{suite['id']}__turn{turn['turn']}"
+        for suite in fixtures["test_suites"]
+        for turn in suite["turns"]
+    }
+    # case_id 기준 중복 제거 (최신 항목 우선 — Langfuse는 최신순 정렬)
+    seen_case_ids: set[str] = set()
+    active_items = []
+    for item in dataset.items:
+        case_id = item.metadata.get("case_id") if item.metadata else None
+        if case_id in valid_case_ids and case_id not in seen_case_ids:
+            seen_case_ids.add(case_id)
+            active_items.append(item)
+
     print(f"Eval 시작: run_name='{RUN_NAME}'")
-    print(f"대상: {E2E_BASE_URL} | 케이스: {len(dataset.items)}개")
+    print(f"대상: {E2E_BASE_URL} | 케이스: {len(active_items)}개 (전체 {len(dataset.items)}개 중 fixture 기준 필터)")
     print("-" * 60)
 
     client = ChatClient(base_url=E2E_BASE_URL)
     await client.login(E2E_LOGIN_ID, E2E_PASSWORD)
 
     try:
-        results = await run_suite(langfuse, client, dataset.items, RUN_NAME)
+        results = await run_suite(langfuse, client, active_items, RUN_NAME)
     finally:
         await client.cleanup_all()
         await client.close()

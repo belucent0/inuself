@@ -10,12 +10,16 @@
     LANGFUSE_SECRET_KEY=sk-... \\
         python scripts/setup_eval_dataset.py
 
+    # fixture와 Langfuse 데이터셋을 완전히 동기화 (삭제/추가/수정 모두 반영)
+    python scripts/setup_eval_dataset.py --reset
+
 환경변수가 이미 .env에 있다면:
     python scripts/setup_eval_dataset.py
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -27,6 +31,14 @@ FIXTURES_PATH = Path(__file__).parent.parent / "tests" / "e2e" / "fixtures" / "c
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="기존 항목을 모두 삭제하고 fixture 기준으로 재등록 (삭제/수정 반영 시 사용)",
+    )
+    args = parser.parse_args()
+
     langfuse = Langfuse(
         public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
         secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
@@ -44,9 +56,13 @@ def main() -> None:
         )
         print(f"[OK] 데이터셋 생성: '{DATASET_NAME}'")
 
-    # 기존 항목 ID 수집 (중복 방지)
     dataset = langfuse.get_dataset(DATASET_NAME)
+
+    # 기존 항목 ID 수집 (중복 방지 — reset 여부와 무관하게 항상 적용)
+    # 구 항목 제거는 run_eval.py의 fixture 기준 필터링으로 처리
     existing_ids = {item.metadata.get("case_id") for item in dataset.items if item.metadata}
+    if args.reset:
+        print(f"[reset] 기존 {len(existing_ids)}개 항목 유지, 누락 항목만 추가")
 
     # fixtures 파일에서 케이스 로드
     fixtures = json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
