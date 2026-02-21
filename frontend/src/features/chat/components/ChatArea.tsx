@@ -70,7 +70,6 @@ const MESSAGE_STATUS_CONFIG: Record<string, { icon: typeof Loader2; text: string
 const MODEL_OPTIONS = [
   'tier-simple',
   'tier-thinking',
-  'tier-recap',
   'codex-high',
   'codex-medium',
   'codex-low',
@@ -545,7 +544,7 @@ export function ChatArea({
     }
   }
 
-  const availableModes: AIMode[] = ['search', 'rag', 'reasoning', 'hybrid']
+  const availableModes: AIMode[] = ['auto', 'simple', 'search', 'rag', 'reasoning', 'hybrid']
 
   return (
     <div className="flex flex-col h-full relative">
@@ -620,11 +619,12 @@ export function ChatArea({
                     className="h-7 px-3 rounded-full text-xs font-medium gap-1 text-muted-foreground hover:text-foreground hover:bg-muted/50"
                   >
                     <span className={cn('w-2 h-2 rounded-full',
+                      mode === 'auto' && 'bg-gray-400',
+                      mode === 'simple' && 'bg-slate-400',
                       mode === 'search' && 'bg-blue-500',
                       mode === 'rag' && 'bg-green-500',
                       mode === 'reasoning' && 'bg-purple-500',
-                      mode === 'hybrid' && 'bg-amber-500',
-                      mode === 'simple' && 'bg-slate-400'
+                      mode === 'hybrid' && 'bg-amber-500'
                     )} />
                     {AI_MODE_CONFIG[mode].label}
                     <ChevronDown className="h-3 w-3 opacity-50" />
@@ -643,11 +643,12 @@ export function ChatArea({
                         )}
                       >
                         <span className={cn('w-2 h-2 rounded-full',
+                          m === 'auto' && 'bg-gray-400',
+                          m === 'simple' && 'bg-slate-400',
                           m === 'search' && 'bg-blue-500',
                           m === 'rag' && 'bg-green-500',
                           m === 'reasoning' && 'bg-purple-500',
-                          m === 'hybrid' && 'bg-amber-500',
-                          m === 'simple' && 'bg-slate-400'
+                          m === 'hybrid' && 'bg-amber-500'
                         )} />
                         {config.label}
                       </DropdownMenuItem>
@@ -664,7 +665,7 @@ export function ChatArea({
                     className="h-7 px-3 rounded-full text-xs font-medium gap-1 text-muted-foreground hover:text-foreground hover:bg-muted/50"
                   >
                     <Bot className="h-3 w-3" />
-                    {model || '자동 모델'}
+                    {model || '자동'}
                     <ChevronDown className="h-3 w-3 opacity-50" />
                   </Button>
                 </DropdownMenuTrigger>
