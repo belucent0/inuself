@@ -19,6 +19,7 @@ from redis.asyncio import Redis
 
 from ..core.config import get_settings
 from ..core.logging import logger
+from ..core.llm_tier import LLMTier
 from ..prompts.search import SEARCH_SYSTEM_PROMPT, SEARCH_USER_TEMPLATE
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -45,13 +46,8 @@ def get_litellm_api_key() -> str:
 
 
 def get_litellm_model(reasoning_mode: bool = False) -> str:
-    """사용할 LLM 모델명 조회 (Env Only)."""
-    env_key = "FLM_THINKING_MODEL" if reasoning_mode else "FLM_LLM_SIMPLE_MODEL"
-    model = os.getenv(env_key)
-    if not model:
-        logger.warning(f"[Config] {env_key} is missing in .env")
-        return "qwen3-tk:4b" if reasoning_mode else "lfm2:2.6b"
-    return model
+    """사용할 LLM 티어명 조회 (tier 라우팅 사용)."""
+    return LLMTier.THINKING if reasoning_mode else LLMTier.SIMPLE
 
 
 @lru_cache(maxsize=1)

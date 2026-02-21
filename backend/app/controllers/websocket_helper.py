@@ -10,6 +10,7 @@ from typing import Optional
 from fastapi import WebSocket
 from openai import AsyncOpenAI
 from ..core.logging import logger
+from ..core.llm_tier import LLMTier
 
 
 def get_litellm_base_url() -> str:
@@ -166,7 +167,7 @@ async def post_process_with_llm(text: str, base_url: str = None) -> str:
     """
     try:
         client = get_async_openai_client()
-        model = os.getenv("LITELLM_MODEL", "tier-simple")
+        model = os.getenv("LITELLM_MODEL", LLMTier.SIMPLE)
         
         response = await client.chat.completions.create(
             model=model,

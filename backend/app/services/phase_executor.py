@@ -1,7 +1,7 @@
 """2단계 LLM 요약 Executor with 검증 & 재시도.
 
 Phase 1: 메타데이터 추출 (tier-simple) → JSON
-Phase 2: 요약 생성 (tier-recap) → 파이프 구분 텍스트
+Phase 2: 요약 생성 (tier-summarize) → 파이프 구분 텍스트
 """
 
 import asyncio
@@ -144,7 +144,7 @@ class PhaseExecutor:
         )
 
     async def _execute_phase_2(self, text: str, metadata: Dict) -> PhaseResult:
-        """Phase 2: 요약 생성 (tier-recap)"""
+        """Phase 2: 요약 생성 (tier-summarize)"""
         from ..prompts.summary import PHASE2_SUMMARY_TEMPLATE, SUMMARY_SYSTEM_PROMPT
 
         for attempt in range(1, self.max_retries + 1):
@@ -163,13 +163,9 @@ class PhaseExecutor:
                     {"role": "user", "content": prompt},
                 ]
 
-                # tier-recap 사용
-                recap_settings = self.settings.model_copy(
-                    update={"litellm_model": self.settings.litellm_model_summarize}
-                )
-
                 response = request_litellm_completion(
-                    settings=recap_settings,
+                    settings=self.settings,
+                    model=self.settings.litellm_model_summarize,
                     messages=messages,
                 )
 

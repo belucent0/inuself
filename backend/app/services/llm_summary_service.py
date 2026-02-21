@@ -398,7 +398,7 @@ def build_llm_messages_3phase(
             f"[3-Phase Builder] Phase 2 prompt built ({len(phase2_messages)} messages)"
         )
 
-        # Phase 3: 상세 내용 (Detailed Content) - tier-recap 전용
+        # Phase 3: 상세 내용 (Detailed Content) - tier-summarize 전용
         phase3_prompt = PHASE3_DETAIL_TEMPLATE.format(
             transcript=chunk,
             toc="- 주제가 없습니다.",  # 임시 TOC, Phase 1 결과로 대체될 것
@@ -521,7 +521,7 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
 
     Phase 1: 구조 분석 (제목, 키워드, 목차)
     Phase 2: 핵심 요약 (bullet points)
-    Phase 3: 상세 내용 (tier-recap 전용)
+    Phase 3: 상세 내용 (tier-summarize 전용)
 
     Args:
         text: 요약할 전사 텍스트
@@ -611,15 +611,10 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
         core_summary = "## 핵심 요약\n- 핵심 요약 생성에 실패했습니다."
 
     # ========================================
-    # Phase 3: 상세 내용 (Detailed Content) - tier-recap 전용
+    # Phase 3: 상세 내용 (Detailed Content) - tier-summarize 전용
     # ========================================
-    logger.info("[3-Phase] Phase 3: Detailed Content (tier-recap)")
+    logger.info("[3-Phase] Phase 3: Detailed Content (tier-summarize)")
     try:
-        # tier-recap 모델 사용
-        recap_settings = settings.model_copy(
-            update={"litellm_model": settings.litellm_model_summarize}
-        )
-
         if toc:
             toc_text = "\n".join([f"- {item}" for item in toc])
         else:
@@ -634,7 +629,7 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
         ]
 
         phase3_response = request_litellm_completion(
-            settings=recap_settings, messages=phase3_messages
+            settings=settings, model=settings.litellm_model_summarize, messages=phase3_messages
         )
         detail_content = phase3_response.strip()
 
