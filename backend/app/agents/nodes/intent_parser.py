@@ -35,6 +35,7 @@ from loguru import logger
 from ..state import GraphState, AIMode, ThinkingStep, QueryAnalysis
 from ..tools.llm_client import async_llm_completion
 from ..tools.model_router import TierRouter
+from ...core.llm_tier import LLMTier
 
 # Kiwi 형태소 분석기 싱글톤 (로딩 시간 절약)
 _kiwi_instance: Kiwi | None = None
@@ -845,7 +846,7 @@ class IntentParserNode:
                     timestamp=time.time(),
                 )
             )
-            selected_model = self._resolve_selected_model(state, "tier-simple")
+            selected_model = self._resolve_selected_model(state, LLMTier.SIMPLE)
             return {
                 "mode": AIMode.SIMPLE,
                 "selected_model": selected_model,

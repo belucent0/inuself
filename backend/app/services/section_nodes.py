@@ -169,14 +169,10 @@ async def create_section_node(
             {"role": "user", "content": prompt},
         ]
 
-        # tier-recap 모델 사용
-        recap_settings = settings.model_copy(
-            update={"llm_model": settings.litellm_model_summarize}
-        )
-
         # LLM 호출 (비동기)
         response = await request_litellm_completion_async(
-            settings=recap_settings,
+            settings=settings,
+            model=settings.litellm_model_summarize,
             messages=messages,
         )
 
@@ -369,12 +365,9 @@ async def fallback_section_node(
             {"role": "user", "content": prompt},
         ]
 
-        recap_settings = settings.model_copy(
-            update={"llm_model": settings.litellm_model_summarize}
-        )
-
         response = await request_litellm_completion_async(
-            settings=recap_settings,
+            settings=settings,
+            model=settings.litellm_model_summarize,
             messages=messages,
         )
 

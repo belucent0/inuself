@@ -40,11 +40,11 @@ class Settings(BaseSettings):
     control_consumer_group: str = "provider-managers"
 
     # GPU Server URLs
-    diarization_url: str = "http://localhost:8003"
-    whisper_cpp_url: str = "http://localhost:8001"
-    insanely_fast_url: str = "http://localhost:8002"
-    llama_server_url: str = "http://localhost:8080"
-    llama_ocr_server_url: str = "http://localhost:8081"
+    diarization_url: str = "http://localhost:12012"
+    whisper_cpp_url: str = "http://localhost:12010"
+    insanely_fast_url: str = "http://localhost:12011"
+    llama_server_url: str = "http://localhost:12001"
+    llama_ocr_server_url: str = "http://localhost:12002"
 
     # FLM NPU Server URLs
     flm_asr_url: str = "http://localhost:11434"
@@ -53,6 +53,9 @@ class Settings(BaseSettings):
         "http://localhost:11437"  # tier-thinking (복잡한 분석 + CoT)
     )
     flm_ocr_url: str = "http://localhost:11436"
+
+    # Lemonade Server URL (GPU, tier-summarize 전용)
+    lemonade_server_url: str = "http://localhost:12000"
 
     # Server paths (from environment)
     llm_server_path: str = "llama-server"

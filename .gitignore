@@ -124,3 +124,7 @@ docs/wpis/*
 docs/wpi/*
 docs/troubleshooting/*
 quality_test_reports/*
+
+# Playwright MCP artifacts
+.playwright-mcp/
+asr-homepage.png

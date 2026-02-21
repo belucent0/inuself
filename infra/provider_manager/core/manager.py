@@ -149,14 +149,14 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
 
     LLM_SERVER_PATH = env_vars.get("LLM_SERVER_PATH", "llama-server")
     LLM_MODEL = env_vars.get("LLM_MODEL", str(PROJECT_ROOT / "models" / "Qwen3-4B-Instruct-2507-Q4_K_S.gguf"))
-    LLM_SERVER_PORT = env_vars.get("LLM_SERVER_PORT", "8082")  # 8080은 Nginx와 충돌 가능성 있음
+    LLM_SERVER_PORT = env_vars.get("LLM_SERVER_PORT", "12001")
     LLM_CONTEXT_LENGTH = env_vars.get("LLM_CONTEXT_LENGTH", "15000")
     LLM_N_GPU_LAYERS = env_vars.get("LLM_N_GPU_LAYERS", "99")
     LLM_N_THREADS = env_vars.get("LLM_N_THREADS", "8")
 
     OCR_SERVER_MODEL = env_vars.get("OCR_SERVER_MODEL", str(PROJECT_ROOT / "models" / "Qwen3-VL-8B-Instruct" / "Qwen3-VL-8B-Instruct-Q8_0.gguf"))
     OCR_SERVER_MMPROJ = env_vars.get("OCR_SERVER_MMPROJ", str(PROJECT_ROOT / "models" / "Qwen3-VL-8B-Instruct" / "mmproj-F32.gguf"))
-    OCR_SERVER_PORT = env_vars.get("OCR_SERVER_PORT", "8081")
+    OCR_SERVER_PORT = env_vars.get("OCR_SERVER_PORT", "12002")
     OCR_CONTEXT_LENGTH = env_vars.get("OCR_CONTEXT_LENGTH", "10000")
     OCR_SERVER_GPU_LAYERS = env_vars.get("OCR_SERVER_GPU_LAYERS", "75")
     OCR_SERVER_THREADS = env_vars.get("OCR_SERVER_THREADS", "4")
@@ -175,6 +175,9 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
     FLM_OCR_MODEL = env_vars.get("FLM_OCR_MODEL", "qwen3vl-it:4b")
 
     logger.info(f"[Config] FLM Models - Simple: {FLM_LLM_SIMPLE_MODEL}, Thinking: {FLM_THINKING_MODEL}, OCR: {FLM_OCR_MODEL}")
+
+    # Lemonade 서버 설정 (tier-summarize 전용 GPU 서버)
+    LEMONADE_SERVER_PORT = env_vars.get("LEMONADE_SERVER_PORT", "8084")
 
     return {
         # FLM NPU 서버들 (RAM 사용량 - NPU는 시스템 RAM 사용)
@@ -211,7 +214,27 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
             estimated_ram=2.0,  # qwen3vl-it:4b 실측 ~1.7GB
             enabled=False,  # On-Demand: 요청 시에만 로드
         ),
-        # GPU LLM/OCR 서버들 (llama.cpp)
+        # GPU LLM/OCR 서버들 (llama.cpp + lemonade)
+        "lemonade-server": ProviderConfig(
+            name="lemonade-server",
+            cmd=[
+                "lemonade-server", "serve",
+                "--port", LEMONADE_SERVER_PORT,
+                "--host", "0.0.0.0",
+                "--llamacpp", "vulkan",
+                "--sdcpp", "cpu",
+                "--no-tray",
+                "--max-loaded-models", "-1",
+                "--ctx-size", "16384",  # 요약용 긴 텍스트 (lemonade serve 레벨)
+                # --no-mmap: GPU 로드 후 파일 매핑 해제 → 시스템 RAM ~600MB로 감소
+                # -np 2: 병렬 슬롯 2개 (KV 캐시 절약)
+                "--llamacpp-args", "-np 2 --no-mmap",
+            ],
+            port=int(LEMONADE_SERVER_PORT),
+            health="/api/v1/health",
+            estimated_ram=12.5,  # gpt-oss-20b-mxfp4-GGUF ~11GB + KV 0.5GB
+            enabled=True,  # 항시 구동 (GPU LLM 허브)
+        ),
         "llama-server": ProviderConfig(
             name="llama-server",
             cmd=[
@@ -240,8 +263,8 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
         # GPU ASR 서버들 (Python)
         "whisper-server": ProviderConfig(
             name="whisper-server",
-            cmd=[ROCM_PYTHON, "-u", str(SCRIPTS_DIR / "whisper_cpp_server.py"), "8001"],
-            port=8001,
+            cmd=[ROCM_PYTHON, "-u", str(SCRIPTS_DIR / "whisper_cpp_server.py"), "12010"],
+            port=12010,
             health="/health",
             estimated_ram=2.0,
             enabled=False,  # On-Demand: 요청 시에만 로드
@@ -249,7 +272,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
         "insanely-fast-server": ProviderConfig(
             name="insanely-fast-server",
             cmd=[ROCM_PYTHON, "-u", str(SCRIPTS_DIR / "insanely_fast_server.py")],
-            port=8002,
+            port=12011,
             health="/health",
             estimated_ram=4.0,
             enabled=False,  # On-Demand: 요청 시에만 로드
@@ -257,7 +280,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
         "diarization-server": ProviderConfig(
             name="diarization-server",
             cmd=[ROCM_PYTHON, "-u", str(SCRIPTS_DIR / "diarization_server.py")],
-            port=8003,
+            port=12012,
             health="/health",
             estimated_ram=2.0,
             enabled=False,  # On-Demand: 요청 시에만 로드
@@ -277,7 +300,7 @@ def get_default_groups() -> List[ProviderGroup]:
         ),
         ProviderGroup(
             name="gpu-llm",
-            providers=[configs["llama-server"], configs["llama-ocr-server"]],
+            providers=[configs["lemonade-server"], configs["llama-server"], configs["llama-ocr-server"]],
             order=2
         ),
         ProviderGroup(

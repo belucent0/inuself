@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("InsanelyFastServer")
 
 # 환경 설정
-PORT = int(os.getenv("PORT", 8002))
+PORT = int(os.getenv("PORT", 12011))
 MODEL_ID = "openai/whisper-large-v3"
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 TORCH_DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32

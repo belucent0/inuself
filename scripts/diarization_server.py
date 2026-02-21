@@ -441,5 +441,5 @@ async def diarize_audio(
 
 
 if __name__ == "__main__":
-    logger.info("Starting server on port 8003 (model will be loaded on first request)")
-    uvicorn.run(app, host="0.0.0.0", port=8003)
+    logger.info("Starting server on port 12012 (model will be loaded on first request)")
+    uvicorn.run(app, host="0.0.0.0", port=12012)
