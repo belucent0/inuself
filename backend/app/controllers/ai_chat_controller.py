@@ -1005,13 +1005,7 @@ async def stream_message_v2(
                 f"[Thread] Client disconnected: thread_id={captured_thread_id}, message_id={captured_message_id}"
             )
             if not response_completed["value"]:
-                # 현재까지 생성된 partial_content 저장
-                await db_update_partial(
-                    captured_message_id,
-                    partial_content=full_response,
-                    status="generating",
-                )
-                # 백그라운드에서 계속 생성
+                # 백그라운드 태스크를 먼저 생성 (await 전에 호출해야 CancelledError로 중단되지 않음)
                 asyncio.create_task(
                     generate_ai_response_background(
                         thread_id=captured_thread_id,
@@ -1021,6 +1015,14 @@ async def stream_message_v2(
                         context=captured_context,
                         settings=captured_settings,
                         message_id=captured_message_id,
+                    )
+                )
+                # partial_content 저장은 fire-and-forget (CancelledError에 영향받지 않도록)
+                asyncio.create_task(
+                    db_update_partial(
+                        captured_message_id,
+                        partial_content=full_response,
+                        status="generating",
                     )
                 )
             raise
