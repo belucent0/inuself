@@ -66,6 +66,11 @@ jobs:
           E2E_LOGIN_ID: ${{ secrets.E2E_LOGIN_ID }}
           E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
           RUN_NAME: pr-${{ github.event.pull_request.number || 'manual' }}-${{ github.sha }}
+          # LLM-as-Judge (정보용 — CI 게이트 무관)
+          JUDGE_LITELLM_BASE_URL: ${{ secrets.JUDGE_LITELLM_BASE_URL || 'http://localhost:4000' }}
+          JUDGE_MODEL: ${{ secrets.JUDGE_MODEL || 'tier-thinking-local' }}
+          JUDGE_LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          JUDGE_ENABLED: "true"
         run: .eval-venv/bin/python scripts/run_eval.py
 
       - name: Langfuse UI 링크 출력
