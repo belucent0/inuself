@@ -62,6 +62,24 @@ class ThreadRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def list_by_content(
+        self, user_id: UUID, content_id: UUID, limit: int = 10
+    ) -> list[AiThread]:
+        """특정 콘텐츠의 스레드 목록 (최근순, 메시지 포함)."""
+        stmt = (
+            select(AiThread)
+            .where(
+                AiThread.user_id == user_id,
+                AiThread.content_id == content_id,
+                AiThread.is_archived == False,
+            )
+            .options(selectinload(AiThread.messages))
+            .order_by(desc(AiThread.updated_at))
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def list_threads(
         self,
         user_id: UUID,
