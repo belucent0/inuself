@@ -15,6 +15,7 @@ import { useThreadTitle } from '@/shared/contexts/ThreadTitleContext'
 import { threadsApi } from '@/shared/services'
 import { httpClient } from '@/shared/services'
 import { ChatArea } from '@/features/chat/components/ChatArea'
+import { ContentBanner } from '@/features/chat/components/ContentBanner'
 import { toast } from 'sonner'
 import { getAccessToken } from '@/shared/services/authToken'
 
@@ -149,6 +150,10 @@ export function ChatPage() {
   const eventSourceRef = useRef<EventSource | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_messageStatus, setMessageStatus] = useState<MessageStatus | null>(null)
+
+  // 콘텐츠 배너: 컨텍스트 ON/OFF
+  const [contentContextEnabled, setContentContextEnabled] = useState(true)
+  const threadContentId = thread?.content_id ?? null
 
   useEffect(() => {
     // messageId가 없거나 threadId가 없으면 스킵
@@ -324,7 +329,14 @@ export function ChatPage() {
           'Content-Type': 'application/json',
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
-        body: JSON.stringify({ query: content, mode: effectiveMode, model }),
+        body: JSON.stringify({
+          query: content,
+          mode: effectiveMode,
+          model,
+          context: contentContextEnabled && threadContentId
+            ? { content_id: threadContentId }
+            : undefined,
+        }),
       })
 
       if (!response.ok) {
@@ -357,16 +369,25 @@ export function ChatPage() {
   // 렌더링
   // ============================================================
   return (
-    <div className="h-full">
-      <ChatArea
-        messages={messages as any}
-        isStreaming={streaming.isStreaming}
-        currentStreamingMessage={streaming.currentMessage}
-        currentThinkingSteps={streaming.thinkingSteps as any}
-        currentSources={streaming.sources as any}
-        onSendMessage={handleSendMessage}
-        onRegenerate={handleRegenerate}
-      />
+    <div className="h-full flex flex-col">
+      {threadContentId && (
+        <ContentBanner
+          contentId={threadContentId}
+          contextEnabled={contentContextEnabled}
+          onContextToggle={setContentContextEnabled}
+        />
+      )}
+      <div className="flex-1 min-h-0">
+        <ChatArea
+          messages={messages as any}
+          isStreaming={streaming.isStreaming}
+          currentStreamingMessage={streaming.currentMessage}
+          currentThinkingSteps={streaming.thinkingSteps as any}
+          currentSources={streaming.sources as any}
+          onSendMessage={handleSendMessage}
+          onRegenerate={handleRegenerate}
+        />
+      </div>
     </div>
   )
 }

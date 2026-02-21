@@ -366,6 +366,19 @@ async def run_ai_agent(
             logger.warning(f"[AIAgent] Failed to load thread history: {e}")
             messages = [HumanMessage(content=query)]
 
+    # 콘텐츠 컨텍스트 로딩
+    content_context = ""
+    if metadata:
+        ctx_ids = metadata.get("content_ids") or (
+            [metadata["content_id"]] if metadata.get("content_id") else []
+        )
+        if ctx_ids:
+            from .tools.content_context import load_content_context
+            content_context = await load_content_context(
+                ctx_ids,
+                source_options=metadata.get("source_options"),
+            )
+
     # 초기 상태 구성
     initial_state: GraphState = {
         "messages": messages,
@@ -391,6 +404,8 @@ async def run_ai_agent(
         "failed_queries": [],
         "needs_retry": False,
         "retry_reason": "",
+        # 콘텐츠 컨텍스트
+        "content_context": content_context,
     }
 
     # 그래프 실행
@@ -589,6 +604,19 @@ async def stream_ai_agent(
             logger.warning(f"[AIAgent] Stream: Failed to load thread history: {e}")
             messages = [HumanMessage(content=query)]
 
+    # 콘텐츠 컨텍스트 로딩
+    content_context = ""
+    if metadata:
+        ctx_ids = metadata.get("content_ids") or (
+            [metadata["content_id"]] if metadata.get("content_id") else []
+        )
+        if ctx_ids:
+            from .tools.content_context import load_content_context
+            content_context = await load_content_context(
+                ctx_ids,
+                source_options=metadata.get("source_options"),
+            )
+
     # 초기 상태 구성
     state: GraphState = {
         "messages": messages,
@@ -614,6 +642,8 @@ async def stream_ai_agent(
         "failed_queries": [],
         "needs_retry": False,
         "retry_reason": "",
+        # 콘텐츠 컨텍스트
+        "content_context": content_context,
     }
 
     try:
