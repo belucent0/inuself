@@ -62,11 +62,13 @@ class QueryRewriterNode:
         strategy = self._select_strategy(retry_count, retry_reason)
 
         # 교차 언어 fallback: 한국어 중심 검색이 낮은 품질일 때 영어 검색 재시도
+        language_strategy = query_analysis.get("language_strategy")
         effective_search_language = search_language
         if self._should_enable_cross_language_fallback(
             retry_reason=retry_reason,
             search_language=search_language,
             retry_count=retry_count,
+            language_strategy=language_strategy,
         ):
             effective_search_language = "en-US"
             logger.info(
@@ -133,8 +135,16 @@ class QueryRewriterNode:
         retry_reason: str,
         search_language: str | None,
         retry_count: int,
+        language_strategy: str | None = None,
     ) -> bool:
         """교차 언어 fallback 적용 여부를 판단한다."""
+        # 이미 이중 언어 전략이면 fallback 불필요 (Phase 3.5에서 선제적으로 처리됨)
+        if language_strategy in (
+            "ko_primary_en_secondary",
+            "en_primary_ko_secondary",
+        ):
+            return False
+
         # 첫 실패에서 바로 전환하지 않고, 한 번 실패한 뒤부터 적용
         if retry_count < 1:
             return False

@@ -87,6 +87,8 @@ class QueryAnalysis(TypedDict, total=False):
     search_recency: str  # "day" | "week" | "month" | "year"
     search_language: str  # 검색 언어 힌트 (예: "ko-KR", "en-US")
     domain_allowlist: list[str]  # 허용 도메인 목록 (예: ["python.org", "pytorch.org"])
+    language_strategy: str  # "ko_only" | "en_only" | "ko_primary_en_secondary" | "en_primary_ko_secondary"
+    tagged_queries: list[dict[str, str]]  # [{"query": "...", "language": "ko-KR"}, ...]
 
 
 class GraphState(TypedDict):
@@ -145,3 +147,6 @@ class GraphState(TypedDict):
     failed_queries: list[str]
     needs_retry: bool
     retry_reason: str
+
+    # 콘텐츠 컨텍스트 (콘텐츠 상세 채팅 시 요약/전사 직접 주입, 빈 문자열이면 미사용)
+    content_context: str
