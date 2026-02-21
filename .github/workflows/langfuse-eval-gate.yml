@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - name: 백엔드 헬스 체크
         run: |
@@ -68,7 +70,7 @@ jobs:
           RUN_NAME: pr-${{ github.event.pull_request.number || 'manual' }}-${{ github.sha }}
           # LLM-as-Judge (정보용 — CI 게이트 무관)
           JUDGE_LITELLM_BASE_URL: ${{ secrets.JUDGE_LITELLM_BASE_URL || 'http://localhost:4000' }}
-          JUDGE_MODEL: ${{ secrets.JUDGE_MODEL || 'tier-thinking-local' }}
+          JUDGE_MODEL: ${{ secrets.JUDGE_MODEL || 'tier-simple' }}
           JUDGE_LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           JUDGE_ENABLED: "true"
         run: .eval-venv/bin/python scripts/run_eval.py

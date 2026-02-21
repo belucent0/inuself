@@ -115,13 +115,9 @@ export function MonitoringPage() {
     <div className="flex flex-col h-full">
       {/* 헤더 */}
       <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="px-6 py-4">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-2xl font-bold">모니터링</h1>
-              <p className="text-sm text-muted-foreground mt-1">시스템 상태 및 성능 대시보드</p>
-            </div>
-            {currentTab.external && (
+        <div className="px-6 py-3">
+          {currentTab.external && (
+            <div className="flex justify-end mb-2">
               <a
                 href={currentTabPath}
                 target="_blank"
@@ -131,8 +127,8 @@ export function MonitoringPage() {
                 새 창에서 열기
                 <ExternalLink className="h-4 w-4" />
               </a>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* 탭 네비게이션 */}
           <Tabs value={activeTab} onValueChange={handleTabChange}>
@@ -195,9 +191,8 @@ export function MonitoringPage() {
               src={currentTabPath}
               className="w-full h-full border-0"
               title={`${currentTab.label} Dashboard`}
-              loading="lazy"
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-          />
+              sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+            />
         )}
       </div>
     </div>

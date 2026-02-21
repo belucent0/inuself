@@ -197,7 +197,7 @@ export function ContentDetailLayout({
             )}
           >
             <ContentChatPanel
-              contentId={content.id}
+              content={content}
               contentTitle={content.title || content.filename}
             />
           </TabsContent>
@@ -246,7 +246,7 @@ export function ContentDetailLayout({
         {/* 우: 채팅 */}
         <div className="flex-1 min-w-0">
           <ContentChatPanel
-            contentId={content.id}
+            content={content}
             contentTitle={content.title || content.filename}
           />
         </div>

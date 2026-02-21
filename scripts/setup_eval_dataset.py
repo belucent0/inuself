@@ -84,6 +84,7 @@ def main() -> None:
                     "suite_id": suite["id"],
                     "turn": turn_def["turn"],
                     "query": turn_def["query"],
+                    "request_mode": turn_def.get("request_mode", "auto"),
                 },
                 expected_output={
                     "mode": assertions.get("mode", {}).get("expected", []),

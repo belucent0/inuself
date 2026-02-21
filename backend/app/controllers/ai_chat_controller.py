@@ -73,6 +73,7 @@ class ThreadDetailResponse(BaseModel):
     messages: list[dict]
     created_at: float
     updated_at: float
+    content_id: str | None = None
 
 
 # === 의존성 ===
@@ -150,6 +151,10 @@ def _build_agent_metadata(
 
     if isinstance(model_candidate, str) and model_candidate.strip():
         metadata["model"] = _validate_requested_model(settings, model_candidate)
+
+    # content_id → content_ids 정규화 (RAG 필터링 일관성)
+    if "content_id" in metadata and "content_ids" not in metadata:
+        metadata["content_ids"] = [metadata["content_id"]]
 
     return metadata or None
 
@@ -348,6 +353,7 @@ async def get_thread(
         messages=[m.to_dict() for m in thread.messages],
         created_at=thread.created_at,
         updated_at=thread.updated_at,
+        content_id=str(thread.content_id) if thread.content_id else None,
     )
 
 
@@ -590,6 +596,7 @@ async def create_thread(
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
 ):
     """새 스레드 생성 (AI 실행 없음, 확인 후 라우팅용).
 
@@ -615,7 +622,26 @@ async def create_thread(
 
     try:
         # 1. 새 스레드 생성
-        thread = await svc.create_thread(user_id=user_id, metadata=agent_metadata)
+        # content_id는 File.id (프론트엔드 공개 ID).
+        # ai_thread.content_id FK는 content.id를 참조하므로 변환 필요.
+        file_id_str = agent_metadata.get("content_id") if agent_metadata else None
+        actual_content_id = None
+        if file_id_str:
+            try:
+                from uuid import UUID as _UUID
+                from ..repositories.content_repository import ContentRepository
+                _repo = ContentRepository(session)
+                _content = await _repo.get_by_file_id(_UUID(str(file_id_str)))
+                if _content:
+                    actual_content_id = _content.id
+            except Exception as _e:
+                logger.warning(f"[Thread] content_id 변환 실패 (file_id={file_id_str}): {_e}")
+
+        thread = await svc.create_thread(
+            user_id=user_id,
+            content_id=actual_content_id,
+            metadata=agent_metadata,
+        )
 
         # 2. 사용자 메시지 저장 (completed)
         user_message = await svc.add_message(
@@ -1005,13 +1031,7 @@ async def stream_message_v2(
                 f"[Thread] Client disconnected: thread_id={captured_thread_id}, message_id={captured_message_id}"
             )
             if not response_completed["value"]:
-                # 현재까지 생성된 partial_content 저장
-                await db_update_partial(
-                    captured_message_id,
-                    partial_content=full_response,
-                    status="generating",
-                )
-                # 백그라운드에서 계속 생성
+                # 백그라운드 태스크를 먼저 생성 (await 전에 호출해야 CancelledError로 중단되지 않음)
                 asyncio.create_task(
                     generate_ai_response_background(
                         thread_id=captured_thread_id,
@@ -1021,6 +1041,14 @@ async def stream_message_v2(
                         context=captured_context,
                         settings=captured_settings,
                         message_id=captured_message_id,
+                    )
+                )
+                # partial_content 저장은 fire-and-forget (CancelledError에 영향받지 않도록)
+                asyncio.create_task(
+                    db_update_partial(
+                        captured_message_id,
+                        partial_content=full_response,
+                        status="generating",
                     )
                 )
             raise

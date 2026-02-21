@@ -28,6 +28,7 @@ export interface ContentListParams {
   pageSize?: number
   status?: string
   contentType?: string
+  search?: string
 }
 
 /**
@@ -39,6 +40,7 @@ export async function getContents(params?: ContentListParams): Promise<ContentLi
   if (params?.pageSize) queryParams.set('page_size', params.pageSize.toString())
   if (params?.status) queryParams.set('status', params.status)
   if (params?.contentType) queryParams.set('content_type', params.contentType)
+  if (params?.search) queryParams.set('search', params.search)
 
   const query = queryParams.toString()
   const response = await httpClient.get<ApiContentListResponse>(`/contents${query ? `?${query}` : ''}`)

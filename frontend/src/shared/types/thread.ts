@@ -52,6 +52,7 @@ export interface Thread {
   created_at: number
   updated_at: number
   metadata?: Record<string, unknown>
+  content_id?: string | null
 }
 
 export interface CreateThreadRequest {

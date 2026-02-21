@@ -61,9 +61,9 @@ def _split_text_into_chunks(text: str, max_chars: int = 25000, overlap_chars: in
 # ============================================================
 
 def _call_llm(settings, messages: list[dict], use_litellm: bool) -> str:
-    """LLM 호출 공통 함수 - 요약 전용 티어(tier-summarize) 사용."""
+    """LLM 호출 공통 함수 - 요약 전용 티어(tier-recap) 사용."""
     if use_litellm:
-        # 요약 전용 모델 사용: tier-summarize → lfm2-trans:2.6b
+        # 요약 전용 모델 사용: tier-recap → gpt-oss-20b-mxfp4-GGUF
         response = request_litellm_completion(
             settings=settings,
             messages=messages,

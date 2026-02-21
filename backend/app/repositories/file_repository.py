@@ -3,7 +3,7 @@ from typing import Sequence
 from uuid import UUID
 
 from ..core.logging import logger
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, func, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,7 @@ class FileRepository:
         limit: int = 20,
         offset: int = 0,
         content_type: models.ContentType | None = None,
+        search: str | None = None,
     ) -> Sequence[models.File]:
         """파일 목록 조회 (관계 포함). user_id가 제공되면 해당 사용자의 파일만 조회."""
         stmt = (
@@ -54,13 +55,24 @@ class FileRepository:
         if content_type:
             stmt = stmt.where(models.File.content_type == content_type)
 
+        if search:
+            stmt = stmt.where(
+                or_(
+                    models.File.filename.ilike(f"%{search}%"),
+                    models.Content.title.ilike(f"%{search}%"),
+                )
+            )
+
         stmt = stmt.limit(limit).offset(offset)
 
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
     async def count_files(
-        self, user_id: UUID | None = None, content_type: models.ContentType | None = None
+        self,
+        user_id: UUID | None = None,
+        content_type: models.ContentType | None = None,
+        search: str | None = None,
     ) -> int:
         """전체 파일 개수 조회. user_id가 제공되면 해당 사용자의 파일만 카운트."""
         stmt = select(func.count(models.File.id)).join(
@@ -72,6 +84,14 @@ class FileRepository:
 
         if content_type:
             stmt = stmt.where(models.File.content_type == content_type)
+
+        if search:
+            stmt = stmt.where(
+                or_(
+                    models.File.filename.ilike(f"%{search}%"),
+                    models.Content.title.ilike(f"%{search}%"),
+                )
+            )
 
         result = await self.session.execute(stmt)
         return result.scalar_one() or 0

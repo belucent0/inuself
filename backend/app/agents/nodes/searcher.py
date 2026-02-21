@@ -93,6 +93,14 @@ class SearcherNode:
         url_to_result: dict[str, dict] = {}
         query_count = 0
 
+        # tagged_queries에서 쿼리→언어 맵 구성 (Phase 3.5 결과)
+        tagged_queries_list = query_analysis.get("tagged_queries", [])
+        query_lang_map: dict[str, str] = {
+            tq["query"]: tq["language"]
+            for tq in tagged_queries_list
+            if isinstance(tq, dict) and "query" in tq and "language" in tq
+        }
+
         try:
             for sq in search_queries:
                 # V9.0 Phase 3: 쿼리 명확화 적용
@@ -104,12 +112,15 @@ class SearcherNode:
                         clarified_query, domain_allowlist
                     )
 
+                # 쿼리별 개별 언어 적용 (fallback: 글로벌 language 옵션)
+                query_language = query_lang_map.get(sq, search_options["language"])
+
                 results = await search_web(
                     search_query,
                     settings=self.settings,
                     limit=search_options["limit"],
                     categories=search_options["categories"],
-                    language=search_options["language"],
+                    language=query_language,
                     time_range=search_options.get("time_range"),
                     use_cache=True,
                 )

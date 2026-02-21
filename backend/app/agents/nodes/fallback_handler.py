@@ -6,6 +6,7 @@ V8.4: 모든 검색 시도가 실패했을 때 대안을 제공합니다.
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Any
 
 from loguru import logger
@@ -147,9 +148,11 @@ class FallbackHandlerNode:
             return "llm_only"
 
         # 3. 특정 최신 정보가 필요한 경우 명시적 에러
+        current_year = str(datetime.now().year)
+        previous_year = str(datetime.now().year - 1)
         if any(
             keyword in query
-            for keyword in ["최신", "현재", "오늘", "실시간", "2026", "2025"]
+            for keyword in ["최신", "현재", "오늘", "실시간", current_year, previous_year]
         ):
             return "explicit_error"
 

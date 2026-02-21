@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -52,7 +53,7 @@ RUN_NAME = os.environ.get(
 
 # LLM-as-Judge 설정 (정보용 — CI 게이트에 영향 없음)
 JUDGE_LITELLM_BASE_URL = os.environ.get("JUDGE_LITELLM_BASE_URL", "http://localhost:4000")
-JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "tier-thinking-local")
+JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "tier-simple")
 JUDGE_ENABLED = os.environ.get("JUDGE_ENABLED", "true").lower() == "true"
 JUDGE_LITELLM_API_KEY = os.environ.get("JUDGE_LITELLM_API_KEY", os.environ.get("LITELLM_API_KEY", ""))
 
@@ -150,6 +151,9 @@ async def _llm_judge(
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
 
+        # <think>...</think> 블록 제거 (tier-thinking 모델 대응)
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
         score = -1.0
         reason = content.strip()
         for line in content.splitlines():
@@ -214,11 +218,12 @@ async def run_suite(
 
             try:
                 start = time.monotonic()
+                request_mode = item.input.get("request_mode", "auto")
 
                 if thread_id is None:
-                    thread_id, message_id = await client.create_thread(query)
+                    thread_id, message_id = await client.create_thread(query, request_mode)
                 else:
-                    thread_id, message_id = await client.add_message(thread_id, query)
+                    thread_id, message_id = await client.add_message(thread_id, query, request_mode)
 
                 result = await client.stream_response(thread_id, message_id)
                 elapsed = time.monotonic() - start
@@ -248,12 +253,15 @@ async def run_suite(
                 )
 
                 # 점수 기록 (CI 게이트 기준)
-                langfuse.score(
-                    trace_id=trace.id,
-                    name="quality_pass",
-                    value=score,
-                    comment="; ".join(failures) if failures else "통과",
-                )
+                try:
+                    langfuse.score(
+                        trace_id=trace.id,
+                        name="quality_pass",
+                        value=score,
+                        comment="; ".join(failures) if failures else "통과",
+                    )
+                except Exception as score_err:
+                    print(f"      [warn] langfuse.score 실패 (무시): {score_err}")
 
                 # LLM-as-Judge (정보용 — CI 게이트 무관)
                 judge_tag = ""
@@ -262,12 +270,15 @@ async def run_suite(
                         query, result.full_content, conversation_history
                     )
                     if j_score >= 0:
-                        langfuse.score(
-                            trace_id=trace.id,
-                            name="quality_judge",
-                            value=j_score,
-                            comment=j_reason,
-                        )
+                        try:
+                            langfuse.score(
+                                trace_id=trace.id,
+                                name="quality_judge",
+                                value=j_score,
+                                comment=j_reason,
+                            )
+                        except Exception as score_err:
+                            print(f"      [warn] langfuse.score(judge) 실패 (무시): {score_err}")
                         judge_tag = f" [judge={j_score:.2f}]"
                     else:
                         judge_tag = f" [judge=ERR: {j_reason[:60]}]"
@@ -343,6 +354,16 @@ async def main() -> int:
 
     client = ChatClient(base_url=E2E_BASE_URL)
     await client.login(E2E_LOGIN_ID, E2E_PASSWORD)
+
+    # LLM 워밍업: 첫 요청의 콜드 스타트 지연을 eval 전에 소진
+    print("워밍업 중... (LLM 콜드 스타트 방지)")
+    try:
+        w_thread_id, w_msg_id = await client.create_thread("hi", "simple")
+        await client.stream_response(w_thread_id, w_msg_id)
+        print("워밍업 완료")
+    except Exception as warmup_err:
+        print(f"워밍업 경고 (무시): {warmup_err}")
+    print("-" * 60)
 
     try:
         fixture_suite_order = [s["id"] for s in fixtures["test_suites"]]
