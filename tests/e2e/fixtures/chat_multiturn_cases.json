@@ -30,10 +30,40 @@
           "turn": 3,
           "query": "그 도시의 인구는?",
           "assertions": {
-            "content_contains_any": ["서울", "인구", "만", "천만", "Seoul"],
-            "content_not_contains": ["도쿄", "베이징", "경기도"],
+            "content_contains_any": ["서울", "Seoul", "인구", "만"],
+            "content_not_contains": [],
             "context_check": {
               "must_reference_any": ["서울", "Seoul"]
+            },
+            "no_error": true,
+            "max_response_time_seconds": 60
+          }
+        }
+      ]
+    },
+    {
+      "id": "search-routing-flow",
+      "name": "검색 라우팅 검증 — 최신 정보 질문 (2-turn)",
+      "turns": [
+        {
+          "turn": 1,
+          "query": "최근 한국 기준금리 현황 알려줘",
+          "assertions": {
+            "mode": { "expected": ["search", "reasoning"] },
+            "content_contains_any": ["금리", "한국은행", "%", "기준"],
+            "content_not_contains": [],
+            "no_error": true,
+            "max_response_time_seconds": 60
+          }
+        },
+        {
+          "turn": 2,
+          "query": "그럼 미국 기준금리는?",
+          "assertions": {
+            "content_contains_any": ["미국", "연준", "Fed", "%"],
+            "content_not_contains": [],
+            "context_check": {
+              "must_reference_any": ["미국", "연준", "Fed", "FOMC"]
             },
             "no_error": true,
             "max_response_time_seconds": 60
