@@ -231,7 +231,7 @@
         ]
       },
       "gridPos": {
-        "h": 7,
+        "h": 8,
         "w": 12,
         "x": 0,
         "y": 0
@@ -258,7 +258,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT 'ASR (오디오)' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status IN ('QUEUED', 'PULLING') THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'PROCESSING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'ASR_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE f.content_type = 'AUDIO'\n  AND $__timeFilter(c.created_at)\nUNION ALL\nSELECT 'OCR (문서)' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status = 'QUEUED' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'OCR_PROCESSING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'OCR_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE f.content_type = 'DOCUMENT'\n  AND $__timeFilter(c.created_at)\nUNION ALL\nSELECT 'LLM 요약' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARY_QUEUED' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARIZING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARY_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status = 'COMPLETED' THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nWHERE c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED')\n  AND $__timeFilter(c.created_at);",
+          "rawSql": "SELECT 'ASR (오디오)' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status IN ('QUEUED', 'PULLING') THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'PROCESSING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'ASR_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE f.content_type = 'AUDIO'\n  AND $__timeFilter(c.created_at)\nUNION ALL\nSELECT 'OCR (문서)' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status = 'QUEUED' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'OCR_PROCESSING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'OCR_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED') THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE f.content_type = 'DOCUMENT'\n  AND $__timeFilter(c.created_at)\nUNION ALL\nSELECT 'LLM 요약' AS pipeline,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARY_QUEUED' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARIZING' THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN c.status = 'COMPLETED' THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN c.status = 'SUMMARY_FAILED' THEN 1 ELSE 0 END), 0) AS failed,\n  COALESCE(ROUND(AVG(CASE WHEN c.status = 'COMPLETED' THEN EXTRACT(EPOCH FROM (c.updated_at - c.created_at)) / 60.0 END)::numeric, 1), 0) AS avg_min\nFROM content c\nWHERE c.status IN ('SUMMARY_QUEUED', 'SUMMARIZING', 'SUMMARY_FAILED', 'COMPLETED')\n  AND $__timeFilter(c.created_at)\nUNION ALL\nSELECT 'LLM 채팅' AS pipeline,\n  COALESCE(SUM(CASE WHEN m.status = 'queued' THEN 1 ELSE 0 END), 0) AS queued,\n  COALESCE(SUM(CASE WHEN m.status IN ('analyzing', 'searching', 'thinking', 'generating') THEN 1 ELSE 0 END), 0) AS processing,\n  COALESCE(SUM(CASE WHEN m.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,\n  COALESCE(SUM(CASE WHEN m.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,\n  NULL::numeric AS avg_min\nFROM ai_message m\nJOIN ai_thread t ON t.id = m.thread_id\nWHERE m.role = 'assistant'\n  AND NOT t.is_archived\n  AND $__timeFilter(m.created_at);",
           "refId": "A"
         }
       ],
@@ -809,175 +809,6 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "대기중"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "대기중"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "yellow",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "처리중"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "처리중"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "blue",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "완료"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "완료"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "실패"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "실패"
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "blue",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 1
-                    }
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "스레드"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "스레드"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "purple",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 16,
-        "x": 0,
-        "y": 22
-      },
-      "id": 10,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgresql"
-          },
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT\n  COUNT(CASE WHEN m.status = 'queued' THEN 1 END) AS \"대기중\",\n  COUNT(CASE WHEN m.status IN ('analyzing', 'searching', 'thinking', 'generating') THEN 1 END) AS \"처리중\",\n  COUNT(CASE WHEN m.status = 'completed' AND m.created_at >= $__timeFrom() AND m.created_at <= $__timeTo() THEN 1 END) AS \"완료\",\n  COUNT(CASE WHEN m.status = 'failed' AND m.created_at >= $__timeFrom() AND m.created_at <= $__timeTo() THEN 1 END) AS \"실패\",\n  COUNT(DISTINCT CASE WHEN m.created_at >= $__timeFrom() AND m.created_at <= $__timeTo() THEN m.thread_id END) AS \"스레드\"\nFROM ai_message m\nJOIN ai_thread t ON t.id = m.thread_id\nWHERE m.role = 'assistant'\n  AND NOT t.is_archived;",
-          "refId": "A"
-        }
-      ],
-      "title": "LLM 채팅 현황",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgresql"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
           "custom": {
             "align": "left",
             "cellOptions": {
@@ -1082,7 +913,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 27
+        "y": 22
       },
       "id": 11,
       "options": {
@@ -1181,7 +1012,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 27
+        "y": 22
       },
       "id": 9,
       "options": {
