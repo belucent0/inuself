@@ -58,29 +58,13 @@ def main() -> None:
 
     dataset = langfuse.get_dataset(DATASET_NAME)
 
-    # --reset: fixture에 없는 항목 삭제 + 기존 항목 갱신
-    if args.reset:
-        fixtures = json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
-        valid_ids = {
-            f"{suite['id']}__turn{turn_def['turn']}"
-            for suite in fixtures["test_suites"]
-            for turn_def in suite["turns"]
-        }
-
-        removed = 0
-        for item in dataset.items:
-            case_id = item.metadata.get("case_id") if item.metadata else None
-            if case_id not in valid_ids:
-                item.delete()
-                print(f"  [DEL] {case_id}")
-                removed += 1
-
-        print(f"[reset] {removed}개 항목 삭제됨")
-        # 삭제 후 데이터셋 재조회
-        dataset = langfuse.get_dataset(DATASET_NAME)
-
     # 기존 항목 ID 수집 (중복 방지)
-    existing_ids = {item.metadata.get("case_id") for item in dataset.items if item.metadata}
+    # --reset 시엔 비워서 전체 재등록 허용 (구 항목은 run_eval.py에서 fixture 기준 필터링)
+    if args.reset:
+        existing_ids: set = set()
+        print("[reset] 전체 재등록 모드 — fixture 기준으로 누락 항목 추가")
+    else:
+        existing_ids = {item.metadata.get("case_id") for item in dataset.items if item.metadata}
 
     # fixtures 파일에서 케이스 로드
     fixtures = json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
