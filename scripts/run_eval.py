@@ -52,7 +52,7 @@ RUN_NAME = os.environ.get(
 
 # LLM-as-Judge 설정 (정보용 — CI 게이트에 영향 없음)
 JUDGE_LITELLM_BASE_URL = os.environ.get("JUDGE_LITELLM_BASE_URL", "http://localhost:4000")
-JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "tier-simple")
+JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "tier-thinking-local")
 JUDGE_ENABLED = os.environ.get("JUDGE_ENABLED", "true").lower() == "true"
 JUDGE_LITELLM_API_KEY = os.environ.get("JUDGE_LITELLM_API_KEY", os.environ.get("LITELLM_API_KEY", ""))
 
