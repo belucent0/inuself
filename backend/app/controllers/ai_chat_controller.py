@@ -315,18 +315,41 @@ async def generate_ai_response_background(
             logger.exception(f"[Thread] Failed to save error message: {save_error}")
 
 
+class UpdateThreadMetadataRequest(BaseModel):
+    """스레드 메타데이터 업데이트 요청."""
+
+    metadata: dict = Field(..., description="병합할 메타데이터 키-값 쌍")
+
+
 @router.get("", response_model=ThreadListResponse)
 async def list_threads(
     limit: int = 20,
     offset: int = 0,
+    content_id: str | None = None,
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
 ):
     """스레드 목록 조회.
 
     GET /api/threads
+    GET /api/threads?content_id=X  — 특정 콘텐츠의 스레드만 조회 (메시지 포함)
+    content_id는 프론트엔드의 file.id이며, 내부적으로 content.id로 변환 후 조회한다.
     """
-    threads = await svc.list_threads(user_id=user_id, limit=limit, offset=offset)
+    if content_id:
+        # file_id → content.id 변환 (AiThread.content_id는 content.id FK)
+        from ..repositories.content_repository import ContentRepository
+        _content_repo = ContentRepository(session)
+        try:
+            _content = await _content_repo.get_by_file_id(UUID(content_id))
+            actual_content_id = str(_content.id) if _content else content_id
+        except Exception:
+            actual_content_id = content_id
+        threads = await svc.get_threads_by_content(
+            user_id=user_id, content_id=actual_content_id, limit=limit
+        )
+    else:
+        threads = await svc.list_threads(user_id=user_id, limit=limit, offset=offset)
     return ThreadListResponse(
         threads=threads,
         total=len(threads),
@@ -355,6 +378,29 @@ async def get_thread(
         updated_at=thread.updated_at,
         content_id=str(thread.content_id) if thread.content_id else None,
     )
+
+
+@router.patch("/{thread_id}/metadata")
+async def update_thread_metadata(
+    thread_id: str,
+    request: UpdateThreadMetadataRequest,
+    svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """스레드 메타데이터 부분 업데이트 (병합).
+
+    PATCH /api/threads/{thread_id}/metadata
+
+    source_options, content_ids 등 클라이언트 상태 저장용.
+    기존 metadata와 병합 (replace가 아닌 merge).
+    """
+    thread = await svc.update_thread_metadata(
+        thread_id, user_id=user_id, metadata_patch=request.metadata
+    )
+    if not thread:
+        raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
+
+    return {"thread_id": thread.thread_id, "message": "메타데이터가 업데이트되었습니다"}
 
 
 @router.delete("/{thread_id}")
@@ -725,6 +771,19 @@ async def add_message(
             status="queued",
             metadata={"mode": request.mode, "context": agent_metadata},
         )
+
+        # 3. source_options가 있으면 thread metadata 자동 업데이트
+        if agent_metadata and "source_options" in agent_metadata:
+            try:
+                await svc.update_thread_metadata(
+                    thread_id,
+                    user_id=user_id,
+                    metadata_patch={"source_options": agent_metadata["source_options"]},
+                )
+            except Exception as meta_err:
+                logger.warning(
+                    f"[Thread] source_options metadata 업데이트 실패 (thread_id={thread_id}): {meta_err}"
+                )
 
         return AddMessageResponse(
             thread_id=thread_id,
