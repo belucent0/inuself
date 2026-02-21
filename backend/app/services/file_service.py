@@ -53,7 +53,7 @@ class FileService:
         self.settings = get_settings()
 
     async def list_files(
-        self, user_id: UUID, page: int = 1, page_size: int = 10
+        self, user_id: UUID, page: int = 1, page_size: int = 10, search: str | None = None
     ) -> ContentListResponse:
         """페이지네이션을 포함한 파일 목록 조회 (사용자별 필터링)."""
         if page < 1:
@@ -62,8 +62,8 @@ class FileService:
             page_size = 10
 
         offset = (page - 1) * page_size
-        total = await self.file_repo.count_files(user_id=user_id)
-        rows = await self.file_repo.list_files(user_id=user_id, limit=page_size, offset=offset)
+        total = await self.file_repo.count_files(user_id=user_id, search=search)
+        rows = await self.file_repo.list_files(user_id=user_id, limit=page_size, offset=offset, search=search)
 
         items = []
         for row in rows:
