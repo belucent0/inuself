@@ -531,78 +531,6 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 7
-      },
-      "id": 5,
-      "options": {
-        "displayLabels": [
-          "name",
-          "percent"
-        ],
-        "legend": {
-          "displayMode": "list",
-          "placement": "right",
-          "showLegend": true,
-          "values": [
-            "value"
-          ]
-        },
-        "pieType": "pie",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgresql"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT\n  CASE\n    WHEN f.content_type = 'AUDIO' THEN 'AUDIO'\n    WHEN f.content_type = 'DOCUMENT' THEN 'DOCUMENT'\n    WHEN f.content_type = 'PORTRAY' THEN 'PORTRAY'\n    ELSE 'OTHER'\n  END AS content_type,\n  COUNT(*) AS count\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE $__timeFilter(c.created_at)\nGROUP BY 1\nORDER BY 2 DESC;",
-          "refId": "A"
-        }
-      ],
-      "title": "타입별 분포",
-      "type": "piechart"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgresql"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
             "mode": "thresholds"
           },
           "custom": {
@@ -724,7 +652,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  f.name AS filename,\n  f.content_type AS type,\n  c.status,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 86400) || '일 전'\n  END AS elapsed\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE c.status IN ('ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED')\n  AND $__timeFilter(c.updated_at)\nORDER BY c.updated_at DESC\nLIMIT 10;",
+          "rawSql": "SELECT\n  f.name AS filename,\n  f.content_type AS type,\n  c.status,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 86400) || '일 전'\n  END AS elapsed\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE c.status IN ('ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED', 'DOWNLOAD_FAILED', 'CANCELLED')\nORDER BY c.updated_at DESC\nLIMIT 10;",
           "refId": "A"
         }
       ],
