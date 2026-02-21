@@ -19,6 +19,9 @@ Langfuse UI에서 확인:
 
     # 실행 이름 지정 (기본: eval-YYYY-MM-DD-HHMM)
     RUN_NAME=after-prompt-refactor python scripts/run_eval.py
+
+    # LLM-as-Judge 비활성화 (LiteLLM 프록시 없는 환경)
+    JUDGE_ENABLED=false python scripts/run_eval.py
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from langfuse import Langfuse
 
 # E2E 클라이언트 재사용
@@ -45,6 +49,12 @@ RUN_NAME = os.environ.get(
     "RUN_NAME",
     f"eval-{datetime.now(timezone.utc).strftime('%Y-%m-%d-%H%M')}",
 )
+
+# LLM-as-Judge 설정 (정보용 — CI 게이트에 영향 없음)
+JUDGE_LITELLM_BASE_URL = os.environ.get("JUDGE_LITELLM_BASE_URL", "http://localhost:4000")
+JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "tier-thinking-local")
+JUDGE_ENABLED = os.environ.get("JUDGE_ENABLED", "true").lower() == "true"
+JUDGE_LITELLM_API_KEY = os.environ.get("JUDGE_LITELLM_API_KEY", os.environ.get("LITELLM_API_KEY", ""))
 
 
 def _score_result(
@@ -92,6 +102,72 @@ def _score_result(
     return score, failures
 
 
+async def _llm_judge(
+    query: str,
+    response: str,
+    conversation_history: list[dict],
+) -> tuple[float, str]:
+    """LLM 심사위원이 응답 품질을 채점합니다.
+
+    Returns:
+        (score, reason) — score는 0~1 float, 오류 시 -1.0 반환
+    """
+    history_text = ""
+    if conversation_history:
+        lines = [
+            f"사용자: {h['query']}\nAI: {h['response'][:200]}"
+            for h in conversation_history
+        ]
+        history_text = "이전 대화:\n" + "\n".join(lines) + "\n\n"
+
+    prompt = (
+        f"{history_text}"
+        f"현재 질문: {query}\n\n"
+        f"AI 응답:\n{response[:800]}\n\n"
+        "위 AI 응답을 다음 기준으로 평가하세요:\n"
+        "1. 질문에 대한 답변 적절성\n"
+        "2. 내용의 정확성과 유용성\n"
+        "3. 이전 대화 맥락 활용 (해당 시)\n\n"
+        "반드시 아래 형식으로만 답하세요:\n"
+        "SCORE: 0.0~1.0\n"
+        "REASON: 한 문장 평가"
+    )
+
+    try:
+        headers = {"Authorization": f"Bearer {JUDGE_LITELLM_API_KEY}"} if JUDGE_LITELLM_API_KEY else {}
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(
+                f"{JUDGE_LITELLM_BASE_URL}/chat/completions",
+                headers=headers,
+                json={
+                    "model": JUDGE_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "max_tokens": 100,
+                },
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+
+        score = -1.0
+        reason = content.strip()
+        for line in content.splitlines():
+            line = line.strip()
+            if line.startswith("SCORE:"):
+                try:
+                    score = float(line.split(":", 1)[1].strip())
+                    score = max(0.0, min(1.0, score))
+                except ValueError:
+                    pass
+            elif line.startswith("REASON:"):
+                reason = line.split(":", 1)[1].strip()
+        return score, reason
+
+    except Exception as exc:
+        return -1.0, f"judge 오류: {exc}"
+
+
 async def run_suite(
     langfuse: Langfuse,
     client: ChatClient,
@@ -121,6 +197,7 @@ async def run_suite(
         print(f"\n[Suite] {suite_id} ({len(suite_items)}턴)")
 
         thread_id: str | None = None
+        conversation_history: list[dict] = []  # judge용 대화 맥락
 
         for item in suite_items:
             turn = item.input.get("turn", "?")
@@ -170,7 +247,7 @@ async def run_suite(
                     level="DEFAULT" if score == 1.0 else "WARNING",
                 )
 
-                # 점수 기록
+                # 점수 기록 (CI 게이트 기준)
                 langfuse.score(
                     trace_id=trace.id,
                     name="quality_pass",
@@ -178,11 +255,31 @@ async def run_suite(
                     comment="; ".join(failures) if failures else "통과",
                 )
 
+                # LLM-as-Judge (정보용 — CI 게이트 무관)
+                judge_tag = ""
+                if JUDGE_ENABLED:
+                    j_score, j_reason = await _llm_judge(
+                        query, result.full_content, conversation_history
+                    )
+                    if j_score >= 0:
+                        langfuse.score(
+                            trace_id=trace.id,
+                            name="quality_judge",
+                            value=j_score,
+                            comment=j_reason,
+                        )
+                        judge_tag = f" [judge={j_score:.2f}]"
+                    else:
+                        judge_tag = f" [judge=ERR: {j_reason[:60]}]"
+
+                # 이번 턴 대화 맥락 저장 (다음 턴 judge용)
+                conversation_history.append({"query": query, "response": result.full_content})
+
                 # 데이터셋 항목에 연결 (trace 객체 직접 전달)
                 item.link(trace, run_name=run_name)
 
                 status = "PASS" if score == 1.0 else "FAIL"
-                print(f"→ {status} (mode={result.mode_used}, {elapsed:.1f}s)")
+                print(f"→ {status} (mode={result.mode_used}, {elapsed:.1f}s){judge_tag}")
                 if failures:
                     for f in failures:
                         print(f"      ✗ {f}")
