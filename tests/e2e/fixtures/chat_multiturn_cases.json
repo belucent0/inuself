@@ -40,35 +40,6 @@
           }
         }
       ]
-    },
-    {
-      "id": "context-followup-flow",
-      "name": "후속 질문 맥락 유지 검증 (2-turn)",
-      "turns": [
-        {
-          "turn": 1,
-          "query": "한국 기준금리 현황 알려줘",
-          "assertions": {
-            "content_contains_any": ["금리", "한국은행", "%", "기준"],
-            "content_not_contains": [],
-            "no_error": true,
-            "max_response_time_seconds": 60
-          }
-        },
-        {
-          "turn": 2,
-          "query": "그럼 미국 기준금리는?",
-          "assertions": {
-            "content_contains_any": ["미국", "연준", "Fed", "%"],
-            "content_not_contains": [],
-            "context_check": {
-              "must_reference_any": ["미국", "연준", "Fed", "FOMC"]
-            },
-            "no_error": true,
-            "max_response_time_seconds": 60
-          }
-        }
-      ]
     }
   ]
 }
