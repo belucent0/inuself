@@ -652,7 +652,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  COALESCE(f.name, '(파일 없음)') AS filename,\n  COALESCE(f.content_type::text, '-') AS type,\n  c.status,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 86400) || '일 전'\n  END AS elapsed\nFROM content c\nLEFT JOIN file f ON f.id = c.file_id\nWHERE c.status IN ('ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED', 'DOWNLOAD_FAILED', 'CANCELLED')\nORDER BY c.updated_at DESC\nLIMIT 10;",
+          "rawSql": "SELECT\n  COALESCE(f.filename, '(파일 없음)') AS filename,\n  COALESCE(f.content_type::text, '-') AS type,\n  c.status,\n  CASE\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 3600 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) || '분 전'\n    WHEN EXTRACT(EPOCH FROM (NOW() - c.updated_at)) < 86400 THEN ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 3600) || '시간 전'\n    ELSE ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 86400) || '일 전'\n  END AS elapsed\nFROM content c\nLEFT JOIN file f ON f.id = c.file_id\nWHERE c.status IN ('ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED', 'DOWNLOAD_FAILED', 'CANCELLED')\nORDER BY c.updated_at DESC\nLIMIT 10;",
           "refId": "A"
         }
       ],
@@ -792,7 +792,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  f.name AS filename,\n  f.content_type AS type,\n  c.status,\n  ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) AS duration_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE c.status IN ('PROCESSING', 'PULLING', 'OCR_PROCESSING', 'SUMMARIZING')\n  AND c.updated_at < NOW() - INTERVAL '30 minutes'\nORDER BY c.updated_at ASC\nLIMIT 10;",
+          "rawSql": "SELECT\n  f.filename AS filename,\n  f.content_type AS type,\n  c.status,\n  ROUND(EXTRACT(EPOCH FROM (NOW() - c.updated_at)) / 60) AS duration_min\nFROM content c\nJOIN file f ON f.id = c.file_id\nWHERE c.status IN ('PROCESSING', 'PULLING', 'OCR_PROCESSING', 'SUMMARIZING')\n  AND c.updated_at < NOW() - INTERVAL '30 minutes'\nORDER BY c.updated_at ASC\nLIMIT 10;",
           "refId": "A"
         }
       ],
