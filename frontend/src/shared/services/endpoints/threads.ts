@@ -15,14 +15,15 @@ import type {
 
 /**
  * 스레드 목록 조회
+ * - content_id 지정 시 해당 콘텐츠의 스레드만 조회 (메시지 포함)
  */
 export async function getThreads(
-  limit = 50,
-  offset = 0
+  params: { limit?: number; offset?: number; content_id?: string } = {}
 ): Promise<ThreadListResponse> {
-  return httpClient.get<ThreadListResponse>(
-    `/threads?limit=${limit}&offset=${offset}`
-  )
+  const { limit = 50, offset = 0, content_id } = params
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (content_id) query.set('content_id', content_id)
+  return httpClient.get<ThreadListResponse>(`/threads?${query}`)
 }
 
 /**
@@ -59,6 +60,16 @@ export async function updateThreadTitle(
 }
 
 /**
+ * 스레드 메타데이터 부분 업데이트 (기존 값과 병합)
+ */
+export async function updateThreadMetadata(
+  threadId: string,
+  metadata: Record<string, unknown>
+): Promise<void> {
+  return httpClient.patch<void>(`/threads/${threadId}/metadata`, { metadata })
+}
+
+/**
  * 메시지 재생성 (SSE 스트리밍)
  *
  * @returns ReadableStream for SSE events
@@ -83,6 +94,7 @@ export const threadsApi = {
   createThread,
   deleteThread,
   updateThreadTitle,
+  updateThreadMetadata,
   regenerateMessage,
 }
 
