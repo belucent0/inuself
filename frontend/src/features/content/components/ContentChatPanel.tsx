@@ -1,21 +1,31 @@
 /**
  * 콘텐츠 채팅 패널
  * ChatArea를 래핑하여 content_id 컨텍스트로 대화
+ * + SourceOptionsPanel로 요약/전사/화자 소스 선택
  */
 
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { ChatArea } from '@/features/chat/components/ChatArea'
 import { useContentChat } from '@/shared/hooks/useContentChat'
+import { SourceOptionsPanel } from './SourceOptionsPanel'
+import type { SourceOptions } from './SourceOptionsPanel'
+import type { ContentDetail } from '../types'
 
 interface ContentChatPanelProps {
-  contentId: string
+  content: ContentDetail
   contentTitle: string
 }
 
 export function ContentChatPanel({
-  contentId,
+  content,
   contentTitle,
 }: ContentChatPanelProps) {
+  const [sourceOptions, setSourceOptions] = useState<SourceOptions>({
+    include_summary: true,
+    include_transcription: true,
+    speaker_filter: null,
+  })
+
   const {
     messages,
     isStreaming,
@@ -24,11 +34,11 @@ export function ContentChatPanel({
     currentSources,
     sendMessage,
     regenerate,
-  } = useContentChat(contentId, contentTitle)
+  } = useContentChat(content.id, contentTitle, sourceOptions)
 
   const handleSendMessage = useCallback(
-    (content: string, mode?: string, model?: string) => {
-      sendMessage(content, mode, model)
+    (msg: string, mode?: string, model?: string) => {
+      sendMessage(msg, mode, model)
     },
     [sendMessage]
   )
@@ -39,15 +49,22 @@ export function ContentChatPanel({
 
   return (
     <div className="h-full flex flex-col">
-      <ChatArea
-        messages={messages}
-        isStreaming={isStreaming}
-        currentStreamingMessage={currentStreamingMessage}
-        currentThinkingSteps={currentThinkingSteps}
-        currentSources={currentSources}
-        onSendMessage={handleSendMessage}
-        onRegenerate={handleRegenerate}
+      <SourceOptionsPanel
+        content={content}
+        options={sourceOptions}
+        onChange={setSourceOptions}
       />
+      <div className="flex-1 min-h-0">
+        <ChatArea
+          messages={messages}
+          isStreaming={isStreaming}
+          currentStreamingMessage={currentStreamingMessage}
+          currentThinkingSteps={currentThinkingSteps}
+          currentSources={currentSources}
+          onSendMessage={handleSendMessage}
+          onRegenerate={handleRegenerate}
+        />
+      </div>
     </div>
   )
 }

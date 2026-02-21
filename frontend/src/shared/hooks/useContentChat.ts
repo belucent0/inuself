@@ -39,7 +39,17 @@ interface QueuedMessageResponse {
   user_message_id: string
 }
 
-export function useContentChat(contentId: string, _contentTitle: string) {
+export interface ContentSourceOptions {
+  include_summary: boolean
+  include_transcription: boolean
+  speaker_filter: string[] | null
+}
+
+export function useContentChat(
+  contentId: string,
+  _contentTitle: string,
+  sourceOptions?: ContentSourceOptions
+) {
   const [messages, setMessages] = useState<ContentMessage[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const threadIdRef = useRef<string | null>(null)
@@ -271,12 +281,17 @@ export function useContentChat(contentId: string, _contentTitle: string) {
         let threadId: string
         let messageId: string
 
+        const msgContext: Record<string, unknown> = { content_id: contentId }
+        if (sourceOptions) {
+          msgContext.source_options = sourceOptions
+        }
+
         if (!threadIdRef.current) {
           // 새 스레드 생성
           const resp = await httpClient.post<QueuedMessageResponse>('/threads', {
             query: content,
             mode: effectiveMode,
-            context: { content_id: contentId },
+            context: msgContext,
             model,
           })
           threadId = resp.thread_id
@@ -290,7 +305,7 @@ export function useContentChat(contentId: string, _contentTitle: string) {
             {
               query: content,
               mode: effectiveMode,
-              context: { content_id: contentId },
+              context: msgContext,
               model,
             }
           )

@@ -597,6 +597,119 @@ class HyDETransformer(QueryTransformer):
             return [w for w in hypothetical_answer.split() if len(w) >= 2][:10]
 
 
+# 명백히 한국어 전용 컨텍스트 마커 (LLM 호출 없이 사전 필터링)
+_KO_ONLY_MARKERS = frozenset({
+    "대통령", "국회", "선거", "코스피", "코스닥", "한국은행",
+    "김치", "한복", "한옥", "불고기", "비빔밥", "된장",
+    "서울 맛집", "국내 맛집", "동네 맛집",
+    "지하철 노선", "버스 노선",
+})
+
+# LLM 판단 프롬프트
+_LANGUAGE_ROUTER_PROMPT = """당신은 검색 쿼리 언어 전문가입니다.
+사용자 질문을 분석하여, 영어 웹 검색이 더 좋은 품질의 문서를 줄 수 있는지 판단하세요.
+
+**판단 기준**:
+- 프로그래밍/기술 문서 → 영어 검색이 대부분 우수
+- 학술 논문/연구 → 영어 검색 우수
+- 글로벌 기업/제품 정보 → 영어 검색 병행이 유리
+- 한국 로컬 뉴스/정치/문화 → 한국어 검색만으로 충분
+- 한국 기업이지만 글로벌 관련 → 한국어 + 영어 병행
+
+**사용자 질문**: {query}
+
+다음 JSON 형식으로만 답하세요:
+{{
+  "needs_english": true/false,
+  "reason": "판단 이유 (한 문장)",
+  "english_queries": ["영어 쿼리 1", "영어 쿼리 2"]
+}}
+
+**중요**: english_queries는 needs_english=true일 때만 포함하며, 최대 2개.
+사용자 질문의 핵심 의도를 영어로 자연스럽게 변환한 검색 쿼리여야 합니다."""
+
+
+class LanguageRouterTransformer(QueryTransformer):
+    """LLM 기반 검색 언어 지능형 결정 transformer.
+
+    사용자 질문 의도를 분석하여 영어 검색이 더 나은 품질의 문서를 제공할지
+    선제적으로 판단하고, 필요시 영어 쿼리를 자동 생성합니다.
+
+    판단 결과는 self.last_decision에 저장되어 reformulate_query()의
+    Phase 3.5에서 언어 태깅에 활용됩니다.
+    """
+
+    def __init__(self) -> None:
+        self.last_decision: dict[str, Any] | None = None
+
+    def should_apply(self, query: str, state: GraphState) -> bool:
+        """저비용 사전 필터링 (LLM 호출 없음)."""
+        mode = state.get("mode")
+        if mode not in (AIMode.SEARCH, AIMode.HYBRID, None):
+            return False
+
+        # 명백한 한국어 전용 쿼리 스킵
+        if any(marker in query for marker in _KO_ONLY_MARKERS):
+            return False
+
+        # 20자 미만 순수 한글 → 스킵 (짧고 단순한 국내 쿼리)
+        if len(query) < 20 and not re.search(r"[a-zA-Z]{3,}", query):
+            return False
+
+        return True
+
+    async def transform(
+        self, query: str, state: GraphState, settings: Any
+    ) -> list[str]:
+        """단일 LLM 호출로 영어 필요 여부 판단 + 영어 쿼리 생성."""
+        prompt = _LANGUAGE_ROUTER_PROMPT.format(query=query)
+
+        try:
+            response = await async_llm_completion(
+                settings=settings,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=200,
+            )
+
+            # JSON 파싱
+            raw = response.strip()
+            # 마크다운 코드블록 제거
+            raw = re.sub(r"```(?:json)?\s*", "", raw).strip("` \n")
+            decision = json.loads(raw)
+
+            self.last_decision = decision
+            needs_english = bool(decision.get("needs_english", False))
+            english_queries: list[str] = decision.get("english_queries", [])
+
+            if needs_english and english_queries:
+                valid_en = [
+                    q for q in english_queries
+                    if isinstance(q, str) and len(q) >= 3
+                ][:2]
+                logger.info(
+                    f"[LanguageRouterTransformer] needs_english=True, "
+                    f"reason={decision.get('reason', '')}, "
+                    f"en_queries={valid_en}"
+                )
+                return valid_en
+            else:
+                logger.info(
+                    f"[LanguageRouterTransformer] needs_english=False, "
+                    f"reason={decision.get('reason', '')}"
+                )
+                return []
+
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.warning(f"[LanguageRouterTransformer] JSON parse failed: {e}")
+            self.last_decision = None
+            return []
+        except Exception as e:
+            logger.error(f"[LanguageRouterTransformer] Failed: {e}")
+            self.last_decision = None
+            return []
+
+
 class IntentParserNode:
     """사용자 쿼리의 의도를 분석하여 적절한 모드를 결정하는 노드.
 
@@ -619,10 +732,10 @@ class IntentParserNode:
 
         # Query Transformation 플러그인 등록 (순서대로 실행)
         self.transformers: list[QueryTransformer] = [
-            ContextualizeTransformer(),  # 1순위: 대화 맥락 반영
-            DecomposeTransformer(),  # 2순위: 질의 분해
-            HyDETransformer(),  # 3순위: HyDE (Phase 1B)
-            # StepBackTransformer(),      # 4순위: Step-back (Phase 5+에서 추가 예정)
+            ContextualizeTransformer(),    # 1순위: 대화 맥락 반영
+            DecomposeTransformer(),        # 2순위: 질의 분해
+            HyDETransformer(),             # 3순위: HyDE (Phase 1B)
+            LanguageRouterTransformer(),   # 4순위: 영어 검색 판단 + 쿼리 생성
         ]
 
         logger.info(
@@ -1190,6 +1303,28 @@ class IntentParserNode:
         # 최대 5개로 제한 (너무 많으면 검색 시간 증가)
         unique_queries = unique_queries[:MAX_QUERY_COUNT]
 
+        # ===== Phase 3.5: 쿼리별 언어 태깅 (LanguageRouterTransformer 결과 반영) =====
+        language_router = next(
+            (t for t in self.transformers if isinstance(t, LanguageRouterTransformer)),
+            None,
+        )
+        lang_decision = getattr(language_router, "last_decision", None)
+
+        if lang_decision and lang_decision.get("needs_english"):
+            language_strategy = "ko_primary_en_secondary"
+            tagged_queries: list[dict[str, str]] = []
+            for q in unique_queries:
+                has_korean = bool(re.search(r"[가-힣]", q))
+                lang = "ko-KR" if has_korean else "en-US"
+                tagged_queries.append({"query": q, "language": lang})
+            logger.info(
+                f"[IntentParser] Language strategy: {language_strategy}, "
+                f"tagged_queries: {tagged_queries}"
+            )
+        else:
+            language_strategy = "ko_only"
+            tagged_queries = [{"query": q, "language": "ko-KR"} for q in unique_queries]
+
         # ===== Phase 4: 검색 제약 힌트 추출 =====
         search_constraints = self._extract_search_constraints(
             original_query=query,
@@ -1220,6 +1355,10 @@ class IntentParserNode:
         domain_allowlist = search_constraints.get("domain_allowlist", [])
         if domain_allowlist:
             query_analysis["domain_allowlist"] = domain_allowlist
+
+        # Phase 3.5 결과 저장
+        query_analysis["language_strategy"] = language_strategy
+        query_analysis["tagged_queries"] = tagged_queries
 
         focus_parts = []
         if keywords:

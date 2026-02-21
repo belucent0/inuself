@@ -73,6 +73,7 @@ class ThreadDetailResponse(BaseModel):
     messages: list[dict]
     created_at: float
     updated_at: float
+    content_id: str | None = None
 
 
 # === 의존성 ===
@@ -150,6 +151,10 @@ def _build_agent_metadata(
 
     if isinstance(model_candidate, str) and model_candidate.strip():
         metadata["model"] = _validate_requested_model(settings, model_candidate)
+
+    # content_id → content_ids 정규화 (RAG 필터링 일관성)
+    if "content_id" in metadata and "content_ids" not in metadata:
+        metadata["content_ids"] = [metadata["content_id"]]
 
     return metadata or None
 
@@ -348,6 +353,7 @@ async def get_thread(
         messages=[m.to_dict() for m in thread.messages],
         created_at=thread.created_at,
         updated_at=thread.updated_at,
+        content_id=str(thread.content_id) if thread.content_id else None,
     )
 
 
@@ -615,7 +621,12 @@ async def create_thread(
 
     try:
         # 1. 새 스레드 생성
-        thread = await svc.create_thread(user_id=user_id, metadata=agent_metadata)
+        content_id = agent_metadata.get("content_id") if agent_metadata else None
+        thread = await svc.create_thread(
+            user_id=user_id,
+            content_id=content_id,
+            metadata=agent_metadata,
+        )
 
         # 2. 사용자 메시지 저장 (completed)
         user_message = await svc.add_message(

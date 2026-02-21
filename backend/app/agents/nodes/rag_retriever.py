@@ -47,8 +47,12 @@ class RAGRetrieverNode:
             timestamp=time.time()
         ))
 
-        # 특정 콘텐츠 ID가 지정된 경우
+        # 특정 콘텐츠 ID가 지정된 경우 (content_id/content_ids 키 방어적 처리)
         content_ids = metadata.get("content_ids")
+        if not content_ids:
+            single_id = metadata.get("content_id")
+            if single_id:
+                content_ids = [single_id]
 
         try:
             results = await search_internal_content(
