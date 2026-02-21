@@ -42,6 +42,7 @@ class TurnDefinition(BaseModel):
 
     turn: int
     query: str
+    request_mode: str = "auto"
     assertions: TurnAssertions
 
 

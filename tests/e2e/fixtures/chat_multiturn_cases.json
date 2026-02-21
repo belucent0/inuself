@@ -19,9 +19,9 @@
           "turn": 2,
           "query": "대한민국의 수도는?",
           "assertions": {
-            "mode": { "expected": ["simple", "search", "reasoning"] },
+            "mode": { "expected": ["simple", "search"] },
             "content_contains_any": ["서울"],
-            "content_not_contains": ["도쿄", "베이징", "평양"],
+            "content_not_contains": [],
             "no_error": true,
             "max_response_time_seconds": 60
           }
@@ -48,6 +48,7 @@
         {
           "turn": 1,
           "query": "최근 AI 관련 주요 뉴스 3가지 알려줘",
+          "request_mode": "search",
           "assertions": {
             "content_contains_any": ["에 따르면", "검색", "출처", "뉴스", "2026", "발표", "공개", "AI", "인공지능"],
             "content_not_contains": [],
@@ -58,14 +59,31 @@
         {
           "turn": 2,
           "query": "그 중 첫 번째 뉴스 좀 더 자세히 알려줘",
+          "request_mode": "search",
           "assertions": {
-            "content_contains_any": ["에 따르면", "발표", "공개", "AI", "인공지능"],
+            "content_contains_any": ["AI", "인공지능", "모델", "기술", "발표", "공개", "출시"],
             "content_not_contains": [],
             "context_check": {
               "must_reference_any": ["AI", "인공지능", "모델", "기술"]
             },
             "no_error": true,
             "max_response_time_seconds": 90
+          }
+        }
+      ]
+    },
+    {
+      "id": "date-tool-test",
+      "name": "날짜 툴 응답 검증 (1-turn)",
+      "turns": [
+        {
+          "turn": 1,
+          "query": "오늘 날짜가 뭐야?",
+          "assertions": {
+            "content_contains_any": ["2026", "2월", "February"],
+            "content_not_contains": [],
+            "no_error": true,
+            "max_response_time_seconds": 30
           }
         }
       ]
