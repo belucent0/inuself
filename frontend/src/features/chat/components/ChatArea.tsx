@@ -34,6 +34,7 @@ import {
   RefreshCw,
   Copy,
   Check,
+  PlusCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { MarkdownContent } from './MarkdownContent'
@@ -153,11 +154,15 @@ function StreamingSourcesToggle({ sources, hasContent }: { sources: SearchSource
 interface ChatAreaProps {
   messages: Message[]
   isStreaming: boolean
+  /** 기존 스레드 초기 로딩 중 여부 (콘텐츠 채팅 전용) */
+  isInitializing?: boolean
   currentStreamingMessage: string
   currentThinkingSteps?: ThinkingStep[]
   currentSources?: SearchSource[]
   onSendMessage: (content: string, mode?: string, model?: string) => void
   onRegenerate?: (mode?: string, model?: string) => void
+  /** 새 대화 시작 콜백 (콘텐츠 채팅 전용). 전달 시 메시지 영역 상단에 버튼 표시 */
+  onNewChat?: () => void
   initialMode?: AIMode
   availableModes?: AIMode[]
   /** 콘텐츠 채팅 전용: 소스 컨텍스트 팝오버 슬롯. 전달 시 기본 모드 셀렉터를 대체 */
@@ -374,11 +379,13 @@ function StreamingMessage({
 export function ChatArea({
   messages,
   isStreaming,
+  isInitializing = false,
   currentStreamingMessage,
   currentThinkingSteps = [],
   currentSources = [],
   onSendMessage,
   onRegenerate,
+  onNewChat,
   initialMode,
   availableModes: availableModesProp,
   sourceContextSlot,
@@ -573,12 +580,37 @@ export function ChatArea({
         {/* 중앙 정렬 래퍼 추가 */}
         <div className={cn(
           "max-w-3xl mx-auto px-4 py-6",
-          messages.length === 0 && !isStreaming && "flex items-center justify-center h-full"
+          messages.length === 0 && !isStreaming && !isInitializing && "flex items-center justify-center h-full"
         )}>
-          {messages.length === 0 && !isStreaming && (
+          {/* 기존 스레드가 있을 때 "새 대화" 버튼 표시 */}
+          {onNewChat && messages.length > 0 && !isStreaming && (
+            <div className="flex justify-end mb-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onNewChat}
+                className="h-7 px-3 text-xs gap-1.5 text-muted-foreground hover:text-foreground rounded-full"
+              >
+                <PlusCircle className="h-3.5 w-3.5" />
+                새 대화
+              </Button>
+            </div>
+          )}
+
+          {messages.length === 0 && !isStreaming && !isInitializing && (
             <div className="flex flex-col items-center justify-center text-center text-muted-foreground">
               <Bot className="h-10 w-10 sm:h-12 sm:w-12 mb-3 opacity-50" />
               <p className="text-sm sm:text-base">대화를 시작해보세요</p>
+            </div>
+          )}
+
+          {/* 초기 로딩 중 스켈레톤 */}
+          {isInitializing && messages.length === 0 && (
+            <div className="flex items-center justify-center h-full">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-sm">이전 대화 불러오는 중...</span>
+              </div>
             </div>
           )}
 
