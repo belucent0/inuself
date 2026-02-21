@@ -596,6 +596,7 @@ async def create_thread(
     settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
 ):
     """새 스레드 생성 (AI 실행 없음, 확인 후 라우팅용).
 
@@ -621,10 +622,24 @@ async def create_thread(
 
     try:
         # 1. 새 스레드 생성
-        content_id = agent_metadata.get("content_id") if agent_metadata else None
+        # content_id는 File.id (프론트엔드 공개 ID).
+        # ai_thread.content_id FK는 content.id를 참조하므로 변환 필요.
+        file_id_str = agent_metadata.get("content_id") if agent_metadata else None
+        actual_content_id = None
+        if file_id_str:
+            try:
+                from uuid import UUID as _UUID
+                from ..repositories.content_repository import ContentRepository
+                _repo = ContentRepository(session)
+                _content = await _repo.get_by_file_id(_UUID(str(file_id_str)))
+                if _content:
+                    actual_content_id = _content.id
+            except Exception as _e:
+                logger.warning(f"[Thread] content_id 변환 실패 (file_id={file_id_str}): {_e}")
+
         thread = await svc.create_thread(
             user_id=user_id,
-            content_id=content_id,
+            content_id=actual_content_id,
             metadata=agent_metadata,
         )
 

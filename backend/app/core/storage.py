@@ -458,3 +458,10 @@ def _try_head_bucket(client: Minio, settings) -> tuple[bool, str]:
                 exc,
             )
             return False, str(exc)
+    except Exception as exc:
+        logger.warning(
+            "S3 연결 실패 - 예상치 못한 오류 (bucket=%s): %s",
+            settings.s3_bucket,
+            exc,
+        )
+        return False, f"S3 연결 실패 (예상치 못한 오류): {exc}"

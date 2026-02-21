@@ -319,7 +319,7 @@ export function useContentChat(
         toast.error('메시지 전송 실패', { description: error.message })
       }
     },
-    [contentId, connectEventSource]
+    [contentId, connectEventSource, sourceOptions]
   )
 
   const regenerate = useCallback(

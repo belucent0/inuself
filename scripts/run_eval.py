@@ -344,6 +344,16 @@ async def main() -> int:
     client = ChatClient(base_url=E2E_BASE_URL)
     await client.login(E2E_LOGIN_ID, E2E_PASSWORD)
 
+    # LLM 워밍업: 첫 요청의 콜드 스타트 지연을 eval 전에 소진
+    print("워밍업 중... (LLM 콜드 스타트 방지)")
+    try:
+        w_thread_id, w_msg_id = await client.create_thread("hi", "simple")
+        await client.stream_response(w_thread_id, w_msg_id)
+        print("워밍업 완료")
+    except Exception as warmup_err:
+        print(f"워밍업 경고 (무시): {warmup_err}")
+    print("-" * 60)
+
     try:
         fixture_suite_order = [s["id"] for s in fixtures["test_suites"]]
         # fixture를 assertions source of truth로 사용 (Langfuse expected_output 구버전 방지)
