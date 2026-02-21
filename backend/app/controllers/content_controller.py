@@ -50,10 +50,11 @@ async def get_file_service(session: AsyncSession = Depends(get_session)) -> File
 async def list_contents(
     page: int = Query(1, ge=1, description="페이지 번호 (1부터 시작)"),
     page_size: int = Query(10, ge=1, le=100, description="페이지당 항목 수 (최대 100)"),
+    search: str | None = Query(None, min_length=1, max_length=100, description="파일명/제목 검색어"),
     user_id: UUID = Depends(get_current_user_id),
     file_service: FileService = Depends(get_file_service),
 ):
-    return await file_service.list_files(user_id=user_id, page=page, page_size=page_size)
+    return await file_service.list_files(user_id=user_id, page=page, page_size=page_size, search=search)
 
 
 @router.get("/{content_id}", response_model=ContentDetail)

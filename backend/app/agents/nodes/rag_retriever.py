@@ -54,12 +54,16 @@ class RAGRetrieverNode:
             if single_id:
                 content_ids = [single_id]
 
+        # search_scope: "selected" → 선택한 문서만, "all" → 전체 KB 검색
+        search_scope = metadata.get("search_scope", "selected")
+        content_ids_for_search = None if search_scope == "all" else content_ids
+
         try:
             results = await search_internal_content(
                 query,
                 settings=self.settings,
                 limit=5,
-                content_ids=content_ids,
+                content_ids=content_ids_for_search,
             )
 
             logger.info(f"[RAGRetriever] Found {len(results)} internal results for: {query[:50]}")

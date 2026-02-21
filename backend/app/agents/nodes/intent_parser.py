@@ -831,6 +831,38 @@ class IntentParserNode:
                 "thinking_steps": thinking_steps,
             }
 
+        # content_context가 있으면 RAG 우선 (auto/simple 모드에서만)
+        content_context = state.get("content_context", "")
+        if content_context and (not current_mode or current_mode == AIMode.SIMPLE):
+            logger.info("[IntentParser] content_context detected → RAG mode")
+            thinking_steps.append(
+                ThinkingStep(
+                    step="intent_analysis",
+                    content="콘텐츠 컨텍스트 감지 → 내 문서 검색 모드",
+                    timestamp=time.time(),
+                )
+            )
+            selected_tier = await self.tier_router.select_tier(
+                query=query, mode="rag", context_size=len(content_context)
+            )
+            thinking_steps.append(
+                ThinkingStep(
+                    step="intent_result",
+                    content=f"RAG 모드 (콘텐츠 우선), 티어: {selected_tier}",
+                    timestamp=time.time(),
+                )
+            )
+            selected_model = self._resolve_selected_model(state, selected_tier)
+            return {
+                "mode": AIMode.RAG,
+                "selected_model": selected_model,
+                "intent_confidence": 1.0,
+                "requires_clarification": False,
+                "query_analysis": None,
+                "search_queries": [query],
+                "thinking_steps": thinking_steps,
+            }
+
         # 사고 과정 기록
         thinking_steps.append(
             ThinkingStep(

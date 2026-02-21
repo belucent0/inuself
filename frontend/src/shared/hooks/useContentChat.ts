@@ -43,6 +43,9 @@ export interface ContentSourceOptions {
   include_summary: boolean
   include_transcription: boolean
   speaker_filter: string[] | null
+  selected_content_ids?: string[]
+  include_all_docs?: boolean
+  include_web_search?: boolean
 }
 
 export function useContentChat(
@@ -260,8 +263,9 @@ export function useContentChat(
   )
 
   const sendMessage = useCallback(
-    async (content: string, mode?: string, model?: string) => {
-      const effectiveMode = mode || 'hybrid'
+    async (content: string, _mode?: string, model?: string) => {
+      // sourceOptions에서 mode 자동 결정 (ChatArea의 mode 파라미터 무시)
+      const effectiveMode = sourceOptions?.include_web_search ? 'hybrid' : 'rag'
 
       const userMessage: ContentMessage = {
         role: 'user',
@@ -284,6 +288,10 @@ export function useContentChat(
         const msgContext: Record<string, unknown> = { content_id: contentId }
         if (sourceOptions) {
           msgContext.source_options = sourceOptions
+          if (sourceOptions.selected_content_ids?.length) {
+            msgContext.content_ids = sourceOptions.selected_content_ids
+          }
+          msgContext.search_scope = sourceOptions.include_all_docs ? 'all' : 'selected'
         }
 
         if (!threadIdRef.current) {
@@ -323,9 +331,12 @@ export function useContentChat(
   )
 
   const regenerate = useCallback(
-    async (mode?: string, model?: string) => {
+    async (_mode?: string, model?: string) => {
       if (!threadIdRef.current || messages.length === 0) return
       if (messages[messages.length - 1].role !== 'assistant') return
+
+      // sourceOptions에서 mode 자동 결정
+      const effectiveMode = sourceOptions?.include_web_search ? 'hybrid' : 'rag'
 
       setMessages((prev) => prev.slice(0, -1))
       setIsLoading(true)
@@ -338,16 +349,16 @@ export function useContentChat(
       try {
         const stream = await httpClient.postStream(
           `/threads/${threadIdRef.current}/regenerate`,
-          { mode: mode || 'hybrid', model }
+          { mode: effectiveMode, model }
         )
-        await processSSEStream(stream, mode || 'hybrid')
+        await processSSEStream(stream, effectiveMode)
       } catch (err) {
         const error = err as Error
         setIsLoading(false)
         toast.error('재생성 실패', { description: error.message })
       }
     },
-    [messages, processSSEStream]
+    [messages, processSSEStream, sourceOptions]
   )
 
   return {
