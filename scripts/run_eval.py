@@ -216,10 +216,14 @@ async def main() -> int:
         for suite in fixtures["test_suites"]
         for turn in suite["turns"]
     }
-    active_items = [
-        item for item in dataset.items
-        if item.metadata and item.metadata.get("case_id") in valid_case_ids
-    ]
+    # case_id 기준 중복 제거 (최신 항목 우선 — Langfuse는 최신순 정렬)
+    seen_case_ids: set[str] = set()
+    active_items = []
+    for item in dataset.items:
+        case_id = item.metadata.get("case_id") if item.metadata else None
+        if case_id in valid_case_ids and case_id not in seen_case_ids:
+            seen_case_ids.add(case_id)
+            active_items.append(item)
 
     print(f"Eval 시작: run_name='{RUN_NAME}'")
     print(f"대상: {E2E_BASE_URL} | 케이스: {len(active_items)}개 (전체 {len(dataset.items)}개 중 fixture 기준 필터)")
