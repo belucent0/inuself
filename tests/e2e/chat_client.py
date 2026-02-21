@@ -38,7 +38,7 @@ class APIError(ChatClientError):
 class ChatClient:
     """백엔드 API를 래핑하는 비동기 클라이언트."""
 
-    def __init__(self, base_url: str, timeout: float = 90.0) -> None:
+    def __init__(self, base_url: str, timeout: float = 180.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._access_token: str | None = None
