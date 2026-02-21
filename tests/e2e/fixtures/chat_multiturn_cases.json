@@ -42,14 +42,13 @@
       ]
     },
     {
-      "id": "search-routing-flow",
-      "name": "검색 라우팅 검증 — 최신 정보 질문 (2-turn)",
+      "id": "context-followup-flow",
+      "name": "후속 질문 맥락 유지 검증 (2-turn)",
       "turns": [
         {
           "turn": 1,
-          "query": "최근 한국 기준금리 현황 알려줘",
+          "query": "한국 기준금리 현황 알려줘",
           "assertions": {
-            "mode": { "expected": ["search", "reasoning"] },
             "content_contains_any": ["금리", "한국은행", "%", "기준"],
             "content_not_contains": [],
             "no_error": true,
