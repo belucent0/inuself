@@ -97,6 +97,7 @@ async def run_suite(
     client: ChatClient,
     items: list,
     run_name: str,
+    fixture_suite_order: list[str] | None = None,
 ) -> dict:
     """한 데이터셋의 모든 케이스를 순서대로 실행합니다."""
     results = {"total": 0, "passed": 0, "failed": 0, "skipped": 0}
@@ -108,7 +109,13 @@ async def run_suite(
         suites.setdefault(sid, [])
         suites[sid].append(item)
 
-    for suite_id, suite_items in suites.items():
+    # fixture JSON 순서대로 suite 실행 (Langfuse는 최신순 반환이라 역순 방지)
+    ordered_suite_ids = fixture_suite_order if fixture_suite_order else list(suites.keys())
+
+    for suite_id in ordered_suite_ids:
+        if suite_id not in suites:
+            continue
+        suite_items = suites[suite_id]
         suite_items.sort(key=lambda x: x.input.get("turn", 1))
         print(f"\n[Suite] {suite_id} ({len(suite_items)}턴)")
 
@@ -233,7 +240,8 @@ async def main() -> int:
     await client.login(E2E_LOGIN_ID, E2E_PASSWORD)
 
     try:
-        results = await run_suite(langfuse, client, active_items, RUN_NAME)
+        fixture_suite_order = [s["id"] for s in fixtures["test_suites"]]
+        results = await run_suite(langfuse, client, active_items, RUN_NAME, fixture_suite_order)
     finally:
         await client.cleanup_all()
         await client.close()
