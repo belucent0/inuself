@@ -158,6 +158,10 @@ interface ChatAreaProps {
   currentSources?: SearchSource[]
   onSendMessage: (content: string, mode?: string, model?: string) => void
   onRegenerate?: (mode?: string, model?: string) => void
+  initialMode?: AIMode
+  availableModes?: AIMode[]
+  /** 콘텐츠 채팅 전용: 소스 컨텍스트 팝오버 슬롯. 전달 시 기본 모드 셀렉터를 대체 */
+  sourceContextSlot?: React.ReactNode
 }
 
 function MessageItem({
@@ -375,9 +379,12 @@ export function ChatArea({
   currentSources = [],
   onSendMessage,
   onRegenerate,
+  initialMode,
+  availableModes: availableModesProp,
+  sourceContextSlot,
 }: ChatAreaProps) {
   const [inputValue, setInputValue] = useState('')
-  const [mode, setMode] = useState<AIMode>('auto')
+  const [mode, setMode] = useState<AIMode>(initialMode ?? 'auto')
   const [model, setModel] = useState<string | undefined>(undefined)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
   const [inputHeight, setInputHeight] = useState(0)
@@ -486,6 +493,13 @@ export function ChatArea({
     }
   }, [messages.length, isStreaming])
 
+  // initialMode 변경 시 mode state 동기화
+  useEffect(() => {
+    if (initialMode !== undefined) {
+      setMode(initialMode)
+    }
+  }, [initialMode])
+
   // textarea 동적 높이 조절
   useEffect(() => {
     const textarea = textareaRef.current
@@ -544,7 +558,8 @@ export function ChatArea({
     }
   }
 
-  const availableModes: AIMode[] = ['auto', 'simple', 'search', 'rag', 'reasoning', 'hybrid']
+  const defaultModes: AIMode[] = ['auto', 'simple', 'search', 'rag', 'reasoning', 'hybrid']
+  const availableModes = availableModesProp ?? defaultModes
 
   return (
     <div className="flex flex-col h-full relative">
@@ -609,53 +624,55 @@ export function ChatArea({
       >
         <div className="max-w-3xl mx-auto w-full px-4 py-4">
           <div className="relative rounded-3xl border border-input bg-background shadow-lg">
-            {/* 입력창 내부 상단 영역 - 모드 선택 드롭다운 */}
+            {/* 입력창 내부 상단 영역 - 소스 컨텍스트 슬롯 또는 기본 모드 셀렉터 */}
             <div className="flex items-center gap-2 px-4 pt-3 pb-1">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild disabled={isStreaming}>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-3 rounded-full text-xs font-medium gap-1 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                  >
-                    <span className={cn('w-2 h-2 rounded-full',
-                      mode === 'auto' && 'bg-gray-400',
-                      mode === 'simple' && 'bg-slate-400',
-                      mode === 'search' && 'bg-blue-500',
-                      mode === 'rag' && 'bg-green-500',
-                      mode === 'reasoning' && 'bg-purple-500',
-                      mode === 'hybrid' && 'bg-amber-500'
-                    )} />
-                    {AI_MODE_CONFIG[mode].label}
-                    <ChevronDown className="h-3 w-3 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent side="top" align="start" className="min-w-[140px]">
-                  {availableModes.map((m) => {
-                    const config = AI_MODE_CONFIG[m]
-                    return (
-                      <DropdownMenuItem
-                        key={m}
-                        onClick={() => setMode(m)}
-                        className={cn(
-                          'cursor-pointer gap-2',
-                          mode === m && 'bg-accent'
-                        )}
-                      >
-                        <span className={cn('w-2 h-2 rounded-full',
-                          m === 'auto' && 'bg-gray-400',
-                          m === 'simple' && 'bg-slate-400',
-                          m === 'search' && 'bg-blue-500',
-                          m === 'rag' && 'bg-green-500',
-                          m === 'reasoning' && 'bg-purple-500',
-                          m === 'hybrid' && 'bg-amber-500'
-                        )} />
-                        {config.label}
-                      </DropdownMenuItem>
-                    )
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {sourceContextSlot ?? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild disabled={isStreaming}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-3 rounded-full text-xs font-medium gap-1 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    >
+                      <span className={cn('w-2 h-2 rounded-full',
+                        mode === 'auto' && 'bg-gray-400',
+                        mode === 'simple' && 'bg-slate-400',
+                        mode === 'search' && 'bg-blue-500',
+                        mode === 'rag' && 'bg-green-500',
+                        mode === 'reasoning' && 'bg-purple-500',
+                        mode === 'hybrid' && 'bg-amber-500'
+                      )} />
+                      {AI_MODE_CONFIG[mode].label}
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="top" align="start" className="min-w-[140px]">
+                    {availableModes.map((m) => {
+                      const config = AI_MODE_CONFIG[m]
+                      return (
+                        <DropdownMenuItem
+                          key={m}
+                          onClick={() => setMode(m)}
+                          className={cn(
+                            'cursor-pointer gap-2',
+                            mode === m && 'bg-accent'
+                          )}
+                        >
+                          <span className={cn('w-2 h-2 rounded-full',
+                            m === 'auto' && 'bg-gray-400',
+                            m === 'simple' && 'bg-slate-400',
+                            m === 'search' && 'bg-blue-500',
+                            m === 'rag' && 'bg-green-500',
+                            m === 'reasoning' && 'bg-purple-500',
+                            m === 'hybrid' && 'bg-amber-500'
+                          )} />
+                          {config.label}
+                        </DropdownMenuItem>
+                      )
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild disabled={isStreaming}>
