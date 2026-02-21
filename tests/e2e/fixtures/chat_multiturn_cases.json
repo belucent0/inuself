@@ -40,6 +40,36 @@
           }
         }
       ]
+    },
+    {
+      "id": "web-search-flow",
+      "name": "웹 검색 라우팅 + 검색 자료 포함 검증 (2-turn)",
+      "turns": [
+        {
+          "turn": 1,
+          "query": "최근 AI 관련 주요 뉴스 3가지 알려줘",
+          "assertions": {
+            "mode": { "expected": ["search", "reasoning"] },
+            "content_contains_any": ["에 따르면", "검색", "출처", "뉴스", "2026", "발표", "공개"],
+            "content_not_contains": [],
+            "no_error": true,
+            "max_response_time_seconds": 90
+          }
+        },
+        {
+          "turn": 2,
+          "query": "그 중 첫 번째 뉴스 좀 더 자세히 알려줘",
+          "assertions": {
+            "content_contains_any": ["에 따르면", "발표", "공개", "AI", "인공지능"],
+            "content_not_contains": [],
+            "context_check": {
+              "must_reference_any": ["AI", "인공지능", "모델", "기술"]
+            },
+            "no_error": true,
+            "max_response_time_seconds": 90
+          }
+        }
+      ]
     }
   ]
 }
