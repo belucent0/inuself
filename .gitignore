@@ -128,3 +128,4 @@ quality_test_reports/*
 # Playwright MCP artifacts
 .playwright-mcp/
 asr-homepage.png
+screenshots/
