@@ -28,6 +28,13 @@ def _mock_if_missing(module: str, *submodules: str) -> None:
 # kiwipiepy (한국어 형태소 분석기)
 _mock_if_missing("kiwipiepy", "kiwipiepy.Kiwi")
 
+# langgraph (LangGraph 워크플로우 엔진, CI 환경에서 미설치)
+_mock_if_missing(
+    "langgraph",
+    "langgraph.graph",
+    "langgraph.graph.message",
+)
+
 # redis (web_search.py가 top-level에서 import)
 _mock_if_missing("redis", "redis.asyncio")
 

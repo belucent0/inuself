@@ -12,11 +12,11 @@ from langchain_core.messages import AIMessage
 
 from ..state import GraphState, AIMode, ThinkingStep
 from ..tools.llm_client import async_llm_completion, async_llm_completion_stream
+from ..tools.datetime_tool import get_current_datetime
 
 
-
-# Reasoning 시스템 프롬프트
-REASONING_SYSTEM_PROMPT = """당신은 복잡한 문제를 단계별로 분석하고 추론하는 AI 어시스턴트입니다.
+# Reasoning 시스템 프롬프트 베이스 (날짜는 _get_reasoning_system_prompt()에서 동적 주입)
+_REASONING_SYSTEM_PROMPT_BASE = """당신은 복잡한 문제를 단계별로 분석하고 추론하는 AI 어시스턴트입니다.
 
 추론 방식:
 1. 먼저 문제를 이해하고 핵심 요소를 파악하세요
@@ -41,6 +41,12 @@ REASONING_SYSTEM_PROMPT = """당신은 복잡한 문제를 단계별로 분석�
 [최종 결론]
 
 한국어로 답변하세요."""
+
+
+def _get_reasoning_system_prompt() -> str:
+    """현재 날짜가 포함된 Reasoning 시스템 프롬프트를 반환합니다."""
+    current_date = get_current_datetime()
+    return f"오늘 날짜: {current_date}\n\n{_REASONING_SYSTEM_PROMPT_BASE}"
 
 
 class ReasonerNode:
@@ -79,7 +85,7 @@ class ReasonerNode:
 
         # 메시지 구성
         messages = [
-            {"role": "system", "content": REASONING_SYSTEM_PROMPT},
+            {"role": "system", "content": _get_reasoning_system_prompt()},
         ]
 
         if context:
@@ -167,7 +173,7 @@ class ReasonerNode:
 
         # 메시지 구성
         messages = [
-            {"role": "system", "content": REASONING_SYSTEM_PROMPT},
+            {"role": "system", "content": _get_reasoning_system_prompt()},
         ]
 
         if context:
