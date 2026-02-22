@@ -54,12 +54,8 @@ export function WpiTestPage() {
       } else if (!status.me_test_completed) {
         setCurrentTestType("me_test")
       }
-      // 진행 중인 검사가 없고, 둘 다 완료 상태이면 결과 페이지로 (has_profile인 경우)
-      if (status.has_profile && !status.in_progress_id && !status.has_incomplete) {
-        navigate("/scan/wpi/result")
-      }
     }
-  }, [status, navigate])
+  }, [status])
 
   // 문항을 ID 순으로 정렬하여 가져옴 (shuffle=false)
   const { questions, loading: questionsLoading } = useWpiQuestions(currentTestType, false)
@@ -145,8 +141,8 @@ export function WpiTestPage() {
         responses,
       })
 
-      if (result.status === "completed") {
-        // 모든 검사 완료 - 결과 페이지로 이동
+      if (result.status === "both_completed") {
+        // 모든 검사 완료 - 결과 상세 페이지로 이동
         navigate(`/scan/history/${result.result_id}`)
       } else {
         // 타인평가로 전환
