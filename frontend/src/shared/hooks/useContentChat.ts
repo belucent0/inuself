@@ -3,12 +3,14 @@
  * - 첫 메시지: 스레드 생성 + 메시지 queued → SSE 스트리밍
  * - 이후 메시지: 기존 스레드에 메시지 추가 → SSE 스트리밍
  * - v1.0.0: POST → message_id → EventSource 패턴 사용
+ * - v1.1.0: 콘텐츠 재방문 시 이전 스레드 자동 복원 + source_options 저장
  */
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { httpClient } from '@/shared/services'
 import { getAccessToken } from '@/shared/services/authToken'
+import { getThreads, updateThreadMetadata } from '@/shared/services/endpoints/threads'
 import type { SearchSource, ThinkingStep, AIMode } from '@/features/chat/types'
 
 interface ContentMessage {
@@ -51,17 +53,89 @@ export interface ContentSourceOptions {
 export function useContentChat(
   contentId: string,
   _contentTitle: string,
-  sourceOptions?: ContentSourceOptions
+  sourceOptions?: ContentSourceOptions,
+  onRestoreOptions?: (options: ContentSourceOptions) => void
 ) {
   const [messages, setMessages] = useState<ContentMessage[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [isInitializing, setIsInitializing] = useState(true)
+  const [hasExistingThread, setHasExistingThread] = useState(false)
   const threadIdRef = useRef<string | null>(null)
+  // 복원 직후 source_options 변경을 메타데이터 저장에서 skip하기 위한 플래그
+  const skipNextMetadataSaveRef = useRef(false)
 
   const [streamingMetadata, setStreamingMetadata] = useState<StreamingMetadata>({
     currentMessage: '',
     thinkingSteps: [],
     sources: [],
   })
+
+  // 마운트 시: 이전 스레드 복원
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadExistingThread() {
+      try {
+        setIsInitializing(true)
+        const response = await getThreads({ content_id: contentId, limit: 1 })
+        if (cancelled || response.threads.length === 0) return
+
+        const latest = response.threads[0]
+
+        // 메시지가 없는 빈 스레드는 건너뜀
+        if (!latest.messages || latest.messages.length === 0) return
+
+        threadIdRef.current = latest.thread_id
+        setHasExistingThread(true)
+
+        // 메시지 복원
+        const restoredMessages: ContentMessage[] = latest.messages.map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          timestamp: m.timestamp,
+          metadata: m.metadata as ContentMessage['metadata'],
+        }))
+        setMessages(restoredMessages)
+
+        // metadata에서 source_options 복원 → 부모에 알림
+        const savedOptions = latest.metadata?.source_options as ContentSourceOptions | undefined
+        if (savedOptions && onRestoreOptions) {
+          skipNextMetadataSaveRef.current = true
+          onRestoreOptions(savedOptions)
+        }
+      } catch (err) {
+        console.warn('[useContentChat] 기존 스레드 로드 실패:', err)
+      } finally {
+        if (!cancelled) {
+          setIsInitializing(false)
+        }
+      }
+    }
+
+    loadExistingThread()
+    return () => {
+      cancelled = true
+    }
+    // contentId가 바뀔 때만 재실행 (onRestoreOptions ref 불안정 제외)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentId])
+
+  // source_options 변경 시 thread metadata 저장
+  useEffect(() => {
+    if (!threadIdRef.current || !sourceOptions) return
+
+    // 복원 직후 첫 변경은 저장하지 않음 (무한루프 방지)
+    if (skipNextMetadataSaveRef.current) {
+      skipNextMetadataSaveRef.current = false
+      return
+    }
+
+    updateThreadMetadata(threadIdRef.current, {
+      source_options: sourceOptions as unknown as Record<string, unknown>,
+    }).catch((err) =>
+      console.warn('[useContentChat] thread metadata 저장 실패:', err)
+    )
+  }, [sourceOptions])
 
   const parseSSEChunk = (line: string): SSEChunk | null => {
     if (!line.startsWith('data: ')) return null
@@ -305,6 +379,7 @@ export function useContentChat(
           threadId = resp.thread_id
           messageId = resp.message_id
           threadIdRef.current = threadId
+          setHasExistingThread(true)
         } else {
           // 기존 스레드에 메시지 추가
           threadId = threadIdRef.current
@@ -361,13 +436,23 @@ export function useContentChat(
     [messages, processSSEStream, sourceOptions]
   )
 
+  // 새 대화 시작: threadIdRef 초기화 + 메시지 클리어
+  const startNewThread = useCallback(() => {
+    threadIdRef.current = null
+    setMessages([])
+    setHasExistingThread(false)
+  }, [])
+
   return {
     messages,
     isStreaming: isLoading,
+    isInitializing,
+    hasExistingThread,
     currentStreamingMessage: streamingMetadata.currentMessage,
     currentThinkingSteps: streamingMetadata.thinkingSteps,
     currentSources: streamingMetadata.sources,
     sendMessage,
     regenerate,
+    startNewThread,
   }
 }

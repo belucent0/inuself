@@ -377,6 +377,10 @@ class ThreadService:
             offset=offset,
         )
 
+        # 배치로 첫 AI 응답 메시지 조회
+        thread_ids = [t.id for t in db_threads]
+        first_messages = await self.repo.get_first_assistant_messages(thread_ids)
+
         results = []
         for t in db_threads:
             message_count = await self.repo.count_messages(t.id)
@@ -387,9 +391,93 @@ class ThreadService:
                 "created_at": t.created_at.timestamp(),
                 "updated_at": t.updated_at.timestamp() if t.updated_at else t.created_at.timestamp(),
                 "is_archived": t.is_archived,
+                "metadata": t.metadata_ or {},
+                "first_message_preview": first_messages.get(t.id, ""),
             })
 
         return results
+
+    async def count_threads(
+        self,
+        user_id: str | UUID,
+        include_archived: bool = False,
+    ) -> int:
+        """사용자의 스레드 전체 개수 조회."""
+        if not self.repo:
+            raise RuntimeError("Database session not available")
+        user_uuid = UUID(str(user_id))
+        return await self.repo.count_threads(user_uuid, include_archived=include_archived)
+
+    async def get_threads_by_content(
+        self,
+        user_id: str | UUID,
+        content_id: str | UUID,
+        limit: int = 10,
+    ) -> list[dict]:
+        """특정 콘텐츠의 스레드 목록 (최근순, 메시지 포함).
+
+        Args:
+            user_id: 사용자 ID
+            content_id: 콘텐츠 ID (File.id)
+            limit: 최대 조회 개수
+
+        Returns:
+            스레드 목록 (messages, metadata 포함)
+        """
+        if not self.repo:
+            raise RuntimeError("Database session not available")
+
+        user_uuid = UUID(str(user_id))
+        content_uuid = UUID(str(content_id))
+
+        db_threads = await self.repo.list_by_content(user_uuid, content_uuid, limit=limit)
+
+        results = []
+        for t in db_threads:
+            thread = Thread.from_db_model(t, include_messages=True)
+            result = thread.to_dict()
+            result["message_count"] = len(thread.messages)
+            results.append(result)
+
+        return results
+
+    async def update_thread_metadata(
+        self,
+        thread_id: str | UUID,
+        user_id: str | UUID,
+        metadata_patch: dict,
+    ) -> Thread | None:
+        """스레드 metadata 부분 업데이트 (기존 값과 병합).
+
+        Args:
+            thread_id: 스레드 ID
+            user_id: 사용자 ID (권한 검증)
+            metadata_patch: 병합할 메타데이터 키-값 쌍
+
+        Returns:
+            업데이트된 스레드 또는 None
+        """
+        if not self.repo:
+            raise RuntimeError("Database session not available")
+
+        db_thread = await self.repo.get_thread_by_user(
+            UUID(str(thread_id)), UUID(str(user_id))
+        )
+        if not db_thread:
+            return None
+
+        # 기존 metadata와 병합 (새 값이 우선)
+        current = dict(db_thread.metadata_ or {})
+        current.update(metadata_patch)
+        db_thread = await self.repo.update_thread(db_thread, metadata=current)
+
+        thread = Thread.from_db_model(db_thread, include_messages=False)
+
+        # 캐시 무효화
+        await self._invalidate_cache(str(thread_id), str(user_id))
+
+        logger.debug(f"[Thread] Metadata updated: {thread_id}")
+        return thread
 
     async def update_thread(
         self,

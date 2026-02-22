@@ -21,6 +21,7 @@ export interface NavItem {
 // 메뉴 구조 정의
 export const navigationItems: NavItem[] = [
   { href: '/', label: 'AI 채팅', icon: MessageSquare, title: 'AI 채팅' },
+  { href: '/threads', label: '대화 기록', icon: History, title: '대화 기록' },
   { href: '/contents', label: '콘텐츠', icon: FileText, title: '콘텐츠' },
   {
     href: '/scan',

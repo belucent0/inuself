@@ -49,6 +49,7 @@ interface SourceContextPopoverProps {
   onAddContent: (content: ContentSummary) => void
   onRemoveContent: (id: string) => void
   disabled?: boolean
+  maxDocs?: number
 }
 
 /** 현재 소스 상태에 따라 버튼 라벨 결정 */
@@ -71,12 +72,14 @@ function getButtonIcon(options: SourceOptions): React.ReactNode {
 function SearchView({
   selectedIds,
   fixedId,
+  maxReached,
   onSelect,
   onDeselect,
   onBack,
 }: {
   selectedIds: string[]
   fixedId: string
+  maxReached: boolean
   onSelect: (c: ContentSummary) => void
   onDeselect: (id: string) => void
   onBack: () => void
@@ -99,6 +102,13 @@ function SearchView({
         />
       </div>
 
+      {/* 한도 도달 안내 */}
+      {maxReached && (
+        <p className="px-3 pt-1 text-[11px] text-amber-500">
+          최대 {selectedIds.length}개 선택됨 — 제거 후 추가하세요.
+        </p>
+      )}
+
       {/* 구분선 */}
       <div className="border-t border-border/50 mx-1 mt-1" />
 
@@ -116,7 +126,7 @@ function SearchView({
               <button
                 key={c.id}
                 type="button"
-                disabled={isFixed}
+                disabled={isFixed || (maxReached && !isSelected)}
                 onClick={() => {
                   if (isFixed) return
                   if (isSelected) {
@@ -127,8 +137,8 @@ function SearchView({
                 }}
                 className={cn(
                   'flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-left transition-colors',
-                  isFixed
-                    ? 'opacity-50 cursor-default'
+                  isFixed || (maxReached && !isSelected)
+                    ? 'opacity-40 cursor-not-allowed'
                     : 'hover:bg-muted/70 cursor-pointer'
                 )}
               >
@@ -179,6 +189,7 @@ export function SourceContextPopover({
   onAddContent,
   onRemoveContent,
   disabled,
+  maxDocs = 5,
 }: SourceContextPopoverProps) {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<'main' | 'search'>('main')
@@ -253,6 +264,7 @@ export function SourceContextPopover({
           <SearchView
             selectedIds={options.selected_content_ids}
             fixedId={fixedContentId}
+            maxReached={options.selected_content_ids.length >= maxDocs}
             onSelect={onAddContent}
             onDeselect={onRemoveContent}
             onBack={() => setView('main')}

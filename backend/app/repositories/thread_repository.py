@@ -62,6 +62,24 @@ class ThreadRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def list_by_content(
+        self, user_id: UUID, content_id: UUID, limit: int = 10
+    ) -> list[AiThread]:
+        """특정 콘텐츠의 스레드 목록 (최근순, 메시지 포함)."""
+        stmt = (
+            select(AiThread)
+            .where(
+                AiThread.user_id == user_id,
+                AiThread.content_id == content_id,
+                AiThread.is_archived == False,
+            )
+            .options(selectinload(AiThread.messages))
+            .order_by(desc(AiThread.updated_at))
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def list_threads(
         self,
         user_id: UUID,
@@ -316,6 +334,26 @@ class ThreadRepository:
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_first_assistant_messages(self, thread_ids: list[UUID]) -> dict[UUID, str]:
+        """각 스레드의 첫 AI 응답 메시지를 배치 조회."""
+        if not thread_ids:
+            return {}
+        subq = (
+            select(
+                AiMessage.thread_id,
+                AiMessage.content,
+                func.row_number().over(
+                    partition_by=AiMessage.thread_id,
+                    order_by=AiMessage.created_at
+                ).label('rn')
+            )
+            .where(AiMessage.thread_id.in_(thread_ids), AiMessage.role == 'assistant')
+            .subquery()
+        )
+        stmt = select(subq.c.thread_id, subq.c.content).where(subq.c.rn == 1)
+        result = await self.session.execute(stmt)
+        return {row.thread_id: row.content[:120] for row in result}
 
     async def delete_last_assistant_message(
         self, thread_id: UUID
