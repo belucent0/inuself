@@ -34,7 +34,7 @@ from ..schemas.wpi import (
     WpiResponses,
 )
 from .litellm_client import request_litellm_completion
-from .wpi_profile_parser import get_auto_report
+from .wpi_profile_parser import load_combination_text, load_default_text
 
 
 # WPI 데이터 스키마 버전
@@ -630,6 +630,125 @@ class WpiService:
             service = cls(session)
             await service._execute_ai_report_generation_by_id(result_id, messages)
 
+    # I-type → 페어링 Me-type 역방향 매핑
+    _I_TO_PAIRED_ME: dict[str, str] = {
+        i_t: m_t for _, (i_t, m_t) in GAP_AXIS_MAP.items()
+    }
+
+    def _analyze_score_profile(
+        self,
+        i_type: str,
+        me_type: str,
+        i_scores: dict[str, float],
+        me_scores: dict[str, float],
+        i_top_types: list[dict[str, float | str]],
+        me_top_types: list[dict[str, float | str]],
+        dominant_i_margin: float | None,
+        dominant_me_margin: float | None,
+    ) -> dict[str, Any]:
+        """점수 프로파일 분석 — 마음 읽기 레시피 결정."""
+        paired_me_type = self._I_TO_PAIRED_ME.get(i_type)
+
+        paired_gap: float | None = None
+        paired_gap_direction = "balanced"
+        if paired_me_type:
+            i_val = i_scores.get(i_type, 0.0)
+            me_val = me_scores.get(paired_me_type, 0.0)
+            paired_gap = i_val - me_val
+            if paired_gap > 5:
+                paired_gap_direction = "i_high"
+            elif paired_gap < -5:
+                paired_gap_direction = "me_high"
+
+        secondary_i_type = str(i_top_types[1]["type"]) if len(i_top_types) > 1 else None
+        secondary_i_score = float(i_top_types[1]["score"]) if len(i_top_types) > 1 else None
+
+        i_sorted = sorted(i_scores.items(), key=lambda x: x[1])
+        me_sorted = sorted(me_scores.items(), key=lambda x: x[1])
+        i_lowest = i_sorted[0][0] if i_sorted else None
+        me_lowest = me_sorted[0][0] if me_sorted else None
+
+        is_dual_i_type = dominant_i_margin is not None and dominant_i_margin < 5
+
+        return {
+            "i_primary": i_type,
+            "i_primary_score": i_scores.get(i_type, 0.0),
+            "i_primary_kr": I_TYPE_KR_LABELS.get(i_type, i_type),
+            "i_secondary": secondary_i_type,
+            "i_secondary_score": secondary_i_score,
+            "i_secondary_kr": I_TYPE_KR_LABELS.get(secondary_i_type, secondary_i_type) if secondary_i_type else None,
+            "i_margin": dominant_i_margin,
+            "i_lowest": i_lowest,
+            "i_lowest_kr": I_TYPE_KR_LABELS.get(i_lowest, i_lowest) if i_lowest else None,
+            "me_primary": me_type,
+            "me_primary_score": me_scores.get(me_type, 0.0),
+            "me_primary_kr": ME_TYPE_KR_LABELS.get(me_type, me_type),
+            "me_margin": dominant_me_margin,
+            "me_lowest": me_lowest,
+            "me_lowest_kr": ME_TYPE_KR_LABELS.get(me_lowest, me_lowest) if me_lowest else None,
+            "paired_me_type": paired_me_type,
+            "paired_me_type_kr": ME_TYPE_KR_LABELS.get(paired_me_type, paired_me_type) if paired_me_type else None,
+            "paired_gap": paired_gap,
+            "paired_gap_direction": paired_gap_direction,
+            "is_dual_i_type": is_dual_i_type,
+            "i_scores_all": dict(i_scores),
+            "me_scores_all": dict(me_scores),
+        }
+
+    def _build_ai_report_context(self, score_profile: dict[str, Any]) -> str:
+        """레시피에 따라 원재료 텍스트를 수집하여 하나의 컨텍스트 문자열로 구성."""
+        i_type = score_profile["i_primary"]
+        me_type = score_profile["me_primary"]
+        secondary_i_type: str | None = score_profile.get("i_secondary")
+        paired_me_type: str | None = score_profile.get("paired_me_type")
+        is_dual = score_profile.get("is_dual_i_type", False)
+
+        i_lower = i_type.lower()
+        sections: list[str] = []
+
+        # 1. 항상 포함: 1위 I-type default.txt
+        default_text = load_default_text(i_lower)
+        if default_text:
+            sections.append(
+                f"[자기평가 우세형: {score_profile.get('i_primary_kr', i_type)}]\n{default_text}"
+            )
+
+        # 2. 항상 포함: 1위 I-type × paired Me-type 조합
+        if paired_me_type:
+            paired_text = load_combination_text(i_lower, paired_me_type.lower())
+            if paired_text:
+                sections.append(
+                    f"[페어링 축 해석: {score_profile.get('i_primary_kr', i_type)} × "
+                    f"{score_profile.get('paired_me_type_kr', paired_me_type)}]\n{paired_text}"
+                )
+
+        # 3. 조건부: 타인평가 우세형이 페어링 축과 다를 때
+        if me_type and paired_me_type and me_type.lower() != paired_me_type.lower():
+            dominant_me_text = load_combination_text(i_lower, me_type.lower())
+            if dominant_me_text:
+                sections.append(
+                    f"[타인평가 우세형 해석: {score_profile.get('i_primary_kr', i_type)} × "
+                    f"{score_profile.get('me_primary_kr', me_type)}]\n{dominant_me_text}"
+                )
+
+        # 4. 조건부: dual I-type일 때 2위 I-type default + 조합
+        if is_dual and secondary_i_type:
+            sec_lower = secondary_i_type.lower()
+            sec_default = load_default_text(sec_lower)
+            if sec_default:
+                sections.append(
+                    f"[2차 자기평가: {score_profile.get('i_secondary_kr', secondary_i_type)}]\n{sec_default}"
+                )
+            if paired_me_type:
+                sec_paired = load_combination_text(sec_lower, paired_me_type.lower())
+                if sec_paired:
+                    sections.append(
+                        f"[2차 자기평가 × 페어링 축: {score_profile.get('i_secondary_kr', secondary_i_type)} × "
+                        f"{score_profile.get('paired_me_type_kr', paired_me_type)}]\n{sec_paired}"
+                    )
+
+        return "\n\n---\n\n".join(sections) if sections else "원재료 텍스트를 찾을 수 없습니다."
+
     def _build_ai_report_messages(
         self, enriched_data: dict[str, Any]
     ) -> list[dict[str, str]]:
@@ -653,12 +772,8 @@ class WpiService:
         i_scores = {str(key): float(value) for key, value in raw_i_scores_obj.items()}
         me_scores = {str(key): float(value) for key, value in raw_me_scores_obj.items()}
 
-        i_top_types = self._sort_scores(i_scores)
-        me_top_types = self._sort_scores(me_scores)
-        secondary_i_type = str(i_top_types[1]["type"]) if len(i_top_types) > 1 else None
-        secondary_me_type = (
-            str(me_top_types[1]["type"]) if len(me_top_types) > 1 else None
-        )
+        i_top_types = self._sort_scores(i_scores, top_k=5)
+        me_top_types = self._sort_scores(me_scores, top_k=5)
 
         dominant_i_margin = None
         if len(i_top_types) >= 2:
@@ -672,40 +787,7 @@ class WpiService:
                 me_top_types[1]["score"]
             )
 
-        primary_auto_report = get_auto_report(str(i_type), str(me_type))
-
-        secondary_profiles: list[dict[str, Any]] = []
-        candidate_pairs: list[tuple[str | None, str | None]] = [
-            (str(i_type), secondary_me_type),
-            (secondary_i_type, str(me_type)),
-        ]
-        seen_pairs: set[str] = set()
-
-        for candidate_i, candidate_me in candidate_pairs:
-            if not candidate_i or not candidate_me:
-                continue
-
-            pair_key = f"{candidate_i}::{candidate_me}"
-            if pair_key in seen_pairs:
-                continue
-            seen_pairs.add(pair_key)
-
-            profile = get_auto_report(candidate_i, candidate_me)
-            serialized_profile = self._serialize_auto_profile(profile)
-            if serialized_profile is None:
-                continue
-
-            secondary_profiles.append(
-                {
-                    "i_type": candidate_i,
-                    "me_type": candidate_me,
-                    "profile": serialized_profile,
-                }
-            )
-
-        gap_analysis = enriched_data.get("gap_analysis", {})
-        gap_highlights = self._extract_gap_highlights(gap_analysis)
-        personalization_summary, grounding_facts = self._build_personalization_summary(
+        score_profile = self._analyze_score_profile(
             i_type=str(i_type),
             me_type=str(me_type),
             i_scores=i_scores,
@@ -714,41 +796,13 @@ class WpiService:
             me_top_types=me_top_types,
             dominant_i_margin=dominant_i_margin,
             dominant_me_margin=dominant_me_margin,
-            gap_highlights=gap_highlights,
-            primary_auto_report=primary_auto_report,
         )
 
-        context = {
-            "i_test": {
-                "dominant_type": i_type,
-                "scores": i_scores,
-                "top_types": i_top_types,
-            },
-            "me_test": {
-                "dominant_type": me_type,
-                "scores": me_scores,
-                "top_types": me_top_types,
-            },
-            "gap_analysis": gap_analysis,
-            "gap_highlights": gap_highlights,
-            "score_insights": {
-                "dominant_margin": {
-                    "i_test": dominant_i_margin,
-                    "me_test": dominant_me_margin,
-                },
-                "secondary_type": {
-                    "i_test": secondary_i_type,
-                    "me_test": secondary_me_type,
-                },
-            },
-            "personalization_summary": personalization_summary,
-            "grounding_facts": grounding_facts,
-            "auto_profile": self._serialize_auto_profile(primary_auto_report),
-            "secondary_profiles": secondary_profiles,
-        }
+        collected_texts = self._build_ai_report_context(score_profile)
 
         user_prompt = WPI_REPORT_USER_TEMPLATE.format(
-            context_json=json.dumps(context, ensure_ascii=False, indent=2)
+            score_profile_json=json.dumps(score_profile, ensure_ascii=False, indent=2),
+            collected_texts=collected_texts,
         )
 
         return [

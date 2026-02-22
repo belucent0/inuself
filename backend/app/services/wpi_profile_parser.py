@@ -230,3 +230,37 @@ def get_auto_report(i_type: str, me_type: str) -> WpiAutoReport | None:
 
     i_type_key, me_type_key = _validate_type(i_type, me_type)
     return load_all_auto_reports().get((i_type_key, me_type_key))
+
+
+def load_combination_text(i_type: str, me_type: str) -> str | None:
+    """특정 I-type × Me-type 조합 텍스트만 단독 로드.
+
+    default.txt를 제외하고 해당 조합 파일만 반환한다.
+    파일이 없으면 None을 반환한다.
+    """
+    try:
+        i_type_key, me_type_key = _validate_type(i_type, me_type)
+    except ValueError:
+        return None
+
+    specific_path = _profile_path(i_type_key, f"{me_type_key}.txt")
+    if not specific_path.exists():
+        return None
+
+    return _read_text(specific_path)
+
+
+def load_default_text(i_type: str) -> str | None:
+    """특정 I-type의 default.txt 텍스트를 로드한다."""
+    try:
+        i_type_key = _normalize_type(i_type)
+        if i_type_key not in {t.lower() for t in I_TEST_TYPES}:
+            return None
+    except Exception:
+        return None
+
+    default_path = _profile_path(i_type_key, "default.txt")
+    if not default_path.exists():
+        return None
+
+    return _read_text(default_path)
