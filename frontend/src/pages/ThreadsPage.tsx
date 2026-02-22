@@ -4,7 +4,6 @@
  */
 
 import { useState, useMemo, useCallback } from 'react'
-import { History } from 'lucide-react'
 import { toast } from 'sonner'
 import { Input } from '@/shared/components/ui/input'
 import { Button } from '@/shared/components/ui/button'
@@ -89,13 +88,7 @@ export function ThreadsPage() {
   }
 
   return (
-    <div className="container mx-auto py-6 px-4 max-w-5xl">
-      {/* 헤더 */}
-      <div className="flex items-center gap-2 mb-6">
-        <History className="h-6 w-6 text-muted-foreground" />
-        <h1 className="text-2xl font-semibold">대화 기록</h1>
-      </div>
-
+    <div className="container mx-auto -mt-4 md:-mt-8 pt-4 pb-4 px-4 max-w-5xl">
       {/* 검색 */}
       <div className="mb-4">
         <Input
