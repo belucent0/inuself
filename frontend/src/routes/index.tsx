@@ -13,6 +13,7 @@ import {
   UploadPage,
   MonitoringPage,
   RoadmapPage,
+  ThreadsPage,
   ScanPage,
   WpiTestPage,
   WpiResultPage,
@@ -41,6 +42,10 @@ const router = createBrowserRouter([
       {
         path: 'chat/:threadId',
         element: <ChatPage />,
+      },
+      {
+        path: 'threads',
+        element: <ThreadsPage />,
       },
       {
         path: 'contents',
