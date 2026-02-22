@@ -377,6 +377,10 @@ class ThreadService:
             offset=offset,
         )
 
+        # 배치로 첫 AI 응답 메시지 조회
+        thread_ids = [t.id for t in db_threads]
+        first_messages = await self.repo.get_first_assistant_messages(thread_ids)
+
         results = []
         for t in db_threads:
             message_count = await self.repo.count_messages(t.id)
@@ -387,9 +391,22 @@ class ThreadService:
                 "created_at": t.created_at.timestamp(),
                 "updated_at": t.updated_at.timestamp() if t.updated_at else t.created_at.timestamp(),
                 "is_archived": t.is_archived,
+                "metadata": t.metadata_ or {},
+                "first_message_preview": first_messages.get(t.id, ""),
             })
 
         return results
+
+    async def count_threads(
+        self,
+        user_id: str | UUID,
+        include_archived: bool = False,
+    ) -> int:
+        """사용자의 스레드 전체 개수 조회."""
+        if not self.repo:
+            raise RuntimeError("Database session not available")
+        user_uuid = UUID(str(user_id))
+        return await self.repo.count_threads(user_uuid, include_archived=include_archived)
 
     async def get_threads_by_content(
         self,

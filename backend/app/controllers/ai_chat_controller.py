@@ -348,11 +348,13 @@ async def list_threads(
         threads = await svc.get_threads_by_content(
             user_id=user_id, content_id=actual_content_id, limit=limit
         )
+        total = len(threads)
     else:
         threads = await svc.list_threads(user_id=user_id, limit=limit, offset=offset)
+        total = await svc.count_threads(user_id=user_id)
     return ThreadListResponse(
         threads=threads,
-        total=len(threads),
+        total=total,
     )
 
 
@@ -378,6 +380,28 @@ async def get_thread(
         updated_at=thread.updated_at,
         content_id=str(thread.content_id) if thread.content_id else None,
     )
+
+
+class UpdateThreadTitleRequest(BaseModel):
+    """스레드 제목 업데이트 요청."""
+    title: str = Field(..., min_length=1, description="새 제목")
+
+
+@router.patch("/{thread_id}")
+async def update_thread_title(
+    thread_id: str,
+    request: UpdateThreadTitleRequest,
+    svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """스레드 제목 업데이트.
+
+    PATCH /api/threads/{thread_id}
+    """
+    thread = await svc.update_thread(thread_id, user_id=user_id, title=request.title)
+    if not thread:
+        raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
+    return {"thread_id": thread.thread_id, "title": thread.title}
 
 
 @router.patch("/{thread_id}/metadata")
@@ -418,6 +442,43 @@ async def delete_thread(
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
 
     return {"message": "스레드가 삭제되었습니다", "thread_id": thread_id}
+
+
+class BulkDeleteThreadsRequest(BaseModel):
+    thread_ids: list[str]
+
+
+class BulkDeleteThreadsResponse(BaseModel):
+    deleted_ids: list[str]
+    skipped_ids: list[str]
+    message: str
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_threads(
+    request: BulkDeleteThreadsRequest,
+    svc: ThreadService = Depends(get_svc),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """다중 스레드 일괄 삭제.
+
+    POST /api/threads/bulk-delete
+    """
+    deleted_ids: list[str] = []
+    skipped_ids: list[str] = []
+
+    for thread_id in request.thread_ids:
+        deleted = await svc.delete_thread(thread_id, user_id=user_id)
+        if deleted:
+            deleted_ids.append(thread_id)
+        else:
+            skipped_ids.append(thread_id)
+
+    return BulkDeleteThreadsResponse(
+        deleted_ids=deleted_ids,
+        skipped_ids=skipped_ids,
+        message=f"{len(deleted_ids)}개 스레드가 삭제되었습니다.",
+    )
 
 
 @router.post("/{thread_id}/regenerate")

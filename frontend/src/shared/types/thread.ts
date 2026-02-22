@@ -53,6 +53,8 @@ export interface Thread {
   updated_at: number
   metadata?: Record<string, unknown>
   content_id?: string | null
+  first_message_preview?: string
+  message_count?: number
 }
 
 export interface CreateThreadRequest {

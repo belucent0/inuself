@@ -86,6 +86,18 @@ export async function regenerateMessage(
 }
 
 /**
+ * 다중 스레드 일괄 삭제
+ */
+export async function bulkDeleteThreads(threadIds: string[]): Promise<{
+  deleted_count: number
+  deleted_ids: string[]
+  skipped_ids: string[]
+  message: string
+}> {
+  return httpClient.post('/threads/bulk-delete', { thread_ids: threadIds })
+}
+
+/**
  * Thread API 서비스 객체
  */
 export const threadsApi = {
@@ -96,6 +108,7 @@ export const threadsApi = {
   updateThreadTitle,
   updateThreadMetadata,
   regenerateMessage,
+  bulkDeleteThreads,
 }
 
 export default threadsApi
