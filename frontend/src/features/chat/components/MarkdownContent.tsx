@@ -8,6 +8,20 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+
+const CODE_FONT_FAMILY = '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, Monaco, monospace'
+
+const codeTheme = {
+  ...oneDark,
+  'code[class*="language-"]': {
+    ...oneDark['code[class*="language-"]'],
+    fontFamily: CODE_FONT_FAMILY,
+  },
+  'pre[class*="language-"]': {
+    ...oneDark['pre[class*="language-"]'],
+    fontFamily: CODE_FONT_FAMILY,
+  },
+}
 import { Brain, ChevronDown, ChevronUp, Loader2, Copy, Check } from 'lucide-react'
 import { cn } from '@/shared/utils/cn'
 import type { SearchSource } from '../types'
@@ -154,10 +168,10 @@ function CodeBlock({ language, children }: { language: string; children: string 
         </button>
       </div>
       <SyntaxHighlighter
-        style={oneDark}
+        style={codeTheme}
         language={language}
         PreTag="div"
-        customStyle={{ margin: 0, borderRadius: 0, fontSize: '0.875rem' }}
+        customStyle={{ margin: 0, borderRadius: 0, fontSize: '0.9375rem' }}
       >
         {children}
       </SyntaxHighlighter>

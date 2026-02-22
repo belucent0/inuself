@@ -215,7 +215,7 @@ function MessageItem({
       <div className="flex justify-end pt-4 pb-2">
         <div className="max-w-[85%]">
           <div className="rounded-2xl rounded-tr-sm bg-primary px-3 py-2 text-primary-foreground">
-            <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+            <p className="text-base whitespace-pre-wrap">{message.content}</p>
           </div>
         </div>
       </div>
@@ -284,7 +284,7 @@ function MessageItem({
       )}
 
       {/* AI 답변: Markdown 렌더링 - 전체 너비 사용 */}
-      <div className="prose prose-sm dark:prose-invert max-w-full">
+      <div className="prose dark:prose-invert max-w-full">
         <MarkdownContent content={message.content} sources={sources} />
       </div>
 
@@ -344,7 +344,7 @@ function StreamingMessage({
         <div className="flex flex-col gap-4 py-4">
           <div className="flex items-center gap-2">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            <span className="text-xs text-muted-foreground">답변 생성 중...</span>
+            <span className="text-sm text-muted-foreground">답변 생성 중...</span>
           </div>
           {/* 스켈레톤 UI 효과 (선택적) */}
           <div className="space-y-2 opacity-50">
@@ -368,7 +368,7 @@ function StreamingMessage({
 
       {/* 스트리밍 답변 - 전체 너비 사용 */}
       {hasContent && (
-        <div className="prose prose-sm dark:prose-invert max-w-full animate-in fade-in duration-300">
+        <div className="prose dark:prose-invert max-w-full animate-in fade-in duration-300">
           <MarkdownContent content={content} sources={sources} isStreaming />
         </div>
       )}
@@ -600,7 +600,7 @@ export function ChatArea({
           {messages.length === 0 && !isStreaming && !isInitializing && (
             <div className="flex flex-col items-center justify-center text-center text-muted-foreground">
               <Bot className="h-10 w-10 sm:h-12 sm:w-12 mb-3 opacity-50" />
-              <p className="text-sm sm:text-base">대화를 시작해보세요</p>
+              <p className="text-base">대화를 시작해보세요</p>
             </div>
           )}
 
@@ -744,7 +744,7 @@ export function ChatArea({
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="추가 질문을 입력하세요..."
-              className="min-h-[60px] max-h-[120px] resize-none border-0 bg-transparent px-4 py-2 pr-12 text-sm focus-visible:ring-0 focus-visible:ring-offset-0 overflow-y-auto"
+              className="min-h-[60px] max-h-[120px] resize-none border-0 bg-transparent px-4 py-2 pr-12 text-base focus-visible:ring-0 focus-visible:ring-offset-0 overflow-y-auto"
               disabled={isStreaming}
             />
             <Button
