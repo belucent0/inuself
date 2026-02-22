@@ -121,7 +121,7 @@ export function HomePage() {
             onClick={() => handleSuggestedQuery(query.text, query.mode)}
             disabled={isNavigating}
           >
-            <span className={cn('text-sm', AI_MODE_CONFIG[query.mode].color)}>
+            <span className={cn('text-base', AI_MODE_CONFIG[query.mode].color)}>
               {query.text}
             </span>
             <ArrowRight className="h-3 w-3 ml-2 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
@@ -145,7 +145,7 @@ export function HomePage() {
               )}
             >
               <div className={cn('font-medium mb-1', config.color)}>{config.label}</div>
-              <div className="text-xs text-muted-foreground">{config.description}</div>
+              <div className="text-sm text-muted-foreground">{config.description}</div>
             </button>
           )
         })}

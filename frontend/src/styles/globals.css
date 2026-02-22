@@ -24,7 +24,7 @@
     --input: 0 0% 89.8%;
     --ring: 0 0% 3.9%;
     --radius: 0.5rem;
-    font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
     background: #f4f6f8;
     color: #111;
     --chart-1: 12 76% 61%;
@@ -94,6 +94,7 @@
 
 /* Markdown styles */
 .markdown-content {
+  font-size: 1rem;
   line-height: 1.6;
   color: #333;
 }
@@ -195,8 +196,8 @@
   background-color: #f4f4f4;
   padding: 0.2rem 0.4rem;
   border-radius: 4px;
-  font-family: 'Courier New', 'Monaco', 'Menlo', monospace;
-  font-size: 0.9em;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco, monospace;
+  font-size: 0.875em;
   color: #e83e8c;
 }
 
