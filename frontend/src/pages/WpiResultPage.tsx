@@ -1,43 +1,43 @@
 /**
  * WPI 검사 결과 페이지
  * - 프로파일 차트
- * - Gap 분석
+ * - 마음 읽기 리포트
  */
 
 import { Link } from "react-router-dom"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/shared/components/ui/card"
 import { Button } from "@/shared/components/ui/button"
 import { Badge } from "@/shared/components/ui/badge"
 import { Skeleton } from "@/shared/components/ui/skeleton"
-import { useWpiProfile, WpiResultChart } from "@/features/scan"
-import type { WpiData, WpiITestScores, WpiMeTestScores } from "@/features/scan"
+import { useWpiProfile, useWpiAiReport, WpiResultChart } from "@/features/scan"
+import type { WpiData, WpiITestScores, WpiMeTestScores, WpiAiReportStatus } from "@/features/scan"
+import { MarkdownContent } from "@/features/chat/components/MarkdownContent"
 import { formatToKST } from "@/shared/utils/cn"
-import { ArrowLeft, TrendingUp, TrendingDown, Minus } from "lucide-react"
+import { ArrowLeft, BookOpen, Loader2, RotateCcw } from "lucide-react"
 
-// Gap 해석 함수
-function interpretGap(gap: number): { icon: React.ReactNode; text: string; color: string } {
-  if (gap > 5) {
-    return {
-      icon: <TrendingUp className="h-4 w-4" />,
-      text: "자기인식이 높음",
-      color: "text-blue-600",
-    }
-  } else if (gap < -5) {
-    return {
-      icon: <TrendingDown className="h-4 w-4" />,
-      text: "타인인식이 높음",
-      color: "text-red-600",
-    }
-  }
-  return {
-    icon: <Minus className="h-4 w-4" />,
-    text: "균형",
-    color: "text-green-600",
-  }
+const WPI_AI_REPORT_STATUS_LABEL: Record<WpiAiReportStatus, string> = {
+  idle: "대기",
+  queued: "큐 대기",
+  processing: "생성 중",
+  completed: "완료",
+  failed: "실패",
+}
+
+function getAiReportStatusVariant(status: WpiAiReportStatus): "default" | "secondary" | "destructive" {
+  if (status === "completed") return "default"
+  if (status === "failed") return "destructive"
+  return "secondary"
 }
 
 export function WpiResultPage() {
   const { profile, loading, error } = useWpiProfile()
+  const {
+    aiReport,
+    loading: aiReportLoading,
+    generating: aiReportGenerating,
+    error: aiReportError,
+    enqueueAiReport,
+  } = useWpiAiReport(profile?.id ?? null)
 
   if (loading) {
     return (
@@ -115,54 +115,72 @@ export function WpiResultPage() {
         meTestDominant={data.me_test.dominant_type}
       />
 
-      {/* Gap 분석 */}
-      {data.gap_analysis && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Gap 분석</CardTitle>
-            <CardDescription>
-              자기평가와 타인평가 간의 차이를 분석합니다
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {Object.entries(data.gap_analysis.axis_gaps).map(([key, axis]) => {
-                const interpretation = interpretGap(axis.gap)
+      {/* 마음 읽기 */}
+      {profile.completed && (() => {
+        const aiReportStatus: WpiAiReportStatus = aiReport?.status ?? "idle"
+        const isAiReportRunning = aiReportStatus === "queued" || aiReportStatus === "processing"
+        const canGenerateAiReport = !isAiReportRunning
+        const aiReportButtonLabel = aiReportStatus === "completed" ? "마음 읽기 다시 생성" : "마음 읽기 생성"
 
-                return (
-                  <div
-                    key={key}
-                    className="flex items-center justify-between p-4 rounded-lg bg-muted/50"
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-medium">{axis.i_type}</span>
-                        <span className="text-muted-foreground">↔</span>
-                        <span className="font-medium">{axis.me_type}</span>
-                      </div>
-                      <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                        <span>자기평가: {axis.i_score.toFixed(1)}</span>
-                        <span>타인평가: {axis.me_score.toFixed(1)}</span>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div
-                        className={`flex items-center gap-1 font-medium ${interpretation.color}`}
-                      >
-                        {interpretation.icon}
-                        <span>Gap: {axis.gap > 0 ? "+" : ""}{axis.gap.toFixed(1)}</span>
-                      </div>
-                      <p className={`text-sm ${interpretation.color}`}>
-                        {interpretation.text}
-                      </p>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+        return (
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2">
+                  <BookOpen className="h-5 w-5 text-indigo-500" />
+                  <CardTitle>마음 읽기</CardTitle>
+                  <Badge variant={getAiReportStatusVariant(aiReportStatus)}>
+                    {WPI_AI_REPORT_STATUS_LABEL[aiReportStatus]}
+                  </Badge>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => void enqueueAiReport(aiReportStatus === "completed")}
+                  disabled={!canGenerateAiReport || aiReportGenerating}
+                >
+                  {aiReportGenerating ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      요청 중...
+                    </>
+                  ) : aiReportStatus === "completed" ? (
+                    <>
+                      <RotateCcw className="h-4 w-4 mr-2" />
+                      {aiReportButtonLabel}
+                    </>
+                  ) : (
+                    aiReportButtonLabel
+                  )}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {aiReportLoading && !aiReport ? (
+                <Skeleton className="h-24 w-full" />
+              ) : aiReportError ? (
+                <p className="text-sm text-red-500">{aiReportError.message}</p>
+              ) : isAiReportRunning ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  마음 읽기 리포트를 생성 중입니다. 잠시만 기다려주세요.
+                </div>
+              ) : aiReportStatus === "failed" ? (
+                <p className="text-sm text-red-500">
+                  {aiReport?.error || "마음 읽기 생성에 실패했습니다. 다시 시도해주세요."}
+                </p>
+              ) : aiReportStatus === "completed" && aiReport?.report_md ? (
+                <div className="rounded-lg border bg-muted/20 p-4 max-w-3xl leading-relaxed">
+                  <MarkdownContent content={aiReport.report_md} className="text-sm" />
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  아직 생성된 마음 읽기 리포트가 없습니다. 버튼을 눌러 생성하세요.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )
+      })()}
 
       {/* 액션 버튼 */}
       <div className="flex justify-center gap-4">
