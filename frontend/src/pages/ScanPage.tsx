@@ -4,7 +4,7 @@
  */
 
 import { useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/components/ui/card"
 import { Button } from "@/shared/components/ui/button"
 import { Badge } from "@/shared/components/ui/badge"
@@ -158,11 +158,6 @@ export function ScanPage() {
                   <Play className="h-4 w-4" />
                   <span className="ml-2">검사하기</span>
                 </Button>
-                {status?.has_profile && (
-                  <Button variant="outline" asChild className="w-full">
-                    <Link to="/scan/wpi/result">결과 보기</Link>
-                  </Button>
-                )}
               </div>
             )}
           </CardContent>

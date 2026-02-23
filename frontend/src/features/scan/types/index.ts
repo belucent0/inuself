@@ -133,7 +133,10 @@ export interface WpiSubmitRequest {
 
 // WPI 제출 응답
 export interface WpiSubmitResponse {
-  status: "in_progress" | "completed"
+  test_type: "i_test" | "me_test"
+  scores: Record<string, number>
+  dominant_type: string
+  status: "i_test_completed" | "me_test_completed" | "both_completed"
   message: string
   result_id: string
 }
