@@ -124,7 +124,7 @@ class ContentStateMachine(BaseStateMachine[FileStatus]):
             name="요약중",
             description="LLM 요약 처리 중",
             is_terminal=False,
-            timeout_minutes=15,
+            timeout_minutes=120,
             retryable=True,
         ),
         FileStatus.COMPLETED: StateInfo(

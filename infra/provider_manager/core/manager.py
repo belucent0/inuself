@@ -177,7 +177,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
     logger.info(f"[Config] FLM Models - Simple: {FLM_LLM_SIMPLE_MODEL}, Thinking: {FLM_THINKING_MODEL}, OCR: {FLM_OCR_MODEL}")
 
     # Lemonade 서버 설정 (tier-recap 전용 GPU 서버)
-    LEMONADE_SERVER_PORT = env_vars.get("LEMONADE_SERVER_PORT", "8084")
+    LEMONADE_SERVER_PORT = env_vars.get("LEMONADE_SERVER_PORT", "12000")
 
     return {
         # FLM NPU 서버들 (RAM 사용량 - NPU는 시스템 RAM 사용)
@@ -225,7 +225,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
                 "--sdcpp", "cpu",
                 "--no-tray",
                 "--max-loaded-models", "-1",
-                "--ctx-size", "16384",  # 요약용 긴 텍스트 (lemonade serve 레벨)
+                "--ctx-size", "32768",  # 요약용 긴 텍스트 (슬롯당 16384, -np 2 적용시)
                 # --no-mmap: GPU 로드 후 파일 매핑 해제 → 시스템 RAM ~600MB로 감소
                 # -np 2: 병렬 슬롯 2개 (KV 캐시 절약)
                 "--llamacpp-args", "-np 2 --no-mmap",

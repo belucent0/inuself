@@ -2,7 +2,7 @@
 
 실제 요청 흐름:
   이 스크립트 → Redis stream:chat:requests
-    → StreamProcessor → lemonade-server:8084
+    → StreamProcessor → lemonade-server:12000
       → Redis stream:gpu:responses → 이 스크립트
 
 사용:
@@ -27,7 +27,7 @@ import redis.asyncio as aioredis
 REDIS_URL = "redis://localhost:6379/0"
 REQUEST_STREAM = "stream:chat:requests"
 RESPONSE_STREAM = "stream:gpu:responses"
-LEMONADE_URL = "http://localhost:8084/api/v1/chat/completions"
+LEMONADE_URL = "http://localhost:12000/api/v1/chat/completions"
 
 SAMPLE_TRANSCRIPT = """
 안녕하세요. 오늘 회의에서는 Q3 매출 결과를 검토하겠습니다.

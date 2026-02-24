@@ -37,12 +37,16 @@ from services.job_tracker import JobTracker, JobStatus
 from services.provider_service import ProviderService
 
 # Tier 라우팅 설정 (공통 모듈에서 import)
-# infra/ 디렉토리를 path에 추가하여 shared 모듈 접근
-import sys
-_infra_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-if _infra_dir not in sys.path:
-    sys.path.insert(0, _infra_dir)
-from shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
+# main.py에서 이미 infra/를 sys.path에 추가했으므로 shared 직접 import 가능
+try:
+    from shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
+except ModuleNotFoundError:
+    # fallback: 명시적으로 infra/ 경로 추가
+    import sys
+    _infra_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    if _infra_dir not in sys.path:
+        sys.path.insert(0, _infra_dir)
+    from shared.tier_config import TIER_MODEL_MAP, resolve_tier_to_model
 
 # TYPE_CHECKING으로 순환 임포트 방지
 from typing import TYPE_CHECKING
@@ -132,7 +136,10 @@ class StreamProcessor:
         await self.provider_manager.start_all_providers()
 
         self.redis = redis_async.from_url(settings.redis_url, decode_responses=True)
-        self.http_client = httpx.AsyncClient(timeout=settings.default_timeout)
+        self.http_client = httpx.AsyncClient(
+            timeout=settings.default_timeout,
+            http2=False,  # lemonade-server (llamacpp Vulkan) HTTP/2 호환성 문제 해결
+        )
 
         # JobTracker 초기화
         self.job_tracker = JobTracker(self.redis)
