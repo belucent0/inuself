@@ -101,7 +101,7 @@ export function YouTubeLinkModal({
           </Button>
 
           <p className="text-xs text-muted-foreground text-center">
-            1시간 이내 영상만 지원됩니다. 영상이 다운로드되고
+            2시간 이내 영상만 지원됩니다. 영상이 다운로드되고
             <br />
             자동으로 음성 인식 및 요약이 진행됩니다.
           </p>
