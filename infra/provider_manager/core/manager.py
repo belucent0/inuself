@@ -225,7 +225,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
                 "--sdcpp", "cpu",
                 "--no-tray",
                 "--max-loaded-models", "-1",
-                "--ctx-size", "32768",  # 요약용 긴 텍스트 (슬롯당 16384, -np 2 적용시)
+                "--ctx-size", "49152",  # 요약용 긴 텍스트 (슬롯당 24576, -np 2 적용시, 3시간+여유)
                 # --no-mmap: GPU 로드 후 파일 매핑 해제 → 시스템 RAM ~600MB로 감소
                 # -np 2: 병렬 슬롯 2개 (KV 캐시 절약)
                 "--llamacpp-args", "-np 2 --no-mmap",
