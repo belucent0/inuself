@@ -24,10 +24,17 @@ from .chat import (
     CHAT_SYSTEM_PROMPT,
 )
 
-from .wpi_report import (
-    WPI_REPORT_SYSTEM_PROMPT,
-    WPI_REPORT_USER_TEMPLATE,
-)
+try:
+    from .wpi_report import (
+        WPI_REPORT_SYSTEM_PROMPT,
+        WPI_REPORT_USER_TEMPLATE,
+    )
+except ImportError:
+    # wpi_report.py가 없으면 example 사용 (로컬 전용 파일)
+    from .wpi_report_example import (
+        WPI_REPORT_SYSTEM_PROMPT,
+        WPI_REPORT_USER_TEMPLATE,
+    )
 
 __all__ = [
     # Summary (3-phase pipeline)
