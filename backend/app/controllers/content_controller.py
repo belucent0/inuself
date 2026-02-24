@@ -207,9 +207,9 @@ async def upload_from_youtube(
         info = await loop.run_in_executor(None, youtube_service.get_video_info, request.url)
         duration = info.get("duration", 0)
 
-        if duration > 3600:  # 1시간 = 3600초
+        if duration > 7200:  # 2시간 = 7200초
             raise HTTPException(
-                status_code=400, detail="Video duration exceeds 1 hour limit"
+                status_code=400, detail="2시간을 초과하는 영상은 처리할 수 없습니다"
             )
 
         title = info.get("title", f"youtube_{video_id}")
@@ -223,7 +223,7 @@ async def upload_from_youtube(
 
     except VideoDurationExceededError:
         raise HTTPException(
-            status_code=400, detail="Video duration exceeds 1 hour limit"
+            status_code=400, detail="2시간을 초과하는 영상은 처리할 수 없습니다"
         )
     except HTTPException:
         raise
