@@ -30,7 +30,7 @@ import {
   History,
   ChevronLeft,
   ChevronRight,
-  Sparkles,
+  BookOpen,
   Loader2,
   RotateCcw,
 } from "lucide-react"
@@ -249,7 +249,7 @@ export function ScanDetailPage() {
     const isAiReportRunning = aiReportStatus === "queued" || aiReportStatus === "processing"
     const canGenerateAiReport = detail.completed && !isAiReportRunning
     const aiReportButtonLabel =
-      aiReportStatus === "completed" ? "AI 리포트 다시 생성" : "AI 리포트 생성"
+      aiReportStatus === "completed" ? "마음 읽기 다시 생성" : "마음 읽기 생성"
 
     return (
       <div className="container mx-auto py-4 px-2 md:px-4 md:py-6 space-y-4 md:space-y-6 max-w-4xl">
@@ -296,13 +296,13 @@ export function ScanDetailPage() {
           </Card>
         )}
 
-        {/* AI 리포트 */}
+        {/* 마음 읽기 */}
         <Card>
           <CardHeader className="px-3 md:px-6 py-3 md:py-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-amber-500" />
-                <CardTitle className="text-base md:text-lg">AI 리포트</CardTitle>
+                <BookOpen className="h-4 w-4 text-indigo-500" />
+                <CardTitle className="text-base md:text-lg">마음 읽기</CardTitle>
                 <Badge variant={getAiReportStatusVariant(aiReportStatus)}>
                   {WPI_AI_REPORT_STATUS_LABEL[aiReportStatus]}
                 </Badge>
@@ -331,7 +331,7 @@ export function ScanDetailPage() {
           <CardContent className="px-3 md:px-6 py-2 md:py-4">
             {!detail.completed ? (
               <p className="text-sm text-muted-foreground">
-                검사 완료 후 AI 리포트를 생성할 수 있습니다.
+                검사 완료 후 마음 읽기를 생성할 수 있습니다.
               </p>
             ) : aiReportLoading && !aiReport ? (
               <Skeleton className="h-24 w-full" />
@@ -340,53 +340,24 @@ export function ScanDetailPage() {
             ) : isAiReportRunning ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                AI 리포트 생성 중입니다. 잠시만 기다려주세요.
+                마음 읽기 리포트를 생성 중입니다. 잠시만 기다려주세요.
               </div>
             ) : aiReportStatus === "failed" ? (
               <p className="text-sm text-red-500">
-                {aiReport?.error || "AI 리포트 생성에 실패했습니다. 다시 시도해주세요."}
+                {aiReport?.error || "마음 읽기 생성에 실패했습니다. 다시 시도해주세요."}
               </p>
             ) : aiReportStatus === "completed" && aiReport?.report_md ? (
-              <div className="rounded-lg border bg-muted/20 p-3 md:p-4">
+              <div className="rounded-lg border bg-muted/20 p-3 md:p-4 max-w-3xl leading-relaxed">
                 <MarkdownContent content={aiReport.report_md} className="text-sm" />
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                아직 생성된 AI 리포트가 없습니다. 버튼을 눌러 생성하세요.
+                아직 생성된 마음 읽기 리포트가 없습니다. 버튼을 눌러 생성하세요.
               </p>
             )}
           </CardContent>
         </Card>
 
-        {/* Gap 분석 */}
-        {data.gap_analysis && (
-          <Card>
-            <CardHeader className="px-3 md:px-6 py-3 md:py-4">
-              <CardTitle className="text-base md:text-lg">Gap 분석</CardTitle>
-            </CardHeader>
-            <CardContent className="px-3 md:px-6 py-2 md:py-4">
-              <div className="space-y-2">
-                {Object.entries(data.gap_analysis.axis_gaps).map(([key, axis]) => (
-                  <div
-                    key={key}
-                    className="flex items-center justify-between p-2 md:p-3 rounded-lg bg-muted/50"
-                  >
-                    <div className="flex items-center gap-1 md:gap-2 text-sm md:text-base">
-                      <span className="font-medium text-red-600">{axis.i_type}</span>
-                      <span className="text-muted-foreground text-xs md:text-sm">↔</span>
-                      <span className="font-medium text-blue-600">{axis.me_type}</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="font-mono text-sm md:text-base">
-                        {axis.gap > 0 ? "+" : ""}{axis.gap.toFixed(1)}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
       </div>
     )
   }

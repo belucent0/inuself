@@ -110,8 +110,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       toast.success('다운로드가 시작되었습니다. 목록에서 확인하세요.', { id: toastId })
       navigate('/contents')
       dispatchContentsRefresh()
-    } catch {
-      toast.error('YouTube 요청 실패. 링크를 확인해주세요.', { id: toastId })
+    } catch (error: unknown) {
+      const axiosError = error as { response?: { data?: { detail?: string } } }
+      const detail = axiosError?.response?.data?.detail
+
+      if (detail?.includes('2시간')) {
+        toast.error('2시간을 초과하는 영상은 처리할 수 없습니다.', { id: toastId })
+      } else {
+        toast.error('YouTube 요청 실패. 링크를 확인해주세요.', { id: toastId })
+      }
     }
   }
 
@@ -161,7 +168,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               <SidebarMenuItem>
                 <SidebarMenuButton onClick={() => setYoutubeModalOpen(true)}>
                   <Youtube className="text-red-500" />
-                  <span className="group-data-[collapsible=icon]:hidden">YouTube 영상 추가</span>
+                  <span className="group-data-[collapsible=icon]:hidden">YouTube 링크</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>

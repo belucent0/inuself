@@ -24,8 +24,8 @@ except ImportError:
     ImpersonateTarget = None
     logger.warning("[YouTube] curl_cffi not available - impersonate feature disabled")
 
-# 최대 영상 길이 (초) - 1시간
-MAX_DURATION_SECONDS = 3600
+# 최대 영상 길이 (초) - 2시간
+MAX_DURATION_SECONDS = 7200
 
 
 class InvalidYouTubeURLError(Exception):

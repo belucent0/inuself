@@ -203,6 +203,7 @@ async def submit_wpi_test(
                 dominant_type=dominant,
                 status="i_test_completed",
                 message="I-Test 완료! Me-Test를 진행해주세요.",
+                result_id=str(result.id),
             )
         else:
             result, scores, dominant, gap_analysis = await service.submit_me_test(
@@ -214,6 +215,7 @@ async def submit_wpi_test(
                 dominant_type=dominant,
                 status="both_completed",
                 message="WPI 검사가 완료되었습니다! 결과를 확인하세요.",
+                result_id=str(result.id),
             )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -102,6 +102,7 @@ class WpiSubmitResponse(BaseModel):
     dominant_type: str
     status: Literal["i_test_completed", "me_test_completed", "both_completed"]
     message: str
+    result_id: str
 
 
 WpiAiReportStatus = Literal["idle", "processing", "completed", "failed"]
