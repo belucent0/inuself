@@ -2,7 +2,7 @@
  * Navigation 설정
  */
 
-import { FileText, Map, Eye, MessageSquare, ClipboardList, History, PlayCircle, type LucideIcon } from 'lucide-react'
+import { FileText, Eye, MessageSquare, ClipboardList, History, PlayCircle, type LucideIcon } from 'lucide-react'
 
 export interface NavSubItem {
   href: string
@@ -34,7 +34,6 @@ export const navigationItems: NavItem[] = [
     ],
   },
   { href: '/monitoring', label: '모니터링', icon: Eye, title: '모니터링' },
-  { href: '/roadmap', label: '로드맵', icon: Map, title: '로드맵' },
 ]
 
 // 경로별 페이지 제목 조회
