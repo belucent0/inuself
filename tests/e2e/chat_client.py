@@ -52,6 +52,25 @@ class ChatClient:
     # 인증
     # ------------------------------------------------------------------
 
+    async def signup(
+        self, login_id: str, password: str, signup_code: str = "zoo", name: str | None = None
+    ) -> bool:
+        """회원가입을 시도하고, 신규 계정이면 True, 기존 계정이면 False를 반환한다."""
+        payload = {
+            "login_id": login_id,
+            "password": password,
+            "signup_code": signup_code,
+            "name": name or login_id,
+        }
+        resp = await self._client.post(
+            "/api/auth/signup", json=payload
+        )
+        if resp.status_code == 200:
+            return True
+        if resp.status_code in (400, 409):
+            return False
+        raise APIError(resp.status_code, resp.text)
+
     async def login(self, login_id: str, password: str) -> None:
         """이메일/비밀번호로 로그인하고 access_token을 저장합니다."""
         resp = await self._client.post(
@@ -118,11 +137,21 @@ class ChatClient:
     # ------------------------------------------------------------------
 
     async def stream_response(
-        self, thread_id: str, message_id: str
-    ) -> TurnResult:
+        self,
+        thread_id: str,
+        message_id: str,
+        cancel_after_events: int | None = None,
+    ) -> TurnResult | tuple[TurnResult, int, bool]:
         """SSE 스트림을 소비하고 TurnResult를 반환합니다.
 
-        이벤트 포맷: data: {"type": "...", "data": ...}\\n\\n
+        cancel_after_events가 지정되면 지정한 data 이벤트 수만큼 받았을 때
+        즉시 cancel API를 호출하고 스트림을 종료한다.
+
+        Returns:
+            cancel_after_events가 None일 때:
+                TurnResult
+            그 외:
+                (TurnResult, received_data_events, cancel_requested)
         """
         if not self._access_token:
             raise AuthError("로그인이 필요합니다.")
@@ -136,6 +165,8 @@ class ChatClient:
         full_content = ""
         mode_used = "simple"
         had_error = False
+        received_data_events = 0
+        cancel_requested = False
 
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(self._timeout)
@@ -169,6 +200,7 @@ class ChatClient:
 
                     event_type = event.get("type", "")
                     event_data = event.get("data")
+                    received_data_events += 1
 
                     if event_type == "token":
                         token = event_data if isinstance(event_data, str) else ""
@@ -195,17 +227,50 @@ class ChatClient:
                     elif event_type == "done":
                         break
 
+                    if (
+                        (not cancel_requested)
+                        and cancel_after_events is not None
+                        and received_data_events >= cancel_after_events
+                    ):
+                        cancel_requested = await self.cancel_stream(thread_id, message_id)
+                        if cancel_requested:
+                            break
+
         elapsed = time.monotonic() - start
-        return TurnResult(
+        result = TurnResult(
             full_content=full_content,
             mode_used=mode_used,
             had_error=had_error,
             elapsed_seconds=elapsed,
         )
 
+        if cancel_after_events is None:
+            return result
+
+        return result, received_data_events, cancel_requested
+
     # ------------------------------------------------------------------
-    # 정리
+    # 기타 API
     # ------------------------------------------------------------------
+
+    async def cancel_stream(
+        self, thread_id: str, message_id: str
+    ) -> bool:
+        """스트리밍 취소 API를 호출해 사용자가 시작한 생성 작업을 취소합니다."""
+        resp = await self._client.post(
+            f"/api/threads/{thread_id}/messages/{message_id}/cancel",
+            headers=self._auth_headers(),
+        )
+        return resp.status_code == 200
+
+    async def get_thread(self, thread_id: str) -> dict:
+        """스레드 상세 조회."""
+        resp = await self._client.get(
+            f"/api/threads/{thread_id}", headers=self._auth_headers()
+        )
+        if resp.status_code != 200:
+            raise APIError(resp.status_code, resp.text)
+        return resp.json()
 
     async def cleanup_all(self) -> None:
         """생성한 모든 스레드를 삭제합니다."""
