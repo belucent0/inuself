@@ -254,7 +254,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup className="pt-0">
+        <SidebarGroup className="pt-0 flex-1 min-h-0">
           <SidebarGroupLabel className="group-data-[collapsible=icon]:hidden">
             <div className="flex items-center justify-between w-full">
               <span>대화 목록</span>
@@ -264,14 +264,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             </div>
           </SidebarGroupLabel>
 
-          <SidebarGroupContent>
-            <div className="group-data-[collapsible=icon]:hidden">
+          <SidebarGroupContent className="flex-1 min-h-0 flex flex-col">
+            <div className="group-data-[collapsible=icon]:hidden flex-1 min-h-0 flex flex-col">
               <div className="relative mb-2 px-2">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
                 <SidebarInput placeholder="대화 검색..." className="pl-8" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
               </div>
 
-              <ScrollArea className="h-[400px]">
+              <ScrollArea className="flex-1">
                 {Object.entries(groupedThreads).map(([group, groupThreads]) =>
                   groupThreads.length > 0 && (
                     <div key={group} className="mb-4">
