@@ -186,7 +186,7 @@ if redis.exists("gpu:asr:active"):
 ║             └──────┬─────────────┬───┘             ║
 ║                    │             │                 ║
 ║           ┌────────▼────┐  ┌─────▼──────────────┐  ║
-║           │  NPU (new)  │  │  GPU (existing)    │  ║
+║           │  NPU (added)│  │  GPU (original)    │  ║
 ║           │  FLM        │  │  llama-server      │  ║
 ║           └─────────────┘  │  lemonade-server   │  ║
 ║                            │  whisper-cpp       │  ║
@@ -213,7 +213,7 @@ PM2 워커 → 모델 서버 직접             컨테이너 → LiteLLM
                                                  │
                                           NPU  /  GPU
 
-워커 수:     3개 (기능별, 일부 모델 직접 로드)  워커 수:   1개 (CPU 전처리 전담)
+워커 수:     3개 (기능별, 일부 모델 직접 로드)  워커 수:   1개 (CPU 바운드 전후처리 전담)
 환경변수:    PM2 워커별 모델 서버 URL 개별 보유  환경변수:  LITELLM_BASE_URL 1개
 라우팅 결정: 워커 코드 안에                    라우팅 결정: LiteLLM config
 Provider 추가: PM2 워커 N곳 코드 수정          Provider 추가: config 1줄
@@ -238,7 +238,7 @@ Lifecycle:   없음 (상시 상주)                  Lifecycle:  자동 언로�
 
 | 항목 | Legacy | V4 이후 |
 |------|--------|---------|
-| 워커 프로세스 수 | 3개 (PM2 · 기능별 · 일부 모델 직접 로드) | 1개 (CPU 전처리 전담) |
+| 워커 프로세스 수 | 3개 (PM2 · 기능별 · 일부 모델 직접 로드) | 1개 (CPU 바운드 전후처리 전담) |
 | Provider 추가 비용 | PM2 워커 N곳 코드 수정 | config 1줄 |
 | 라우팅 로직 위치 | 워커 코드 내 분산 | LiteLLM config 집중 |
 | 실시간 채팅 추가 | 컨테이너-Host 경계 문제 발생 | Backend에서 동일 엔드포인트 호출 |
@@ -265,7 +265,7 @@ Legacy 구조의 문제는 기능이 추가될 때마다 표면으로 올라왔�
 
 ## 7. 기술 스택
 
-- **LiteLLM Proxy**: 통합 AI 게이트웨이, 모델명 기반 라우팅 + Fallback
+- **LiteLLM Proxy**: 통합 AI 게이트웨이, 티어 기반 라우팅 + Fallback
 - **Valkey (Redis 호환)**: 배치 작업 큐 + 컨테이너-Host 간 통신 브릿지 (Stream)
 - **Provider Manager**: Host 프로세스, GPU/NPU 하드웨어 lifecycle 전담 (asyncio)
 - **LangGraph**: AI 에이전트 그래프 오케스트레이션
