@@ -44,6 +44,15 @@ Backend/Worker/LiteLLM Proxy 간 GPU 자원 충돌(OOM)을 Redis 기반 분산 �
 
 ---
 
+### [06. 티어 기반 라우팅](./06-tier-based-routing.md)
+> GPU/NPU/Cloud를 하나의 계층 구조로
+
+NPU(경량 추론) / GPU(중량 추론) / Cloud API(예비 폴백)를 티어 개념으로 추상화한 경험. 모델명 기반 라우팅의 한계, 동적 폴백 설계, LiteLLM config-driven 라우팅의 복리 효과를 다룬다.
+
+**키워드**: LiteLLM, 티어 기반 라우팅, NPU, GPU, Fallback, custom_handler, DIP
+
+---
+
 ## 디렉토리 구조 참고
 
 ```
@@ -51,6 +60,10 @@ docs/
 ├── problem-solving/          ← 이 디렉토리: "왜 이 문제를 풀었고, 어떤 판단을 했는가"
 │   ├── README.md
 │   ├── 01-search-retry-mechanism.md
-│   └── 02-llm-semantic-observability.md
+│   ├── 02-llm-semantic-observability.md
+│   ├── 03-architecture-evolution.md
+│   ├── 04-litellm-semaphore.md
+│   ├── 05-design-rationale.md
+│   └── 06-tier-based-routing.md
 └── (기타 기술 문서)          ← "어떻게 구현했는가" 중심
 ```
