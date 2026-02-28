@@ -81,6 +81,15 @@ GPU_SERVICES = {"llama", "whisper-cpp", "insanely-fast", "diarization-server"}
 # NPU Services: On-Demand - Single FLM server for ASR + OCR
 NPU_SERVICES = {"flm"}  # Single unified FLM server
 
+# Provider Manager용 Redis status key 매핑 (V7.5+: ASR provider 사전 상태 확인)
+# custom_handler의 provider name → providers:status hash key
+PROVIDER_REDIS_STATUS_KEY = {
+    "whisper-cpp": "whisper-server",
+    "insanely-fast": "insanely-fast-server",
+    "diarization-server": "diarization-server",
+    "llama": "llama-server",
+}
+
 
 # 기본값은 호스트 Docker 내부 주소 (LiteLLM 컨테이너 -> 호스트)
 GPU_API_BASE = os.getenv("GPU_API_BASE", "http://host.docker.internal:8080")  # LLM
@@ -2055,6 +2064,24 @@ class PrometheusRouter(CustomLLM):
 
             device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
 
+            # V7.5+: Provider 상태 사전 확인 (DOWN 시 즉시 실패, 불필요한 Redis 왕복 방지)
+            _status_key = PROVIDER_REDIS_STATUS_KEY.get(target_provider)
+            if _status_key:
+                try:
+                    _status_json = redis_client_sync.hget("providers:status", _status_key)
+                    if _status_json:
+                        _status = json.loads(_status_json)
+                        if _status.get("status") != "up":
+                            raise RuntimeError(
+                                f"ASR provider '{_status_key}' is currently '{_status.get('status', 'unknown')}'. "
+                                f"Please check Provider Manager at port 9998."
+                            )
+                        logger.info(f"[PrometheusRouter V7.5] Provider '{_status_key}' is UP, proceeding")
+                except RuntimeError:
+                    raise
+                except Exception as _e:
+                    logger.warning(f"[PrometheusRouter V7.5] Provider status check failed: {_e}, proceeding anyway")
+
             # V7.5: Worker에서 전달받은 lock_id가 있으면 재획득 스킵
             worker_lock_id = extra_body.get("lock_id")
             lock_id = None
@@ -2413,6 +2440,24 @@ class PrometheusRouter(CustomLLM):
                 target_provider = "whisper-cpp"
 
             device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
+
+            # V7.5+: Provider 상태 사전 확인 (DOWN 시 즉시 실패, 불필요한 Redis 왕복 방지)
+            _status_key = PROVIDER_REDIS_STATUS_KEY.get(target_provider)
+            if _status_key:
+                try:
+                    _status_json = await redis_client_async.hget("providers:status", _status_key)
+                    if _status_json:
+                        _status = json.loads(_status_json)
+                        if _status.get("status") != "up":
+                            raise RuntimeError(
+                                f"ASR provider '{_status_key}' is currently '{_status.get('status', 'unknown')}'. "
+                                f"Please check Provider Manager at port 9998."
+                            )
+                        logger.info(f"[PrometheusRouter V7.5] Provider '{_status_key}' is UP, proceeding")
+                except RuntimeError:
+                    raise
+                except Exception as _e:
+                    logger.warning(f"[PrometheusRouter V7.5] Provider status check failed: {_e}, proceeding anyway")
 
             # V7.5: Worker에서 전달받은 lock_id가 있으면 재획득 스킵
             worker_lock_id = extra_body.get("lock_id")
