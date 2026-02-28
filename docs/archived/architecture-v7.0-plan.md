@@ -370,7 +370,7 @@ servy restart --name llama-server --args "--model qwen3-vl-8b.gguf"
 
 ---
 
-## 포트폴리오 하이라이트
+## 기술 하이라이트
 
 1. **Redis Stream 기반 Docker ↔ Host 통신**
    - Docker Desktop 크래시 회피
