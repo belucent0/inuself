@@ -1128,6 +1128,31 @@ class StreamProcessor:
 
         await self.publish_response(request_id, results)
 
+    async def handle_embedding(self, request_id: str, data: dict):
+        """임베딩 요청 처리 - FLM LLM 서버(/v1/embeddings OpenAI 형식) 직접 호출."""
+        text = data.get("text", "")
+        model = data.get("model", "embed-gemma:300m")
+
+        logger.info(f"[{request_id}] Embedding request: model={model}, text_len={len(text)}")
+
+        try:
+            url = f"{settings.flm_llm_url}/v1/embeddings"
+            response = await self.http_client.post(
+                url,
+                json={"input": text, "model": model},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            await self.publish_response(request_id, result)
+            logger.info(f"[{request_id}] Embedding completed")
+        except httpx.TimeoutException:
+            await self.publish_error(request_id, "Embedding timeout")
+        except httpx.HTTPStatusError as e:
+            await self.publish_error(request_id, f"Embedding HTTP error: {e.response.status_code}")
+        except Exception as e:
+            await self.publish_error(request_id, f"Embedding failed: {str(e)}")
+
     # ==========================================
     # Main Loop
     # ==========================================
@@ -1165,9 +1190,16 @@ class StreamProcessor:
         device_group = self.PROVIDER_DEVICE_GROUP.get(provider_name)
         semaphore = self._device_semaphores.get(device_group) if device_group else None
 
-        # health_check는 세마포어 없이 즉시 처리
+        # health_check / embedding은 세마포어 없이 즉시 처리
         if task_type == "health_check":
             await self.handle_health_check(request_id, data)
+            await self.redis.xack(
+                settings.request_stream, settings.consumer_group, message_id
+            )
+            return
+
+        if task_type == "embedding":
+            await self.handle_embedding(request_id, data)
             await self.redis.xack(
                 settings.request_stream, settings.consumer_group, message_id
             )
