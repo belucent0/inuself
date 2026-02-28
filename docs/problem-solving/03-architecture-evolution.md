@@ -188,9 +188,10 @@ if redis.exists("gpu:asr:active"):
 ║           ┌────────▼────┐  ┌─────▼──────────────┐ ║
 ║           │  NPU (신규)  │  │  GPU (기존)         │ ║
 ║           │  FLM         │  │  llama-server      │ ║
-║           └─────────────┘  │  whisper-cpp       │ ║
+║           └─────────────┘  │  lemonade-server   │ ║
+║                             │  whisper-cpp       │ ║
 ║                             │  insanely-fast     │ ║
-║                             │  diarize           │ ║
+║                             │  pyannote          │ ║
 ║                             └────────────────────┘ ║
 ╚═════════════════════════════════════════════════════╝
 
