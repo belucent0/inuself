@@ -151,11 +151,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        <div className="p-2">
-          <h1 className="text-lg font-semibold group-data-[collapsible=icon]:hidden">
-            ASR 파이프라인
+        <Link to="/" className="p-2 flex items-center gap-2 hover:opacity-80 transition-opacity">
+          <img src="/favicon.svg" className="h-6 w-6 shrink-0" alt="InuSelf logo" />
+          <h1 className="text-lg font-bold group-data-[collapsible=icon]:hidden text-foreground">
+            InuSelf
           </h1>
-        </div>
+        </Link>
       </SidebarHeader>
 
       <SidebarContent>

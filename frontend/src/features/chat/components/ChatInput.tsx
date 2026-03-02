@@ -3,7 +3,7 @@
  */
 
 import { useRef, type ChangeEvent, type KeyboardEvent, type FormEvent } from 'react'
-import { Send, Paperclip } from 'lucide-react'
+import { Send } from 'lucide-react'
 import { Button } from '@/shared/components/ui/button'
 import {
   Tooltip,
@@ -21,7 +21,6 @@ interface ChatInputProps {
   onInputChange: (value: string) => void
   onSendMessage: (message: string) => void
   isLoading?: boolean
-  onFileUpload?: () => void
   mode?: AIMode
   onModeChange?: (mode: AIMode) => void
   showModeDescription?: boolean
@@ -42,7 +41,6 @@ export function ChatInput({
   onInputChange,
   onSendMessage,
   isLoading = false,
-  onFileUpload,
   mode = 'search',
   onModeChange,
   showModeDescription = false,
@@ -123,25 +121,6 @@ export function ChatInput({
               compact
             />
 
-            <div className="mx-1 h-4 w-[1px] bg-border" />
-
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
-                    onClick={onFileUpload}
-                  >
-                    <Paperclip className="h-4 w-4" />
-                    <span className="sr-only">파일 첨부</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>파일 첨부</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
           </div>
 
           <div className="flex items-center gap-2">
@@ -153,15 +132,7 @@ export function ChatInput({
                     size="icon"
                     onClick={() => handleSubmit()}
                     disabled={isDisabled}
-                    className={cn(
-                      'h-8 w-8 rounded-full transition-all',
-                      inputValue.trim()
-                        ? cn(
-                            'text-white',
-                            currentConfig.color.replace('text-', 'bg-').replace('/500', '-500')
-                          )
-                        : 'bg-muted text-muted-foreground'
-                    )}
+                    className="h-8 w-8 rounded-full"
                   >
                     <Send className="h-4 w-4" />
                     <span className="sr-only">전송</span>
