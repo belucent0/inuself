@@ -26,7 +26,6 @@ from .section_executor import (
     SectionGraphExecutor,
     PhaseExecutionError,
     extract_metadata,
-    generate_core_summary,
 )
 
 
@@ -432,17 +431,7 @@ class ContentService:
                             ),
                         )
 
-                        # Phase 2: 핵심 요약 (OTEL context 전파)
-                        core_summary = await loop.run_in_executor(
-                            None,
-                            preserve_otel_context(
-                                lambda: generate_core_summary(
-                                    text_to_summarize, metadata, self.settings
-                                )
-                            ),
-                        )
-
-                        # Phase 3~N: LangGraph 병렬 섹션 생성
+                        # Phase 2~N: LangGraph 병렬 섹션 생성 (먼저 실행)
                         sections, detailed_md, logs = await executor.generate_sections(
                             toc=metadata.get("toc", []),
                             transcript=text_to_summarize,
@@ -450,6 +439,9 @@ class ContentService:
                             title=metadata.get("title", "요약"),
                             max_retries=3,
                         )
+
+                        # 핵심 요약 생성 (섹션 생성 이후 - 실제 섹션 내용 기반)
+                        core_summary = executor._generate_core_summary(metadata, sections)
 
                         # 결과 조합
                         summary_md = executor.generate_summary_md(
