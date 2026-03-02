@@ -7,7 +7,6 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   LogOut,
   Upload,
-  Mic,
   Youtube,
   MessageSquare,
   Plus,
@@ -175,21 +174,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   <Upload />
                   <span className="group-data-[collapsible=icon]:hidden">파일 업로드</span>
                 </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="cursor-not-allowed">
-                        <SidebarMenuButton disabled className="opacity-40 pointer-events-none">
-                          <Mic />
-                          <span className="group-data-[collapsible=icon]:hidden">실시간 전사</span>
-                        </SidebarMenuButton>
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">준비 중입니다</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
