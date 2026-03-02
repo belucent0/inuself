@@ -3145,6 +3145,37 @@ class PrometheusRouter(CustomLLM):
                 except Exception:
                     pass
 
+    async def aembedding(self, *args, **kwargs):
+        """비동기 임베딩 요청 - Redis Stream 기반.
+
+        Backend TierRouter가 쿼리 복잡도 분류에 사용.
+        FLM LLM 서버(localhost:11435)의 /v1/embeddings 엔드포인트 경유.
+        """
+        from litellm import EmbeddingResponse
+
+        input_data = kwargs.get("input", "")
+        # 리스트 형태로 오면 첫 번째 항목만 처리 (TierRouter는 단일 텍스트 전송)
+        if isinstance(input_data, list):
+            input_data = input_data[0] if input_data else ""
+
+        logger.info(f"[PrometheusRouter] aembedding called, text_len={len(input_data)}")
+
+        gpu_client = get_async_gpu_stream_client()
+        result = await gpu_client.request_embedding(
+            text=input_data,
+            model="embed-gemma:300m",
+            timeout=15.0,
+        )
+
+        # FLM 서버 Ollama 응답 → LiteLLM EmbeddingResponse 변환
+        return EmbeddingResponse(
+            object=result.get("object", "list"),
+            data=result.get("data", []),
+            model=result.get("model", "embed-gemma:300m"),
+            usage=result.get("usage"),
+        )
+
+
 # LiteLLM에 등록할 핸들러 인스턴스
 prometheus_router = PrometheusRouter()
 
