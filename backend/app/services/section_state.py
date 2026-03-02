@@ -16,6 +16,14 @@ def _replace(existing: Any, new: Any) -> Any:
     return new
 
 
+def _merge_dicts(existing: Dict[str, str], new: Dict[str, str]) -> Dict[str, str]:
+    """딕셔너리를 병합하는 reducer (병렬 섹션 생성 결과 누적용)."""
+    result = dict(existing) if existing else {}
+    if new:
+        result.update(new)
+    return result
+
+
 def _append_unique(existing: List[str], new: List[str]) -> List[str]:
     """리스트에 고유하게 추가하는 reducer."""
     if not existing:
@@ -53,7 +61,7 @@ class SectionGenerationState(TypedDict):
     title: Annotated[str, _replace]
 
     # 출력/누적 필드 (병렬 업데이트 지원)
-    sections: Annotated[Dict[str, str], _replace]
+    sections: Annotated[Dict[str, str], _merge_dicts]
     failed_sections: Annotated[List[str], _append_unique]
     detailed_content_md: Annotated[Optional[str], _replace]
 
