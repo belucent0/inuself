@@ -2,81 +2,109 @@
 Embedding 생성 유틸리티
 
 FLM embeddinggemma:300m 모델을 사용하여 텍스트 임베딩을 생성합니다.
-Provider-Manager의 On-Demand 로딩을 고려한 Retry 로직 포함.
+Backend → Redis Stream(stream:chat:requests) → Provider Manager → FLM 경로 사용.
 """
 import asyncio
-import httpx
+import json
+import time
+import uuid
 from loguru import logger
+
+from ..core.redis import get_redis_client
+
+CHAT_STREAM = "stream:chat:requests"
+RESPONSE_STREAM = "stream:gpu:responses"
+
+
+def _generate_request_id() -> str:
+    """유니크 request_id 생성."""
+    return f"{uuid.uuid4().hex[:16]}_{int(time.time() * 1000)}"
 
 
 async def create_embedding(
     text: str,
     model: str = "embeddinggemma:300m",
-    timeout: float = 30.0,
-    max_retries: int = 3
+    timeout: float = 15.0,
+    max_retries: int = 3  # 시그니처 호환 유지 (내부적으로 미사용)
 ) -> list[float] | None:
-    """텍스트 임베딩 생성
+    """텍스트 임베딩 생성 (Redis Stream 경유)
 
     Args:
         text: 임베딩할 텍스트
         model: 임베딩 모델 (기본: embeddinggemma:300m)
-        timeout: HTTP 타임아웃 (초)
-        max_retries: 최대 재시도 횟수
+        timeout: 응답 대기 타임아웃 (초)
+        max_retries: 하위 호환 파라미터 (미사용)
 
     Returns:
         list[float]: 768차원 임베딩 벡터
         None: 실패 시
-
-    Note:
-        - Provider-Manager가 FLM 서버를 On-Demand로 로드 (~11초 소요)
-        - 첫 요청 실패 시 자동으로 로딩 대기 후 재시도
     """
-    embedding_url = "http://localhost:11435/v1/embeddings"
+    redis_client = get_redis_client()
+    request_id = _generate_request_id()
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        for attempt in range(max_retries):
-            try:
-                response = await client.post(
-                    embedding_url,
-                    json={
-                        "model": model,
-                        "input": text,
-                    }
-                )
+    request_data = {
+        "request_id": request_id,
+        "type": "embedding",
+        "text": text,
+        "model": model,
+        "timestamp": str(time.time()),
+    }
 
-                if response.status_code == 200:
-                    data = response.json()
-                    # OpenAI 호환 포맷: {"data": [{"embedding": [...]}]}
-                    embedding = data.get("data", [{}])[0].get("embedding", [])
+    try:
+        # 요청 전송 전 현재 응답 스트림의 마지막 ID 확인 → 이후 메시지만 읽기 위해
+        tail = await redis_client.xrevrange(RESPONSE_STREAM, "+", "-", count=1)
+        last_id = tail[0][0] if tail else "0"
 
-                    if len(embedding) == 768:
-                        logger.debug(f"Embedding generated: {len(text)} chars → 768 dims")
-                        return embedding
-                    else:
-                        logger.warning(f"Unexpected embedding dimension: {len(embedding)}")
-                        return None
-                else:
-                    logger.error(f"Embedding API error: {response.status_code}")
+        await redis_client.xadd(CHAT_STREAM, request_data)
+        logger.debug(f"Embedding request sent: request_id={request_id}, {len(text)} chars")
+    except Exception as e:
+        logger.error(f"Failed to send embedding request to Redis Stream: {e}")
+        return None
 
-            except httpx.ConnectError as e:
-                # Provider-Manager가 FLM 로드 중일 수 있음
-                if attempt == 0:
-                    logger.info("FLM server not ready, waiting for On-Demand load... (~12s)")
-                    await asyncio.sleep(12)  # FLM 로딩 대기
-                else:
-                    logger.warning(f"Connection failed (attempt {attempt + 1}/{max_retries}): {e}")
-                    await asyncio.sleep(2)
+    # XREAD로 응답 대기
+    start_time = time.time()
 
-            except httpx.TimeoutException as e:
-                logger.warning(f"Timeout (attempt {attempt + 1}/{max_retries}): {e}")
-                await asyncio.sleep(2)
+    while time.time() - start_time < timeout:
+        try:
+            messages = await redis_client.xread(
+                {RESPONSE_STREAM: last_id},
+                count=10,
+                block=1000,
+            )
 
-            except Exception as e:
-                logger.error(f"Embedding generation failed (attempt {attempt + 1}/{max_retries}): {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2)
+            if messages:
+                for _stream_name, stream_messages in messages:
+                    for message_id, message_data in stream_messages:
+                        last_id = message_id
 
-    logger.error(f"Failed to generate embedding after {max_retries} attempts")
+                        if message_data.get("request_id") != request_id:
+                            continue
+
+                        # processing_started 이벤트는 건너뜀
+                        if message_data.get("event") == "processing_started":
+                            continue
+
+                        if "error" in message_data:
+                            logger.error(f"Embedding error from provider: {message_data['error']}")
+                            return None
+
+                        if "result" in message_data:
+                            result = json.loads(message_data["result"])
+                            embedding = result.get("data", [{}])[0].get("embedding", [])
+
+                            if len(embedding) > 0:
+                                logger.debug(f"Embedding received: {len(text)} chars → {len(embedding)} dims")
+                                return embedding
+                            else:
+                                logger.warning(f"Empty embedding returned: {result}")
+                                return None
+
+        except Exception as e:
+            logger.warning(f"Redis read error, retrying: {e}")
+            await asyncio.sleep(1)
+            continue
+
+    logger.error(f"Embedding timeout after {timeout}s for request_id={request_id}")
     return None
 
 
@@ -96,22 +124,16 @@ async def create_embeddings_batch(
 
     Returns:
         list[list[float] | None]: 임베딩 리스트 (실패 시 None)
-
-    Note:
-        - API 레이트 리미트 방지를 위해 delay 사용
-        - 첫 요청에서 FLM 로딩 시간 자동 대기
     """
     embeddings = []
 
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
 
-        # 배치 내 텍스트들을 순차 처리
         for text in batch:
             embedding = await create_embedding(text, model=model)
             embeddings.append(embedding)
 
-            # API 레이트 리미트 방지
             if delay > 0:
                 await asyncio.sleep(delay)
 
@@ -122,9 +144,7 @@ async def create_embeddings_batch(
 
 
 async def warmup_embedding_service(timeout: float = 30.0) -> bool:
-    """FLM embedding 서비스 준비 대기
-
-    Provider-Manager가 FLM 서버를 로드할 때까지 대기합니다.
+    """FLM embedding 서비스 준비 확인 (Redis Stream 경유)
 
     Args:
         timeout: 최대 대기 시간 (초)
@@ -132,11 +152,9 @@ async def warmup_embedding_service(timeout: float = 30.0) -> bool:
     Returns:
         bool: 준비 완료 여부
     """
-    logger.info("Warming up FLM embedding service...")
+    logger.info("Warming up FLM embedding service via Redis Stream...")
 
-    # 더미 텍스트로 서비스 활성화
-    dummy_text = "warmup"
-    embedding = await create_embedding(dummy_text, timeout=timeout)
+    embedding = await create_embedding("warmup", timeout=timeout)
 
     if embedding:
         logger.info("✅ FLM embedding service is ready!")

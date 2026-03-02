@@ -86,15 +86,16 @@ class TierRouter:
             logger.info(f"[TierRouter] Large context ({context_size}) -> tier-thinking")
             return LLMTier.THINKING
 
-        # 3. 임베딩 기반 유사도 매칭 (LiteLLM → Redis Stream → Provider Manager → FLM 서버)
-        try:
-            selected = await self._embedding_based_routing(query)
-            if selected:
-                return selected
-        except Exception as e:
-            logger.warning(f"[TierRouter] Embedding routing failed: {e}, using rule-based fallback")
+        # 3. 임베딩 기반 유사도 매칭 — FLM 안정화 전까지 비활성화
+        # (활성화 시: LiteLLM → Redis Stream → Provider Manager → FLM 서버 경유, FLM DOWN이면 2분 블로킹)
+        # try:
+        #     selected = await self._embedding_based_routing(query)
+        #     if selected:
+        #         return selected
+        # except Exception as e:
+        #     logger.warning(f"[TierRouter] Embedding routing failed: {e}, using rule-based fallback")
 
-        # 4. 규칙 기반 폴백
+        # 4. 규칙 기반 라우팅
         return self._rule_based_routing(query)
 
     async def _embedding_based_routing(self, query: str) -> Optional[str]:
