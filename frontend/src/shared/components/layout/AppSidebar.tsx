@@ -180,10 +180,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <SidebarMenuButton disabled className="opacity-40 cursor-not-allowed">
-                        <Mic />
-                        <span className="group-data-[collapsible=icon]:hidden">실시간 전사</span>
-                      </SidebarMenuButton>
+                      <span className="cursor-not-allowed">
+                        <SidebarMenuButton disabled className="opacity-40 pointer-events-none">
+                          <Mic />
+                          <span className="group-data-[collapsible=icon]:hidden">실시간 전사</span>
+                        </SidebarMenuButton>
+                      </span>
                     </TooltipTrigger>
                     <TooltipContent side="right">준비 중입니다</TooltipContent>
                   </Tooltip>
