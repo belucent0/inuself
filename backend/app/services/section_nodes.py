@@ -4,6 +4,8 @@
 기존 코드와 병행하여 사용됩니다.
 """
 
+import json
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -179,9 +181,6 @@ async def create_section_node(
         )
 
         # JSON 파싱
-        import json
-        import re
-
         content = ""
         try:
             # <think>...</think> 블록 제거 (chain-of-thought 모델 대응)
@@ -239,42 +238,38 @@ async def create_section_node(
             logger.error(f"[LangGraph] 데이터 추출 오류: {e}")
             content = ""
 
-        # 로깅
-        state["logs"].append(
-            {
-                "timestamp": time.time(),
-                "topic": topic,
-                "action": "generate",
-                "content_length": len(content),
-            }
-        )
-
         logger.info(f"[LangGraph] 섹션 생성 완료: {topic} ({len(content)}자)")
 
         # 검증 통과 시 sections에 저장 (conditional edge에서 state 수정은 무시되므로 여기서 처리)
-        sections_update = {topic: content} if content and len(content) >= 50 else {}
+        is_valid, _ = validate_section_length(content)
+        sections_update = {topic: content} if is_valid else {}
 
         return {
-            **state,
             "current_content": content,
             "sections": sections_update,
+            "logs": [
+                {
+                    "timestamp": time.time(),
+                    "topic": topic,
+                    "action": "generate",
+                    "content_length": len(content),
+                }
+            ],
         }
 
     except Exception as e:
         logger.error(f"[LangGraph] 섹션 생성 오류: {topic}, {e}")
 
-        state["logs"].append(
-            {
-                "timestamp": time.time(),
-                "topic": topic,
-                "action": "generate_error",
-                "error": str(e),
-            }
-        )
-
         return {
-            **state,
             "current_content": "",
+            "logs": [
+                {
+                    "timestamp": time.time(),
+                    "topic": topic,
+                    "action": "generate_error",
+                    "error": str(e),
+                }
+            ],
         }
 
 
@@ -341,11 +336,11 @@ async def fallback_section_node(
         settings: 설정 객체
 
     Returns:
-        대체 내용이 추가된 상태
+        변경된 필드만 담은 delta dict
     """
     failed_topic = state.get("current_topic")
     if not failed_topic:
-        return state
+        return {}
 
     logger.info(f"[LangGraph] 대체 주제 시도: {failed_topic}")
 
@@ -381,35 +376,40 @@ async def fallback_section_node(
         # 길이 검증
         is_valid, _ = validate_section_length(content)
 
+        log_entry = {
+            "timestamp": time.time(),
+            "topic": failed_topic,
+            "action": "fallback",
+            "alternative_topic": alternative_topic,
+            "success": is_valid,
+        }
+
         if is_valid:
-            state["sections"] = {**state.get("sections", {}), failed_topic: content}
-            _emit_section_progress(state)
+            # 진행률 콜백: 새 섹션 포함 카운트로 호출
+            _emit_section_progress({**state, "sections": {**state.get("sections", {}), failed_topic: content}})
             logger.info(
                 f"[LangGraph] 대체 주제 성공: {failed_topic} ({len(content)}자)"
             )
+            return {
+                "sections": {failed_topic: content},
+                "logs": [log_entry],
+            }
         else:
             # 그래도 실패하면 기본 메시지
-            state["failed_sections"].append(failed_topic)
-            state["sections"] = {**state.get("sections", {}), failed_topic: "해당 내용 생성 실패"}
-            _emit_section_progress(state)
+            _emit_section_progress({**state, "sections": {**state.get("sections", {}), failed_topic: "해당 내용 생성 실패"}})
             logger.warning(f"[LangGraph] 대체 주제도 실패: {failed_topic}")
-
-        state["logs"].append(
-            {
-                "timestamp": time.time(),
-                "topic": failed_topic,
-                "action": "fallback",
-                "alternative_topic": alternative_topic,
-                "success": is_valid,
+            return {
+                "sections": {failed_topic: "해당 내용 생성 실패"},
+                "failed_sections": [failed_topic],
+                "logs": [log_entry],
             }
-        )
 
     except Exception as e:
         logger.error(f"[LangGraph] 대체 생성 오류: {failed_topic}, {e}")
-        state["failed_sections"].append(failed_topic)
-        state["sections"] = {**state.get("sections", {}), failed_topic: "해당 내용 생성 실패"}
-
-    return state
+        return {
+            "sections": {failed_topic: "해당 내용 생성 실패"},
+            "failed_sections": [failed_topic],
+        }
 
 
 def aggregate_sections_node(state: SectionGenerationState) -> SectionGenerationState:
@@ -433,16 +433,6 @@ def aggregate_sections_node(state: SectionGenerationState) -> SectionGenerationS
 
     elapsed = time.time() - state["start_time"]
 
-    state["logs"].append(
-        {
-            "timestamp": time.time(),
-            "action": "aggregate",
-            "total_sections": len(state["sections"]),
-            "failed_sections": len(state["failed_sections"]),
-            "elapsed_seconds": elapsed,
-        }
-    )
-
     logger.info(
         f"[LangGraph] 집계 완료: {len(state['sections'])}개 섹션, "
         f"{len(state['failed_sections'])}개 실패, "
@@ -450,6 +440,14 @@ def aggregate_sections_node(state: SectionGenerationState) -> SectionGenerationS
     )
 
     return {
-        **state,
         "detailed_content_md": detailed_content_md,
+        "logs": [
+            {
+                "timestamp": time.time(),
+                "action": "aggregate",
+                "total_sections": len(state["sections"]),
+                "failed_sections": len(state["failed_sections"]),
+                "elapsed_seconds": elapsed,
+            }
+        ],
     }

@@ -7,6 +7,7 @@
 https://langchain-ai.github.io/langgraph/how-tos/map-reduce/
 """
 
+import time
 from typing import TypedDict, Dict, List, Optional, Any, Annotated, Callable
 
 
@@ -18,10 +19,7 @@ def _replace(existing: Any, new: Any) -> Any:
 
 def _merge_dicts(existing: Dict[str, str], new: Dict[str, str]) -> Dict[str, str]:
     """딕셔너리를 병합하는 reducer (병렬 섹션 생성 결과 누적용)."""
-    result = dict(existing) if existing else {}
-    if new:
-        result.update(new)
-    return result
+    return {**(existing or {}), **(new or {})}
 
 
 def _append_unique(existing: List[str], new: List[str]) -> List[str]:
@@ -101,8 +99,6 @@ def create_initial_state(
     Returns:
         초기화된 SectionGenerationState
     """
-    import time
-
     return {
         "toc": toc,
         "transcript": transcript,

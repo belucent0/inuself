@@ -441,7 +441,7 @@ class ContentService:
                         )
 
                         # 핵심 요약 생성 (섹션 생성 이후 - 실제 섹션 내용 기반)
-                        core_summary = executor._generate_core_summary(metadata, sections)
+                        core_summary = executor.get_core_summary(metadata, sections)
 
                         # 결과 조합
                         summary_md = executor.generate_summary_md(
