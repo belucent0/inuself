@@ -46,7 +46,6 @@ import { ScrollArea } from '@/shared/components/ui/scroll-area'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/shared/components/ui/collapsible'
 import { navigationItems } from '@/shared/config/navigation'
 import { YouTubeLinkModal } from './YouTubeLinkModal'
-import { StreamingASRModal } from './StreamingASRModal'
 import UploadForm from './UploadForm'
 import { uploadApi } from '@/shared/services/endpoints/upload'
 import { toast } from 'sonner'
@@ -91,7 +90,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const navigate = useNavigate()
   const pathname = location.pathname
   const [youtubeModalOpen, setYoutubeModalOpen] = useState(false)
-  const [streamingModalOpen, setStreamingModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
   const { threads, removeThread, loadThreads } = useThreads()
@@ -179,10 +177,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton onClick={() => setStreamingModalOpen(true)}>
-                  <Mic />
-                  <span className="group-data-[collapsible=icon]:hidden">실시간 전사</span>
-                </SidebarMenuButton>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <SidebarMenuButton disabled className="opacity-40 cursor-not-allowed">
+                        <Mic />
+                        <span className="group-data-[collapsible=icon]:hidden">실시간 전사</span>
+                      </SidebarMenuButton>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">준비 중입니다</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
@@ -344,7 +349,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarRail />
 
       <YouTubeLinkModal open={youtubeModalOpen} onOpenChange={setYoutubeModalOpen} onSubmit={handleYouTubeSubmit} />
-      <StreamingASRModal open={streamingModalOpen} onOpenChange={setStreamingModalOpen} />
     </Sidebar>
   )
 }
