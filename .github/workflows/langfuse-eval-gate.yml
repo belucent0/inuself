@@ -37,19 +37,25 @@ jobs:
         run: |
           # WSL2에서 localhost 경유 SSE 스트리밍이 끊기는 문제를 우회
           # /etc/resolv.conf의 nameserver가 Windows 호스트 IP
-          WIN_IP=$(cat /etc/resolv.conf | grep nameserver | awk 'NR==1{print $2}')
+          WIN_IP=$(awk '/nameserver/{print $2; exit}' /etc/resolv.conf)
+          if [[ -z "$WIN_IP" ]]; then
+            echo "ERROR: Windows 호스트 IP를 추출할 수 없습니다 (WSL2 환경인지 확인 필요)"
+            cat /etc/resolv.conf
+            exit 1
+          fi
           echo "WIN_IP=${WIN_IP}" >> $GITHUB_ENV
           echo "Windows 호스트 IP: ${WIN_IP}"
 
       - name: 백엔드 헬스 체크
         run: |
-          for i in 1 2 3 4 5; do
-            if curl -sf http://${WIN_IP}:8000/health > /dev/null 2>&1; then
+          for i in 1 2 3; do
+            HTTP_CODE=$(curl -w "%{http_code}" -s -o /tmp/health_response.txt http://${WIN_IP}:8000/health)
+            if [ "$HTTP_CODE" = "200" ]; then
               echo "헬스 체크 성공 (${WIN_IP}:8000)"
               exit 0
             fi
-            echo "시도 $i/5 실패, 5초 대기..."
-            sleep 5
+            echo "시도 $i/3 실패 (HTTP ${HTTP_CODE}): $(cat /tmp/health_response.txt)"
+            [ $i -lt 3 ] && sleep 3
           done
           echo "백엔드가 응답하지 않습니다: http://${WIN_IP}:8000"
           exit 1
