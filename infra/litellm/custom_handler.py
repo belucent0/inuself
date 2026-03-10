@@ -177,18 +177,13 @@ DEVICE_GROUP_MAP = {
 
 
 # ==========================================
-# V7.5: Redis 분산 잠금 (SETNX 기반)
-# 경쟁 조건 방지를 위한 원자적 잠금 메커니즘
+# V7.5: Redis 분산 잠금 (redis-py Lock 기반)
+# redis-py Lock이 SETNX + Lua 원자적 해제 + TTL을 내부적으로 처리한다.
 # ==========================================
 
-# Lua 스크립트: 원자적 잠금 해제 (본인 lock_id만 삭제)
-RELEASE_LOCK_SCRIPT = """
-if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-else
-    return 0
-end
-"""
+# 활성 잠금 저장소: lock_id → Lock 객체 (동기/비동기 각각)
+_sync_locks: dict[str, Any] = {}
+_async_locks: dict[str, Any] = {}
 
 
 async def acquire_device_lock_async(
@@ -196,7 +191,7 @@ async def acquire_device_lock_async(
     lock_id: str | None = None,
     timeout: int = 3600
 ) -> str | None:
-    """원자적 디바이스 잠금 획득 (SETNX).
+    """디바이스 잠금 획득 (비동기).
 
     Args:
         device: "gpu" 또는 "npu"
@@ -214,11 +209,10 @@ async def acquire_device_lock_async(
     lock_id = lock_id or str(uuid.uuid4())
 
     try:
-        # SETNX: 키가 없을 때만 설정 (원자적!)
-        acquired = await redis_client_async.set(
-            key, lock_id, nx=True, ex=timeout
-        )
+        lock = redis_client_async.lock(key, timeout=timeout, blocking=False)
+        acquired = await lock.acquire()
         if acquired:
+            _async_locks[lock_id] = lock
             logger.info(f"[Lock] {device.upper()} acquired: {key} (lock_id={lock_id[:8]}...)")
             return lock_id
         else:
@@ -230,7 +224,7 @@ async def acquire_device_lock_async(
 
 
 async def release_device_lock_async(device: str, lock_id: str) -> bool:
-    """디바이스 잠금 해제 (본인 것만).
+    """디바이스 잠금 해제 (본인 것만, 비동기).
 
     Args:
         device: "gpu" 또는 "npu"
@@ -240,20 +234,17 @@ async def release_device_lock_async(device: str, lock_id: str) -> bool:
         해제 성공 여부
     """
     if not redis_client_async or not lock_id:
-        return True  # Redis 없거나 lock_id 없으면 성공으로 처리
+        return True
 
-    key = f"worker:{device}:active"
+    lock = _async_locks.pop(lock_id, None)
+    if not lock:
+        logger.warning(f"[Lock] {device.upper()} release skipped (not found): lock_id={lock_id[:8]}...")
+        return False
 
     try:
-        result = await redis_client_async.eval(
-            RELEASE_LOCK_SCRIPT, 1, key, lock_id
-        )
-        released = result == 1
-        if released:
-            logger.info(f"[Lock] {device.upper()} released: {key}")
-        else:
-            logger.warning(f"[Lock] {device.upper()} release failed (not owner or expired): {key}")
-        return released
+        await lock.release()
+        logger.info(f"[Lock] {device.upper()} released (lock_id={lock_id[:8]}...)")
+        return True
     except Exception as e:
         logger.error(f"[Lock] Failed to release {device}: {e}")
         return False
@@ -264,7 +255,7 @@ def acquire_device_lock_sync(
     lock_id: str | None = None,
     timeout: int = 3600
 ) -> str | None:
-    """원자적 디바이스 잠금 획득 (SETNX) - 동기 버전.
+    """디바이스 잠금 획득 (동기).
 
     Args:
         device: "gpu" 또는 "npu"
@@ -282,11 +273,10 @@ def acquire_device_lock_sync(
     lock_id = lock_id or str(uuid.uuid4())
 
     try:
-        # SETNX: 키가 없을 때만 설정 (원자적!)
-        acquired = redis_client_sync.set(
-            key, lock_id, nx=True, ex=timeout
-        )
+        lock = redis_client_sync.lock(key, timeout=timeout, blocking=False)
+        acquired = lock.acquire()
         if acquired:
+            _sync_locks[lock_id] = lock
             logger.info(f"[Lock] {device.upper()} acquired: {key} (lock_id={lock_id[:8]}...)")
             return lock_id
         else:
@@ -298,7 +288,7 @@ def acquire_device_lock_sync(
 
 
 def release_device_lock_sync(device: str, lock_id: str) -> bool:
-    """디바이스 잠금 해제 (본인 것만) - 동기 버전.
+    """디바이스 잠금 해제 (본인 것만, 동기).
 
     Args:
         device: "gpu" 또는 "npu"
@@ -308,85 +298,20 @@ def release_device_lock_sync(device: str, lock_id: str) -> bool:
         해제 성공 여부
     """
     if not redis_client_sync or not lock_id:
-        return True  # Redis 없거나 lock_id 없으면 성공으로 처리
+        return True
 
-    key = f"worker:{device}:active"
+    lock = _sync_locks.pop(lock_id, None)
+    if not lock:
+        logger.warning(f"[Lock] {device.upper()} release skipped (not found): lock_id={lock_id[:8]}...")
+        return False
 
     try:
-        result = redis_client_sync.eval(
-            RELEASE_LOCK_SCRIPT, 1, key, lock_id
-        )
-        released = result == 1
-        if released:
-            logger.info(f"[Lock] {device.upper()} released: {key}")
-        else:
-            logger.warning(f"[Lock] {device.upper()} release failed (not owner or expired): {key}")
-        return released
+        lock.release()
+        logger.info(f"[Lock] {device.upper()} released (lock_id={lock_id[:8]}...)")
+        return True
     except Exception as e:
         logger.error(f"[Lock] Failed to release {device}: {e}")
         return False
-
-
-# ==========================================
-# Legacy 세마포어 함수 (하위 호환성 - 점진적 제거 예정)
-# ==========================================
-
-async def _set_redis_semaphore_async(provider: str, active: bool):
-    """Redis 세마포어 설정/해제 (비동기).
-
-    Args:
-        provider: Provider 이름 (flm, whisper-cpp, insanely-fast 등)
-        active: True면 획득, False면 해제
-    """
-    if not redis_client_async:
-        logger.warning("[Semaphore] Redis client not available")
-        return
-
-    device_group = DEVICE_GROUP_MAP.get(provider)
-    if not device_group:
-        logger.debug(f"[Semaphore] Unknown provider: {provider}")
-        return
-
-    key = f"worker:{device_group}:active"
-
-    try:
-        if active:
-            await redis_client_async.set(key, "1", ex=600)  # TTL 10분
-            logger.info(f"[Semaphore] {device_group.upper()} acquired: {key} (provider={provider})")
-        else:
-            await redis_client_async.delete(key)
-            logger.info(f"[Semaphore] {device_group.upper()} released: {key} (provider={provider})")
-    except Exception as e:
-        logger.error(f"[Semaphore] Failed to set Redis semaphore: {e}")
-
-
-def _set_redis_semaphore_sync(provider: str, active: bool):
-    """Redis 세마포어 설정/해제 (동기).
-
-    Args:
-        provider: Provider 이름 (flm, whisper-cpp, insanely-fast 등)
-        active: True면 획득, False면 해제
-    """
-    if not redis_client_sync:
-        logger.warning("[Semaphore] Redis client not available")
-        return
-
-    device_group = DEVICE_GROUP_MAP.get(provider)
-    if not device_group:
-        logger.debug(f"[Semaphore] Unknown provider: {provider}")
-        return
-
-    key = f"worker:{device_group}:active"
-
-    try:
-        if active:
-            redis_client_sync.set(key, "1", ex=600)  # TTL 10분
-            logger.info(f"[Semaphore] {device_group.upper()} acquired: {key} (provider={provider})")
-        else:
-            redis_client_sync.delete(key)
-            logger.info(f"[Semaphore] {device_group.upper()} released: {key} (provider={provider})")
-    except Exception as e:
-        logger.error(f"[Semaphore] Failed to set Redis semaphore: {e}")
 
 
 def get_gpu_device_ids_sync() -> list[str]:
