@@ -1,12 +1,5 @@
 """LiteLLM Custom Handler - Prometheus 기반 GPU/NPU 라우팅.
 
-Architecture V6.6: Redis Stream 기반 메시징 아키텍처
-
-주요 변경 (V6.6):
-- Docker → Host HTTP 통신 제거 (Docker Desktop 크래시 방지)
-- Redis Stream을 통한 GPU 작업 요청/응답
-- Provider Manager가 Host에서 실행되어 localhost로 GPU 서버 접근
-
 ASR 라우팅:
 - 신속모드: whisper-cpp (GPU, 8001) - whisper v3 turbo
 - 정확모드: insanely-fast (GPU, 8002) - whisper large-v3
@@ -36,10 +29,9 @@ import litellm
 from litellm import CustomLLM
 from litellm.types.utils import GenericStreamingChunk, ModelResponse
 
-# V6.6: Redis Stream GPU 클라이언트
 from custom.gpu_stream_client import AsyncGPUStreamClient, get_async_gpu_stream_client
 
-# V7.3: OpenTelemetry 분산 추적
+# OpenTelemetry 분산 추적
 try:
     from custom.telemetry import (
         trace_provider_call,
@@ -72,17 +64,14 @@ logger = logging.getLogger(__name__)
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://asr-prometheus:9090")
 REDIS_URL = os.getenv("REDIS_URL", "redis://asr-valkey:6379/0")
 
-# Architecture V6.3: Provider Manager for On-Demand NPU control
 PROVIDER_MANAGER_URL = os.getenv("PROVIDER_MANAGER_URL", "http://host.docker.internal:9999")
 
-# Service Classification (V6.4 Simplified)
 # GPU Services: Always-On - No start/stop control needed
 GPU_SERVICES = {"llama", "whisper-cpp", "insanely-fast", "diarization-server"}
 # NPU Services: On-Demand - Single FLM server for ASR + OCR
 NPU_SERVICES = {"flm"}  # Single unified FLM server
 
-# Provider Manager용 Redis status key 매핑 (V7.5+: ASR provider 사전 상태 확인)
-# custom_handler의 provider name → providers:status hash key
+# Provider Manager용 Redis status key 매핑 (custom_handler provider name → providers:status hash key)
 PROVIDER_REDIS_STATUS_KEY = {
     "whisper-cpp": "whisper-server",
     "insanely-fast": "insanely-fast-server",
@@ -103,7 +92,7 @@ NPU_API_BASE = os.getenv("NPU_API_BASE", "http://host.docker.internal:11434")  #
 _cached_gpu_device_id: str | None = None
 _cached_npu_device_id: str | None = None
 
-# Chat/LLM 모델명 (V6.5)
+# Chat/LLM 모델명
 GPU_MODEL = os.getenv("GPU_MODEL", "Qwen3-4B-Instruct-2507-Q4_K_S.gguf")  # llama-server Router mode
 NPU_MODEL = os.getenv("NPU_MODEL", "qwen3vl-it:4b")  # FLM unified (LLM + OCR)
 
@@ -132,15 +121,13 @@ GPU_INSANELY_FAST_API_BASE = os.getenv("GPU_INSANELY_FAST_API_BASE", "http://hos
 BUSY_THRESHOLD = 70  # 70% 이상이면 "바쁨"
 
 # Health check 설정
-# V6.6: host.docker.internal HTTP 호출이 Docker Desktop 크래시를 유발
-# Health check 비활성화하고 Redis Stream 응답으로 health 판단
+# host.docker.internal HTTP 호출이 Docker Desktop 크래시를 유발하므로 기본 비활성화
 HEALTH_CHECK_TIMEOUT = float(os.getenv("HEALTH_CHECK_TIMEOUT", "3.0"))  # 서버 응답 대기 시간
-HEALTH_CHECK_ENABLED = os.getenv("HEALTH_CHECK_ENABLED", "false").lower() == "true"  # V6.6: 기본값 false
+HEALTH_CHECK_ENABLED = os.getenv("HEALTH_CHECK_ENABLED", "false").lower() == "true"
 
-# V6.4: NPU OCR uses same FLM server as ASR (unified)
-NPU_OCR_API_BASE = NPU_API_BASE  # Same port 11434
+NPU_OCR_API_BASE = NPU_API_BASE  # Same port 11434 (NPU OCR uses same FLM server as ASR)
 
-# Provider별 Health Check URL 매핑 (V6.4 Simplified)
+# Provider별 Health Check URL 매핑
 PROVIDER_HEALTH_URLS = {
     "llama": f"{GPU_API_BASE}/health",
     "flm": f"{NPU_API_BASE}/v1/models",  # Unified FLM (ASR + OCR on 11434)
@@ -161,15 +148,14 @@ except Exception as e:
     redis_client_sync = None
     redis_client_async = None
 
-# V7.0: Provider to Device Group 매핑
 DEVICE_GROUP_MAP = {
     "flm": "npu",
     "flm-server": "npu",
     "llamacpp": "gpu",
     "llamacpp_server": "gpu",
     "llama-server": "gpu",
-    "llama": "gpu",  # V7.6: llama provider 추가
-    "llama-ocr": "gpu",  # V7.6: llama-ocr provider 추가
+    "llama": "gpu",
+    "llama-ocr": "gpu",
     "whisper-cpp": "gpu",
     "insanely-fast": "gpu",
     "diarization-server": "gpu",
@@ -177,7 +163,7 @@ DEVICE_GROUP_MAP = {
 
 
 # ==========================================
-# V7.6: Redis 분산 잠금 (redis-py Lock 기반, stateless custom token)
+# Redis 분산 잠금 (redis-py Lock 기반, stateless custom token)
 # acquire 시 lock_id를 custom token으로 전달 → Redis value = lock_id UUID
 # release 시 Lock 객체를 재구성하여 token 주입 → dict 없이 stateless
 # ==========================================
@@ -842,8 +828,6 @@ def check_flm_model_ready_sync(api_base: str, model: str, timeout: float = 10.0)
 def check_flm_health_with_model_sync(provider: str) -> bool:
     """FLM Provider의 health + model readiness 확인 (동기).
 
-    V6.5: 통합 FLM 서버 (11434) - ASR + OCR + LLM 통합
-
     Args:
         provider: 'flm' (통합 서버 11434)
 
@@ -859,14 +843,12 @@ def check_flm_health_with_model_sync(provider: str) -> bool:
     if not check_provider_health_sync(provider):
         return False
 
-    # V6.5: 통합 FLM 서버는 /v1/models 응답만으로 OK (dry-run 불필요)
+    # 통합 FLM 서버는 /v1/models 응답만으로 OK (dry-run 불필요)
     return True
 
 
 async def check_flm_health_with_model_async(provider: str) -> bool:
     """FLM Provider의 health + model readiness 확인 (비동기).
-
-    V6.5: 통합 FLM 서버 (11434) - ASR + OCR + LLM 통합
 
     Args:
         provider: 'flm' (통합 서버 11434)
@@ -883,7 +865,7 @@ async def check_flm_health_with_model_async(provider: str) -> bool:
     if not await check_provider_health_async(provider):
         return False
 
-    # V6.5: 통합 FLM 서버는 /v1/models 응답만으로 OK (dry-run 불필요)
+    # 통합 FLM 서버는 /v1/models 응답만으로 OK (dry-run 불필요)
     return True
 
 
@@ -996,7 +978,6 @@ async def wait_for_available_provider_async(
 ) -> tuple[str, str, str, str, str]:
     """둘 다 busy일 때 대기하다가 먼저 available 되는 쪽 반환 (비동기).
 
-    V7.5: SETNX 기반 원자적 잠금으로 경쟁 조건 방지
     - 체크와 획득을 원자적으로 수행 (SETNX)
     - lock_id 반환하여 호출자가 release_device_lock_async()로 해제
 
@@ -1054,8 +1035,7 @@ async def _wait_for_available_provider_loop(
     poll_interval: float,
     span=None,
 ) -> tuple[str, str, str, str, str]:
-    """폴링 루프 내부 로직 - V7.5 SETNX 기반 원자적 잠금.
-
+    """폴링 루프 내부 로직
     기존 is_provider_busy_async() 체크 대신 acquire_device_lock_async()로
     체크와 획득을 원자적으로 수행합니다.
     """
@@ -1108,7 +1088,6 @@ def wait_for_available_provider_sync(
 ) -> tuple[str, str, str, str, str]:
     """둘 다 busy일 때 대기하다가 먼저 available 되는 쪽 반환 (동기).
 
-    V7.5: SETNX 기반 원자적 잠금으로 경쟁 조건 방지
     - 체크와 획득을 원자적으로 수행 (SETNX)
     - lock_id 반환하여 호출자가 release_device_lock_sync()로 해제
 
@@ -1166,8 +1145,7 @@ def _wait_for_available_provider_loop_sync(
     poll_interval: float,
     span=None,
 ) -> tuple[str, str, str, str, str]:
-    """폴링 루프 내부 로직 - V7.5 SETNX 기반 원자적 잠금 (동기 버전).
-
+    """폴링 루프 내부 로직
     기존 is_provider_busy_sync() 체크 대신 acquire_device_lock_sync()로
     체크와 획득을 원자적으로 수행합니다.
     """
@@ -1211,9 +1189,8 @@ def _wait_for_available_provider_loop_sync(
 
 
 async def send_provider_control_signal(provider: str, action: str = "start"):
-    """Host Agent에게 서비스 제어 요청 전송 (비동기, V6.3).
+    """Host Agent에게 서비스 제어 요청 전송 (비동기).
 
-    Architecture V6.3:
     - GPU 서버: Always-On, 제어 신호 불필요 (no-op)
     - NPU 서버: On-Demand, Host Agent HTTP API로 제어
 
@@ -1237,7 +1214,6 @@ async def send_provider_control_signal(provider: str, action: str = "start"):
     elif action == "stop":
         url = f"{PROVIDER_MANAGER_URL}/stop/{service_name}"
     else:
-        # touch는 V6.3에서 불필요 (Servy가 health check로 관리)
         logger.debug(f"[CustomRouter] Action '{action}' not supported in V6.3")
         return
 
@@ -1256,7 +1232,6 @@ async def send_provider_control_signal(provider: str, action: str = "start"):
 async def increment_active_count(provider: str):
     """Provider 활성 요청 카운트 증가 (비동기).
 
-    V6.3 Note: 모니터링 용도로만 사용. Servy가 서비스 관리를 담당.
     """
     if not redis_client_async:
         return
@@ -1271,7 +1246,6 @@ async def increment_active_count(provider: str):
 async def decrement_active_count(provider: str):
     """Provider 활성 요청 카운트 감소 (비동기).
 
-    V6.3 Note: 모니터링 용도로만 사용. Servy가 서비스 관리를 담당.
     """
     if not redis_client_async:
         return
@@ -1359,11 +1333,9 @@ async def select_provider_async(
     4. 둘 다 busy → 대기 (최대 30초)
     5. 선택된 Provider unhealthy → start 신호 + 대기 (max 15초)
     """
-    # Provider 설정 헬퍼 (V6.5: 통합 FLM 서버)
     def get_provider_config(provider: str, task: str) -> tuple[str, str, str, str]:
         """(api_base, model, provider_key, signal_provider)"""
         if provider == "npu":
-            # V6.5: 모든 NPU 작업은 통합 FLM 서버 (11434) 사용
             if task == "audio":
                 return NPU_API_BASE, NPU_AUDIO_MODEL, "npu-audio", "flm"
             return NPU_API_BASE, NPU_MODEL, "npu", "flm"  # LLM + OCR 통합
@@ -1386,7 +1358,7 @@ async def select_provider_async(
             await send_provider_control_signal("flm", "start")
         if task_type == "audio":
             return NPU_API_BASE, NPU_AUDIO_MODEL, "npu-audio"
-        return NPU_API_BASE, NPU_MODEL, "npu"  # V6.5: 통합 FLM (11434)
+        return NPU_API_BASE, NPU_MODEL, "npu"
 
     # 1. Tier별 라우팅 정책 가져오기
     routing_policy = get_routing_policy(tier)
@@ -1415,7 +1387,6 @@ async def select_provider_async(
         api_base, model, key, signal, lock_id = await wait_for_available_provider_async(
             policy_primary, policy_fallback, task_type, get_provider_config
         )
-        # V7.6: lock_id를 호출자에게 전달 (해제하지 않음)
         # 호출자(acompletion 등)가 작업 완료 후 release_device_lock_async()로 해제
         if not skip_signal:
             await send_provider_control_signal(signal, "start")
@@ -1427,7 +1398,6 @@ async def select_provider_async(
         logger.warning(f"[CustomRouter] Both busy, no queue → forcing {policy_primary.upper()}")
 
     # 4. Health Check
-    # V6.5: 통합 FLM 서버 사용
     npu_health_provider = "flm"
     npu_healthy = await check_flm_health_with_model_async(npu_health_provider)
     gpu_healthy = await check_provider_health_async("llama")
@@ -1503,9 +1473,8 @@ async def select_provider_async(
 
 
 def send_provider_control_signal_sync(provider: str, action: str = "start"):
-    """Host Agent에게 서비스 제어 요청 전송 (동기, V6.3).
+    """Host Agent에게 서비스 제어 요청 전송 (동기).
 
-    Architecture V6.3:
     - GPU 서버: Always-On, 제어 신호 불필요 (no-op)
     - NPU 서버: On-Demand, Host Agent HTTP API로 제어
     """
@@ -1525,7 +1494,6 @@ def send_provider_control_signal_sync(provider: str, action: str = "start"):
     elif action == "stop":
         url = f"{PROVIDER_MANAGER_URL}/stop/{service_name}"
     else:
-        # touch는 V6.3에서 불필요 (Servy가 health check로 관리)
         logger.debug(f"[CustomRouter] Action '{action}' not supported in V6.3")
         return
 
@@ -1553,7 +1521,7 @@ def wait_for_server_ready_sync(api_base: str, max_wait: float = 60.0, interval: 
         서버 준비 완료 여부
     """
     # FLM 서버 여부 판별
-    is_flm_server = ":11434" in api_base  # V6.5: 통합 FLM 서버만
+    is_flm_server = ":11434" in api_base
 
     # Health endpoint 결정
     if is_flm_server:
@@ -1580,7 +1548,6 @@ def wait_for_server_ready_sync(api_base: str, max_wait: float = 60.0, interval: 
                         logger.info(f"[CustomRouter] Server responding at {api_base} after {elapsed:.1f}s (attempt {attempt})")
                         health_passed = True
 
-                    # V6.5: 통합 FLM 서버는 /v1/models 응답만으로 OK
                     if is_flm_server:
                         elapsed = time.time() - start_time
                         logger.info(f"[CustomRouter] FLM server ready at {api_base} after {elapsed:.1f}s")
@@ -1653,7 +1620,7 @@ async def wait_for_server_ready_async(api_base: str, max_wait: float = 60.0, int
     import asyncio
 
     # FLM 서버 여부 판별
-    is_flm_server = ":11434" in api_base  # V6.5: 통합 FLM 서버만
+    is_flm_server = ":11434" in api_base
 
     # Health endpoint 결정
     if is_flm_server:
@@ -1680,7 +1647,6 @@ async def wait_for_server_ready_async(api_base: str, max_wait: float = 60.0, int
                         logger.info(f"[CustomRouter] Server responding at {api_base} after {elapsed:.1f}s (attempt {attempt})")
                         health_passed = True
 
-                    # V6.5: 통합 FLM 서버는 /v1/models 응답만으로 OK
                     if is_flm_server:
                         elapsed = time.time() - start_time
                         logger.info(f"[CustomRouter] FLM server ready at {api_base} after {elapsed:.1f}s")
@@ -1702,7 +1668,6 @@ async def wait_for_server_ready_async(api_base: str, max_wait: float = 60.0, int
 def increment_active_count_sync(provider: str):
     """Provider 활성 요청 카운트 증가 (동기).
 
-    V6.3 Note: 모니터링 용도로만 사용. Servy가 서비스 관리를 담당.
     """
     if not redis_client_sync:
         return
@@ -1717,7 +1682,6 @@ def increment_active_count_sync(provider: str):
 def decrement_active_count_sync(provider: str):
     """Provider 활성 요청 카운트 감소 (동기).
 
-    V6.3 Note: 모니터링 용도로만 사용. Servy가 서비스 관리를 담당.
     """
     if not redis_client_sync:
         return
@@ -1755,11 +1719,9 @@ def select_provider_sync(
     4. 둘 다 busy → 대기 (최대 30초)
     5. 선택된 Provider unhealthy → start 신호 + 대기 (max 15초)
     """
-    # Provider 설정 헬퍼 (V6.5: 통합 FLM 서버)
     def get_provider_config(provider: str, task: str) -> tuple[str, str, str, str]:
         """(api_base, model, provider_key, signal_provider)"""
         if provider == "npu":
-            # V6.5: 모든 NPU 작업은 통합 FLM 서버 (11434) 사용
             if task == "audio":
                 return NPU_API_BASE, NPU_AUDIO_MODEL, "npu-audio", "flm"
             return NPU_API_BASE, NPU_MODEL, "npu", "flm"  # LLM + OCR 통합
@@ -1782,7 +1744,7 @@ def select_provider_sync(
             send_provider_control_signal_sync("flm", "start")
         if task_type == "audio":
             return NPU_API_BASE, NPU_AUDIO_MODEL, "npu-audio"
-        return NPU_API_BASE, NPU_MODEL, "npu"  # V6.5: 통합 FLM (11434)
+        return NPU_API_BASE, NPU_MODEL, "npu"
 
     # 1. Tier별 라우팅 정책 가져오기
     routing_policy = get_routing_policy(tier)
@@ -1811,7 +1773,6 @@ def select_provider_sync(
         api_base, model, key, signal, lock_id = wait_for_available_provider_sync(
             policy_primary, policy_fallback, task_type, get_provider_config
         )
-        # V7.6: lock_id를 호출자에게 전달 (해제하지 않음)
         # 호출자(completion 등)가 작업 완료 후 release_device_lock_sync()로 해제
         if not skip_signal:
             send_provider_control_signal_sync(signal, "start")
@@ -1823,7 +1784,6 @@ def select_provider_sync(
         logger.warning(f"[CustomRouter] Both busy, no queue → forcing {policy_primary.upper()}")
 
     # 4. Health Check
-    # V6.5: 통합 FLM 서버 사용
     npu_health_provider = "flm"
     npu_healthy = check_flm_health_with_model_sync(npu_health_provider)
     gpu_healthy = check_provider_health_sync("llama")
@@ -1927,9 +1887,7 @@ class PrometheusRouter(CustomLLM):
         return False, None, None
 
     def completion(self, *args, **kwargs) -> ModelResponse:
-        """동기 completion (Non-streaming) - V7.4 Redis Stream 기반.
-
-        Architecture V7.4:
+        """동기 completion (Non-streaming)
         - HTTP 직접 통신 대신 Redis Stream을 통해 Provider Manager로 요청
         - OCR/ASR/Diarization 요청 감지 및 처리
         - Docker Desktop 크래시 방지
@@ -1951,14 +1909,12 @@ class PrometheusRouter(CustomLLM):
         if stream:
             logger.warning("[PrometheusRouter V7.4] stream=True detected in completion. LiteLLM should have called astreaming.")
 
-        # V7.4: 라우터 prefix 제거 (예: "prometheus-router/ocr-speed" -> "ocr-speed")
         model_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
 
         # extra_body에서 task_type 추출 (ASR/Diarization 감지용)
         extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
         task_type = extra_body.get("task_type", "")
 
-        # V7.4: ASR 요청 감지 및 처리
         if task_type == "asr" or model_name.startswith("asr-"):
             logger.info(f"[PrometheusRouter V7.4] ASR request detected (sync): model={requested_model} (extracted: {model_name})")
 
@@ -1981,7 +1937,6 @@ class PrometheusRouter(CustomLLM):
 
             device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
 
-            # V7.5+: Provider 상태 사전 확인 (DOWN 시 즉시 실패, 불필요한 Redis 왕복 방지)
             _status_key = PROVIDER_REDIS_STATUS_KEY.get(target_provider)
             if _status_key:
                 try:
@@ -1999,7 +1954,6 @@ class PrometheusRouter(CustomLLM):
                 except Exception as _e:
                     logger.warning(f"[PrometheusRouter V7.5] Provider status check failed: {_e}, proceeding anyway")
 
-            # V7.5: Worker에서 전달받은 lock_id가 있으면 재획득 스킵
             worker_lock_id = extra_body.get("lock_id")
             lock_id = None
             lock_acquired_here = False  # LiteLLM에서 획득했는지 여부
@@ -2068,12 +2022,10 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] ASR completion failed: {e}")
                 raise
             finally:
-                # V7.5: LiteLLM에서 획득한 잠금만 해제 (Worker 잠금은 Worker에서 해제)
                 if lock_acquired_here and lock_id:
                     release_device_lock_sync(device_group, lock_id)
                 decrement_active_count_sync(target_provider)
 
-        # V7.4: Diarization 요청 감지 및 처리
         if task_type == "diarization" or model_name == "diarization":
             logger.info(f"[PrometheusRouter V7.5] Diarization request detected (sync): model={requested_model}")
 
@@ -2088,7 +2040,6 @@ class PrometheusRouter(CustomLLM):
             target_provider = "diarization-server"  # pyannote diarization provider
             device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
 
-            # V7.5: Worker에서 전달받은 lock_id가 있으면 재획득 스킵
             worker_lock_id = extra_body.get("lock_id")
             lock_id = None
             lock_acquired_here = False  # LiteLLM에서 획득했는지 여부
@@ -2156,12 +2107,10 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] Diarization completion failed: {e}")
                 raise
             finally:
-                # V7.5: LiteLLM에서 획득한 잠금만 해제 (Worker 잠금은 Worker에서 해제)
                 if lock_acquired_here and lock_id:
                     release_device_lock_sync(device_group, lock_id)
                 decrement_active_count_sync(target_provider)
 
-        # V7.0: OCR 요청 감지 (모델명이 ocr-로 시작하거나 vision 요청)
         is_ocr_model = model_name.startswith("ocr-")
         is_vision, image_base64, text_prompt = self._is_vision_request(messages)
 
@@ -2187,8 +2136,6 @@ class PrometheusRouter(CustomLLM):
                 gpu_client = get_gpu_stream_client()
 
                 if image_base64:
-                    # V7.0: Redis Stream을 통한 OCR 요청
-                    # V7.3: trace_id 로깅 추가
                     trace_id = get_trace_id() if TELEMETRY_ENABLED else None
                     if trace_id:
                         logger.info(f"[PrometheusRouter V7.3] OCR request trace_id={trace_id}")
@@ -2236,10 +2183,8 @@ class PrometheusRouter(CustomLLM):
         # 일반 LLM 요청
         # Tier 정보 추출 (model_name이 tier-로 시작하면 해당 tier 사용)
         tier = model_name if model_name.startswith("tier-") else None
-        # V7.6: Provider 선택 - 잠금이 이미 획득될 수 있음
         result = select_provider_sync(task_type="chat", skip_signal=True, tier=tier)
 
-        # V7.6: 반환값이 5개(lock_id 포함)인지 3개인지 확인
         if len(result) == 5:
             api_base, _, provider_key, device_group, lock_id = result
         else:
@@ -2258,7 +2203,6 @@ class PrometheusRouter(CustomLLM):
 
         logger.info(f"[PrometheusRouter V7.6] Routing to {target_provider} via Redis Stream, model={requested_model_name}, lock_id={lock_id[:8] if lock_id else 'None'}...")
 
-        # V7.6: lock_id가 없으면 직접 획득 시도
         lock_acquired_here = False
         if not lock_id:
             wait_start = time.time()
@@ -2311,13 +2255,12 @@ class PrometheusRouter(CustomLLM):
             logger.error(f"[PrometheusRouter V7.6] LLM completion failed: {e}")
             raise
         finally:
-            # V7.6: 잠금 해제 (select_provider에서 받은 것이든 직접 획득한 것이든)
             if lock_id:
                 release_device_lock_sync(device_group, lock_id)
             decrement_active_count_sync(target_provider)
 
     async def acompletion(self, *args, **kwargs) -> ModelResponse:
-        """비동기 completion (Non-streaming) - V7.4 Redis Stream 기반 (OCR/ASR/Diarization 지원)."""
+        """비동기 completion (Non-streaming)"""
         import base64
         import json
         import tempfile
@@ -2329,14 +2272,12 @@ class PrometheusRouter(CustomLLM):
 
         logger.info(f"[PrometheusRouter V7.4] acompletion called. model={requested_model}")
 
-        # V7.4: 라우터 prefix 제거 (예: "prometheus-router/ocr-speed" -> "ocr-speed")
         model_name = requested_model.split("/")[-1] if "/" in requested_model else requested_model
 
         # extra_body에서 task_type 추출 (ASR/Diarization 감지용)
         extra_body = optional_params.get("extra_body", {}) or kwargs.get("extra_body", {})
         task_type = extra_body.get("task_type", "")
 
-        # V7.4: ASR 요청 감지 및 처리
         if task_type == "asr" or model_name.startswith("asr-"):
             logger.info(f"[PrometheusRouter V7.5] ASR request detected: model={requested_model} (extracted: {model_name})")
 
@@ -2358,7 +2299,6 @@ class PrometheusRouter(CustomLLM):
 
             device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
 
-            # V7.5+: Provider 상태 사전 확인 (DOWN 시 즉시 실패, 불필요한 Redis 왕복 방지)
             _status_key = PROVIDER_REDIS_STATUS_KEY.get(target_provider)
             if _status_key:
                 try:
@@ -2376,7 +2316,6 @@ class PrometheusRouter(CustomLLM):
                 except Exception as _e:
                     logger.warning(f"[PrometheusRouter V7.5] Provider status check failed: {_e}, proceeding anyway")
 
-            # V7.5: Worker에서 전달받은 lock_id가 있으면 재획득 스킵
             worker_lock_id = extra_body.get("lock_id")
             lock_id = None
             lock_acquired_here = False  # LiteLLM에서 획득했는지 여부
@@ -2444,12 +2383,10 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] ASR acompletion failed: {e}")
                 raise
             finally:
-                # V7.5: LiteLLM에서 획득한 잠금만 해제 (Worker 잠금은 Worker에서 해제)
                 if lock_acquired_here and lock_id:
                     await release_device_lock_async(device_group, lock_id)
                 await decrement_active_count(target_provider)
 
-        # V7.4: Diarization 요청 감지 및 처리
         if task_type == "diarization" or model_name == "diarization":
             logger.info(f"[PrometheusRouter V7.5] Diarization request detected: model={requested_model}")
 
@@ -2464,7 +2401,6 @@ class PrometheusRouter(CustomLLM):
             target_provider = "diarization-server"  # pyannote diarization provider
             device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
 
-            # V7.5: Worker에서 전달받은 lock_id가 있으면 재획득 스킵
             worker_lock_id = extra_body.get("lock_id")
             lock_id = None
             lock_acquired_here = False  # LiteLLM에서 획득했는지 여부
@@ -2532,12 +2468,10 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] Diarization acompletion failed: {e}")
                 raise
             finally:
-                # V7.5: LiteLLM에서 획득한 잠금만 해제 (Worker 잠금은 Worker에서 해제)
                 if lock_acquired_here and lock_id:
                     await release_device_lock_async(device_group, lock_id)
                 await decrement_active_count(target_provider)
 
-        # V7.0: OCR 요청 감지 (모델명이 ocr-로 시작하거나 vision 요청)
         is_ocr_model = model_name.startswith("ocr-")
         is_vision, image_base64, text_prompt = self._is_vision_request(messages)
 
@@ -2559,7 +2493,6 @@ class PrometheusRouter(CustomLLM):
 
             device_group = DEVICE_GROUP_MAP.get(target_provider, "npu")
 
-            # V7.5: SETNX 기반 원자적 잠금 - 대기 루프
             lock_id = None
             wait_start = time.time()
             max_wait = 300.0  # OCR은 5분
@@ -2578,7 +2511,6 @@ class PrometheusRouter(CustomLLM):
                 gpu_client = get_async_gpu_stream_client()
 
                 if image_base64:
-                    # V7.0: Redis Stream을 통한 OCR 요청 (비동기)
                     image_data = base64.b64decode(image_base64)
                     result = await gpu_client.request_ocr(
                         image_data=image_data,
@@ -2618,7 +2550,6 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] OCR acompletion failed: {e}")
                 raise
             finally:
-                # V7.5: SETNX 기반 잠금 해제
                 if lock_id:
                     await release_device_lock_async(device_group, lock_id)
                 await decrement_active_count(target_provider)
@@ -2626,10 +2557,8 @@ class PrometheusRouter(CustomLLM):
         # 일반 LLM 요청
         # Tier 정보 추출 (model_name이 tier-로 시작하면 해당 tier 사용)
         tier = model_name if model_name.startswith("tier-") else None
-        # V7.6: Provider 선택 - 잠금이 이미 획득될 수 있음
         result = await select_provider_async(task_type="chat", skip_signal=True, tier=tier)
 
-        # V7.6: 반환값이 5개(lock_id 포함)인지 3개인지 확인
         if len(result) == 5:
             api_base, _, provider_key, device_group, lock_id = result
         else:
@@ -2648,7 +2577,6 @@ class PrometheusRouter(CustomLLM):
 
         logger.info(f"[PrometheusRouter V7.6] Routing to {target_provider} via Redis Stream, model={requested_model_name}, tier={tier}, lock_id={lock_id[:8] if lock_id else 'None'}...")
 
-        # V7.6: lock_id가 없으면 직접 획득 시도
         lock_acquired_here = False
         if not lock_id:
             logger.info(f"[PrometheusRouter V7.6] Attempting to acquire {device_group.upper()} lock...")
@@ -2703,13 +2631,12 @@ class PrometheusRouter(CustomLLM):
             logger.error(f"[PrometheusRouter V7.6] acompletion failed: {e}")
             raise
         finally:
-            # V7.6: 잠금 해제 (select_provider에서 받은 것이든 직접 획득한 것이든)
             if lock_id:
                 await release_device_lock_async(device_group, lock_id)
             await decrement_active_count(target_provider)
 
     async def astreaming(self, *args, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
-        """비동기 스트리밍 - V7.4 Redis Stream 기반 (실시간 스트리밍)."""
+        """비동기 스트리밍"""
         start_ts = time.time()
 
         # model parameter extraction for logging
@@ -2736,10 +2663,8 @@ class PrometheusRouter(CustomLLM):
         # Tier 정보 추출 (model_name이 tier-로 시작하면 해당 tier 사용)
         tier = raw_model_name if raw_model_name.startswith("tier-") else None
 
-        # V7.6: Provider 선택 - 잠금이 이미 획득될 수 있음
         result = await select_provider_async(task_type="chat", skip_signal=True, tier=tier)
 
-        # V7.6: 반환값이 5개(lock_id 포함)인지 3개인지 확인
         if len(result) == 5:
             api_base, _, provider_key, device_group, lock_id = result
         else:
@@ -2753,13 +2678,11 @@ class PrometheusRouter(CustomLLM):
         if device_group is None:
             device_group = DEVICE_GROUP_MAP.get(target_provider, "npu")
 
-        # V8.0: Tier-based routing - 티어명을 실제 모델명으로 변환
         requested_model_name = resolve_tier_to_model(raw_model_name)
 
         selection_latency = time.time() - start_ts
         logger.debug(f"{get_log_prefix()} [PrometheusRouter V8.0] Provider: {target_provider}, model={requested_model_name}, tier={tier}, lock_id={lock_id[:8] if lock_id else 'None'}... (Latency: {selection_latency:.3f}s)")
 
-        # V7.6: lock_id가 없으면 직접 획득 시도
         lock_acquired_here = False
         if not lock_id:
             logger.info(f"{get_log_prefix()} [PrometheusRouter V7.6] Streaming: Attempting to acquire {device_group.upper()} lock...")
@@ -2827,15 +2750,12 @@ class PrometheusRouter(CustomLLM):
             logger.error(f"{get_log_prefix()} [PrometheusRouter V7.6] Request FAILED: {model} (Total: {total_duration:.3f}s, Error: {e})")
             raise
         finally:
-            # V7.6: 잠금 해제 (select_provider에서 받은 것이든 직접 획득한 것이든)
             if lock_id:
                 await release_device_lock_async(device_group, lock_id)
             await decrement_active_count(target_provider)
 
     async def transcription(self, *args, **kwargs) -> ModelResponse:
-        """Audio Transcription - V6.6 Redis Stream 기반.
-
-        Architecture V6.6:
+        """Audio Transcription
         - HTTP 직접 통신 대신 Redis Stream을 통해 Provider Manager로 요청
         - Provider Manager가 Host에서 localhost로 GPU 서버 접근
         - Docker Desktop 크래시 방지
@@ -2882,7 +2802,6 @@ class PrometheusRouter(CustomLLM):
                 target_provider = "diarization-server"
                 device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
 
-                # V7.5: SETNX 기반 원자적 잠금 - 대기 루프
                 lock_id = None
                 wait_start = time.time()
                 max_wait = 3600.0  # 1시간
@@ -2916,7 +2835,6 @@ class PrometheusRouter(CustomLLM):
                     logger.error(f"[PrometheusRouter V7.5] Diarization Error: {e}")
                     raise e
                 finally:
-                    # V7.5: SETNX 기반 잠금 해제
                     if lock_id:
                         await release_device_lock_async(device_group, lock_id)
                     await decrement_active_count(target_provider)
@@ -2947,7 +2865,6 @@ class PrometheusRouter(CustomLLM):
 
             device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
 
-            # V7.5: SETNX 기반 원자적 잠금 - 대기 루프
             lock_id = None
             wait_start = time.time()
             max_wait = 3600.0  # 1시간
@@ -2996,7 +2913,6 @@ class PrometheusRouter(CustomLLM):
                 if is_speed_mode:
                     logger.warning(f"[PrometheusRouter V7.5] NPU failed: {e}. Trying Fallback to whisper-cpp...")
 
-                    # V7.5: NPU 잠금 해제
                     if lock_id:
                         await release_device_lock_async(device_group, lock_id)
                     await decrement_active_count("flm")
@@ -3004,7 +2920,6 @@ class PrometheusRouter(CustomLLM):
                     target_provider = "whisper-cpp"
                     fallback_device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
 
-                    # V7.5: GPU 잠금 획득 (Fallback)
                     fallback_lock_id = None
                     wait_start = time.time()
                     while time.time() - wait_start < max_wait:
@@ -3048,7 +2963,6 @@ class PrometheusRouter(CustomLLM):
                     logger.error(f"[PrometheusRouter V7.5] Transcription failed: {e}")
                     raise e
             finally:
-                # V7.5: 잠금 해제 (Fallback이 아닌 경우에만)
                 if not is_speed_mode or 'fallback_lock_id' not in dir():
                     if lock_id:
                         await release_device_lock_async(device_group, lock_id)
