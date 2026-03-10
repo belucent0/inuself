@@ -177,14 +177,10 @@ DEVICE_GROUP_MAP = {
 
 
 # ==========================================
-# V7.5: Redis 분산 잠금 (redis-py Lock 기반)
-# redis-py Lock이 SETNX + Lua 원자적 해제 + TTL을 내부적으로 처리한다.
+# V7.6: Redis 분산 잠금 (redis-py Lock 기반, stateless custom token)
+# acquire 시 lock_id를 custom token으로 전달 → Redis value = lock_id UUID
+# release 시 Lock 객체를 재구성하여 token 주입 → dict 없이 stateless
 # ==========================================
-
-# 활성 잠금 저장소: lock_id → Lock 객체 (동기/비동기 각각)
-_sync_locks: dict[str, Any] = {}
-_async_locks: dict[str, Any] = {}
-
 
 async def acquire_device_lock_async(
     device: str,
@@ -210,9 +206,8 @@ async def acquire_device_lock_async(
 
     try:
         lock = redis_client_async.lock(key, timeout=timeout, blocking=False)
-        acquired = await lock.acquire()
+        acquired = await lock.acquire(token=lock_id.encode())
         if acquired:
-            _async_locks[lock_id] = lock
             logger.info(f"[Lock] {device.upper()} acquired: {key} (lock_id={lock_id[:8]}...)")
             return lock_id
         else:
@@ -236,10 +231,9 @@ async def release_device_lock_async(device: str, lock_id: str) -> bool:
     if not redis_client_async or not lock_id:
         return True
 
-    lock = _async_locks.pop(lock_id, None)
-    if not lock:
-        logger.warning(f"[Lock] {device.upper()} release skipped (not found): lock_id={lock_id[:8]}...")
-        return False
+    key = f"worker:{device}:active"
+    lock = redis_client_async.lock(key, thread_local=False)
+    lock.local.token = lock_id.encode()
 
     try:
         await lock.release()
@@ -274,9 +268,8 @@ def acquire_device_lock_sync(
 
     try:
         lock = redis_client_sync.lock(key, timeout=timeout, blocking=False)
-        acquired = lock.acquire()
+        acquired = lock.acquire(token=lock_id.encode())
         if acquired:
-            _sync_locks[lock_id] = lock
             logger.info(f"[Lock] {device.upper()} acquired: {key} (lock_id={lock_id[:8]}...)")
             return lock_id
         else:
@@ -300,10 +293,9 @@ def release_device_lock_sync(device: str, lock_id: str) -> bool:
     if not redis_client_sync or not lock_id:
         return True
 
-    lock = _sync_locks.pop(lock_id, None)
-    if not lock:
-        logger.warning(f"[Lock] {device.upper()} release skipped (not found): lock_id={lock_id[:8]}...")
-        return False
+    key = f"worker:{device}:active"
+    lock = redis_client_sync.lock(key, thread_local=False)
+    lock.local.token = lock_id.encode()
 
     try:
         lock.release()
