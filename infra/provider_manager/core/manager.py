@@ -451,19 +451,16 @@ class ProviderManager:
     # Redis Connection & Status Publishing
     # ==========================================
 
-    async def _ensure_redis(self) -> aioredis.Redis:
-        """Redis 연결 확보."""
-        if self.redis is None:
-            self.redis = aioredis.from_url(
-                settings.redis_url,
-                decode_responses=True
-            )
-        return self.redis
+    async def _ensure_redis(self) -> Optional[aioredis.Redis]:
+        """Redis 클라이언트 반환 (외부 주입, 없으면 None)."""
+        return self.redis  # RedisConnectionManager 콜백에서 설정됨
 
     async def _publish_status(self, provider_name: str, state: ProviderState) -> None:
         """프로바이더 상태를 Redis Hash에 발행."""
+        if self.redis is None:
+            return  # Redis 미연결 시 skip
         try:
-            redis = await self._ensure_redis()
+            redis = self.redis
             status_data = {
                 "status": state.status.value,
                 "last_check": state.last_check.isoformat() if state.last_check else "",
