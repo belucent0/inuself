@@ -7,10 +7,12 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
 
 from services.provider_service import ProviderService
+from services.redis_manager import get_redis_manager
 from models.schemas import (
     StatusResponse,
     OperationResponse,
     HealthResponse,
+    ServiceHealthItem,
     GroupStatusItem,
     ProviderStatusItem,
     AllProcessesResponse,
@@ -23,8 +25,14 @@ router = APIRouter(tags=["Status"])
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
-    """API 서버 헬스체크."""
-    return HealthResponse(status="healthy")
+    """API 서버 헬스체크 — Redis 실제 연결 상태 반영."""
+    redis_mgr = get_redis_manager()
+    redis_status = "healthy" if redis_mgr and redis_mgr.is_connected else "connecting"
+    overall = "healthy" if redis_status == "healthy" else "degraded"
+    return HealthResponse(
+        status=overall,
+        services={"redis": ServiceHealthItem(status=redis_status)},
+    )
 
 
 @router.get("/status", response_model=StatusResponse)

@@ -82,9 +82,9 @@ module.exports = {
         OTEL_TRACES_EXPORTER: 'otlp',
       },
       autorestart: true,
-      max_restarts: 3,          // 최대 3번만 재시작 (crash loop 방지)
-      min_uptime: '30s',        // 30초 이상 실행되어야 안정으로 판단
-      restart_delay: 10000,     // 재시작 전 대기 (10초)
+      max_restarts: 3,
+      min_uptime: '30s',               // 30초 이상 실행되어야 안정으로 판단
+      restart_delay: 10000,
       kill_timeout: 15000,      // 종료 대기 (15초) - graceful shutdown 시간 확보
       treekill: true,           // 모든 자식 프로세스도 종료 (Windows)
       wait_ready: false,
