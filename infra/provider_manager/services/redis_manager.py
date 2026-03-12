@@ -140,6 +140,7 @@ class RedisConnectionManager:
                 logger.info("RedisConnectionManager: connected to Redis")
 
                 # on_ready 콜백 실행 (OCP — 외부 컴포넌트 초기화)
+                callback_failed = False
                 for callback in self._callbacks:
                     try:
                         result = callback(self._redis)
@@ -147,6 +148,15 @@ class RedisConnectionManager:
                             await result
                     except Exception as e:
                         logger.error(f"RedisConnectionManager: on_ready callback error: {e}")
+                        callback_failed = True
+                        break
+
+                if callback_failed:
+                    self._state = RedisState.DISCONNECTED
+                    self._ready_event.clear()
+                    logger.warning("RedisConnectionManager: callback failed, retrying connection")
+                    await asyncio.sleep(base_delay)
+                    continue
 
                 # 헬스체크 루프 (10초마다 ping)
                 while True:
