@@ -139,6 +139,11 @@ PROVIDER_HEALTH_URLS = {
 # GPU 세마포어 키 (Worker와 동일)
 GPU_SEMAPHORE_KEY = "worker:gpu:active"
 
+# 잠금 TTL (작업 유형별, 각 경로의 request timeout보다 길게 설정)
+LOCK_TTL_LLM = 700      # 12분 (LLM 채팅/요약 request timeout=600s + 여유)
+LOCK_TTL_ASR = 600      # 10분 (ASR+Diarization 대용량 오디오 최대 5분)
+LOCK_TTL_DEFAULT = 700  # 12분 (기본값: LLM 경로 기준)
+
 # Redis 클라이언트 (Connection Pool 사용)
 try:
     redis_client_sync = redis.from_url(REDIS_URL, decode_responses=True)
@@ -171,7 +176,7 @@ DEVICE_GROUP_MAP = {
 async def acquire_device_lock_async(
     device: str,
     lock_id: str | None = None,
-    timeout: int = 3600
+    timeout: int = LOCK_TTL_DEFAULT
 ) -> str | None:
     """디바이스 잠금 획득 (비동기).
 
@@ -233,7 +238,7 @@ async def release_device_lock_async(device: str, lock_id: str) -> bool:
 def acquire_device_lock_sync(
     device: str,
     lock_id: str | None = None,
-    timeout: int = 3600
+    timeout: int = LOCK_TTL_DEFAULT
 ) -> str | None:
     """디바이스 잠금 획득 (동기).
 
@@ -1967,7 +1972,7 @@ class PrometheusRouter(CustomLLM):
                 wait_start = time.time()
                 max_wait = 3600.0  # 1시간
                 while time.time() - wait_start < max_wait:
-                    lock_id = acquire_device_lock_sync(device_group)
+                    lock_id = acquire_device_lock_sync(device_group, timeout=LOCK_TTL_ASR)
                     if lock_id:
                         lock_acquired_here = True
                         break
@@ -2022,7 +2027,7 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] ASR completion failed: {e}")
                 raise
             finally:
-                if lock_acquired_here and lock_id:
+                if lock_id:
                     release_device_lock_sync(device_group, lock_id)
                 decrement_active_count_sync(target_provider)
 
@@ -2053,7 +2058,7 @@ class PrometheusRouter(CustomLLM):
                 wait_start = time.time()
                 max_wait = 3600.0  # 1시간
                 while time.time() - wait_start < max_wait:
-                    lock_id = acquire_device_lock_sync(device_group)
+                    lock_id = acquire_device_lock_sync(device_group, timeout=LOCK_TTL_ASR)
                     if lock_id:
                         lock_acquired_here = True
                         break
@@ -2107,7 +2112,7 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] Diarization completion failed: {e}")
                 raise
             finally:
-                if lock_acquired_here and lock_id:
+                if lock_id:
                     release_device_lock_sync(device_group, lock_id)
                 decrement_active_count_sync(target_provider)
 
@@ -2329,7 +2334,7 @@ class PrometheusRouter(CustomLLM):
                 wait_start = time.time()
                 max_wait = 3600.0  # 1시간
                 while time.time() - wait_start < max_wait:
-                    lock_id = await acquire_device_lock_async(device_group)
+                    lock_id = await acquire_device_lock_async(device_group, timeout=LOCK_TTL_ASR)
                     if lock_id:
                         lock_acquired_here = True
                         break
@@ -2383,7 +2388,7 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] ASR acompletion failed: {e}")
                 raise
             finally:
-                if lock_acquired_here and lock_id:
+                if lock_id:
                     await release_device_lock_async(device_group, lock_id)
                 await decrement_active_count(target_provider)
 
@@ -2414,7 +2419,7 @@ class PrometheusRouter(CustomLLM):
                 wait_start = time.time()
                 max_wait = 3600.0  # 1시간
                 while time.time() - wait_start < max_wait:
-                    lock_id = await acquire_device_lock_async(device_group)
+                    lock_id = await acquire_device_lock_async(device_group, timeout=LOCK_TTL_ASR)
                     if lock_id:
                         lock_acquired_here = True
                         break
@@ -2468,7 +2473,7 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] Diarization acompletion failed: {e}")
                 raise
             finally:
-                if lock_acquired_here and lock_id:
+                if lock_id:
                     await release_device_lock_async(device_group, lock_id)
                 await decrement_active_count(target_provider)
 
@@ -2806,7 +2811,7 @@ class PrometheusRouter(CustomLLM):
                 wait_start = time.time()
                 max_wait = 3600.0  # 1시간
                 while time.time() - wait_start < max_wait:
-                    lock_id = await acquire_device_lock_async(device_group)
+                    lock_id = await acquire_device_lock_async(device_group, timeout=LOCK_TTL_ASR)
                     if lock_id:
                         break
                     await asyncio.sleep(0.5)
@@ -2869,7 +2874,7 @@ class PrometheusRouter(CustomLLM):
             wait_start = time.time()
             max_wait = 3600.0  # 1시간
             while time.time() - wait_start < max_wait:
-                lock_id = await acquire_device_lock_async(device_group)
+                lock_id = await acquire_device_lock_async(device_group, timeout=LOCK_TTL_ASR)
                 if lock_id:
                     break
                 await asyncio.sleep(0.5)
@@ -2880,6 +2885,7 @@ class PrometheusRouter(CustomLLM):
             # 활성 카운트 증가
             await increment_active_count(target_provider)
 
+            fallback_used = False
             try:
                 # Redis Stream을 통한 Transcription 요청
                 language = data.get("language", "ko")
@@ -2912,6 +2918,7 @@ class PrometheusRouter(CustomLLM):
                 # Fallback 로직 (Speed 모드에서 NPU 실패 시 -> GPU Whisper.cpp)
                 if is_speed_mode:
                     logger.warning(f"[PrometheusRouter V7.5] NPU failed: {e}. Trying Fallback to whisper-cpp...")
+                    fallback_used = True
 
                     if lock_id:
                         await release_device_lock_async(device_group, lock_id)
@@ -2923,7 +2930,7 @@ class PrometheusRouter(CustomLLM):
                     fallback_lock_id = None
                     wait_start = time.time()
                     while time.time() - wait_start < max_wait:
-                        fallback_lock_id = await acquire_device_lock_async(fallback_device_group)
+                        fallback_lock_id = await acquire_device_lock_async(fallback_device_group, timeout=LOCK_TTL_ASR)
                         if fallback_lock_id:
                             break
                         await asyncio.sleep(0.5)
@@ -2963,7 +2970,7 @@ class PrometheusRouter(CustomLLM):
                     logger.error(f"[PrometheusRouter V7.5] Transcription failed: {e}")
                     raise e
             finally:
-                if not is_speed_mode or 'fallback_lock_id' not in dir():
+                if not is_speed_mode or not fallback_used:
                     if lock_id:
                         await release_device_lock_async(device_group, lock_id)
                     await decrement_active_count(target_provider)
