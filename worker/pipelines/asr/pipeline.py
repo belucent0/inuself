@@ -27,6 +27,9 @@ from .litellm_audio_client import (
     DiarizationAnnotationWrapper,
     acquire_gpu_lock,
     release_gpu_lock,
+    start_lock_heartbeat,
+    stop_lock_heartbeat,
+    LOCK_TTL_ASR,
 )
 
 
@@ -175,11 +178,15 @@ def _run_case4_parallel_processing(
     # V7.5: ASR+Diarization 묶음 잠금 획득 (Worker측에서 한 번만)
     # 두 작업이 동일한 lock_id를 공유하여 LiteLLM에서 재획득 스킵
     print(f"\n[Parallel] Acquiring GPU lock for ASR+Diarization bundle...")
-    lock_id = acquire_gpu_lock(timeout=3600, max_wait=3600.0)
+    lock_id = acquire_gpu_lock(timeout=LOCK_TTL_ASR, max_wait=3600.0)
     if lock_id:
         print(f"[Parallel] GPU lock acquired: {lock_id[:8]}...")
     else:
         print(f"[Parallel] Warning: GPU lock failed, proceeding without lock")
+
+    heartbeat = None
+    if lock_id:
+        heartbeat = start_lock_heartbeat(lock_id, LOCK_TTL_ASR)
 
     def run_asr():
         """ASR 작업 실행 (OpenTelemetry context 복원)."""
@@ -246,7 +253,8 @@ def _run_case4_parallel_processing(
                 diarization_params = {}
                 diarization_fallback_used = True
     finally:
-        # V7.5: ASR+Diarization 완료 후 잠금 해제
+        # Heartbeat 중지 후 잠금 해제
+        stop_lock_heartbeat(heartbeat)
         if lock_id:
             released = release_gpu_lock(lock_id)
             if released:

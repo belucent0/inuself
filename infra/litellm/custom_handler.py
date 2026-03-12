@@ -16,6 +16,7 @@ OCR 라우팅:
 import os
 import json
 import logging
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -141,7 +142,7 @@ GPU_SEMAPHORE_KEY = "worker:gpu:active"
 
 # 잠금 TTL (작업 유형별, 각 경로의 request timeout보다 길게 설정)
 LOCK_TTL_LLM = 700      # 12분 (LLM 채팅/요약 request timeout=600s + 여유)
-LOCK_TTL_ASR = 600      # 10분 (ASR+Diarization 대용량 오디오 최대 5분)
+LOCK_TTL_ASR = 600      # 10분 (heartbeat로 자동 갱신)
 LOCK_TTL_DEFAULT = 700  # 12분 (기본값: LLM 경로 기준)
 
 # Redis 클라이언트 (Connection Pool 사용)
@@ -295,6 +296,44 @@ def release_device_lock_sync(device: str, lock_id: str) -> bool:
     except Exception as e:
         logger.error(f"[Lock] Failed to release {device}: {e}")
         return False
+
+
+def start_lock_heartbeat(
+    redis_client, key: str, lock_id: str, ttl: int
+) -> threading.Event:
+    """Lock TTL을 주기적으로 갱신하는 백그라운드 스레드 시작.
+
+    Args:
+        redis_client: sync Redis 클라이언트
+        key: Lock 키 (e.g. "worker:gpu:active")
+        lock_id: 잠금 토큰 (UUID)
+        ttl: 갱신할 TTL (초)
+    Returns:
+        stop_event: set()하면 스레드 종료
+    """
+    interval = ttl // 2  # TTL의 절반 간격으로 갱신
+    stop_event = threading.Event()
+
+    def _heartbeat():
+        while not stop_event.wait(interval):
+            try:
+                lock = redis_client.lock(key, thread_local=False)
+                lock.local.token = lock_id.encode()
+                lock.extend(ttl, replace_ttl=True)
+                logger.debug(f"[Lock HB] Extended {key} TTL={ttl}s")
+            except Exception as e:
+                logger.warning(f"[Lock HB] Extend failed {key}: {e}")
+                break
+
+    t = threading.Thread(target=_heartbeat, daemon=True)
+    t.start()
+    return stop_event
+
+
+def stop_lock_heartbeat(stop_event: threading.Event | None):
+    """Heartbeat 스레드 중지."""
+    if stop_event:
+        stop_event.set()
 
 
 def get_gpu_device_ids_sync() -> list[str]:
@@ -1983,6 +2022,12 @@ class PrometheusRouter(CustomLLM):
 
             increment_active_count_sync(target_provider)
 
+            heartbeat = None
+            if lock_acquired_here and lock_id:
+                heartbeat = start_lock_heartbeat(
+                    redis_client_sync, f"worker:{device_group}:active", lock_id, LOCK_TTL_ASR
+                )
+
             try:
                 gpu_client = get_gpu_stream_client()
 
@@ -2027,7 +2072,8 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] ASR completion failed: {e}")
                 raise
             finally:
-                if lock_id:
+                stop_lock_heartbeat(heartbeat)
+                if lock_acquired_here and lock_id:
                     release_device_lock_sync(device_group, lock_id)
                 decrement_active_count_sync(target_provider)
 
@@ -2068,6 +2114,12 @@ class PrometheusRouter(CustomLLM):
                     logger.warning(f"[PrometheusRouter V7.5] Diarization lock timeout after {max_wait}s, proceeding without lock")
 
             increment_active_count_sync(target_provider)
+
+            heartbeat = None
+            if lock_acquired_here and lock_id:
+                heartbeat = start_lock_heartbeat(
+                    redis_client_sync, f"worker:{device_group}:active", lock_id, LOCK_TTL_ASR
+                )
 
             try:
                 gpu_client = get_gpu_stream_client()
@@ -2112,7 +2164,8 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] Diarization completion failed: {e}")
                 raise
             finally:
-                if lock_id:
+                stop_lock_heartbeat(heartbeat)
+                if lock_acquired_here and lock_id:
                     release_device_lock_sync(device_group, lock_id)
                 decrement_active_count_sync(target_provider)
 
@@ -2345,6 +2398,12 @@ class PrometheusRouter(CustomLLM):
 
             await increment_active_count(target_provider)
 
+            heartbeat = None
+            if lock_acquired_here and lock_id:
+                heartbeat = start_lock_heartbeat(
+                    redis_client_sync, f"worker:{device_group}:active", lock_id, LOCK_TTL_ASR
+                )
+
             try:
                 gpu_client = get_async_gpu_stream_client()
 
@@ -2388,7 +2447,8 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] ASR acompletion failed: {e}")
                 raise
             finally:
-                if lock_id:
+                stop_lock_heartbeat(heartbeat)
+                if lock_acquired_here and lock_id:
                     await release_device_lock_async(device_group, lock_id)
                 await decrement_active_count(target_provider)
 
@@ -2429,6 +2489,12 @@ class PrometheusRouter(CustomLLM):
                     logger.warning(f"[PrometheusRouter V7.5] Diarization lock timeout after {max_wait}s, proceeding without lock")
 
             await increment_active_count(target_provider)
+
+            heartbeat = None
+            if lock_acquired_here and lock_id:
+                heartbeat = start_lock_heartbeat(
+                    redis_client_sync, f"worker:{device_group}:active", lock_id, LOCK_TTL_ASR
+                )
 
             try:
                 gpu_client = get_async_gpu_stream_client()
@@ -2473,7 +2539,8 @@ class PrometheusRouter(CustomLLM):
                 logger.error(f"[PrometheusRouter V7.5] Diarization acompletion failed: {e}")
                 raise
             finally:
-                if lock_id:
+                stop_lock_heartbeat(heartbeat)
+                if lock_acquired_here and lock_id:
                     await release_device_lock_async(device_group, lock_id)
                 await decrement_active_count(target_provider)
 

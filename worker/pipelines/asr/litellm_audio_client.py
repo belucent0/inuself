@@ -14,6 +14,7 @@ V7.5 변경사항:
 import base64
 import json
 import os
+import threading
 import time
 import uuid
 from enum import Enum
@@ -40,7 +41,7 @@ except Exception as e:
     logger.warning(f"[LiteLLM Client] Redis client init failed: {e}")
     _redis_client = None
 
-# ASR+Diarization 작업 TTL (10분)
+# ASR+Diarization 작업 TTL (10분, heartbeat로 자동 갱신)
 LOCK_TTL_ASR = 600
 
 
@@ -109,6 +110,43 @@ def release_gpu_lock(lock_id: str) -> bool:
     except Exception as e:
         logger.error(f"[Worker Lock] Failed to release GPU: {e}")
         return False
+
+
+def start_lock_heartbeat(lock_id: str, ttl: int = LOCK_TTL_ASR) -> threading.Event | None:
+    """GPU Lock heartbeat 시작 (Worker측).
+
+    Args:
+        lock_id: 잠금 토큰 (UUID)
+        ttl: 갱신할 TTL (초)
+    Returns:
+        stop_event: set()하면 스레드 종료. Redis 없으면 None.
+    """
+    if not _redis_client:
+        return None
+    key = "worker:gpu:active"
+    interval = ttl // 2
+    stop_event = threading.Event()
+
+    def _heartbeat():
+        while not stop_event.wait(interval):
+            try:
+                lock = _redis_client.lock(key, thread_local=False)
+                lock.local.token = lock_id.encode()
+                lock.extend(ttl, replace_ttl=True)
+                logger.debug(f"[Worker Lock HB] Extended TTL={ttl}s")
+            except Exception as e:
+                logger.warning(f"[Worker Lock HB] Extend failed: {e}")
+                break
+
+    t = threading.Thread(target=_heartbeat, daemon=True)
+    t.start()
+    return stop_event
+
+
+def stop_lock_heartbeat(stop_event: threading.Event | None):
+    """Heartbeat 스레드 중지."""
+    if stop_event:
+        stop_event.set()
 
 
 class ASRProvider(Enum):
