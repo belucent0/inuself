@@ -2,7 +2,8 @@
  * HTTP Client - 공통 API 요청 처리
  */
 
-import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from '../authToken'
+import { getAccessToken } from '../authToken'
+import { tokenManager } from '../tokenManager'
 
 export interface RequestConfig {
   headers?: Record<string, string>
@@ -16,11 +17,6 @@ export interface ApiError extends Error {
   status: number
   statusText: string
   data?: unknown
-}
-
-interface RefreshResponse {
-  access_token: string
-  refresh_token: string
 }
 
 /**
@@ -77,34 +73,6 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json()
 }
 
-async function refreshAccessToken(): Promise<boolean> {
-  const refreshToken = getRefreshToken()
-  if (!refreshToken) {
-    return false
-  }
-
-  const response = await fetch(resolveUrl('/auth/refresh'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  })
-
-  if (!response.ok) {
-    clearAuthTokens()
-    return false
-  }
-
-  const data = (await response.json()) as RefreshResponse
-  setAuthTokens({
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-  })
-
-  return true
-}
-
 function createHeaders(config?: RequestConfig): Headers {
   const headers = new Headers({
     'Content-Type': 'application/json',
@@ -142,7 +110,7 @@ async function request<T>(
     config?.retryOnAuthFailure !== false
 
   if (shouldRetry) {
-    const refreshed = await refreshAccessToken()
+    const refreshed = await tokenManager.refreshNow()
     if (refreshed) {
       return request<T>(method, endpoint, data, config, true)
     }
@@ -211,7 +179,7 @@ export async function postStream(
   })
 
   if (response.status === 401 && !retried && !config?.skipAuth && config?.retryOnAuthFailure !== false) {
-    const refreshed = await refreshAccessToken()
+    const refreshed = await tokenManager.refreshNow()
     if (refreshed) {
       return postStream(endpoint, data, config, true)
     }
