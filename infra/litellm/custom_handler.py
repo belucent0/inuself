@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://asr-prometheus:9090")
 REDIS_URL = os.getenv("REDIS_URL", "redis://asr-valkey:6379/0")
 
-PROVIDER_MANAGER_URL = os.getenv("PROVIDER_MANAGER_URL", "http://host.docker.internal:9999")
+PROVIDER_MANAGER_URL = os.getenv("PROVIDER_MANAGER_URL", "http://host.docker.internal:9998")
 
 # GPU Services: Always-On - No start/stop control needed
 GPU_SERVICES = {"llama", "whisper-cpp", "insanely-fast", "diarization-server"}
@@ -1273,6 +1273,66 @@ async def send_provider_control_signal(provider: str, action: str = "start"):
         logger.warning(f"[CustomRouter] Provider Manager request failed: {e}")
 
 
+async def _get_provider_status(provider_name: str) -> str:
+    """Redis providers:status 해시에서 프로바이더 상태 조회."""
+    if not redis_client_async:
+        return "unknown"
+    try:
+        status_json = await redis_client_async.hget("providers:status", provider_name)
+        if status_json:
+            status_data = json.loads(status_json)
+            return status_data.get("status", "unknown")
+        return "unknown"
+    except Exception as e:
+        logger.warning(f"[On-Demand] Failed to get provider status: {e}")
+        return "unknown"
+
+
+async def ensure_provider_ready_via_api(provider_name: str, timeout: float = 120.0) -> bool:
+    """On-Demand 프로바이더가 준비될 때까지 대기 (필요시 Provider Manager API로 로드 요청).
+
+    Args:
+        provider_name: 프로바이더 이름 (e.g., "whisper-server")
+        timeout: 최대 대기 시간 (초)
+
+    Returns:
+        준비 완료 여부
+    """
+    # 1. 현재 상태 확인 → "up"이면 즉시 반환
+    current_status = await _get_provider_status(provider_name)
+    if current_status == "up":
+        return True
+
+    # 2. "down"/"cooldown"/"unknown"이면 Provider Manager에 로드 요청
+    if current_status in ("down", "cooldown", "unknown"):
+        logger.info(f"[On-Demand] Loading {provider_name} (current: {current_status})...")
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(f"{PROVIDER_MANAGER_URL}/providers/{provider_name}/load")
+                if resp.status_code == 200:
+                    logger.info(f"[On-Demand] Load request accepted for {provider_name}")
+                else:
+                    logger.warning(f"[On-Demand] Load request failed: {resp.status_code} - {resp.text}")
+                    return False
+        except Exception as e:
+            logger.error(f"[On-Demand] Failed to request provider load: {e}")
+            return False
+
+    # 3. polling: "up" 될 때까지 대기
+    loop = asyncio.get_running_loop()
+    start_time = loop.time()
+    while loop.time() - start_time < timeout:
+        status = await _get_provider_status(provider_name)
+        if status == "up":
+            elapsed = loop.time() - start_time
+            logger.info(f"[On-Demand] {provider_name} is ready (waited {elapsed:.1f}s)")
+            return True
+        await asyncio.sleep(2)
+
+    logger.error(f"[On-Demand] {provider_name} failed to become ready within {timeout}s")
+    return False
+
+
 async def increment_active_count(provider: str):
     """Provider 활성 요청 카운트 증가 (비동기).
 
@@ -2359,20 +2419,11 @@ class PrometheusRouter(CustomLLM):
 
             _status_key = PROVIDER_REDIS_STATUS_KEY.get(target_provider)
             if _status_key:
-                try:
-                    _status_json = await redis_client_async.hget("providers:status", _status_key)
-                    if _status_json:
-                        _status = json.loads(_status_json)
-                        if _status.get("status") != "up":
-                            raise RuntimeError(
-                                f"ASR provider '{_status_key}' is currently '{_status.get('status', 'unknown')}'. "
-                                f"Please check Provider Manager at port 9998."
-                            )
-                        logger.info(f"[PrometheusRouter V7.5] Provider '{_status_key}' is UP, proceeding")
-                except RuntimeError:
-                    raise
-                except Exception as _e:
-                    logger.warning(f"[PrometheusRouter V7.5] Provider status check failed: {_e}, proceeding anyway")
+                if not await ensure_provider_ready_via_api(_status_key, timeout=120.0):
+                    raise RuntimeError(
+                        f"ASR provider '{_status_key}' failed to start within timeout."
+                    )
+                logger.info(f"[PrometheusRouter V7.5] Provider '{_status_key}' is ready")
 
             worker_lock_id = extra_body.get("lock_id")
             lock_id = None
@@ -2465,6 +2516,14 @@ class PrometheusRouter(CustomLLM):
 
             target_provider = "diarization-server"  # pyannote diarization provider
             device_group = DEVICE_GROUP_MAP.get(target_provider, "gpu")
+
+            _status_key = PROVIDER_REDIS_STATUS_KEY.get(target_provider)
+            if _status_key:
+                if not await ensure_provider_ready_via_api(_status_key, timeout=120.0):
+                    raise RuntimeError(
+                        f"Diarization provider '{_status_key}' failed to start within timeout."
+                    )
+                logger.info(f"[PrometheusRouter V7.5] Diarization provider '{_status_key}' is ready")
 
             worker_lock_id = extra_body.get("lock_id")
             lock_id = None
