@@ -331,7 +331,8 @@ async def run_combined(api_port: int = 9998):
     import uvicorn
     from uvicorn import Config, Server
     import httpx
-    import redis.asyncio as redis_async
+
+    from services.redis_manager import RedisConnectionManager
 
     global provider_manager, stream_processor, idle_manager, _running_combined
 
@@ -408,89 +409,79 @@ async def run_combined(api_port: int = 9998):
     # 병렬 실행
     api_task = asyncio.create_task(server.serve())
 
-    # Redis 연결
-    stream_processor.redis = redis_async.from_url(settings.redis_url, decode_responses=True)
-    stream_processor.http_client = httpx.AsyncClient(timeout=settings.default_timeout)
-
-    # JobTracker 초기화
-    from services.job_tracker import JobTracker
-    stream_processor.job_tracker = JobTracker(stream_processor.redis)
-    logger.info("JobTracker initialized")
-
-    # ProviderService 초기화 (HTTP API에서 사용)
-    provider_service = ProviderService(provider_manager, stream_processor.job_tracker)
-    set_service(provider_service)
-    logger.info("ProviderService initialized")
-
-    # Redis가 준비될 때까지 대기 (BusyLoadingError 처리)
-    max_retries = 30
-    for attempt in range(max_retries):
-        try:
-            await stream_processor.redis.ping()
-            logger.info("Redis connection ready")
-            break
-        except Exception as e:
-            if "loading" in str(e).lower() or "LOADING" in str(e):
-                logger.warning(f"Redis is loading dataset, waiting... (attempt {attempt + 1}/{max_retries})")
-                await asyncio.sleep(1)
-            else:
-                raise
-    else:
-        raise RuntimeError("Redis failed to become ready after maximum retries")
-
-    # 모든 GPU 작업 스트림에 Consumer Group 생성
+    # GPU 스트림 목록 구성 (설정 기반, Redis 불필요)
     gpu_streams = [
         settings.request_stream,  # legacy stream (chat)
         settings.media_request_stream,  # audio/vision (ASR, OCR)
         settings.chat_request_stream,  # chat completions
         settings.recap_request_stream,  # summaries
     ]
-    # 중복 제거
     gpu_streams = list(dict.fromkeys(gpu_streams))
 
-    for stream in gpu_streams:
+    streams_to_listen = {stream: ">" for stream in gpu_streams}
+    streams_to_listen[settings.control_request_stream] = ">"
+
+    # ==========================================
+    # RedisConnectionManager (background, non-blocking)
+    # ==========================================
+    redis_manager = RedisConnectionManager(settings.redis_url)
+
+    async def _on_redis_ready(redis_client):
+        """Redis 연결 성공 시 콜백 — 의존 컴포넌트 초기화 (DIP)."""
+        stream_processor.redis = redis_client
+        stream_processor.http_client = httpx.AsyncClient(timeout=settings.default_timeout)
+        provider_manager.redis = redis_client
+
+        from services.job_tracker import JobTracker
+        stream_processor.job_tracker = JobTracker(redis_client)
+        logger.info("JobTracker initialized")
+
+        provider_service = ProviderService(provider_manager, stream_processor.job_tracker)
+        set_service(provider_service)
+        logger.info("ProviderService initialized")
+
+        # Consumer Group 생성
+        for stream in gpu_streams:
+            try:
+                await redis_client.xgroup_create(stream, settings.consumer_group, id="0", mkstream=True)
+                logger.info(f"Created consumer group '{settings.consumer_group}' for {stream}")
+            except Exception as e:
+                if "BUSYGROUP" not in str(e):
+                    raise
+                logger.info(f"Consumer group '{settings.consumer_group}' already exists for {stream}")
+
         try:
-            await stream_processor.redis.xgroup_create(
-                stream,
-                settings.consumer_group,
-                id="0",
-                mkstream=True
+            await redis_client.xgroup_create(
+                settings.control_request_stream, settings.consumer_group, id="0", mkstream=True
             )
-            logger.info(f"Created consumer group '{settings.consumer_group}' for {stream}")
+            logger.info(f"Created consumer group '{settings.consumer_group}' for {settings.control_request_stream}")
         except Exception as e:
             if "BUSYGROUP" not in str(e):
                 raise
-            logger.info(f"Consumer group '{settings.consumer_group}' already exists for {stream}")
+            logger.info(f"Consumer group '{settings.consumer_group}' already exists for {settings.control_request_stream}")
 
-    # Control API Consumer Group 생성 (동일한 consumer_group 사용 - xreadgroup에서 함께 읽기 위해)
-    try:
-        await stream_processor.redis.xgroup_create(
-            settings.control_request_stream,
-            settings.consumer_group,  # gpu-workers (xreadgroup과 동일한 그룹)
-            id="0",
-            mkstream=True
-        )
-        logger.info(f"Created consumer group '{settings.consumer_group}' for {settings.control_request_stream}")
-    except Exception as e:
-        if "BUSYGROUP" not in str(e):
-            raise
-        logger.info(f"Consumer group '{settings.consumer_group}' already exists for {settings.control_request_stream}")
+        logger.info("Consumer groups ready — stream processing will begin")
+        logger.info(f"  GPU Streams: {', '.join(gpu_streams)}")
+        logger.info(f"  Control Stream: {settings.control_request_stream}")
+
+    redis_manager.on_ready(_on_redis_ready)
+    await redis_manager.start()  # background task, non-blocking
 
     logger.info(f"Provider Manager started. API: http://0.0.0.0:{api_port}")
-    logger.info(f"  GPU Streams: {', '.join(gpu_streams)}")
-    logger.info(f"  Control Stream: {settings.control_request_stream}")
+    logger.info("Waiting for Redis connection in background...")
 
     # Stale job cleanup 주기 (5분마다)
     last_cleanup_time = time.time()
     CLEANUP_INTERVAL = 300  # 5분
     STALE_JOB_MAX_AGE = settings.default_timeout + 300  # timeout + 5분
 
-    # 모든 GPU 스트림을 위한 streams_to_listen 구성
-    streams_to_listen = {stream: ">" for stream in gpu_streams}
-    streams_to_listen[settings.control_request_stream] = ">"
-
     # Stream 처리 루프 (양쪽 스트림 동시 처리)
     while stream_processor.is_running:
+        # Redis 미연결 시 gracefully 대기
+        if not redis_manager.is_connected:
+            await asyncio.sleep(1)
+            continue
+
         try:
             messages = await stream_processor.redis.xreadgroup(
                 settings.consumer_group,
@@ -570,8 +561,8 @@ async def run_combined(api_port: int = 9998):
 
     if stream_processor.http_client:
         await stream_processor.http_client.aclose()
-    if stream_processor.redis:
-        await stream_processor.redis.aclose()
+
+    await redis_manager.close()
 
     api_task.cancel()
     logger.info("Provider Manager stopped.")

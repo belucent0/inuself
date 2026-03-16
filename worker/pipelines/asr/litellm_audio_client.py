@@ -14,6 +14,7 @@ V7.5 변경사항:
 import base64
 import json
 import os
+import threading
 import time
 import uuid
 from enum import Enum
@@ -35,29 +36,23 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://valkey:6379/0")
 
 # Redis 클라이언트 (Worker측 잠금용)
 try:
-    _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+    _redis_client = redis.from_url(REDIS_URL, decode_responses=False)
 except Exception as e:
     logger.warning(f"[LiteLLM Client] Redis client init failed: {e}")
     _redis_client = None
 
-# Lua 스크립트: 원자적 잠금 해제 (본인 lock_id만 삭제)
-RELEASE_LOCK_SCRIPT = """
-if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-else
-    return 0
-end
-"""
+# ASR+Diarization 작업 TTL (10분, heartbeat로 자동 갱신)
+LOCK_TTL_ASR = 600
 
 
-def acquire_gpu_lock(timeout: int = 3600, max_wait: float = 3600.0) -> str | None:
-    """GPU 잠금 획득 (Worker측).
+def acquire_gpu_lock(timeout: int = LOCK_TTL_ASR, max_wait: float = 3600.0) -> str | None:
+    """GPU 잠금 획득 (Worker측, redis-py Lock 사용).
 
     ASR+Diarization 묶음 작업 시작 전 호출.
-    잠금 획득 때까지 대기합니다.
+    custom_handler.py의 acquire_device_lock_sync와 동일한 메커니즘.
 
     Args:
-        timeout: 잠금 TTL (초, 기본 1시간)
+        timeout: 잠금 TTL (초, 기본 10분)
         max_wait: 최대 대기 시간 (초, 기본 1시간)
 
     Returns:
@@ -73,8 +68,8 @@ def acquire_gpu_lock(timeout: int = 3600, max_wait: float = 3600.0) -> str | Non
 
     while time.time() - wait_start < max_wait:
         try:
-            # SETNX: 키가 없을 때만 설정 (원자적)
-            acquired = _redis_client.set(key, lock_id, nx=True, ex=timeout)
+            lock = _redis_client.lock(key, timeout=timeout, blocking=False)
+            acquired = lock.acquire(token=lock_id.encode())
             if acquired:
                 logger.info(f"[Worker Lock] GPU acquired: {key} (lock_id={lock_id[:8]}...)")
                 return lock_id
@@ -90,9 +85,10 @@ def acquire_gpu_lock(timeout: int = 3600, max_wait: float = 3600.0) -> str | Non
 
 
 def release_gpu_lock(lock_id: str) -> bool:
-    """GPU 잠금 해제 (Worker측).
+    """GPU 잠금 해제 (Worker측, redis-py Lock 사용).
 
     ASR+Diarization 묶음 작업 완료 후 호출.
+    custom_handler.py의 release_device_lock_sync와 동일한 메커니즘.
 
     Args:
         lock_id: 획득 시 받은 lock_id
@@ -104,18 +100,53 @@ def release_gpu_lock(lock_id: str) -> bool:
         return True
 
     key = "worker:gpu:active"
+    lock = _redis_client.lock(key, thread_local=False)
+    lock.local.token = lock_id.encode()
 
     try:
-        result = _redis_client.eval(RELEASE_LOCK_SCRIPT, 1, key, lock_id)
-        released = result == 1
-        if released:
-            logger.info(f"[Worker Lock] GPU released: {key}")
-        else:
-            logger.warning(f"[Worker Lock] GPU release failed (not owner or expired): {key}")
-        return released
+        lock.release()
+        logger.info(f"[Worker Lock] GPU released: {key}")
+        return True
     except Exception as e:
         logger.error(f"[Worker Lock] Failed to release GPU: {e}")
         return False
+
+
+def start_lock_heartbeat(lock_id: str, ttl: int = LOCK_TTL_ASR) -> threading.Event | None:
+    """GPU Lock heartbeat 시작 (Worker측).
+
+    Args:
+        lock_id: 잠금 토큰 (UUID)
+        ttl: 갱신할 TTL (초)
+    Returns:
+        stop_event: set()하면 스레드 종료. Redis 없으면 None.
+    """
+    if not _redis_client:
+        return None
+    key = "worker:gpu:active"
+    interval = ttl // 2
+    stop_event = threading.Event()
+
+    def _heartbeat():
+        while not stop_event.wait(interval):
+            try:
+                lock = _redis_client.lock(key, thread_local=False)
+                lock.local.token = lock_id.encode()
+                lock.extend(ttl, replace_ttl=True)
+                logger.debug(f"[Worker Lock HB] Extended TTL={ttl}s")
+            except Exception as e:
+                logger.warning(f"[Worker Lock HB] Extend failed: {e}")
+                break
+
+    t = threading.Thread(target=_heartbeat, daemon=True)
+    t.start()
+    return stop_event
+
+
+def stop_lock_heartbeat(stop_event: threading.Event | None):
+    """Heartbeat 스레드 중지."""
+    if stop_event:
+        stop_event.set()
 
 
 class ASRProvider(Enum):

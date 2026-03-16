@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from loguru import logger
@@ -148,8 +149,9 @@ class FallbackHandlerNode:
             return "llm_only"
 
         # 3. 특정 최신 정보가 필요한 경우 명시적 에러
-        current_year = str(datetime.now().year)
-        previous_year = str(datetime.now().year - 1)
+        _kst = ZoneInfo("Asia/Seoul")
+        current_year = str(datetime.now(tz=_kst).year)
+        previous_year = str(datetime.now(tz=_kst).year - 1)
         if any(
             keyword in query
             for keyword in ["최신", "현재", "오늘", "실시간", current_year, previous_year]

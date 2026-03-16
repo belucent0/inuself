@@ -7,6 +7,7 @@
 https://langchain-ai.github.io/langgraph/how-tos/map-reduce/
 """
 
+import time
 from typing import TypedDict, Dict, List, Optional, Any, Annotated, Callable
 
 
@@ -14,6 +15,11 @@ from typing import TypedDict, Dict, List, Optional, Any, Annotated, Callable
 def _replace(existing: Any, new: Any) -> Any:
     """값을 완전히 대체하는 reducer."""
     return new
+
+
+def _merge_dicts(existing: Dict[str, str], new: Dict[str, str]) -> Dict[str, str]:
+    """딕셔너리를 병합하는 reducer (병렬 섹션 생성 결과 누적용)."""
+    return {**(existing or {}), **(new or {})}
 
 
 def _append_unique(existing: List[str], new: List[str]) -> List[str]:
@@ -53,7 +59,7 @@ class SectionGenerationState(TypedDict):
     title: Annotated[str, _replace]
 
     # 출력/누적 필드 (병렬 업데이트 지원)
-    sections: Annotated[Dict[str, str], _replace]
+    sections: Annotated[Dict[str, str], _merge_dicts]
     failed_sections: Annotated[List[str], _append_unique]
     detailed_content_md: Annotated[Optional[str], _replace]
 
@@ -93,8 +99,6 @@ def create_initial_state(
     Returns:
         초기화된 SectionGenerationState
     """
-    import time
-
     return {
         "toc": toc,
         "transcript": transcript,

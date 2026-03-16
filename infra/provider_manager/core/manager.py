@@ -451,19 +451,16 @@ class ProviderManager:
     # Redis Connection & Status Publishing
     # ==========================================
 
-    async def _ensure_redis(self) -> aioredis.Redis:
-        """Redis 연결 확보."""
-        if self.redis is None:
-            self.redis = aioredis.from_url(
-                settings.redis_url,
-                decode_responses=True
-            )
-        return self.redis
+    async def _ensure_redis(self) -> Optional[aioredis.Redis]:
+        """Redis 클라이언트 반환 (외부 주입, 없으면 None)."""
+        return self.redis  # RedisConnectionManager 콜백에서 설정됨
 
     async def _publish_status(self, provider_name: str, state: ProviderState) -> None:
         """프로바이더 상태를 Redis Hash에 발행."""
+        if self.redis is None:
+            return  # Redis 미연결 시 skip
         try:
-            redis = await self._ensure_redis()
+            redis = self.redis
             status_data = {
                 "status": state.status.value,
                 "last_check": state.last_check.isoformat() if state.last_check else "",
@@ -1085,6 +1082,41 @@ class ProviderManager:
             await asyncio.sleep(1)
         return False
 
+    async def _warm_up_lemonade(self, port: int, model_name: str) -> None:
+        """lemonade-server 시작 후 모델을 GPU VRAM에 강제 로드.
+
+        lemonade-server는 --model 없이 serve 모드로 시작되므로
+        첫 번째 요청 전까지 모델이 GPU VRAM에 올라오지 않는다.
+        /api/v1/models는 설치된 모델 목록만 반환하므로 신뢰할 수 없고,
+        실제 completion 요청을 보내야만 GPU 로드가 보장된다.
+        """
+        base_url = f"http://localhost:{port}"
+        logger.info(f"[lemonade-warmup] Loading {model_name} into GPU VRAM via warmup request (may take a few minutes)...")
+
+        load_client = httpx.AsyncClient(timeout=600.0)  # 모델 로드 최대 10분
+        try:
+            resp = await load_client.post(
+                f"{base_url}/api/v1/chat/completions",
+                json={
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 1,
+                    "stream": False,
+                },
+            )
+            if resp.status_code == 200:
+                logger.info(f"[lemonade-warmup] Model {model_name} loaded into GPU VRAM successfully")
+            else:
+                logger.warning(
+                    f"[lemonade-warmup] Warmup request returned {resp.status_code}: {resp.text[:300]}"
+                )
+        except asyncio.CancelledError:
+            logger.info(f"[lemonade-warmup] Warm-up cancelled (shutdown in progress)")
+        except Exception as e:
+            logger.error(f"[lemonade-warmup] Model warm-up failed: {e}")
+        finally:
+            await load_client.aclose()
+
     async def wait_for_port_release(self, port: int, timeout: float = 30.0) -> bool:
         """포트가 해제될 때까지 대기."""
         start_time = time.time()
@@ -1190,6 +1222,14 @@ class ProviderManager:
             logger.info(f"{provider.name} is ready on port {provider.port}")
             # 상태 업데이트: UP
             await self._update_state(provider.name, ProviderStatus.UP)
+
+            # lemonade-server: 모델 GPU 로드 확인 및 사전 Warm-up (백그라운드)
+            if provider.name == "lemonade-server":
+                env_vars = _load_env_vars()
+                lemonade_model = env_vars.get("LEMONADE_SUMMARIZE_MODEL", "gpt-oss-20b-mxfp4-GGUF")
+                logger.info(f"[lemonade-warmup] Scheduling GPU model pre-load: {lemonade_model}")
+                asyncio.create_task(self._warm_up_lemonade(provider.port, lemonade_model))
+
             return True
         else:
             logger.error(f"{provider.name} failed to start (health check timeout)")

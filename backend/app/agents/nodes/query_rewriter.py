@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from loguru import logger
@@ -220,7 +221,7 @@ class QueryRewriterNode:
             새로운 검색 쿼리 목록
         """
         # 전략별 프롬프트
-        current_year = str(datetime.now().year)
+        current_year = str(datetime.now(tz=ZoneInfo("Asia/Seoul")).year)
         strategy_instructions = {
             "broaden": f"""더 넓은 범위의 일반적인 용어를 사용하세요.
 예: "FastAPI 성능 벤치마크" → "파이썬 웹 프레임워크 성능 비교"

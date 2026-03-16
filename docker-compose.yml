@@ -282,7 +282,7 @@ services:
       dockerfile: worker/Dockerfile
     image: asr-worker:latest
     container_name: asr-worker-unified
-    command: celery -A worker.celery_app worker --loglevel=info -Q celery,asr,asr_tasks,llm_summary,ocr_tasks,search
+    command: celery -A worker.celery_app worker --loglevel=info -c 1 -Q celery,asr,asr_tasks,llm_summary,ocr_tasks,search
     volumes:
       - ./.env:/app/.env:ro
       - ./backend/data:/app/data

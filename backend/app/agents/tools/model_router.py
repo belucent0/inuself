@@ -60,8 +60,10 @@ class TierRouter:
         self._rule_embeddings: dict[str, list[list[float]]] = {}
         self._embeddings_initialized = False
 
-        # FLM 임베딩 서버 URL (flm-llm 서버에서 제공)
-        self.embedding_url = "http://localhost:11435/v1/embeddings"
+        # LiteLLM 프록시를 통한 임베딩 엔드포인트 (Redis Stream → Provider Manager → FLM 서버)
+        litellm_base_url = getattr(settings, "litellm_base_url", "http://litellm:4000")
+        self.embedding_url = f"{litellm_base_url.rstrip('/')}/v1/embeddings"
+        self.embedding_api_key = getattr(settings, "litellm_api_key", "")
 
     async def select_tier(self, query: str, mode: str = None, context_size: int = 0) -> str:
         """쿼리에 적합한 능력 티어 선택.
@@ -84,8 +86,8 @@ class TierRouter:
             logger.info(f"[TierRouter] Large context ({context_size}) -> tier-thinking")
             return LLMTier.THINKING
 
-        # 3. 임베딩 기반 유사도 매칭 (현재 비활성화 - Docker 환경에서 localhost 접근 불가)
-        # TODO: 임베딩 서버를 Docker 네트워크로 노출하거나 설정으로 URL 변경
+        # 3. 임베딩 기반 유사도 매칭 — FLM 안정화 전까지 비활성화
+        # (활성화 시: LiteLLM → Redis Stream → Provider Manager → FLM 서버 경유, FLM DOWN이면 2분 블로킹)
         # try:
         #     selected = await self._embedding_based_routing(query)
         #     if selected:
@@ -93,7 +95,7 @@ class TierRouter:
         # except Exception as e:
         #     logger.warning(f"[TierRouter] Embedding routing failed: {e}, using rule-based fallback")
 
-        # 4. 규칙 기반 폴백
+        # 4. 규칙 기반 라우팅
         return self._rule_based_routing(query)
 
     async def _embedding_based_routing(self, query: str) -> Optional[str]:
@@ -183,12 +185,17 @@ class TierRouter:
             임베딩 벡터 또는 None
         """
         try:
+            headers = {}
+            if self.embedding_api_key:
+                headers["Authorization"] = f"Bearer {self.embedding_api_key}"
+
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
                     self.embedding_url,
+                    headers=headers,
                     json={
                         "input": text,
-                        "model": "embeddinggemma:300m"  # FLM 내장 임베딩 모델
+                        "model": "flm-embeddings"  # LiteLLM 모델명 → FLM embed-gemma:300m 경유
                     }
                 )
 
