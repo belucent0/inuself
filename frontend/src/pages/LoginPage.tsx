@@ -48,7 +48,7 @@ export function LoginPage() {
       <div className="relative z-10 flex min-h-screen items-center justify-center px-4 py-10">
         <Card className="w-full max-w-md border-slate-800/70 bg-slate-900/80 text-slate-50 backdrop-blur">
           <CardHeader className="space-y-3 text-center">
-            <AuthBrandMark tone="emerald" />
+            <AuthBrandMark />
             <CardTitle className="text-2xl">로그인</CardTitle>
             <CardDescription className="text-slate-300">
               계정에 로그인하여 기능을 계속 이용하세요.
@@ -84,7 +84,7 @@ export function LoginPage() {
 
               <Button
                 type="submit"
-                className="w-full border border-white/20 bg-gradient-to-r from-emerald-300 via-teal-300 to-cyan-300 text-slate-950 shadow-[0_12px_28px_-14px_rgba(45,212,191,0.95)] hover:from-emerald-200 hover:via-teal-200 hover:to-cyan-200"
+                className="w-full bg-white text-slate-900 hover:bg-slate-100"
                 disabled={isSubmitting}
               >
                 {isSubmitting ? '로그인 중...' : '로그인'}
@@ -93,7 +93,7 @@ export function LoginPage() {
 
             <p className="mt-6 text-center text-sm text-slate-300">
               아직 계정이 없으신가요?{' '}
-              <Link to="/signup" className="font-medium text-emerald-300 hover:text-emerald-200">
+              <Link to="/signup" className="font-medium text-slate-200 hover:text-white underline underline-offset-2">
                 회원가입
               </Link>
             </p>

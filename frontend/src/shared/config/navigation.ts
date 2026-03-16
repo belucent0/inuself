@@ -38,7 +38,7 @@ export const navigationItems: NavItem[] = [
 
 // 경로별 페이지 제목 조회
 export function getPageTitle(pathname: string | null): string {
-  if (!pathname) return 'ASR 파이프라인'
+  if (!pathname) return 'InuSelf'
 
   // AI Chat routes
   if (pathname === '/' || pathname.startsWith('/chat/')) {
@@ -61,5 +61,5 @@ export function getPageTitle(pathname: string | null): string {
     return '심리검사'
   }
 
-  return 'ASR 파이프라인'
+  return 'InuSelf'
 }

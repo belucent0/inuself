@@ -823,6 +823,42 @@ class AsyncGPUStreamClient:
         logger.info(f"[GPUStream] OCR completed: request_id={request_id}")
         return result
 
+    async def request_embedding(
+        self,
+        text: str,
+        model: str = "embeddinggemma:300m",
+        timeout: float = 15.0,
+    ) -> dict:
+        """임베딩 벡터 요청 (비동기).
+
+        Args:
+            text: 임베딩할 텍스트
+            model: 임베딩 모델 이름
+            timeout: 타임아웃 (초)
+
+        Returns:
+            임베딩 결과 {data: [{embedding: [...], index: 0}], ...}
+        """
+        redis_client = await self.get_redis()
+        request_id = self._generate_request_id()
+
+        request_data = {
+            "request_id": request_id,
+            "type": "embedding",
+            "text": text,
+            "model": model,
+            "timestamp": str(time.time()),
+        }
+
+        with self._create_client_span("embedding", CHAT_STREAM):
+            self._inject_trace_context(request_data)
+            logger.info(f"[GPUStream] Sending embedding request: request_id={request_id}")
+            await redis_client.xadd(CHAT_STREAM, request_data)
+
+        result = await self._wait_for_response(request_id, timeout)
+        logger.info(f"[GPUStream] Embedding completed: request_id={request_id}")
+        return result
+
     async def check_health(self, service: str = "all", timeout: float = 30.0) -> dict:
         """GPU 서비스 Health Check (비동기)."""
         redis_client = await self.get_redis()

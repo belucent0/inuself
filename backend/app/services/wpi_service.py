@@ -25,9 +25,19 @@ from ..core.storage import upload_fileobj
 from ..db.models import ScanResult
 from ..db.session import AsyncSessionLocal
 try:
-    from ..prompts.wpi_report import WPI_REPORT_SYSTEM_PROMPT, WPI_REPORT_USER_TEMPLATE
+    from ..prompts.wpi_report import (
+        WPI_REPORT_SYSTEM_PROMPT,
+        WPI_REPORT_USER_TEMPLATE,
+        WPI_SECTION6_SYSTEM_PROMPT,
+        WPI_SECTION6_USER_TEMPLATE,
+    )
 except ImportError:
-    from ..prompts.wpi_report_example import WPI_REPORT_SYSTEM_PROMPT, WPI_REPORT_USER_TEMPLATE
+    from ..prompts.wpi_report_example import (  # type: ignore[no-redef]
+        WPI_REPORT_SYSTEM_PROMPT,
+        WPI_REPORT_USER_TEMPLATE,
+    )
+    WPI_SECTION6_SYSTEM_PROMPT = WPI_REPORT_SYSTEM_PROMPT
+    WPI_SECTION6_USER_TEMPLATE = WPI_REPORT_USER_TEMPLATE
 from ..repositories.scan_repository import ScanRepository
 from ..schemas.wpi import (
     GAP_AXIS_MAP,
@@ -67,6 +77,16 @@ AXIS_KR_LABELS = {
     "independence_self": "독립성-자기축",
     "achievement_culture": "성취-문화 축",
 }
+
+GAP_OVERSHOOTING_THRESHOLD = 10
+MULTI_TYPE_MARGIN = 7
+
+PROBLEMATIC_MULTI_COMBOS: list[tuple[set[str], str]] = [
+    ({"Idealist", "Romanticist"}, "아이디얼리스트+로맨티스트"),
+    ({"Humanist", "Romanticist"}, "휴머니스트+로맨티스트"),
+    ({"Romanticist", "Agent"}, "로맨티스트+에이전트"),
+    ({"Realist", "Humanist", "Agent"}, "리얼리스트+휴머니스트+에이전트"),
+]
 
 logger = app_logging.logger
 
@@ -545,7 +565,7 @@ class WpiService:
         payload = {
             "scan_result_id": str(result_id),
             "raw_response": report_md,
-            "generation_mode": "single_prompt",
+            "generation_mode": "two_pass",
         }
         result_s3_key = f"results/wpi_report/{result_id}/{uuid4().hex}.json"
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -588,10 +608,28 @@ class WpiService:
             timeout=single_prompt_timeout_seconds,
         )
 
+    def _build_section6_messages(
+        self,
+        score_profile_json: str,
+        collected_texts: str,
+        preceding_sections: str,
+    ) -> list[dict[str, str]]:
+        user_prompt = WPI_SECTION6_USER_TEMPLATE.format(
+            score_profile_json=score_profile_json,
+            collected_texts=collected_texts,
+            preceding_sections=preceding_sections,
+        )
+        return [
+            {"role": "system", "content": WPI_SECTION6_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+
     async def _execute_ai_report_generation_by_id(
         self,
         result_id: UUID,
-        messages: list[dict[str, str]],
+        pass1_messages: list[dict[str, str]],
+        score_profile_json: str,
+        collected_texts: str,
     ) -> None:
         result = await self.repo.get_by_id(result_id)
         if result is None:
@@ -599,7 +637,20 @@ class WpiService:
             return
 
         try:
-            report_md = await self._generate_ai_report_markdown(messages)
+            # Pass 1: 섹션 1~5 생성
+            sections_1_5 = await self._generate_ai_report_markdown(pass1_messages)
+            logger.info("WPI AI report Pass 1 done: result_id=%s", result_id)
+
+            # Pass 2: 섹션 6 생성 (앞 섹션 참조)
+            pass2_messages = self._build_section6_messages(
+                score_profile_json=score_profile_json,
+                collected_texts=collected_texts,
+                preceding_sections=sections_1_5,
+            )
+            section_6 = await self._generate_ai_report_markdown(pass2_messages)
+            logger.info("WPI AI report Pass 2 done: result_id=%s", result_id)
+
+            report_md = sections_1_5 + "\n\n" + section_6
             result_s3_key = self._upload_ai_report_payload(result.id, report_md)
             logger.info(
                 "WPI AI report generated: result_id=%s, result_s3_key=%s",
@@ -627,11 +678,15 @@ class WpiService:
     async def _run_ai_report_generation_task(
         cls,
         result_id: UUID,
-        messages: list[dict[str, str]],
+        pass1_messages: list[dict[str, str]],
+        score_profile_json: str,
+        collected_texts: str,
     ) -> None:
         async with AsyncSessionLocal() as session:
             service = cls(session)
-            await service._execute_ai_report_generation_by_id(result_id, messages)
+            await service._execute_ai_report_generation_by_id(
+                result_id, pass1_messages, score_profile_json, collected_texts
+            )
 
     # I-type → 페어링 Me-type 역방향 매핑
     _I_TO_PAIRED_ME: dict[str, str] = {
@@ -663,6 +718,29 @@ class WpiService:
             elif paired_gap < -5:
                 paired_gap_direction = "me_high"
 
+        # 5축 전체 I-Me 갭 분석
+        all_axis_gaps = []
+        for axis_name, (axis_i_type, axis_me_type) in GAP_AXIS_MAP.items():
+            i_val = i_scores.get(axis_i_type, 0.0)
+            me_val = me_scores.get(axis_me_type, 0.0)
+            gap_val = i_val - me_val
+            abs_gap_val = abs(gap_val)
+            direction = "balanced"
+            if gap_val > 5:
+                direction = "i_high"
+            elif gap_val < -5:
+                direction = "me_high"
+            all_axis_gaps.append({
+                "i_type_kr": I_TYPE_KR_LABELS.get(axis_i_type, axis_i_type),
+                "me_type_kr": ME_TYPE_KR_LABELS.get(axis_me_type, axis_me_type),
+                "gap": round(gap_val, 1),
+                "abs_gap": round(abs_gap_val, 1),
+                "gap_direction": direction,
+                "is_primary_axis": axis_i_type == i_type,
+                "is_overshooting": abs_gap_val > GAP_OVERSHOOTING_THRESHOLD,
+            })
+        all_axis_gaps.sort(key=lambda x: x["abs_gap"], reverse=True)
+
         secondary_i_type = str(i_top_types[1]["type"]) if len(i_top_types) > 1 else None
         secondary_i_score = float(i_top_types[1]["score"]) if len(i_top_types) > 1 else None
 
@@ -672,6 +750,61 @@ class WpiService:
         me_lowest = me_sorted[0][0] if me_sorted else None
 
         is_dual_i_type = dominant_i_margin is not None and dominant_i_margin < 5
+
+        # 3위 I-type 정보
+        tertiary_i_type = str(i_top_types[2]["type"]) if len(i_top_types) > 2 else None
+        tertiary_i_score = float(i_top_types[2]["score"]) if len(i_top_types) > 2 else None
+        i_secondary_margin = (
+            float(i_top_types[1]["score"]) - float(i_top_types[2]["score"])
+            if len(i_top_types) > 2 else None
+        )
+
+        # Multi-type 감지 (MULTI_TYPE_MARGIN 이내)
+        primary_score = float(i_top_types[0]["score"])
+        multi_types: list[str] = []
+        for entry in i_top_types:
+            if primary_score - float(entry["score"]) <= MULTI_TYPE_MARGIN:
+                multi_types.append(str(entry["type"]))
+            else:
+                break
+
+        multi_i_type_count = len(multi_types)
+        is_multi_i_type = multi_i_type_count >= 2
+        is_triple_i_type = multi_i_type_count >= 3
+
+        # 문제 조합 감지
+        multi_set = set(multi_types)
+        has_problematic = False
+        problematic_label = None
+        for combo_set, label in PROBLEMATIC_MULTI_COMBOS:
+            if combo_set.issubset(multi_set):
+                has_problematic = True
+                problematic_label = label
+                break
+
+        # 다중형 + 갭 동시 존재
+        multi_type_with_gap = is_multi_i_type and any(
+            g["is_overshooting"] for g in all_axis_gaps
+        )
+
+        # --- 안정형(Stability) 감지 ---
+        balanced_axis_count = sum(
+            1 for g in all_axis_gaps if g["gap_direction"] == "balanced"
+        )
+        max_abs_gap = max(g["abs_gap"] for g in all_axis_gaps) if all_axis_gaps else 0.0
+
+        # 안정형: 모든 축이 balanced + 단일 자기평가형
+        is_overall_balanced = (
+            balanced_axis_count == 5
+            and not is_multi_i_type
+        )
+
+        # 준안정형: 4축 이상 balanced + overshooting 없음 + 단일형
+        is_near_balanced = (
+            balanced_axis_count >= 4
+            and not any(g["is_overshooting"] for g in all_axis_gaps)
+            and not is_multi_i_type
+        )
 
         return {
             "i_primary": i_type,
@@ -696,6 +829,23 @@ class WpiService:
             "is_dual_i_type": is_dual_i_type,
             "i_scores_all": dict(i_scores),
             "me_scores_all": dict(me_scores),
+            "all_axis_gaps": all_axis_gaps,
+            "i_tertiary": tertiary_i_type,
+            "i_tertiary_score": tertiary_i_score,
+            "i_tertiary_kr": I_TYPE_KR_LABELS.get(tertiary_i_type, tertiary_i_type) if tertiary_i_type else None,
+            "i_secondary_margin": i_secondary_margin,
+            "multi_i_type_count": multi_i_type_count,
+            "multi_i_types": multi_types,
+            "multi_i_types_kr": [I_TYPE_KR_LABELS.get(t, t) for t in multi_types],
+            "is_multi_i_type": is_multi_i_type,
+            "is_triple_i_type": is_triple_i_type,
+            "has_problematic_multi_combo": has_problematic,
+            "problematic_combo_label": problematic_label,
+            "multi_type_with_gap": multi_type_with_gap,
+            "balanced_axis_count": balanced_axis_count,
+            "max_abs_gap": max_abs_gap,
+            "is_overall_balanced": is_overall_balanced,
+            "is_near_balanced": is_near_balanced,
         }
 
     def _build_ai_report_context(self, score_profile: dict[str, Any]) -> str:
@@ -754,7 +904,7 @@ class WpiService:
 
     def _build_ai_report_messages(
         self, enriched_data: dict[str, Any]
-    ) -> list[dict[str, str]]:
+    ) -> tuple[list[dict[str, str]], str, str]:
         i_test = enriched_data.get("i_test") or {}
         me_test = enriched_data.get("me_test") or {}
 
@@ -802,16 +952,18 @@ class WpiService:
         )
 
         collected_texts = self._build_ai_report_context(score_profile)
+        score_profile_json = json.dumps(score_profile, ensure_ascii=False, indent=2)
 
         user_prompt = WPI_REPORT_USER_TEMPLATE.format(
-            score_profile_json=json.dumps(score_profile, ensure_ascii=False, indent=2),
+            score_profile_json=score_profile_json,
             collected_texts=collected_texts,
         )
 
-        return [
+        messages = [
             {"role": "system", "content": WPI_REPORT_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ]
+        return messages, score_profile_json, collected_texts
 
     async def _get_result_for_user(self, user_id: UUID, result_id: UUID) -> ScanResult:
         result = await self.get_by_id(result_id)
@@ -866,7 +1018,7 @@ class WpiService:
                 "message": "이미 생성된 AI 리포트가 있습니다",
             }
 
-        messages = self._build_ai_report_messages(enriched_data)
+        pass1_messages, score_profile_json, collected_texts = self._build_ai_report_messages(enriched_data)
         next_state = await self._write_ai_report_state(
             result,
             status="processing",
@@ -874,7 +1026,11 @@ class WpiService:
             error=None,
             job_id=None,
         )
-        asyncio.create_task(self._run_ai_report_generation_task(result.id, messages))
+        asyncio.create_task(
+            self._run_ai_report_generation_task(
+                result.id, pass1_messages, score_profile_json, collected_texts
+            )
+        )
         return {
             "result_id": result.id,
             **next_state,

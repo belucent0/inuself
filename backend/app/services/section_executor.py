@@ -315,6 +315,12 @@ class SectionGraphExecutor:
         parts.append("")
         return "\n".join(parts)
 
+    def get_core_summary(
+        self, metadata: Dict[str, Any], sections: Dict[str, str]
+    ) -> str:
+        """핵심 요약을 생성합니다 (_generate_core_summary의 public 래퍼)."""
+        return self._generate_core_summary(metadata, sections)
+
     def _combine_to_markdown(
         self,
         metadata: Dict[str, Any],

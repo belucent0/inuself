@@ -7,7 +7,6 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   LogOut,
   Upload,
-  Mic,
   Youtube,
   MessageSquare,
   Plus,
@@ -46,7 +45,6 @@ import { ScrollArea } from '@/shared/components/ui/scroll-area'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/shared/components/ui/collapsible'
 import { navigationItems } from '@/shared/config/navigation'
 import { YouTubeLinkModal } from './YouTubeLinkModal'
-import { StreamingASRModal } from './StreamingASRModal'
 import UploadForm from './UploadForm'
 import { uploadApi } from '@/shared/services/endpoints/upload'
 import { toast } from 'sonner'
@@ -91,7 +89,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const navigate = useNavigate()
   const pathname = location.pathname
   const [youtubeModalOpen, setYoutubeModalOpen] = useState(false)
-  const [streamingModalOpen, setStreamingModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
   const { threads, removeThread, loadThreads } = useThreads()
@@ -151,11 +148,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        <div className="p-2">
-          <h1 className="text-lg font-semibold group-data-[collapsible=icon]:hidden">
-            ASR 파이프라인
+        <Link to="/" className="p-2 flex items-center gap-2 hover:opacity-80 transition-opacity">
+          <img src="/favicon.svg" className="h-6 w-6 shrink-0" alt="InuSelf logo" />
+          <h1 className="text-lg font-bold group-data-[collapsible=icon]:hidden text-foreground">
+            InuSelf
           </h1>
-        </div>
+        </Link>
       </SidebarHeader>
 
       <SidebarContent>
@@ -175,12 +173,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <SidebarMenuButton onClick={handleFileUploadClick}>
                   <Upload />
                   <span className="group-data-[collapsible=icon]:hidden">파일 업로드</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton onClick={() => setStreamingModalOpen(true)}>
-                  <Mic />
-                  <span className="group-data-[collapsible=icon]:hidden">실시간 전사</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
@@ -343,7 +335,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarRail />
 
       <YouTubeLinkModal open={youtubeModalOpen} onOpenChange={setYoutubeModalOpen} onSubmit={handleYouTubeSubmit} />
-      <StreamingASRModal open={streamingModalOpen} onOpenChange={setStreamingModalOpen} />
     </Sidebar>
   )
 }

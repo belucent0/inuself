@@ -206,7 +206,7 @@ export function SignupPage() {
       <div className="relative z-10 flex min-h-screen items-center justify-center px-4 py-10">
         <Card className="w-full max-w-md border-zinc-800/70 bg-zinc-900/80 text-zinc-50 backdrop-blur">
           <CardHeader className="space-y-3 text-center">
-            <AuthBrandMark tone="emerald" />
+            <AuthBrandMark />
             <CardTitle className="text-2xl">회원가입</CardTitle>
             <CardDescription className="text-zinc-300">
               새 계정을 만들고 바로 서비스를 시작하세요.
@@ -233,7 +233,7 @@ export function SignupPage() {
                     type="button"
                     variant="secondary"
                     size="sm"
-                    className="bg-emerald-100/90 text-emerald-950 shadow-sm hover:bg-emerald-100"
+                    className="bg-slate-700 text-slate-200 hover:bg-slate-600"
                     onClick={() => void checkDuplicateLoginId()}
                     disabled={isCheckingLoginId || isSubmitting}
                   >
@@ -257,7 +257,7 @@ export function SignupPage() {
                 {loginIdError ? (
                   <p className="text-xs text-red-300">{loginIdError}</p>
                 ) : isLoginIdChecked ? (
-                  <p className="text-xs text-emerald-300">중복 확인 완료된 아이디입니다.</p>
+                  <p className="text-xs text-slate-300">중복 확인 완료된 아이디입니다.</p>
                 ) : null}
               </div>
               <div className="space-y-2">
@@ -322,7 +322,7 @@ export function SignupPage() {
                 <Button
                   type="button"
                   variant="secondary"
-                  className="w-full bg-teal-100/90 text-teal-950 hover:bg-teal-100"
+                  className="w-full bg-white/10 text-slate-300 border border-white/15 hover:bg-white/15"
                   onClick={() => navigate('/login')}
                   disabled={isSubmitting}
                 >
@@ -330,7 +330,7 @@ export function SignupPage() {
                 </Button>
                 <Button
                   type="submit"
-                  className="w-full border border-white/20 bg-gradient-to-r from-emerald-300 via-teal-300 to-cyan-300 text-slate-950 shadow-[0_12px_28px_-14px_rgba(45,212,191,0.95)] hover:from-emerald-200 hover:via-teal-200 hover:to-cyan-200"
+                  className="w-full bg-white text-slate-900 hover:bg-slate-100"
                   disabled={isSubmitting || isCheckingLoginId}
                 >
                   {isSubmitting ? '처리 중...' : '확인'}
