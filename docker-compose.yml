@@ -288,7 +288,6 @@ services:
       - ./backend/data:/app/data
       - ./backend/app:/app/app:ro
       - ./worker:/app/worker
-      - ./infra/litellm:/app/infra/litellm:ro # V6.6: GPU Stream Client
     environment:
       - TASK_QUEUE_TYPE=celery
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
