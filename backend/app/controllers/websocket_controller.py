@@ -144,10 +144,10 @@ async def websocket_asr_stream(
     
     settings = get_settings()
     # LiteLLM Gateway URL 사용 (architecture v4: One Gateway)
-    litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
+    litellm_base_url = os.getenv("AI_GATEWAY_URL", "http://localhost:4000")
     # LiteLLM endpoint (OpenAI compatible)
     transcribe_url = f"{litellm_base_url}/v1/audio/transcriptions"
-    api_key = os.getenv("LITELLM_API_KEY", "")
+    api_key = os.getenv("AI_GATEWAY_API_KEY", "")
     
     # LiteLLM Gateway 연결 확인
     try:

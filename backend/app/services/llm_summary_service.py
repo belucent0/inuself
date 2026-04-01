@@ -629,7 +629,7 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
         ]
 
         phase3_response = request_litellm_completion(
-            settings=settings, model=settings.litellm_model_summarize, messages=phase3_messages
+            settings=settings, model=settings.ai_gateway_model_summarize, messages=phase3_messages
         )
         detail_content = phase3_response.strip()
 

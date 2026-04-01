@@ -165,7 +165,7 @@ class PhaseExecutor:
 
                 response = request_litellm_completion(
                     settings=self.settings,
-                    model=self.settings.litellm_model_summarize,
+                    model=self.settings.ai_gateway_model_summarize,
                     messages=messages,
                 )
 

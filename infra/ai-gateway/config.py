@@ -116,4 +116,4 @@ get_routing_policy = _tier_config.get_routing_policy
 # ============================================================
 # API 인증
 # ============================================================
-GATEWAY_API_KEY = os.getenv("LITELLM_API_KEY", "")
+GATEWAY_API_KEY = os.getenv("AI_GATEWAY_API_KEY", "")

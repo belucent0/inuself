@@ -69,19 +69,19 @@ class Settings(BaseSettings):
     worker_type: str = Field("llm", validation_alias="WORKER_TYPE")
 
     # LLM 요약 설정 (llama.cpp 서버)
-    llm_provider: str = "llamacpp_server"  # "llamacpp_server" | "flm" | "litellm"
+    llm_provider: str = "llamacpp_server"  # "llamacpp_server" | "flm" | "ai-gateway"
 
-    # LiteLLM 프록시 설정
-    litellm_base_url: str = Field(
-        "http://asr-litellm:4000",  # Docker 내부 통신
-        validation_alias="LITELLM_BASE_URL",
+    # AI Gateway 설정
+    ai_gateway_url: str = Field(
+        "http://ai-gateway:4000",  # Docker 내부 통신
+        validation_alias="AI_GATEWAY_URL",
     )
-    litellm_api_key: str = Field("", validation_alias="LITELLM_API_KEY")
-    litellm_model: str = Field("tier-simple", validation_alias="LITELLM_MODEL")
-    litellm_model_summarize: str = Field(
-        "tier-recap", validation_alias="LITELLM_MODEL_SUMMARIZE"
+    ai_gateway_api_key: str = Field("", validation_alias="AI_GATEWAY_API_KEY")
+    ai_gateway_model: str = Field("tier-simple", validation_alias="AI_GATEWAY_MODEL")
+    ai_gateway_model_summarize: str = Field(
+        "tier-recap", validation_alias="AI_GATEWAY_MODEL_SUMMARIZE"
     )
-    litellm_allowed_models: str = Field("", validation_alias="LITELLM_ALLOWED_MODELS")
+    ai_gateway_allowed_models: str = Field("", validation_alias="AI_GATEWAY_ALLOWED_MODELS")
 
     # AI Agent 검색 품질 튜닝 파라미터
     agent_search_web_limit: int = Field(

@@ -580,9 +580,9 @@ class WpiService:
         self,
         messages: list[dict[str, str]],
     ) -> str:
-        wpi_model = os.getenv("WPI_REPORT_LITELLM_MODEL", "").strip()
+        wpi_model = os.getenv("WPI_REPORT_MODEL", "").strip()
         if not wpi_model:
-            wpi_model = self.settings.litellm_model_summarize
+            wpi_model = self.settings.ai_gateway_model_summarize
 
         request_timeout_seconds = float(
             os.getenv("WPI_REPORT_LLM_REQUEST_TIMEOUT_SECONDS", "45")

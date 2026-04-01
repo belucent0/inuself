@@ -92,9 +92,9 @@ def request_litellm_completion(
     OpenAI SDK를 사용하여 LiteLLM 프록시와 통신합니다.
     LiteLLM이 GPU/NPU 자원 상태에 따라 자동으로 라우팅합니다.
     """
-    client = get_openai_client(settings.litellm_base_url, settings.litellm_api_key)
+    client = get_openai_client(settings.ai_gateway_url, settings.ai_gateway_api_key)
 
-    model_name = model or settings.litellm_model
+    model_name = model or settings.ai_gateway_model
 
     logger.info("[LiteLLM] Request: model=%s", model_name)
 
@@ -236,10 +236,10 @@ async def request_litellm_completion_async(
     이벤트 루프를 블로킹하지 않으므로 FastAPI와 함께 사용하기에 적합합니다.
     """
     client = get_async_openai_client(
-        settings.litellm_base_url, settings.litellm_api_key
+        settings.ai_gateway_url, settings.ai_gateway_api_key
     )
 
-    model_name = model or settings.litellm_model
+    model_name = model or settings.ai_gateway_model
 
     logger.info("[LiteLLM/Async] Request: model=%s", model_name)
 

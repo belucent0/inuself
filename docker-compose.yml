@@ -118,14 +118,14 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME:-asr-media}
-      # LiteLLM 프록시 설정
-      - LLM_PROVIDER=litellm
-      - LITELLM_BASE_URL=http://litellm:4000
-      - LITELLM_API_KEY=${LITELLM_API_KEY}
-      - LITELLM_MODEL=${LITELLM_MODEL:-tier-simple}
-      - LITELLM_MODEL_SUMMARIZE=${LITELLM_MODEL_SUMMARIZE:-tier-recap}
+      # AI Gateway 설정
+      - LLM_PROVIDER=ai-gateway
+      - AI_GATEWAY_URL=http://ai-gateway:4000
+      - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY}
+      - AI_GATEWAY_MODEL=${AI_GATEWAY_MODEL:-tier-simple}
+      - AI_GATEWAY_MODEL_SUMMARIZE=${AI_GATEWAY_MODEL_SUMMARIZE:-tier-recap}
       # WPI 마음 읽기 리포트 전용 모델 (Codex)
-      - WPI_REPORT_LITELLM_MODEL=${LITELLM_MODEL_WPI_REPORT:-codex-medium}
+      - WPI_REPORT_MODEL=${WPI_REPORT_MODEL:-codex-medium}
       - WPI_REPORT_LLM_REQUEST_TIMEOUT_SECONDS=120
       - WPI_REPORT_LLM_BUSY_MAX_SECONDS=180
       - WPI_REPORT_SINGLE_PROMPT_TIMEOUT_SECONDS=300
@@ -302,13 +302,13 @@ services:
       - REDIS_STREAM_ENABLED=true
       # Prometheus for metrics (optional)
       - PROMETHEUS_URL=http://asr-prometheus:9090
-      # LiteLLM 프록시 설정 (LLM 요약용)
-      - LITELLM_BASE_URL=http://litellm:4000
-      - LITELLM_API_KEY=${LITELLM_API_KEY}
-      - LITELLM_MODEL=${LITELLM_MODEL:-tier-simple}
-      - LITELLM_MODEL_SUMMARIZE=${LITELLM_MODEL_SUMMARIZE:-tier-recap}
+      # AI Gateway 설정 (LLM 요약용)
+      - AI_GATEWAY_URL=http://ai-gateway:4000
+      - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY}
+      - AI_GATEWAY_MODEL=${AI_GATEWAY_MODEL:-tier-simple}
+      - AI_GATEWAY_MODEL_SUMMARIZE=${AI_GATEWAY_MODEL_SUMMARIZE:-tier-recap}
       # WPI 마음 읽기 리포트 전용 모델 (Codex)
-      - WPI_REPORT_LITELLM_MODEL=${LITELLM_MODEL_WPI_REPORT:-codex-medium}
+      - WPI_REPORT_MODEL=${WPI_REPORT_MODEL:-codex-medium}
       - WPI_REPORT_LLM_REQUEST_TIMEOUT_SECONDS=120
       - WPI_REPORT_LLM_BUSY_MAX_SECONDS=180
       - WPI_REPORT_SINGLE_PROMPT_TIMEOUT_SECONDS=300
@@ -353,10 +353,6 @@ services:
       # OpenTelemetry 분산 추적
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - OTEL_SERVICE_NAME=asr-ai-gateway
-    networks:
-      default:
-        aliases:
-          - litellm  # Backend/Worker가 http://litellm:4000 으로 접근 가능 (하위 호환)
     depends_on:
       valkey:
         condition: service_healthy

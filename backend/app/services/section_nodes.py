@@ -176,7 +176,7 @@ async def create_section_node(
         # LLM 호출 (비동기)
         response = await request_litellm_completion_async(
             settings=settings,
-            model=settings.litellm_model_summarize,
+            model=settings.ai_gateway_model_summarize,
             messages=messages,
         )
 
@@ -367,7 +367,7 @@ async def fallback_section_node(
 
         response = await request_litellm_completion_async(
             settings=settings,
-            model=settings.litellm_model_summarize,
+            model=settings.ai_gateway_model_summarize,
             messages=messages,
         )
 

@@ -38,11 +38,11 @@ SEARCH_CACHE_TTL = 3600  # 1시간
 
 
 def get_litellm_base_url() -> str:
-    return os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
+    return os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
 
 
 def get_litellm_api_key() -> str:
-    return os.getenv("LITELLM_API_KEY", "")
+    return os.getenv("AI_GATEWAY_API_KEY", "")
 
 
 def get_litellm_model(reasoning_mode: bool = False) -> str:

@@ -52,10 +52,10 @@ RUN_NAME = os.environ.get(
 )
 
 # LLM-as-Judge 설정 (정보용 — CI 게이트에 영향 없음)
-JUDGE_LITELLM_BASE_URL = os.environ.get("JUDGE_LITELLM_BASE_URL", "http://localhost:4000")
+JUDGE_AI_GATEWAY_URL = os.environ.get("JUDGE_AI_GATEWAY_URL", "http://localhost:4000")
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "tier-simple")
 JUDGE_ENABLED = os.environ.get("JUDGE_ENABLED", "true").lower() == "true"
-JUDGE_LITELLM_API_KEY = os.environ.get("JUDGE_LITELLM_API_KEY", os.environ.get("LITELLM_API_KEY", ""))
+JUDGE_AI_GATEWAY_API_KEY = os.environ.get("JUDGE_AI_GATEWAY_API_KEY", os.environ.get("AI_GATEWAY_API_KEY", ""))
 
 
 def _score_result(
@@ -135,10 +135,10 @@ async def _llm_judge(
     )
 
     try:
-        headers = {"Authorization": f"Bearer {JUDGE_LITELLM_API_KEY}"} if JUDGE_LITELLM_API_KEY else {}
+        headers = {"Authorization": f"Bearer {JUDGE_AI_GATEWAY_API_KEY}"} if JUDGE_AI_GATEWAY_API_KEY else {}
         async with httpx.AsyncClient() as http:
             resp = await http.post(
-                f"{JUDGE_LITELLM_BASE_URL}/chat/completions",
+                f"{JUDGE_AI_GATEWAY_URL}/chat/completions",
                 headers=headers,
                 json={
                     "model": JUDGE_MODEL,

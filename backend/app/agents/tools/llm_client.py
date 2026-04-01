@@ -68,7 +68,7 @@ async def async_llm_completion(
     """비동기 LLM 완성 요청.
 
     Args:
-        settings: 애플리케이션 설정 (litellm_base_url, litellm_api_key, litellm_model 포함)
+        settings: 애플리케이션 설정 (ai_gateway_url, ai_gateway_api_key, ai_gateway_model 포함)
         messages: 대화 메시지 목록
         model: 사용할 LLM 모델명 (동적 라우팅, None이면 settings 기본값 사용)
         temperature: 온도 (기본값: settings에서 가져옴)
@@ -80,10 +80,10 @@ async def async_llm_completion(
     Raises:
         LLMClientError: LLM 호출 실패
     """
-    client = _get_async_client(settings.litellm_base_url, settings.litellm_api_key)
+    client = _get_async_client(settings.ai_gateway_url, settings.ai_gateway_api_key)
 
     # 동적 모델 라우팅: 명시적 모델 > settings 기본값
-    actual_model = model or settings.litellm_model
+    actual_model = model or settings.ai_gateway_model
     logger.info(f"[LLM] Async request: model={actual_model}")
 
     try:
@@ -147,10 +147,10 @@ async def async_llm_completion_stream(
     Raises:
         LLMClientError: LLM 호출 실패
     """
-    client = _get_async_client(settings.litellm_base_url, settings.litellm_api_key)
+    client = _get_async_client(settings.ai_gateway_url, settings.ai_gateway_api_key)
 
     # 동적 모델 라우팅: 명시적 모델 > settings 기본값
-    actual_model = model or settings.litellm_model
+    actual_model = model or settings.ai_gateway_model
     logger.info(f"[LLM] Async stream request: model={actual_model}")
 
     try:

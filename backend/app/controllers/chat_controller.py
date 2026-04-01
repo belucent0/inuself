@@ -16,20 +16,19 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 
 def get_litellm_base_url() -> str:
-    """FLM 서버 URL 반환 (LiteLLM 우회)."""
-    # LiteLLM 프록시 연결 (Gateway Strategy)
-    return os.getenv("LITELLM_BASE_URL", "http://asr-litellm:4000")
+    """AI Gateway URL 반환."""
+    return os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
 
 
 def get_litellm_api_key() -> str:
     """API 키 반환."""
-    return os.getenv("LITELLM_API_KEY", "")
+    return os.getenv("AI_GATEWAY_API_KEY", "")
 
 
 def get_litellm_model() -> str:
-    """FLM 모델명 반환."""
+    """모델명 반환."""
     # 티어 기반 라우팅 사용
-    return os.getenv("LITELLM_MODEL", LLMTier.SIMPLE)
+    return os.getenv("AI_GATEWAY_MODEL", LLMTier.SIMPLE)
 
 
 @lru_cache(maxsize=1)

@@ -64,10 +64,10 @@ def request_litellm_completion(
     LiteLLM이 GPU/NPU 자원 상태에 따라 자동으로 라우팅합니다.
 
     Args:
-        model: 사용할 모델. None이면 settings.litellm_model 사용
+        model: 사용할 모델. None이면 settings.ai_gateway_model 사용
     """
-    client = get_openai_client(settings.litellm_base_url, settings.litellm_api_key)
-    model_name = model or settings.litellm_model
+    client = get_openai_client(settings.ai_gateway_url, settings.ai_gateway_api_key)
+    model_name = model or settings.ai_gateway_model
 
     logger.info("LiteLLM request: url=%s model=%s", client.base_url, model_name)
 

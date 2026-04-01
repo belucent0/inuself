@@ -61,9 +61,9 @@ class TierRouter:
         self._embeddings_initialized = False
 
         # LiteLLM 프록시를 통한 임베딩 엔드포인트 (Redis Stream → Provider Manager → FLM 서버)
-        litellm_base_url = getattr(settings, "litellm_base_url", "http://litellm:4000")
-        self.embedding_url = f"{litellm_base_url.rstrip('/')}/v1/embeddings"
-        self.embedding_api_key = getattr(settings, "litellm_api_key", "")
+        ai_gateway_url = getattr(settings, "ai_gateway_url", "http://ai-gateway:4000")
+        self.embedding_url = f"{ai_gateway_url.rstrip('/')}/v1/embeddings"
+        self.embedding_api_key = getattr(settings, "ai_gateway_api_key", "")
 
     async def select_tier(self, query: str, mode: str = None, context_size: int = 0) -> str:
         """쿼리에 적합한 능력 티어 선택.
