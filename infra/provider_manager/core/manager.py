@@ -233,7 +233,7 @@ def get_default_provider_configs() -> Dict[str, ProviderConfig]:
             port=int(LEMONADE_SERVER_PORT),
             health="/api/v1/health",
             estimated_ram=12.5,  # gpt-oss-20b-mxfp4-GGUF ~11GB + KV 0.5GB
-            enabled=True,  # 항시 구동 (GPU LLM 허브)
+            enabled=False,  # On-Demand: 요청 시에만 로드 (VRAM 절약)
         ),
         "llama-server": ProviderConfig(
             name="llama-server",
@@ -1082,13 +1082,16 @@ class ProviderManager:
             await asyncio.sleep(1)
         return False
 
-    async def _warm_up_lemonade(self, port: int, model_name: str) -> None:
+    async def _warm_up_lemonade(self, port: int, model_name: str) -> bool:
         """lemonade-server 시작 후 모델을 GPU VRAM에 강제 로드.
 
         lemonade-server는 --model 없이 serve 모드로 시작되므로
         첫 번째 요청 전까지 모델이 GPU VRAM에 올라오지 않는다.
         /api/v1/models는 설치된 모델 목록만 반환하므로 신뢰할 수 없고,
         실제 completion 요청을 보내야만 GPU 로드가 보장된다.
+
+        Returns:
+            모델 로드 성공 여부
         """
         base_url = f"http://localhost:{port}"
         logger.info(f"[lemonade-warmup] Loading {model_name} into GPU VRAM via warmup request (may take a few minutes)...")
@@ -1106,16 +1109,57 @@ class ProviderManager:
             )
             if resp.status_code == 200:
                 logger.info(f"[lemonade-warmup] Model {model_name} loaded into GPU VRAM successfully")
+                return True
             else:
                 logger.warning(
                     f"[lemonade-warmup] Warmup request returned {resp.status_code}: {resp.text[:300]}"
                 )
+                return False
         except asyncio.CancelledError:
             logger.info(f"[lemonade-warmup] Warm-up cancelled (shutdown in progress)")
+            return False
         except Exception as e:
             logger.error(f"[lemonade-warmup] Model warm-up failed: {e}")
+            return False
         finally:
             await load_client.aclose()
+
+    async def _probe_lemonade_model(self, port: int, model_name: str, timeout: float = 15.0) -> bool:
+        """lemonade-server 모델 추론 가능 여부를 빠르게 확인.
+
+        _warm_up_lemonade(600s)과 달리 짧은 timeout으로 모델이
+        이미 로드된 상태인지 빠르게 판정한다.
+
+        Args:
+            port: lemonade-server 포트
+            model_name: 모델 이름
+            timeout: 요청 타임아웃 (초)
+
+        Returns:
+            추론 가능 여부
+        """
+        base_url = f"http://localhost:{port}"
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                resp = await client.post(
+                    f"{base_url}/api/v1/chat/completions",
+                    json={
+                        "model": model_name,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 1,
+                        "stream": False,
+                    },
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("choices"):
+                        logger.info(f"[lemonade-probe] Model {model_name} is ready")
+                        return True
+                logger.warning(f"[lemonade-probe] Unexpected response: {resp.status_code}")
+                return False
+            except Exception as e:
+                logger.warning(f"[lemonade-probe] Model probe failed: {e}")
+                return False
 
     async def wait_for_port_release(self, port: int, timeout: float = 30.0) -> bool:
         """포트가 해제될 때까지 대기."""
@@ -1478,6 +1522,21 @@ class ProviderManager:
     # Individual Provider Operations (API용)
     # ==========================================
 
+    def get_provider_config(self, name: str) -> Optional[ProviderConfig]:
+        """프로바이더 이름으로 설정 조회.
+
+        Args:
+            name: 프로바이더 이름
+
+        Returns:
+            ProviderConfig 또는 None
+        """
+        for group in self.groups.values():
+            for provider in group.providers:
+                if provider.name == name:
+                    return provider
+        return None
+
     async def load_provider(self, provider_name: str) -> bool:
         """개별 프로바이더 로드 (시작).
 
@@ -1487,12 +1546,10 @@ class ProviderManager:
         Returns:
             성공 여부
         """
-        # 프로바이더 설정 찾기
-        for group in self.groups.values():
-            for provider in group.providers:
-                if provider.name == provider_name:
-                    logger.info(f"Loading provider: {provider_name} (On-Demand)")
-                    return await self.start_provider(provider, force=True)
+        provider = self.get_provider_config(provider_name)
+        if provider:
+            logger.info(f"Loading provider: {provider_name} (On-Demand)")
+            return await self.start_provider(provider, force=True)
 
         logger.warning(f"Provider not found: {provider_name}")
         return False
