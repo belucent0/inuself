@@ -96,7 +96,7 @@ def setup_telemetry(service_name: str = None, app=None) -> None:
     if _initialized:
         return
 
-    service = service_name or os.getenv("OTEL_SERVICE_NAME", "asr-litellm")
+    service = service_name or os.getenv("OTEL_SERVICE_NAME", "asr-ai-gateway")
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 
     if not endpoint:

@@ -36,10 +36,7 @@ def get_async_openai_client() -> AsyncOpenAI:
     """AsyncOpenAI 클라이언트 싱글톤 (LiteLLM 프록시 연결)."""
     base_url = get_litellm_base_url().rstrip("/")
     return AsyncOpenAI(
-        base_url=f"{base_url}", # LiteLLM은 /v1 불필요할 수 있으나 보통 포함됨, 하지만 asr-litellm:4000은 보통 root
-        # OpenAI SDK requires base_url to effectively be base endpoint. LiteLLM proxy usually exposes /v1 or /chat/completions directly.
-        # But here we assume http://asr-litellm:4000
-        # Safe to append /v1 if LiteLLM mimics OpenAI exactly.
+        base_url=f"{base_url}",
         api_key=get_litellm_api_key(),
         timeout=120.0,
     )

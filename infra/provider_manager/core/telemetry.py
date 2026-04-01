@@ -236,7 +236,7 @@ def trace_gpu_operation(
         kind=SpanKind.SERVER,
     ) as span:
         # Service Graph 연결을 위한 peer.service 설정
-        span.set_attribute("peer.service", "asr-litellm")  # 요청 발신자
+        span.set_attribute("peer.service", "asr-ai-gateway")  # 요청 발신자
         span.set_attribute("messaging.system", "redis-stream")
         span.set_attribute("messaging.operation", "receive")
 

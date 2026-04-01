@@ -76,9 +76,9 @@ class WorkerSettings(BaseSettings):
     @field_validator("ai_gateway_url")
     @classmethod
     def resolve_docker_host(cls, v: str) -> str:
-        """Docker 서비스명(asr-litellm)을 로컬 환경(localhost)에 맞게 변환."""
-        if "asr-litellm" in v:
-            return v.replace("asr-litellm", "localhost")
+        """Docker 서비스명(ai-gateway)을 로컬 환경(localhost)에 맞게 변환."""
+        if "ai-gateway" in v:
+            return v.replace("ai-gateway", "localhost")
         return v
 
     # ========================================

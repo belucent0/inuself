@@ -166,7 +166,7 @@ async def websocket_asr_stream(
                 logger.error(f"[WebSocket ASR] LiteLLM Gateway connection failed: result={result}")
                 await websocket.send_json({
                     "type": "error",
-                    "message": "AI Gateway(LiteLLM)에 연결할 수 없습니다. 서비스 상태를 확인해주세요.",
+                    "message": "AI Gateway에 연결할 수 없습니다. 서비스 상태를 확인해주세요.",
                 })
                 await websocket.close(code=1011, reason="Gateway unavailable")
                 return
