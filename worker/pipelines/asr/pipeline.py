@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # OpenTelemetry context 전파 (ThreadPoolExecutor용)
 from opentelemetry import context as otel_context
@@ -54,6 +54,7 @@ def run_asr_diarization_pipeline(
     max_speakers: int | None = None,
     file_id: int | None = None,  # 락 회복을 위한 file_id
     accuracy_mode: str = "speed",  # "speed" (FLM/NPU) or "accuracy" (whisper.cpp/GPU)
+    on_progress: Callable[[float, str], None] | None = None,
 ) -> PipelineResult:
     """
     ASR + 화자분리 파이프라인 실행.
@@ -85,6 +86,8 @@ def run_asr_diarization_pipeline(
     audio_duration = float(result.stdout.strip())
     sample_rate = 16000  # 고정값 (ffmpeg -ar 16000)
     print(f"[Pipeline] Audio loaded: {audio_duration:.2f} seconds")
+    if on_progress:
+        on_progress(15, "오디오 분석 완료")
 
     # 2. ffmpeg로 WAV 변환 (16kHz, Mono, 16-bit PCM)
     wav_temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
@@ -100,6 +103,8 @@ def run_asr_diarization_pipeline(
         str(wav_path)
     ], check=True)
     print(f"[Pipeline] Converted to WAV: {wav_path}")
+    if on_progress:
+        on_progress(20, "오디오 변환 완료")
 
     logs.append({
         "event": "audio_loaded",
@@ -118,6 +123,7 @@ def run_asr_diarization_pipeline(
                 max_speakers=max_speakers,
                 file_id=file_id,
                 accuracy_mode=accuracy_mode,
+                on_progress=on_progress,
             )
         else:
             raise ValueError(f"Unsupported processing mode: {processing_mode}")
@@ -136,6 +142,7 @@ def _run_case4_parallel_processing(
     max_speakers: int | None = None,
     file_id: int | None = None,
     accuracy_mode: str = "speed",  # "speed" (whisper.cpp/GPU) or "accuracy" (insanely-fast/GPU)
+    on_progress: Callable[[float, str], None] | None = None,
 ) -> PipelineResult:
     """
     V7.0: ASR + 화자분리 병렬 처리.
@@ -183,6 +190,8 @@ def _run_case4_parallel_processing(
         print(f"[Parallel] GPU lock acquired: {lock_id[:8]}...")
     else:
         print(f"[Parallel] Warning: GPU lock failed, proceeding without lock")
+    if on_progress:
+        on_progress(25, "GPU 확보")
 
     heartbeat = None
     if lock_id:
@@ -219,6 +228,8 @@ def _run_case4_parallel_processing(
             otel_context.detach(token)
 
     print(f"\n[Parallel] Starting ASR and Diarization simultaneously...")
+    if on_progress:
+        on_progress(28, "음성 인식 + 화자분리 처리 중")
 
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -226,32 +237,37 @@ def _run_case4_parallel_processing(
             asr_future = executor.submit(run_asr)
             diarization_future = executor.submit(run_diarization)
 
-            # ASR 결과 대기 (필수)
-            try:
-                asr_result, model_load_time, transcribe_time, asr_provider = asr_future.result()
-                print(f"[Parallel] ASR completed: {len(asr_result.get('segments', []))} segments")
-                print(f"[Parallel] ASR Provider: {asr_provider.value}")
-            except Exception as e:
-                print(f"[Pipeline] Error: ASR failed: {e}")
-                raise
-
-            # Diarization 결과 대기 (실패해도 계속 진행)
-            try:
-                diarization, diarization_load_time, diarization_time, embeddings_dict, pipeline, diarization_params = diarization_future.result()
-                diarization_segment_count = len(list(diarization.itertracks(yield_label=True)))
-                if diarization_segment_count == 0:
-                    print(f"[Pipeline] Warning: Diarization returned 0 segments. Using fallback: SPEAKER_00")
-                    diarization_fallback_used = True
-                else:
-                    print(f"[Parallel] Diarization completed: {diarization_segment_count} segments")
-            except Exception as e:
-                print(f"[Pipeline] Warning: Diarization failed: {e}")
-                print(f"[Pipeline] Proceeding with ASR only (fallback: SPEAKER_00)")
-                diarization = DiarizationAnnotationWrapper([])
-                diarization_load_time = 0.0
-                diarization_time = 0.0
-                diarization_params = {}
-                diarization_fallback_used = True
+            # as_completed로 개별 완료 감지하여 progress 발행
+            for future in as_completed([asr_future, diarization_future]):
+                if future is asr_future:
+                    try:
+                        asr_result, model_load_time, transcribe_time, asr_provider = future.result()
+                        print(f"[Parallel] ASR completed: {len(asr_result.get('segments', []))} segments")
+                        print(f"[Parallel] ASR Provider: {asr_provider.value}")
+                        if on_progress:
+                            on_progress(55, "음성 인식 완료")
+                    except Exception as e:
+                        print(f"[Pipeline] Error: ASR failed: {e}")
+                        raise
+                elif future is diarization_future:
+                    try:
+                        diarization, diarization_load_time, diarization_time, embeddings_dict, pipeline, diarization_params = future.result()
+                        diarization_segment_count = len(list(diarization.itertracks(yield_label=True)))
+                        if diarization_segment_count == 0:
+                            print(f"[Pipeline] Warning: Diarization returned 0 segments. Using fallback: SPEAKER_00")
+                            diarization_fallback_used = True
+                        else:
+                            print(f"[Parallel] Diarization completed: {diarization_segment_count} segments")
+                        if on_progress:
+                            on_progress(65, "화자분리 완료")
+                    except Exception as e:
+                        print(f"[Pipeline] Warning: Diarization failed: {e}")
+                        print(f"[Pipeline] Proceeding with ASR only (fallback: SPEAKER_00)")
+                        diarization = DiarizationAnnotationWrapper([])
+                        diarization_load_time = 0.0
+                        diarization_time = 0.0
+                        diarization_params = {}
+                        diarization_fallback_used = True
     finally:
         # Heartbeat 중지 후 잠금 해제
         stop_lock_heartbeat(heartbeat)
@@ -289,6 +305,8 @@ def _run_case4_parallel_processing(
 
     # 화자 정보 병합 (V1: ASR 세그먼트 기준)
     print(f"\n[Merging] Combining ASR and diarization results...")
+    if on_progress:
+        on_progress(72, "결과 병합 중")
     merged_segments = merge_segments_with_speakers(
         asr_segments,
         diarization,
@@ -341,6 +359,8 @@ def _run_case4_parallel_processing(
         print(f"[Hallucination] Filtered {hallucination_count} segments ({pre_filter_count} → {len(filtered_segments)})")
 
     merged_segments = filtered_segments
+    if on_progress:
+        on_progress(78, "후처리 완료")
 
     # Fallback: 화자분리 실패/0 세그먼트 시 모든 ASR 세그먼트를 SPEAKER_00으로 할당
     if diarization_fallback_used:

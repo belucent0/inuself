@@ -16,7 +16,7 @@ import re
 import time
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 import httpx
 import redis
@@ -584,6 +584,7 @@ class OcrVisionProcessor:
         ocr_mode: OcrMode = "document",
         resource_timeout: float = 120.0,
         file_id: str = None,
+        on_progress: Callable[[float, str], None] | None = None,
     ) -> dict[str, Any]:
         """여러 이미지를 OCR 처리.
 
@@ -656,6 +657,11 @@ class OcrVisionProcessor:
                         "status": "success"
                     })
                     logger.info(f"Page {page_num} completed ({len(text)} chars)")
+
+                    # 페이지별 진행률 발행 (25% ~ 85% 구간에 매핑)
+                    if on_progress:
+                        page_progress = 25 + (page_num / len(images)) * 60
+                        on_progress(page_progress, f"페이지 {page_num}/{len(images)} 완료")
 
                 except Exception as e:
                     logger.error(f"Failed to process page {page_num}: {e}")
