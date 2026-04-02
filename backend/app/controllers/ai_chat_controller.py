@@ -113,7 +113,7 @@ MODEL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+(?:\([A-Za-z0-9._:-]+\))?$")
 
 
 def _parse_allowed_models(settings: Settings) -> set[str]:
-    raw = settings.litellm_allowed_models.strip()
+    raw = settings.ai_gateway_allowed_models.strip()
     if not raw:
         return set()
     return {item.strip() for item in raw.split(",") if item.strip()}
@@ -130,7 +130,7 @@ def _validate_requested_model(settings: Settings, requested_model: str) -> str:
     if allowed and model not in allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"model '{model}' is not in LITELLM_ALLOWED_MODELS",
+            detail=f"model '{model}' is not in AI_GATEWAY_ALLOWED_MODELS",
         )
     return model
 

@@ -84,7 +84,7 @@ async def _process_job_async(
         response = request_litellm_completion(
             settings=get_settings(),
             messages=messages,
-            model=get_settings().litellm_model_summarize,
+            model=get_settings().ai_gateway_model_summarize,
         )
 
         logger.info(f"[LLM] LLM response received: {len(response)} chars")

@@ -144,10 +144,10 @@ async def websocket_asr_stream(
     
     settings = get_settings()
     # LiteLLM Gateway URL 사용 (architecture v4: One Gateway)
-    litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
+    litellm_base_url = os.getenv("AI_GATEWAY_URL", "http://localhost:4000")
     # LiteLLM endpoint (OpenAI compatible)
     transcribe_url = f"{litellm_base_url}/v1/audio/transcriptions"
-    api_key = os.getenv("LITELLM_API_KEY", "")
+    api_key = os.getenv("AI_GATEWAY_API_KEY", "")
     
     # LiteLLM Gateway 연결 확인
     try:
@@ -166,7 +166,7 @@ async def websocket_asr_stream(
                 logger.error(f"[WebSocket ASR] LiteLLM Gateway connection failed: result={result}")
                 await websocket.send_json({
                     "type": "error",
-                    "message": "AI Gateway(LiteLLM)에 연결할 수 없습니다. 서비스 상태를 확인해주세요.",
+                    "message": "AI Gateway에 연결할 수 없습니다. 서비스 상태를 확인해주세요.",
                 })
                 await websocket.close(code=1011, reason="Gateway unavailable")
                 return

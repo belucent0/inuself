@@ -27,9 +27,9 @@ import redis
 from worker.logging_config import logger
 from worker.telemetry import get_trace_id, inject_trace_context
 
-# LiteLLM Proxy URL
-LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
-LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "sk-1234")
+# AI Gateway URL
+AI_GATEWAY_URL = os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
+AI_GATEWAY_API_KEY = os.getenv("AI_GATEWAY_API_KEY", "sk-1234")
 
 # Redis URL (잠금용)
 REDIS_URL = os.getenv("REDIS_URL", "redis://valkey:6379/0")
@@ -223,9 +223,9 @@ def call_litellm_transcription(
         audio_base64 = base64.b64encode(audio_content).decode('utf-8')
 
     # LiteLLM chat completion 요청
-    url = f"{LITELLM_BASE_URL}/v1/chat/completions"
+    url = f"{AI_GATEWAY_URL}/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {LITELLM_API_KEY}",
+        "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
         "Content-Type": "application/json",
     }
 
@@ -351,9 +351,9 @@ def call_litellm_diarization(
         audio_base64 = base64.b64encode(audio_content).decode('utf-8')
 
     # LiteLLM chat completion 요청
-    url = f"{LITELLM_BASE_URL}/v1/chat/completions"
+    url = f"{AI_GATEWAY_URL}/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {LITELLM_API_KEY}",
+        "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
         "Content-Type": "application/json",
     }
 

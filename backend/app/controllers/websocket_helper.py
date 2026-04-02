@@ -14,15 +14,15 @@ from ..core.llm_tier import LLMTier
 
 
 def get_litellm_base_url() -> str:
-    """LiteLLM 프록시 URL 반환."""
-    if litellm_url := os.getenv("LITELLM_BASE_URL"):
-        return litellm_url
+    """AI Gateway URL 반환."""
+    if gateway_url := os.getenv("AI_GATEWAY_URL"):
+        return gateway_url
     return "http://localhost:4000"
 
 
 def get_litellm_api_key() -> str:
-    """LiteLLM API 키 반환."""
-    return os.getenv("LITELLM_API_KEY", "")
+    """AI Gateway API 키 반환."""
+    return os.getenv("AI_GATEWAY_API_KEY", "")
 
 
 @lru_cache(maxsize=1)
@@ -167,7 +167,7 @@ async def post_process_with_llm(text: str, base_url: str = None) -> str:
     """
     try:
         client = get_async_openai_client()
-        model = os.getenv("LITELLM_MODEL", LLMTier.SIMPLE)
+        model = os.getenv("AI_GATEWAY_MODEL", LLMTier.SIMPLE)
         
         response = await client.chat.completions.create(
             model=model,
