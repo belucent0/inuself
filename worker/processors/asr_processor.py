@@ -23,6 +23,7 @@ from worker.utils.storage import download_file, upload_json
 #     rebuild_speaker_stats,
 #     rebuild_transcription_text,
 # )
+from worker.utils.event_publisher import publish_file_progress
 from worker.utils.result_publisher import (
     publish_asr_started,
     publish_asr_completed,
@@ -104,6 +105,10 @@ async def _process_job(
     publish_asr_started(file_id)
     logger.info(f"[Worker] Published processing_started event: file_id={file_id}")
 
+    # progress 콜백: 파이프라인 내부 서브스테이지 이벤트 발행
+    def _on_progress(progress: float, message: str) -> None:
+        publish_file_progress(file_id, "PROCESSING", "asr_pipeline", progress, message)
+
     # 파일 다운로드
     logger.info(f"[Worker] [2/5] Downloading file: {storage_key}")
 
@@ -115,9 +120,11 @@ async def _process_job(
     try:
         download_file(storage_key, destination=temp_path)
         logger.info(f"[Worker] [3/5] File download completed: {temp_path}")
+        publish_file_progress(file_id, "PROCESSING", "download_complete", 8, "파일 다운로드 완료")
 
         # ASR 파이프라인 실행
         logger.info("[Worker] [4/5] Starting ASR pipeline...")
+        publish_file_progress(file_id, "PROCESSING", "pipeline_start", 12, "음성 인식 시작")
 
         # Lazy import: torchaudio DLL 로드 오류 방지
         from worker.pipelines.asr.pipeline import (
@@ -137,6 +144,7 @@ async def _process_job(
             max_speakers=max_speakers,
             file_id=file_id,
             accuracy_mode=accuracy_mode,
+            on_progress=_on_progress,
         )
 
         # OpenTelemetry context를 executor 스레드로 전파
@@ -155,6 +163,7 @@ async def _process_job(
             None, pipeline_with_otel_context
         )
         logger.info("[Worker] [5/5] ASR pipeline completed!")
+        publish_file_progress(file_id, "PROCESSING", "pipeline_complete", 85, "음성 인식 완료")
 
         num_speakers = len(result.speaker_stats)
         logger.info(f"[Worker] - Number of speakers: {num_speakers}")
@@ -203,6 +212,7 @@ async def _process_job(
     upload_json(result_data, key=result_s3_key)
 
     logger.info(f"[Worker] Results saved to S3: {result_s3_key}")
+    publish_file_progress(file_id, "PROCESSING", "s3_upload_complete", 92, "결과 저장 완료")
 
     # Redis Stream: 완료 알림
     publish_asr_completed(

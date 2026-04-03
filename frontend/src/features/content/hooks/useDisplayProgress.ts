@@ -23,9 +23,12 @@ const PROGRESS_MAP: Partial<Record<ContentStatus, number>> = {
   SUMMARIZING: 10,
 }
 
-const ESTIMATED_DURATION: Partial<Record<ContentStatus, (d: number) => number>> = {
-  PROCESSING: (duration) => (duration || 120) * 0.65,
-  OCR_PROCESSING: () => 60,
+/** 상태별 예상 소요시간(초) 계산. content 전체를 받아 정확한 추정. */
+type DurationEstimator = (content: ContentSummary) => number
+
+const ESTIMATED_DURATION: Partial<Record<ContentStatus, DurationEstimator>> = {
+  PROCESSING: (c) => (c.duration_seconds || 120) * 1.5,
+  OCR_PROCESSING: (c) => Math.max((c.document?.page_count ?? 0), 1) * 30,
   SUMMARIZING: () => 45,
 }
 
@@ -89,13 +92,40 @@ export function useDisplayProgress(content: ContentSummary): number {
     const isModeB = realProgress > 0
 
     const tick = () => {
-      let raw: number
+      // Mode A: 시간 기반 추정 (항상 계산)
+      let modeA = 0
+      const estimator = ESTIMATED_DURATION[status]
+      if (!estimator) {
+        modeA = PROGRESS_MAP[status] ?? 0
+      } else {
+        const estimatedTotal = estimator(content)
+        const startTime = updated_at ? new Date(updated_at).getTime() : 0
 
+        if (!startTime || startTime <= 0) {
+          modeA = PROGRESS_MAP[status] ?? 10
+        } else {
+          const elapsed = (Date.now() - startTime) / 1000
+          const ratio = Math.max(0, elapsed / estimatedTotal)
+
+          if (ratio <= 1) {
+            // 추정시간 이내: quadratic ease-out (cubic보다 완만)
+            const eased = 1 - Math.pow(1 - ratio, 2)
+            modeA = 10 + eased * 70
+          } else {
+            // 추정시간 초과: 로그 크롤 (80% → 95% 점근, 절대 멈추지 않음)
+            const overtime = ratio - 1
+            const extra = 15 * (1 - 1 / (1 + overtime * 0.5))
+            modeA = 80 + extra
+          }
+        }
+      }
+
+      // Mode B: SSE 마일스톤 보간 (SSE 이벤트가 있을 때만)
+      let modeB = 0
       if (isModeB) {
-        // Mode B: SSE 마일스톤 보간
         const { value: anchorVal, time: anchorTime } = anchorRef.current
         if (anchorTime <= 0) {
-          raw = realProgress
+          modeB = realProgress
         } else {
           const elapsed = (Date.now() - anchorTime) / 1000
           const interpolated = anchorVal + elapsed * INTERPOLATION_RATE
@@ -104,28 +134,13 @@ export function useDisplayProgress(content: ContentSummary): number {
             (interpolated - anchorVal) / MAX_INTERPOLATION_BUFFER,
             1,
           )
-          const eased = anchorVal + MAX_INTERPOLATION_BUFFER * (1 - Math.pow(1 - bufferRatio, 2))
-          raw = Math.min(eased, 99)
-        }
-      } else {
-        // Mode A: 시간 기반 추정
-        const estimator = ESTIMATED_DURATION[status]
-        if (!estimator) {
-          raw = PROGRESS_MAP[status] ?? 0
-        } else {
-          const estimatedTotal = estimator(duration_seconds)
-          const startTime = updated_at ? new Date(updated_at).getTime() : 0
-
-          if (!startTime || startTime <= 0) {
-            raw = PROGRESS_MAP[status] ?? 10
-          } else {
-            const elapsed = (Date.now() - startTime) / 1000
-            const ratio = Math.max(0, Math.min(elapsed / estimatedTotal, 1))
-            const eased = 1 - Math.pow(1 - ratio, 3)
-            raw = 10 + eased * 75
-          }
+          modeB = anchorVal + MAX_INTERPOLATION_BUFFER * (1 - Math.pow(1 - bufferRatio, 2))
+          modeB = Math.min(modeB, 99)
         }
       }
+
+      // 두 모드 중 더 높은 값 사용 (NPU 구간에서 Mode B 버퍼 소진 시 Mode A가 이어받음)
+      const raw = Math.max(modeA, modeB)
 
       // 단조증가 보장
       const clamped = Math.max(0, Math.min(100, Math.round(raw)))
@@ -139,7 +154,7 @@ export function useDisplayProgress(content: ContentSummary): number {
     const interval = isModeB ? 200 : 1000
     const id = setInterval(tick, interval)
     return () => clearInterval(id)
-  }, [isProcessing, realProgress, status, duration_seconds, updated_at])
+  }, [isProcessing, realProgress, status, duration_seconds, updated_at, content.document?.page_count])
 
   return display
 }
