@@ -149,10 +149,17 @@ export function useContents(params?: ContentListParams): UseContentsResult {
             ? Math.max(event.progress ?? 0, item.progress ?? 0)
             : event.progress
 
+          // SSE 메타데이터에서 page_count를 document에 반영 (document가 있고 값이 변경된 경우만)
+          const documentUpdate =
+            event.metadata?.page_count && item.document && event.metadata.page_count !== item.document.page_count
+              ? { document: { ...item.document, page_count: event.metadata.page_count } }
+              : {}
+
           return {
             ...item,
             status: newStatus,
             progress: newProgress,
+            ...documentUpdate,
             ...(oldStatus !== newStatus ? { updated_at: new Date().toISOString() } : {}),
           }
         })

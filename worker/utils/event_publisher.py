@@ -27,7 +27,7 @@ def _get_redis() -> Redis:
 
 
 def publish_file_progress(
-    file_id: int,
+    file_id: int | str,
     status: str,
     step: str,
     progress: float,
