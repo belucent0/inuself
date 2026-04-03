@@ -148,5 +148,8 @@ class GraphState(TypedDict):
     needs_retry: bool
     retry_reason: str
 
+    # V8.5: Time Budget (재시도 루프 총 소요시간 제한)
+    deadline: float  # time.monotonic() 기준 마감 시각 (0이면 제한 없음)
+
     # 콘텐츠 컨텍스트 (콘텐츠 상세 채팅 시 요약/전사 직접 주입, 빈 문자열이면 미사용)
     content_context: str

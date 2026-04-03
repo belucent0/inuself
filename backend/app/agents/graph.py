@@ -6,9 +6,10 @@ V8.0: 전체 워크플로우 구현 (Intent → Search/RAG/Reasoning → Generat
 
 from __future__ import annotations
 
+import time
 from typing import Any, AsyncIterator
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 from loguru import logger
 
@@ -26,6 +27,28 @@ from .nodes import (
     QueryRewriterNode,
     FallbackHandlerNode,
 )
+
+
+# V8.5: 검색 Time Budget (초)
+SEARCH_BUDGET_SECONDS = 120
+
+# 후속 질문 감지 패턴 (이전 응답 참조)
+_FOLLOWUP_PATTERNS = [
+    "그 중", "첫 번째", "두 번째", "세 번째", "네 번째", "다섯 번째",
+    "자세히", "더 알려", "더 자세", "구체적으로",
+    "그것", "그건", "그게", "위의", "아까", "방금",
+]
+
+
+def _is_followup_query(query: str) -> bool:
+    """이전 응답을 참조하는 후속 질문인지 판단."""
+    return any(p in query for p in _FOLLOWUP_PATTERNS)
+
+
+def _has_previous_assistant_context(state: GraphState) -> bool:
+    """대화 히스토리에 이전 assistant 응답(검색 결과 포함)이 있는지 확인."""
+    msgs = state.get("messages", [])
+    return any(isinstance(m, AIMessage) and len(m.content) > 100 for m in msgs)
 
 
 # 상태 표기용 모드/티어 한글 표시명 매핑
@@ -404,6 +427,8 @@ async def run_ai_agent(
         "failed_queries": [],
         "needs_retry": False,
         "retry_reason": "",
+        # V8.5: Time Budget
+        "deadline": time.monotonic() + SEARCH_BUDGET_SECONDS,
         # 콘텐츠 컨텍스트
         "content_context": content_context,
     }
@@ -642,6 +667,8 @@ async def stream_ai_agent(
         "failed_queries": [],
         "needs_retry": False,
         "retry_reason": "",
+        # V8.5: Time Budget
+        "deadline": time.monotonic() + SEARCH_BUDGET_SECONDS,
         # 콘텐츠 컨텍스트
         "content_context": content_context,
     }
@@ -795,8 +822,29 @@ async def stream_ai_agent(
                 # 원본 쿼리 저장
                 state["original_search_queries"] = state.get("search_queries", [query])
 
+                # V8.5: 후속 질문 감지 — 이전 대화에 이미 관련 정보가 있으면 재검색 스킵
+                if _is_followup_query(query) and _has_previous_assistant_context(state):
+                    logger.info(
+                        f"[Agent] Follow-up query detected, skipping search: '{query[:50]}...'"
+                    )
+                    yield {
+                        "type": "thinking",
+                        "data": {"step": "followup_detected", "content": "이전 검색 결과를 활용하여 답변 준비 중..."},
+                    }
+                    # 검색 스킵 → 바로 Generator로 (아래 break로 while 루프 진입 안 함)
+                    state["search_retry_count"] = max_retries  # 루프 스킵
+
                 # 재시도 루프
                 while state["search_retry_count"] < max_retries:
+                    # V8.5: Time Budget 체크 (남은 시간 30초 미만이면 재시도 중단)
+                    deadline = state.get("deadline", 0)
+                    if deadline > 0 and time.monotonic() > deadline - 30:
+                        logger.info(
+                            f"[Agent] Time budget exhausted ({SEARCH_BUDGET_SECONDS}s), "
+                            f"skipping retry (attempt {state['search_retry_count']})"
+                        )
+                        break
+
                     # 웹 검색
                     retry_count = state["search_retry_count"]
                     if retry_count == 0:
@@ -962,7 +1010,20 @@ async def stream_ai_agent(
 
                 state["original_search_queries"] = state.get("search_queries", [query])
 
+                # V8.5: 후속 질문 감지 (HYBRID 모드에서도 적용)
+                if _is_followup_query(query) and _has_previous_assistant_context(state):
+                    logger.info(
+                        f"[Agent] Follow-up query detected (HYBRID), skipping web search: '{query[:50]}...'"
+                    )
+                    state["search_retry_count"] = max_retries
+
                 while state["search_retry_count"] < max_retries:
+                    # V8.5: Time Budget 체크
+                    deadline = state.get("deadline", 0)
+                    if deadline > 0 and time.monotonic() > deadline - 30:
+                        logger.info(f"[Agent] Time budget exhausted, skipping retry")
+                        break
+
                     retry_count = state["search_retry_count"]
                     if retry_count == 0:
                         yield {
