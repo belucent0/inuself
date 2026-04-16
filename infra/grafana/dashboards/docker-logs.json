@@ -201,7 +201,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{container=\"asr-litellm-proxy\"}",
+          "expr": "{container=\"asr-ai-gateway\"}",
           "queryType": "range",
           "refId": "A"
         }

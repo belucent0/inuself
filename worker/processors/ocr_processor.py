@@ -16,6 +16,7 @@ from worker.config import get_settings
 from worker.logging_config import logger
 from worker.utils.event_loop import setup_worker_event_loop, cleanup_worker_event_loop
 from worker.utils.storage import download_file, upload_json
+from worker.utils.event_publisher import publish_file_progress
 from worker.utils.result_publisher import (
     publish_ocr_started,
     publish_ocr_completed,
@@ -86,6 +87,7 @@ async def _process_job(
     ocr_accuracy_mode: str = "speed",
 ) -> None:
     """OCR 작업 처리 함수."""
+    file_id_str = str(file_id)
 
     # 파라미터 검증
     if not file_s3_key and not image_s3_keys:
@@ -135,6 +137,7 @@ async def _process_job(
             original_file_path = temp_dir / f"original{file_suffix}"
             download_file(file_s3_key, destination=original_file_path)
             logger.info(f"[OCR] Original file downloaded: {original_file_path}")
+            publish_file_progress(file_id_str, "OCR_PROCESSING", "download_complete", 8, "파일 다운로드 완료")
 
             # 2. 전처리: 파일 → 이미지 변환
             logger.info("[OCR] [3/5] Converting file to images...")
@@ -149,6 +152,7 @@ async def _process_job(
             else:
                 images = prep_result["images"]
                 logger.info(f"[OCR] [4/5] Converted to {len(images)} images, acquiring OCR resource...")
+                publish_file_progress(file_id_str, "OCR_PROCESSING", "images_ready", 20, "이미지 변환 완료", metadata={"page_count": len(images)})
 
         # 기존 방식: 이미지 다운로드 (Backend 전처리)
         else:
@@ -185,6 +189,7 @@ async def _process_job(
                     ) from fnf_err
 
             logger.info(f"[OCR] [3/4] Downloaded {len(images)} images, acquiring OCR resource...")
+            publish_file_progress(file_id_str, "OCR_PROCESSING", "images_ready", 20, "이미지 다운로드 완료", metadata={"page_count": len(images)})
 
         # 텍스트 파일은 OCR 불필요
         if is_text_file and text_content is not None:
@@ -219,14 +224,21 @@ async def _process_job(
             return
 
         # OCR 처리 (Provider Manager에서 processing_started 이벤트 발행)
+        publish_file_progress(file_id_str, "OCR_PROCESSING", "ocr_start", 25, "OCR 처리 시작")
+
+        def _on_ocr_progress(progress: float, message: str) -> None:
+            publish_file_progress(file_id_str, "OCR_PROCESSING", "ocr_page", progress, message)
+
         result = ocr_processor.process_images(
             images,
             ocr_mode=ocr_mode,
             file_id=str(file_id),
+            on_progress=_on_ocr_progress,
         )
 
         step_num = "[5/5]" if file_s3_key else "[4/4]"
         logger.info(f"[OCR] {step_num} OCR completed: {len(result['ocr_text'])} chars extracted")
+        publish_file_progress(file_id_str, "OCR_PROCESSING", "ocr_complete", 85, "OCR 처리 완료")
         
     except Exception as exc:
         logger.error(
@@ -265,9 +277,10 @@ async def _process_job(
     
     result_s3_key = f"results/ocr/{file_id}/{uuid4().hex}.json"
     upload_json(result_data, key=result_s3_key)
-    
+
     logger.info(f"[OCR] Results saved to S3: {result_s3_key}")
-    
+    publish_file_progress(file_id_str, "OCR_PROCESSING", "s3_upload_complete", 92, "결과 저장 완료")
+
     # Redis Stream: 완료 알림
     publish_ocr_completed(
         file_id,

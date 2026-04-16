@@ -118,6 +118,10 @@ class StreamProcessor:
             "npu": 0,
         }  # 대기 중인 작업 수 추적
 
+        # lemonade 모델 warm-up/recovery 직렬화 (동시 warm-up 방지)
+        self._lemonade_model_lock = asyncio.Lock()
+        self._lemonade_recovery_task: Optional[asyncio.Task] = None
+
     @property
     def service(self) -> ProviderService:
         """ProviderService 인스턴스 (지연 생성)."""
@@ -571,6 +575,97 @@ class StreamProcessor:
             )
             return False
 
+    async def _ensure_lemonade_model_ready(self, timeout: float = 600.0) -> bool:
+        """lemonade-server 프로세스 UP + 모델 추론 가능까지 보장.
+
+        _ensure_provider_ready()는 프로세스 레벨만 확인하지만,
+        이 메서드는 실제 모델이 GPU에 로드되어 추론 가능한지까지 검증한다.
+        항시 구동 / 온디맨드 모드 모두에서 동작.
+
+        Args:
+            timeout: 전체 대기 타임아웃 (초)
+
+        Returns:
+            모델 준비 완료 여부
+        """
+        from core.manager import _load_env_vars
+
+        # Step 1: 프로세스 UP 확인 (기존 온디맨드 로직)
+        if not await self._ensure_provider_ready("lemonade-server", timeout=timeout):
+            return False
+
+        provider = self.provider_manager.get_provider_config("lemonade-server")
+        if not provider:
+            logger.error("[lemonade-model] Provider config not found")
+            return False
+
+        env_vars = _load_env_vars()
+        model_name = env_vars.get("LEMONADE_SUMMARIZE_MODEL", "gpt-oss-20b-mxfp4-GGUF")
+
+        # Step 2: 빠른 probe - 모델이 이미 로드되어 있으면 바로 통과
+        if await self.provider_manager._probe_lemonade_model(provider.port, model_name):
+            return True
+
+        # Step 3-5: warm-up/recovery (동시 요청 직렬화)
+        async with self._lemonade_model_lock:
+            # 락 획득 후 다시 probe (다른 요청이 이미 로딩 완료했을 수 있음)
+            if await self.provider_manager._probe_lemonade_model(provider.port, model_name):
+                return True
+
+            # Step 3: warm-up 시도 (모델 cold start 로딩)
+            logger.info("[lemonade-model] Model not ready, attempting warm-up...")
+            warmup_ok = await self.provider_manager._warm_up_lemonade(provider.port, model_name)
+
+            if warmup_ok:
+                # warm-up 성공 후 probe로 최종 확인
+                if await self.provider_manager._probe_lemonade_model(provider.port, model_name):
+                    return True
+
+            # Step 4: warm-up 실패 → provider 재시작 (llamacpp backend 죽음 등)
+            logger.warning("[lemonade-model] Warm-up failed, triggering provider recovery...")
+            recovered = await self.provider_manager._recover_provider(provider)
+            if not recovered:
+                logger.error("[lemonade-model] Provider recovery failed")
+                return False
+
+            # Step 5: recovery 후 모델 로딩 대기 (probe 폴링)
+            start_time = asyncio.get_running_loop().time()
+            while asyncio.get_running_loop().time() - start_time < timeout:
+                if await self.provider_manager._probe_lemonade_model(provider.port, model_name):
+                    logger.info("[lemonade-model] Model ready after recovery")
+                    return True
+                await asyncio.sleep(10)
+
+            logger.error(f"[lemonade-model] Model failed to become ready within {timeout}s")
+            return False
+
+    async def _background_lemonade_recovery(self) -> None:
+        """lemonade 요청 실패 후 백그라운드에서 모델 상태 확인 + 복구.
+
+        현재 요청은 이미 실패했으므로, 다음 요청이 성공할 수 있도록
+        사전에 모델 상태를 점검하고 필요 시 recovery를 트리거한다.
+        """
+        try:
+            from core.manager import _load_env_vars
+
+            provider = self.provider_manager.get_provider_config("lemonade-server")
+            if not provider:
+                return
+
+            env_vars = _load_env_vars()
+            model_name = env_vars.get("LEMONADE_SUMMARIZE_MODEL", "gpt-oss-20b-mxfp4-GGUF")
+
+            is_ok = await self.provider_manager._probe_lemonade_model(
+                provider.port, model_name, timeout=15.0
+            )
+            if not is_ok:
+                logger.warning(
+                    "[lemonade-recovery] Model probe failed after request error, triggering recovery..."
+                )
+                await self.provider_manager._recover_provider(provider)
+        except Exception as e:
+            logger.error(f"[lemonade-recovery] Background recovery failed: {e}")
+
     async def handle_diarization(self, request_id: str, data: dict):
         """Diarization 작업 처리."""
         file_content_b64 = data.get("file_content")
@@ -759,8 +854,8 @@ class StreamProcessor:
 
         # On-Demand: 필요한 서버가 준비될 때까지 대기
         if use_lemonade:
-            if not await self._ensure_provider_ready("lemonade-server"):
-                await self.publish_error(request_id, "Lemonade server failed to start")
+            if not await self._ensure_lemonade_model_ready():
+                await self.publish_error(request_id, "Lemonade server model failed to load")
                 return
         elif use_npu:
             if is_thinking_model:
@@ -780,6 +875,7 @@ class StreamProcessor:
                 await self.publish_error(request_id, "Llama server failed to start")
                 return
 
+        full_content = ""
         try:
             if use_lemonade:
                 logger.info(
@@ -818,7 +914,6 @@ class StreamProcessor:
             }
 
             # HTTP 요청 span
-            full_content = ""
             completion_tokens = 0
 
             with trace_http_request(
@@ -961,6 +1056,11 @@ class StreamProcessor:
             with trace_response_publish(request_id, success=True):
                 await self.publish_response(request_id, result)
 
+            # lemonade-server idle timeout 활동 기록
+            # (외부 provider_name은 llama-server로 매핑되므로 직접 기록)
+            if use_lemonade and self.idle_manager:
+                self.idle_manager.record_activity("lemonade-server")
+
         except httpx.TimeoutException:
             with trace_response_publish(request_id, success=False):
                 await self.publish_error(request_id, f"LLM completion timeout")
@@ -996,6 +1096,13 @@ class StreamProcessor:
         except Exception as e:
             with trace_response_publish(request_id, success=False):
                 await self.publish_error(request_id, f"LLM completion failed: {str(e)}")
+        finally:
+            # lemonade 요청 실패 시 백그라운드에서 모델 상태 점검 + 복구
+            if use_lemonade and not full_content:
+                if self._lemonade_recovery_task is None or self._lemonade_recovery_task.done():
+                    self._lemonade_recovery_task = asyncio.create_task(
+                        self._background_lemonade_recovery()
+                    )
 
     async def handle_ocr(self, request_id: str, data: dict):
         """OCR Vision 작업 처리."""

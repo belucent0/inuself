@@ -67,7 +67,7 @@ def _call_llm(settings, messages: list[dict], use_litellm: bool) -> str:
         response = request_litellm_completion(
             settings=settings,
             messages=messages,
-            model=settings.litellm_model_summarize,
+            model=settings.ai_gateway_model_summarize,
         )
     else:
         response = request_chat_completion(settings=settings, messages=messages, stream=False)
@@ -375,7 +375,7 @@ def summarize_transcription(text: str) -> tuple[str, str]:
         raise ValueError("요약할 텍스트가 비어 있습니다.")
 
     settings = get_settings()
-    use_litellm = settings.llm_provider == "litellm"
+    use_litellm = settings.llm_provider == "ai-gateway"
 
     # 청크 분할
     max_chunk_chars = 25000

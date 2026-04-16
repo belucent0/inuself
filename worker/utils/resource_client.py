@@ -18,10 +18,10 @@ from contextlib import contextmanager
 from typing import Optional, Generator
 from worker.logging_config import logger
 
-# LiteLLM Base URL
-LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
-RESOURCE_ACQUIRE_URL = f"{LITELLM_BASE_URL}/resource/acquire"
-RESOURCE_RELEASE_URL = f"{LITELLM_BASE_URL}/resource/release"
+# AI Gateway Base URL
+AI_GATEWAY_URL = os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
+RESOURCE_ACQUIRE_URL = f"{AI_GATEWAY_URL}/resource/acquire"
+RESOURCE_RELEASE_URL = f"{AI_GATEWAY_URL}/resource/release"
 
 # 기본 타임아웃 (초)
 DEFAULT_ACQUIRE_TIMEOUT = 120.0  # 리소스 획득 대기 시간

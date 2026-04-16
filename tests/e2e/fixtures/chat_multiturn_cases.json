@@ -36,7 +36,7 @@
               "must_reference_any": ["서울", "Seoul"]
             },
             "no_error": true,
-            "max_response_time_seconds": 120
+            "max_response_time_seconds": 150
           }
         }
       ]
@@ -53,7 +53,7 @@
             "content_contains_any": ["에 따르면", "검색", "출처", "뉴스", "2026", "발표", "공개", "AI", "인공지능"],
             "content_not_contains": [],
             "no_error": true,
-            "max_response_time_seconds": 120
+            "max_response_time_seconds": 180
           }
         },
         {

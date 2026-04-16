@@ -61,30 +61,30 @@ class WorkerSettings(BaseSettings):
     asr_chunk_threshold_minutes: int = 25
 
     # ========================================
-    # LiteLLM 프록시 설정 (V4 표준)
-    # 모든 LLM 요청은 LiteLLM을 통해 라우팅됨
+    # AI Gateway 설정 (V4 표준)
+    # 모든 LLM 요청은 AI Gateway를 통해 라우팅됨
     # ========================================
-    litellm_base_url: str = Field(
-        "http://localhost:4000", validation_alias="LITELLM_BASE_URL"
+    ai_gateway_url: str = Field(
+        "http://localhost:4000", validation_alias="AI_GATEWAY_URL"
     )
-    litellm_api_key: str = Field("", validation_alias="LITELLM_API_KEY")
-    litellm_model: str = Field("tier-simple", validation_alias="LITELLM_MODEL")
-    litellm_model_summarize: str = Field(
-        "tier-simple", validation_alias="LITELLM_MODEL_SUMMARIZE"
+    ai_gateway_api_key: str = Field("", validation_alias="AI_GATEWAY_API_KEY")
+    ai_gateway_model: str = Field("tier-simple", validation_alias="AI_GATEWAY_MODEL")
+    ai_gateway_model_summarize: str = Field(
+        "tier-simple", validation_alias="AI_GATEWAY_MODEL_SUMMARIZE"
     )
 
-    @field_validator("litellm_base_url")
+    @field_validator("ai_gateway_url")
     @classmethod
     def resolve_docker_host(cls, v: str) -> str:
-        """Docker 서비스명(asr-litellm)을 로컬 환경(localhost)에 맞게 변환."""
-        if "asr-litellm" in v:
-            return v.replace("asr-litellm", "localhost")
+        """Docker 서비스명(ai-gateway)을 로컬 환경(localhost)에 맞게 변환."""
+        if "ai-gateway" in v:
+            return v.replace("ai-gateway", "localhost")
         return v
 
     # ========================================
-    # LLM 공통 설정 (LiteLLM 또는 직접 호출 시 사용)
+    # LLM 공통 설정 (AI Gateway 또는 직접 호출 시 사용)
     # ========================================
-    llm_provider: str = Field("litellm", validation_alias="LLM_PROVIDER")
+    llm_provider: str = Field("ai-gateway", validation_alias="LLM_PROVIDER")
     llm_system_prompt: str = (
         "당신은 회의록을 요약하는 전문가입니다. 모든 응답은 반드시 한글로 작성하세요."
     )

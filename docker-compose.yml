@@ -104,7 +104,7 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      litellm:
+      ai-gateway:
         condition: service_started
     restart: unless-stopped
     extra_hosts:
@@ -118,14 +118,14 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME:-asr-media}
-      # LiteLLM 프록시 설정
-      - LLM_PROVIDER=litellm
-      - LITELLM_BASE_URL=http://litellm:4000
-      - LITELLM_API_KEY=${LITELLM_API_KEY}
-      - LITELLM_MODEL=${LITELLM_MODEL:-tier-simple}
-      - LITELLM_MODEL_SUMMARIZE=${LITELLM_MODEL_SUMMARIZE:-tier-recap}
+      # AI Gateway 설정
+      - LLM_PROVIDER=ai-gateway
+      - AI_GATEWAY_URL=http://ai-gateway:4000
+      - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY}
+      - AI_GATEWAY_MODEL=${AI_GATEWAY_MODEL:-tier-simple}
+      - AI_GATEWAY_MODEL_SUMMARIZE=${AI_GATEWAY_MODEL_SUMMARIZE:-tier-recap}
       # WPI 마음 읽기 리포트 전용 모델 (Codex)
-      - WPI_REPORT_LITELLM_MODEL=${LITELLM_MODEL_WPI_REPORT:-codex-medium}
+      - WPI_REPORT_MODEL=${WPI_REPORT_MODEL:-codex-medium}
       - WPI_REPORT_LLM_REQUEST_TIMEOUT_SECONDS=120
       - WPI_REPORT_LLM_BUSY_MAX_SECONDS=180
       - WPI_REPORT_SINGLE_PROMPT_TIMEOUT_SECONDS=300
@@ -288,7 +288,6 @@ services:
       - ./backend/data:/app/data
       - ./backend/app:/app/app:ro
       - ./worker:/app/worker
-      - ./infra/litellm:/app/infra/litellm:ro # V6.6: GPU Stream Client
     environment:
       - TASK_QUEUE_TYPE=celery
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
@@ -303,13 +302,13 @@ services:
       - REDIS_STREAM_ENABLED=true
       # Prometheus for metrics (optional)
       - PROMETHEUS_URL=http://asr-prometheus:9090
-      # LiteLLM 프록시 설정 (LLM 요약용)
-      - LITELLM_BASE_URL=http://litellm:4000
-      - LITELLM_API_KEY=${LITELLM_API_KEY}
-      - LITELLM_MODEL=${LITELLM_MODEL:-tier-simple}
-      - LITELLM_MODEL_SUMMARIZE=${LITELLM_MODEL_SUMMARIZE:-tier-recap}
+      # AI Gateway 설정 (LLM 요약용)
+      - AI_GATEWAY_URL=http://ai-gateway:4000
+      - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY}
+      - AI_GATEWAY_MODEL=${AI_GATEWAY_MODEL:-tier-simple}
+      - AI_GATEWAY_MODEL_SUMMARIZE=${AI_GATEWAY_MODEL_SUMMARIZE:-tier-recap}
       # WPI 마음 읽기 리포트 전용 모델 (Codex)
-      - WPI_REPORT_LITELLM_MODEL=${LITELLM_MODEL_WPI_REPORT:-codex-medium}
+      - WPI_REPORT_MODEL=${WPI_REPORT_MODEL:-codex-medium}
       - WPI_REPORT_LLM_REQUEST_TIMEOUT_SECONDS=120
       - WPI_REPORT_LLM_BUSY_MAX_SECONDS=180
       - WPI_REPORT_SINGLE_PROMPT_TIMEOUT_SECONDS=300
@@ -331,46 +330,34 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  litellm:
+  # AI Gateway — LiteLLM Proxy 대체 (FastAPI + openai SDK)
+  # OpenAI-compatible API를 제공하며, Redis Stream으로 로컬 GPU/NPU 프로바이더에 요청 전달
+  ai-gateway:
     build:
-      context: ./infra/litellm
+      context: ./infra/ai-gateway
       dockerfile: Dockerfile
-    image: asr-litellm-proxy:1.0.0
-    container_name: asr-litellm-proxy
+    image: asr-ai-gateway:1.0.0
+    container_name: asr-ai-gateway
     ports:
       - "4000:4000"
     volumes:
-      # config.yaml은 이미지에 포함됨 (볼륨 마운트 제거 - Windows 동기화 문제 방지)
-      - ./infra/litellm:/app/custom:ro
       - ./infra/shared:/app/infra/shared:ro # 공통 tier_config 모듈
     env_file:
       - .env
     environment:
-      # Docker 전용 오버라이드 (호스트와 다른 설정)
-      - PROMETHEUS_URL=http://asr-prometheus:9090
       - REDIS_URL=redis://asr-valkey:6379/0
-      - LITELLM_CONFIG_PATH=/app/custom/litellm_config.yaml
-      # LiteLLM은 DB 사용 안 함 (Prisma 에러 방지)
-      - DATABASE_URL=
-      # Architecture V7.0: Redis Stream을 통해 Host의 Provider Manager로 요청
-      # host.docker.internal HTTP 통신 제거 (Docker Desktop 크래시 방지)
-      - REDIS_STREAM_ENABLED=true
-      # Background health checks 비활성화
-      - DISABLE_SPEND_LOGS=true
-      - BACKGROUND_HEALTH_CHECKS=false
-      - HEALTH_CHECK_INTERVAL=86400
-      # OpenTelemetry 분산 추적 비활성화 (backend에서 이미 추적 중)
-      # LiteLLM 자체 health check가 필터 없이 Tempo로 전송되는 것을 방지
-      - OTEL_EXPORTER_OTLP_ENDPOINT=
-      - OTEL_TRACES_EXPORTER=none
-      - OTEL_METRICS_EXPORTER=none
-      - OTEL_LOGS_EXPORTER=none
-      - OTEL_SDK_DISABLED=true
+      - DEPLOY_MODE=${DEPLOY_MODE:-local-gpu}
+      # Codex (CLIProxyAPI) 설정
+      - CODEX_API_BASE=http://cli-proxy-api:8317/v1
+      - CLIPROXY_API_KEY=${CLIPROXY_API_KEY:-}
+      # OpenTelemetry 분산 추적
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
+      - OTEL_SERVICE_NAME=asr-ai-gateway
     depends_on:
-      - prometheus
-      - valkey
-      - tempo
-      - cli-proxy-api
+      valkey:
+        condition: service_healthy
+      cli-proxy-api:
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:4000/health/liveliness" ]

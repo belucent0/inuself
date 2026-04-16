@@ -16,7 +16,7 @@ import re
 import time
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 import httpx
 import redis
@@ -25,10 +25,10 @@ from PIL import Image
 from worker.config import get_settings
 from worker.logging_config import logger
 
-# V7.0: LiteLLM Proxy를 통한 OCR 요청
+# V7.0: AI Gateway를 통한 OCR 요청
 REDIS_STREAM_ENABLED = os.getenv("REDIS_STREAM_ENABLED", "false").lower() == "true"
-LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://litellm:4000")
-LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
+AI_GATEWAY_URL = os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
+AI_GATEWAY_API_KEY = os.getenv("AI_GATEWAY_API_KEY", "")
 OCR_REQUEST_TIMEOUT = 300.0  # 5분
 
 
@@ -67,9 +67,9 @@ def _call_ocr_via_litellm(
     logger.info(f"[OCR Vision] Sending OCR via LiteLLM: model={final_model}, accuracy_mode={accuracy_mode}")
 
     # OpenAI Vision API 형식으로 요청
-    url = f"{LITELLM_BASE_URL}/v1/chat/completions"
+    url = f"{AI_GATEWAY_URL}/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {LITELLM_API_KEY}",
+        "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
         "Content-Type": "application/json",
     }
     
@@ -584,6 +584,7 @@ class OcrVisionProcessor:
         ocr_mode: OcrMode = "document",
         resource_timeout: float = 120.0,
         file_id: str = None,
+        on_progress: Callable[[float, str], None] | None = None,
     ) -> dict[str, Any]:
         """여러 이미지를 OCR 처리.
 
@@ -656,6 +657,11 @@ class OcrVisionProcessor:
                         "status": "success"
                     })
                     logger.info(f"Page {page_num} completed ({len(text)} chars)")
+
+                    # 페이지별 진행률 발행 (25% ~ 85% 구간에 매핑)
+                    if on_progress:
+                        page_progress = 25 + (page_num / len(images)) * 60
+                        on_progress(page_progress, f"페이지 {page_num}/{len(images)} 완료")
 
                 except Exception as e:
                     logger.error(f"Failed to process page {page_num}: {e}")

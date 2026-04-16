@@ -1,12 +1,12 @@
-"""OpenTelemetry 분산 추적 설정 (LiteLLM Custom Handler용).
+"""OpenTelemetry 분산 추적 설정 (AI Gateway용).
 
 GPU/NPU 프로바이더 호출 추적 및 병목 분석을 위한 모듈.
 
 사용법:
-    from custom.telemetry import setup_litellm_telemetry, trace_provider_call
+    from middleware.telemetry import setup_telemetry, trace_provider_call
 
-    # 초기화 (run_proxy.py에서)
-    setup_litellm_telemetry()
+    # 초기화 (main.py에서)
+    setup_telemetry()
 
     # 프로바이더 호출 추적
     with trace_provider_call("gpu", "whisper-large-v3", file_id=123) as span:
@@ -89,14 +89,14 @@ _initialized = False
 _tracer_provider: Optional[TracerProvider] = None
 
 
-def setup_litellm_telemetry(service_name: str = None, app=None) -> None:
-    """LiteLLM용 OpenTelemetry 초기화."""
+def setup_telemetry(service_name: str = None, app=None) -> None:
+    """AI Gateway용 OpenTelemetry 초기화."""
     global _initialized, _tracer_provider
 
     if _initialized:
         return
 
-    service = service_name or os.getenv("OTEL_SERVICE_NAME", "asr-litellm")
+    service = service_name or os.getenv("OTEL_SERVICE_NAME", "asr-ai-gateway")
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 
     if not endpoint:

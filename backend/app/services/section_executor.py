@@ -177,7 +177,7 @@ class SectionGraphExecutor:
                 # Phase 1도 tier-recap 사용 (법률/전문 용어 처리 향상)
                 response = await request_litellm_completion_async(
                     settings=self.settings,
-                    model=self.settings.litellm_model_summarize,
+                    model=self.settings.ai_gateway_model_summarize,
                     messages=messages,
                 )
 
