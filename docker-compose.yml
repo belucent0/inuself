@@ -97,6 +97,7 @@ services:
       - ./docs/wpis:/app/docs/wpis:ro
       # 코드 변경사항 실시간 반영 (개발 환경)
       - ./backend/app:/app/app:ro
+      - ./backend/alembic:/app/alembic:ro
     depends_on:
       postgres:
         condition: service_healthy
