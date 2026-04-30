@@ -4,14 +4,17 @@
  * - MarkdownContent 재사용하여 summary 렌더링
  */
 
+import { useState } from 'react'
 import type { ContentDetail } from '../types'
 import { MarkdownContent } from '@/features/chat/components/MarkdownContent'
 import { Button } from '@/shared/components/ui/button'
+import { contentsApi } from '@/shared/services/endpoints/contents'
 import {
   Loader2,
   AlertCircle,
   Clock,
   RotateCcw,
+  ImageIcon,
 } from 'lucide-react'
 
 interface SummaryDisplayProps {
@@ -97,6 +100,22 @@ export function SummaryDisplay({
   onRetryClick,
 }: SummaryDisplayProps) {
   const summaryText = content.summary_md || content.summary_html || content.summary
+  const [coverImageUrl, setCoverImageUrl] = useState(content.cover_image_url)
+  const [isRegenerating, setIsRegenerating] = useState(false)
+
+  const handleRegenerateImage = async () => {
+    setIsRegenerating(true)
+    try {
+      const result = await contentsApi.regenerateCoverImage(content.id)
+      if (result.cover_image_url) {
+        setCoverImageUrl(`${result.cover_image_url}?t=${Date.now()}`)
+      }
+    } catch {
+      // 실패 시 조용히 무시 (toast 등 추가 가능)
+    } finally {
+      setIsRegenerating(false)
+    }
+  }
 
   if (content.status !== 'COMPLETED') {
     return (
@@ -106,6 +125,51 @@ export function SummaryDisplay({
 
   return (
     <div className="space-y-6 max-w-3xl">
+      {/* 커버 이미지 */}
+      {coverImageUrl && (
+        <div className="relative group">
+          <div className="aspect-video w-full max-w-md overflow-hidden rounded-lg border">
+            <img
+              src={coverImageUrl}
+              alt={content.title || '커버 이미지'}
+              className="w-full h-full object-cover"
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity gap-1.5"
+            onClick={handleRegenerateImage}
+            disabled={isRegenerating}
+          >
+            {isRegenerating ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
+            재생성
+          </Button>
+        </div>
+      )}
+
+      {/* 커버 이미지가 없을 때 생성 버튼 */}
+      {!coverImageUrl && summaryText && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          onClick={handleRegenerateImage}
+          disabled={isRegenerating}
+        >
+          {isRegenerating ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <ImageIcon className="h-3.5 w-3.5" />
+          )}
+          커버 이미지 생성
+        </Button>
+      )}
+
       {summaryText ? (
         <div className="prose prose-sm dark:prose-invert max-w-none">
           <MarkdownContent content={summaryText} />

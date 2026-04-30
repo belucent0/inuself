@@ -97,6 +97,7 @@ services:
       - ./docs/wpis:/app/docs/wpis:ro
       # 코드 변경사항 실시간 반영 (개발 환경)
       - ./backend/app:/app/app:ro
+      - ./backend/alembic:/app/alembic:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -350,6 +351,10 @@ services:
       # Codex (CLIProxyAPI) 설정
       - CODEX_API_BASE=http://cli-proxy-api:8317/v1
       - CLIPROXY_API_KEY=${CLIPROXY_API_KEY:-}
+      # RunPod Serverless (이미지 생성)
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY:-}
+      - RUNPOD_IMAGE_BASE_URL=${RUNPOD_IMAGE_BASE_URL:-}
+      - RUNPOD_IMAGE_MODEL=${RUNPOD_IMAGE_MODEL:-sdxl-turbo}
       # OpenTelemetry 분산 추적
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - OTEL_SERVICE_NAME=asr-ai-gateway

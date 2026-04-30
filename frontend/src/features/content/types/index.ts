@@ -28,6 +28,7 @@ export interface ContentSummary {
   updated_at: string
   speakers: string[]
   duration_seconds: number
+  cover_image_url?: string
   /** SSE 전용 ephemeral 필드 (API 응답에는 없음) */
   progress?: number
   transcription?: {

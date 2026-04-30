@@ -111,10 +111,70 @@ async def _process_job_async(
 
     logger.info(f"[LLM] Results saved to S3: {result_s3_key}")
 
+    # 커버 이미지 자동 생성 (non-fatal — 실패해도 요약 결과 유지)
+    image_s3_key = await _generate_cover_image(file_id=file_id, llm_response=response)
+
     # Redis Stream: 완료 알림
-    publish_llm_completed(file_id, result_s3_key=result_s3_key)
+    publish_llm_completed(file_id, result_s3_key=result_s3_key, image_s3_key=image_s3_key)
 
     logger.info(
         "[LLM] OK LLM processing completed (Dumb Proxy Mode), result published to stream"
     )
     logger.info("LLM processing completed for file_id={}".format(file_id))
+
+
+async def _generate_cover_image(*, file_id: int, llm_response: str) -> str | None:
+    """LLM 응답에서 제목/키워드를 추출하여 커버 이미지를 생성합니다.
+
+    실패해도 예외를 전파하지 않습니다 (non-fatal).
+
+    Returns:
+        이미지 S3 key 또는 None
+    """
+    try:
+        import json as _json
+        import io
+
+        from worker.pipelines.image.generator import generate_content_image
+        from worker.utils.storage import upload_fileobj
+
+        # LLM 응답에서 제목/키워드 추출 시도 (JSON 파싱)
+        title = ""
+        keywords = ""
+        try:
+            parsed = _json.loads(llm_response)
+            title = parsed.get("title", "") or parsed.get("제목", "")
+            kw = parsed.get("keywords", []) or parsed.get("키워드", [])
+            if isinstance(kw, list):
+                keywords = ", ".join(kw)
+            elif isinstance(kw, str):
+                keywords = kw
+        except (_json.JSONDecodeError, AttributeError):
+            # JSON이 아닌 경우 첫 줄을 제목으로 사용
+            lines = llm_response.strip().split("\n")
+            title = lines[0][:200] if lines else "untitled"
+
+        if not title:
+            logger.info("[ImageGen] No title found in LLM response, skipping image generation")
+            return None
+
+        logger.info(f"[ImageGen] Starting cover image generation for file_id={file_id}")
+        image_bytes = generate_content_image(
+            title=title,
+            keywords=keywords,
+            summary=llm_response[:500],
+        )
+
+        if not image_bytes:
+            logger.info("[ImageGen] Image generation returned None (service unavailable?)")
+            return None
+
+        # S3에 이미지 업로드
+        image_key = f"results/images/{file_id}/{uuid4().hex}.png"
+        upload_fileobj(io.BytesIO(image_bytes), key=image_key)
+        logger.info(f"[ImageGen] Cover image saved to S3: {image_key}")
+        return image_key
+
+    except Exception as exc:
+        logger.warning(f"[ImageGen] Cover image generation failed (non-fatal): {exc}")
+        return None

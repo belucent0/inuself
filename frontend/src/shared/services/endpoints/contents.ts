@@ -92,9 +92,19 @@ export async function retryProcessing(
   return httpClient.post<{ message: string }>(`/contents/${id}/retry?${params.toString()}`)
 }
 
+/**
+ * 커버 이미지 재생성
+ */
+export async function regenerateCoverImage(
+  id: string
+): Promise<{ success: boolean; message: string; cover_image_url?: string }> {
+  return httpClient.post(`/contents/${id}/regenerate-image`)
+}
+
 export const contentsApi = {
   getContents,
   getContent,
   deleteContents,
   retryProcessing,
+  regenerateCoverImage,
 }

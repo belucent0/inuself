@@ -145,6 +145,44 @@ async def stream_media(
     )
 
 
+@router.get("/cover/{content_id}")
+async def get_cover_image(
+    content_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user_id: UUID = Depends(get_current_user_id),
+    cache_service: MediaCacheService = Depends(get_media_cache_service),
+):
+    """커버 이미지 프록시.
+
+    콘텐츠의 AI 생성 커버 이미지를 S3에서 스트리밍합니다.
+    """
+    repo = ContentRepository(session)
+    content = await repo.get_by_file_id(content_id)
+
+    if not content:
+        raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
+
+    if not content.cover_image_key:
+        raise HTTPException(status_code=404, detail="커버 이미지가 없습니다")
+
+    file_info = await cache_service.get_file_info(content.cover_image_key)
+    if not file_info:
+        raise HTTPException(status_code=404, detail="커버 이미지 파일을 찾을 수 없습니다")
+
+    file_size = file_info["size"]
+
+    return StreamingResponse(
+        cache_service.stream_file(content.cover_image_key, 0, file_size - 1),
+        status_code=200,
+        headers={
+            "Content-Type": "image/png",
+            "Content-Length": str(file_size),
+            "Cache-Control": "public, max-age=86400",
+        },
+        media_type="image/png",
+    )
+
+
 @router.head("/{content_id}")
 async def head_media(
     content_id: UUID,

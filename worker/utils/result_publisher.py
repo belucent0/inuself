@@ -155,21 +155,24 @@ def publish_llm_completed(
     file_id: int,
     *,
     result_s3_key: str,
+    image_s3_key: str | None = None,
 ) -> str:
     """LLM 작업 완료를 발행합니다.
 
     Args:
         file_id: 파일 ID
         result_s3_key: 결과 JSON이 저장된 S3 key
+        image_s3_key: 커버 이미지가 저장된 S3 key (선택)
     """
-    return _publish_result(
-        {
-            "type": "llm",
-            "event": "completed",
-            "file_id": file_id,
-            "result_s3_key": result_s3_key,
-        }
-    )
+    data = {
+        "type": "llm",
+        "event": "completed",
+        "file_id": file_id,
+        "result_s3_key": result_s3_key,
+    }
+    if image_s3_key:
+        data["image_s3_key"] = image_s3_key
+    return _publish_result(data)
 
 
 def publish_llm_failed(file_id: int, *, error: str) -> str:

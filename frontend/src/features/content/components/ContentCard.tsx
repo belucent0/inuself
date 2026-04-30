@@ -115,6 +115,16 @@ export function ContentCard({ content, selected, selectionMode, onToggle, onRetr
         : null
   const body = (
     <div className="flex-1 min-h-[2.75rem] mb-3">
+      {content.cover_image_url && status === 'COMPLETED' && (
+        <div className="aspect-video w-full overflow-hidden rounded-md mb-3">
+          <img
+            src={content.cover_image_url}
+            alt={content.title || content.filename}
+            className="w-full h-full object-cover"
+            loading="lazy"
+          />
+        </div>
+      )}
       <h3 className="text-base font-medium leading-snug line-clamp-2">
         {content.title || content.filename}
       </h3>

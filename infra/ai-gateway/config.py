@@ -82,6 +82,8 @@ RUNPOD_LLM_BASE_URL = os.getenv("RUNPOD_LLM_BASE_URL", "")
 RUNPOD_ASR_BASE_URL = os.getenv("RUNPOD_ASR_BASE_URL", "")
 RUNPOD_VISION_BASE_URL = os.getenv("RUNPOD_VISION_BASE_URL", "")
 RUNPOD_EMBED_BASE_URL = os.getenv("RUNPOD_EMBED_BASE_URL", "")
+RUNPOD_IMAGE_BASE_URL = os.getenv("RUNPOD_IMAGE_BASE_URL", "")
+RUNPOD_IMAGE_MODEL = os.getenv("RUNPOD_IMAGE_MODEL", "sdxl-turbo")
 
 # ============================================================
 # Codex (CLIProxyAPI) — 양쪽 모드 공통

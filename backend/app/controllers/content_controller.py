@@ -417,6 +417,31 @@ async def retry_processing(
         raise HTTPException(status_code=500, detail=f"재처리 실패: {str(exc)}") from exc
 
 
+@router.post("/{content_id}/regenerate-image", tags=["contents"])
+async def regenerate_cover_image(
+    content_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    service: ContentService = Depends(get_service),
+):
+    """콘텐츠의 커버 이미지를 재생성합니다.
+
+    기존 요약 데이터(제목/키워드)를 기반으로 새 이미지를 생성합니다.
+    """
+    try:
+        result = await service.regenerate_cover_image(content_id, user_id=user_id)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.exception("Cover image regeneration failed")
+        raise HTTPException(
+            status_code=500, detail=f"이미지 재생성 실패: {str(exc)}"
+        ) from exc
+
+
 @router.post(
     "/{content_id}/recluster-speakers",
     response_model=ReclusterSpeakersResponse,

@@ -144,6 +144,7 @@ class Content(Base):
     )
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     summary_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cover_image_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(768), nullable=True
     )  # FLM embeddinggemma:300m (768 dimensions)

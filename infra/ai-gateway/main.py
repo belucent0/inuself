@@ -13,6 +13,7 @@ from clients.stream_client import get_async_gpu_stream_client
 from core.redis import close_async_redis
 from routes.chat import router as chat_router
 from routes.embeddings import router as embeddings_router
+from routes.images import router as images_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +45,7 @@ app = FastAPI(
 # chat_router가 /v1/chat/completions를 처리하며, task_type에 따라 media.py로 내부 분기
 app.include_router(chat_router)
 app.include_router(embeddings_router)
+app.include_router(images_router)
 
 
 @app.get("/health/liveliness")

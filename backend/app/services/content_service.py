@@ -55,6 +55,9 @@ class ContentService:
             item = ContentListItem.model_validate(row)
             # media_url: 보안 프록시 URL (인증 기반 접근)
             item.media_url = get_secure_media_url(row.file_id)
+            # cover_image_url: 커버 이미지 프록시 URL
+            if row.cover_image_key:
+                item.cover_image_url = f"/api/media/cover/{row.file_id}"
             items.append(item)
 
         total_pages = (total + page_size - 1) // page_size if total > 0 else 0
@@ -77,6 +80,9 @@ class ContentService:
         detail = ContentDetail.model_validate(content)
         # media_url: 보안 프록시 URL (인증 기반 접근)
         detail.media_url = get_secure_media_url(content.file_id) if content.file_id else None
+        # cover_image_url: 커버 이미지 프록시 URL
+        if content.cover_image_key:
+            detail.cover_image_url = f"/api/media/cover/{content.file_id}"
         return detail
 
     async def delete_queued_contents(self) -> int:
@@ -154,6 +160,84 @@ class ContentService:
                     content_id,
                     exc,
                 )
+
+    async def regenerate_cover_image(
+        self, content_id: UUID, *, user_id: UUID | None = None
+    ) -> dict[str, Any]:
+        """커버 이미지를 재생성합니다.
+
+        기존 제목/키워드 기반으로 AI Gateway를 통해 새 이미지를 생성합니다.
+
+        Args:
+            content_id: Content의 file_id (UUID)
+            user_id: 사용자 ID (소유자 검증용)
+
+        Returns:
+            {"success": True, "message": "...", "cover_image_url": "..."}
+        """
+        from ..repositories.file_repository import FileRepository
+
+        file_repo = FileRepository(self.session)
+        content = await self.repo.get_by_file_id(content_id)
+
+        if not content:
+            raise ValueError("콘텐츠를 찾을 수 없습니다")
+
+        if user_id and content.user_id != user_id:
+            raise ValueError("해당 콘텐츠에 대한 권한이 없습니다")
+
+        if not content.title:
+            raise ValueError("제목이 없어 이미지를 생성할 수 없습니다")
+
+        # AI Gateway를 통해 이미지 생성
+        import httpx
+        import base64
+        import io
+        from uuid import uuid4
+        from ..core.storage import upload_fileobj
+
+        settings = self.settings
+        gateway_url = settings.ai_gateway_url.rstrip("/")
+
+        prompt = (
+            f"A clean, modern digital illustration representing: {content.title[:200]}. "
+            f"Style: professional, minimalist, soft gradient background, no text overlay."
+        )
+
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(
+                f"{gateway_url}/v1/images/generations",
+                json={
+                    "prompt": prompt,
+                    "model": "sd-turbo",
+                    "n": 1,
+                    "size": "512x512",
+                    "response_format": "b64_json",
+                },
+                headers={"Authorization": f"Bearer {settings.ai_gateway_api_key}"},
+            )
+            resp.raise_for_status()
+            result = resp.json()
+
+        data = result.get("data", [])
+        if not data or not data[0].get("b64_json"):
+            raise ValueError("이미지 생성 실패: 응답에 이미지 데이터 없음")
+
+        image_bytes = base64.b64decode(data[0]["b64_json"])
+        image_key = f"results/images/{content_id}/{uuid4().hex}.png"
+
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: upload_fileobj(io.BytesIO(image_bytes), key=image_key)
+        )
+
+        await file_repo.update_cover_image_key(content_id, image_key)
+        await self.session.commit()
+
+        return {
+            "success": True,
+            "message": "커버 이미지가 재생성되었습니다",
+            "cover_image_url": f"/api/media/cover/{content_id}",
+        }
 
     async def retry_processing(
         self,

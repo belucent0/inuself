@@ -280,6 +280,18 @@ class FileRepository:
         await self.session.execute(stmt)
         await self.session.flush()
 
+    async def update_cover_image_key(self, file_id: UUID, cover_image_key: str) -> None:
+        """커버 이미지 S3 key 업데이트 (Content만 업데이트)."""
+        now = datetime.now(timezone.utc)
+
+        stmt = (
+            update(models.Content)
+            .where(models.Content.file_id == file_id)
+            .values(cover_image_key=cover_image_key, updated_at=now)
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()
+
     async def delete_queued_files(self) -> tuple[int, list[int], list[str]]:
         """QUEUED 상태인 모든 파일 삭제. (삭제된 개수, file_id 리스트, object_key 리스트) 반환."""
         # Content의 status를 기준으로 조회

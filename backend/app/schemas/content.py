@@ -36,6 +36,7 @@ class ContentBaseSchema(BaseModel):
     status: ContentStatus
     summary_md: str | None = None
     title: str | None = None
+    cover_image_url: str | None = None
     created_at: datetime
     updated_at: datetime | None = Field(None)  # File 모델에는 없지만 하위 호환성을 위해 유지
     # 파일 타입 (선택적, 하위 호환성)

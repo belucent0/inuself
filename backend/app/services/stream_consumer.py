@@ -557,6 +557,12 @@ class StreamConsumer:
                 if summary_md:
                     await file_repo.update_summary_markdown(file_id, summary_md)
 
+                # 커버 이미지 S3 key 저장 (Worker에서 생성한 경우)
+                image_s3_key = message.get("image_s3_key")
+                if image_s3_key:
+                    await file_repo.update_cover_image_key(file_id, image_s3_key)
+                    logger.info(f"Cover image saved: file_id={file_id}, key={image_s3_key}")
+
                 await file_repo.update_file_status(file_id, FileStatus.COMPLETED)
                 await file_repo.add_llm_log(
                     file_id,
