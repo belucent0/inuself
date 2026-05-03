@@ -22,6 +22,8 @@ from config import (
     OCR_BASE_URL,
     OCR_MODEL_NAME,
     OCR_REQUEST_TIMEOUT,
+    ASR_BASE_URL,
+    ASR_REQUEST_TIMEOUT,
     RUNPOD_API_KEY,
     RUNPOD_ASR_BASE_URL,
     RUNPOD_VISION_BASE_URL,
@@ -58,69 +60,43 @@ async def handle_media_request(body: dict) -> JSONResponse:
 async def _handle_asr(body: dict) -> JSONResponse:
     """ASR (음성인식) 요청 처리.
 
+    refactor/inference: asr-whisper 컨테이너(FastAPI) 직접 호출.
+    accuracy_mode 분기는 폐기 (whisper-turbo 단일).
+
     extra_body:
-        audio_base64, language, accuracy_mode, lock_id, file_id
+        audio_base64, language, accuracy_mode (무시)
     """
     extra = body.get("extra_body", {})
-    accuracy_mode = extra.get("accuracy_mode", "speed")
-    worker_lock_id = extra.get("lock_id")
+    accuracy_mode = extra.get("accuracy_mode", "")  # 호환만, 분기 안 함
     language = extra.get("language", "ko")
-    file_id = extra.get("file_id")
     audio_base64 = extra.get("audio_base64", "")
 
     if not audio_base64:
         return JSONResponse({"error": "audio_base64 is required"}, status_code=400)
 
-    # 서버리스 모드
+    # 서버리스 모드 (RunPod) — 별도 라우팅 유지
     if DEPLOY_MODE == "serverless":
-        return await _handle_asr_serverless(audio_base64, language, accuracy_mode)
+        return await _handle_asr_serverless(audio_base64, language, accuracy_mode or "speed")
 
-    # 모델/프로바이더 선택
-    if accuracy_mode == "accuracy":
-        asr_model = "whisper-large-v3"
-        provider_name = "insanely-fast"
-    else:
-        asr_model = "whisper-turbo"
-        provider_name = "whisper-cpp"
-
-    # 락 처리
-    lock_id = worker_lock_id
-    heartbeat = None
-    own_lock = False
-    tmp = None
-
-    if not lock_id:
-        lock_id = await acquire_device_lock("gpu", max_wait=3600.0)
-        own_lock = True
-        if lock_id:
-            heartbeat = start_lock_heartbeat(lock_id, device="gpu")
+    audio_bytes = base64.b64decode(audio_base64)
 
     try:
-        # audio_base64 → 임시 파일 (Redis Stream은 파일 경로/내용 전송)
-        audio_bytes = base64.b64decode(audio_base64)
-        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        tmp.write(audio_bytes)
-        tmp.close()
+        async with httpx.AsyncClient(timeout=ASR_REQUEST_TIMEOUT) as client:
+            files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
+            data = {"language": language, "return_timestamps": "true"}
+            r = await client.post(f"{ASR_BASE_URL}/transcribe", files=files, data=data)
+            r.raise_for_status()
+            result = r.json()
 
-        stream_client = get_async_gpu_stream_client()
-        result = await stream_client.request_transcription(
-            audio_file_path=Path(tmp.name),
-            model=asr_model,
-            language=language,
-            timeout=1800.0,
-        )
+        content = json.dumps(result, ensure_ascii=False)
+        return JSONResponse(build_openai_response(content, result.get("model", "whisper")))
 
-        # 결과를 OpenAI 포맷으로 래핑
-        content = json.dumps(result) if isinstance(result, dict) else str(result)
-        return JSONResponse(build_openai_response(content, asr_model))
-
-    finally:
-        if tmp:
-            Path(tmp.name).unlink(missing_ok=True)
-        if heartbeat:
-            stop_lock_heartbeat(heartbeat)
-        if own_lock and lock_id:
-            await release_device_lock("gpu", lock_id)
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[ASR] upstream {e.response.status_code}: {e.response.text[:300]}")
+        return JSONResponse({"error": f"ASR upstream error: {e.response.status_code}"}, status_code=502)
+    except Exception as e:
+        logger.error(f"[ASR] Error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 async def _handle_diarization(body: dict) -> JSONResponse:

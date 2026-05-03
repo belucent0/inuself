@@ -337,6 +337,8 @@ services:
   #          util=0.20에서는 KV cache 부족.
   # asr-ocr: llama.cpp HIP + dots.ocr 1.7B Q8 (always-on, ~3.8 GB VRAM)
   #          Override model via env: OCR_MODEL_REPO / OCR_MODEL_FILE / OCR_MMPROJ_FILE
+  # asr-whisper: transformers Whisper-large-v3-turbo FastAPI (lazy-load,
+  #              첫 /transcribe 시 ~30s 모델 로드 후 메모리 상주)
 
   asr-llm:
     image: asr-llm:1.0.0
@@ -398,6 +400,35 @@ services:
       retries: 3
       start_period: 180s
 
+  asr-whisper:
+    image: asr-whisper:1.0.0
+    container_name: asr-whisper
+    ports:
+      - "18001:8001"   # FastAPI /transcribe — ai-gateway 직접 호출
+    devices:
+      - /dev/dxg
+    volumes:
+      - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so:ro
+      - ./infra/inference/librocdxg/librocdxg.so:/opt/rocm/lib/librocdxg.so:ro
+      - hf-cache-fast:/root/.cache/huggingface
+      - ./infra/inference/bench:/bench:ro
+      - ./media/wav:/audio:ro
+    environment:
+      - HSA_ENABLE_DXG_DETECTION=1
+      - WHISPER_MODEL=openai/whisper-large-v3-turbo
+    cap_add: [SYS_PTRACE]
+    security_opt: [seccomp=unconfined]
+    ipc: host
+    shm_size: 4g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # Bench/debug: docker exec asr-whisper python /bench/whisper_smoke.py /audio/<file>.wav
+
   # AI Gateway — LiteLLM Proxy 대체 (FastAPI + openai SDK)
   # OpenAI-compatible API를 제공하며, Redis Stream으로 로컬 GPU/NPU 프로바이더에 요청 전달
   ai-gateway:
@@ -422,6 +453,7 @@ services:
       - OCR_BASE_URL=http://asr-ocr:8080
       - LLM_BASE_URL=http://asr-llm:8000
       - LLM_MODEL_NAME=gemma-4-E4B-it
+      - ASR_BASE_URL=http://asr-whisper:8001
       # OpenTelemetry 분산 추적
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - OTEL_SERVICE_NAME=asr-ai-gateway

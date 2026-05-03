@@ -68,6 +68,9 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://asr-llm:8000")
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemma-4-E4B-it")
 LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "300"))
 
+ASR_BASE_URL = os.getenv("ASR_BASE_URL", "http://asr-whisper:8001")
+ASR_REQUEST_TIMEOUT = float(os.getenv("ASR_REQUEST_TIMEOUT", "1800"))
+
 # ============================================================
 # Provider Health Check URL
 # ============================================================
