@@ -332,13 +332,13 @@ services:
     restart: unless-stopped
 
   # ─── 추론 컨테이너 (refactor/inference): WSL2 + AMD ROCm gfx1150 ───
-  # asr-llm: vLLM 0.20 + Gemma 4 E4B BF16 (always-on, util=0.35 dev mode,
-  #          --enforce-eager). util=0.35 필요: Gemma 4 multimodal vision
-  #          인코더 +3 GB + max-model-len 8192 KV cache까지 수용 (4096은
-  #          transcript 요약 시 input+output 합산 4097로 즉시 초과).
-  #          --enforce-eager 필요: 8K context + ROCm + torch.compile 조합이
-  #          dev 환경에서 20분+ warmup 멈추는 문제 회피 (compile cache
-  #          무력화, 추론 ~20% 느림 but cold start 5분 내).
+  # asr-llm: vLLM 0.20 + Gemma 4 E4B BF16 (always-on, util=0.35 dev mode).
+  #          util=0.35 필요: Gemma 4 multimodal vision 인코더 +3 GB +
+  #          max-model-len 8192 KV cache까지 수용 (4096은 transcript 요약 시
+  #          input+output 합산 4097로 즉시 초과).
+  #          torch.compile 캐시는 vllm-compile-cache 볼륨에 디스크 보존 →
+  #          첫 빌드만 길고 다음 cold start부터 빠름. 첫 빌드 stuck 시
+  #          --enforce-eager로 회귀 검토.
   #          --revision 핀: HF Hub의 새 revision push 시 컨테이너 재기동만
   #          해도 15GB 모델 자동 재다운로드 트리거되는 문제 차단.
   # asr-ocr: llama.cpp HIP + dots.ocr 1.7B Q8 (always-on, ~3.8 GB VRAM)
@@ -357,6 +357,7 @@ services:
     volumes:
       - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so:ro
       - hf-cache-fast:/root/.cache/huggingface
+      - vllm-compile-cache:/root/.cache/vllm  # torch.compile cache 디스크 보존 (cold start 가속)
     environment:
       - HSA_ENABLE_DXG_DETECTION=1
     command: >
@@ -366,7 +367,6 @@ services:
       --gpu-memory-utilization 0.35
       --max-num-seqs 4
       --enable-prefix-caching
-      --enforce-eager
       --dtype bfloat16
       --served-model-name gemma-4-E4B-it
       --host 0.0.0.0 --port 8000
@@ -588,3 +588,4 @@ volumes:
   cliproxy-auth-data:
   cliproxy-logs-data:
   hf-cache-fast: # HuggingFace 모델 캐시 (asr-ocr/llm/whisper/diarize 공유)
+  vllm-compile-cache: # vLLM torch.compile 캐시 (asr-llm cold start 가속)
