@@ -136,11 +136,8 @@ async def _handle_ocr(body: dict) -> JSONResponse:
     """OCR (이미지 텍스트 추출) 요청 처리.
 
     refactor/inference 이후: dots.ocr 단일 컨테이너(asr-ocr:8080)로 통일.
-    accuracy_mode 파라미터는 호환을 위해 받지만 더 이상 분기하지 않는다
-    (Gemma 4 fast / Qwen-VL accurate 이원화 폐기 — 모든 OCR이 dots.ocr).
+    accuracy_mode는 더 이상 분기하지 않으므로 폐기 (요청 본문에 와도 무시).
     """
-    extra = body.get("extra_body", {})
-    accuracy_mode = extra.get("accuracy_mode", "")  # 로깅용으로만 보존
     messages = body.get("messages", [])
 
     # 이미지가 있는지 형식만 확인 (직접 호출이라 base64 추출 불필요)
@@ -150,7 +147,7 @@ async def _handle_ocr(body: dict) -> JSONResponse:
 
     # 서버리스 모드 (RunPod) — 별도 라우팅 유지
     if DEPLOY_MODE == "serverless":
-        return await _handle_ocr_serverless(body, accuracy_mode or "accuracy")
+        return await _handle_ocr_serverless(body)
 
     # 로컬 컨테이너 모드: asr-ocr (dots.ocr llama-server) 직접 호출
     payload = {
@@ -223,7 +220,7 @@ async def _handle_asr_serverless(
         Path(tmp.name).unlink(missing_ok=True)
 
 
-async def _handle_ocr_serverless(body: dict, accuracy_mode: str) -> JSONResponse:
+async def _handle_ocr_serverless(body: dict) -> JSONResponse:
     """서버리스 OCR 처리 (RunPod Vision)."""
     from openai import AsyncOpenAI
 
