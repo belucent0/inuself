@@ -332,8 +332,45 @@ services:
     restart: unless-stopped
 
   # ─── 추론 컨테이너 (refactor/inference): WSL2 + AMD ROCm gfx1150 ───
+  # asr-llm: vLLM 0.20 + Gemma 4 E4B BF16 (always-on, util=0.30 dev mode)
+  #          util=0.30 필요: Gemma 4 multimodal vision 인코더가 +3 GB 점유 →
+  #          util=0.20에서는 KV cache 부족.
   # asr-ocr: llama.cpp HIP + dots.ocr 1.7B Q8 (always-on, ~3.8 GB VRAM)
   #          Override model via env: OCR_MODEL_REPO / OCR_MODEL_FILE / OCR_MMPROJ_FILE
+
+  asr-llm:
+    image: asr-llm:1.0.0
+    container_name: asr-llm
+    ports:
+      - "18000:8000"   # OpenAI-compatible API
+    devices:
+      - /dev/dxg
+    volumes:
+      - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so:ro
+      - hf-cache-fast:/root/.cache/huggingface
+    environment:
+      - HSA_ENABLE_DXG_DETECTION=1
+    command: >
+      vllm serve google/gemma-4-E4B-it
+      --max-model-len 4096
+      --gpu-memory-utilization 0.30
+      --max-num-seqs 4
+      --enable-prefix-caching
+      --dtype bfloat16
+      --served-model-name gemma-4-E4B-it
+      --host 0.0.0.0 --port 8000
+    cap_add: [SYS_PTRACE]
+    security_opt: [seccomp=unconfined]
+    ipc: host
+    shm_size: 8g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/models"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 600s   # vLLM 모델 로드 + Triton compile (cold ~10분)
+
   asr-ocr:
     image: asr-ocr:1.0.0
     container_name: asr-ocr
@@ -383,6 +420,8 @@ services:
       - CLIPROXY_API_KEY=${CLIPROXY_API_KEY:-}
       # 컨테이너 추론 백엔드 (refactor/inference)
       - OCR_BASE_URL=http://asr-ocr:8080
+      - LLM_BASE_URL=http://asr-llm:8000
+      - LLM_MODEL_NAME=gemma-4-E4B-it
       # OpenTelemetry 분산 추적
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - OTEL_SERVICE_NAME=asr-ai-gateway

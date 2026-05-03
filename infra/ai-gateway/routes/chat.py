@@ -16,7 +16,15 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from openai import AsyncOpenAI
 
 from clients.stream_client import get_async_gpu_stream_client
-from config import DEPLOY_MODE, CODEX_API_KEY, RUNPOD_API_KEY, resolve_tier_to_model
+from config import (
+    DEPLOY_MODE,
+    CODEX_API_KEY,
+    RUNPOD_API_KEY,
+    LLM_BASE_URL,
+    LLM_MODEL_NAME,
+    LLM_REQUEST_TIMEOUT,
+    resolve_tier_to_model,
+)
 from services.device_lock import acquire_device_lock, release_device_lock
 from services.routing import select_provider, get_codex_provider
 from utils.response import build_openai_response
@@ -165,6 +173,11 @@ async def chat_completions(request: Request):
     if model == "tier-thinking":
         return await _handle_tier_thinking(body)
 
+    # refactor/inference: local-gpu 모드의 일반 LLM은 asr-llm 컨테이너 직결
+    # (Provider Manager + Redis Stream 우회, vLLM OpenAI API 직접 사용)
+    if DEPLOY_MODE == "local-gpu":
+        return await _handle_local_llm_container(body, stream)
+
     # 일반 LLM (tier-simple, tier-recap, 직접 모델명)
     tier = model if model.startswith("tier-") else None
     resolved_model = resolve_tier_to_model(model) if tier else model
@@ -204,6 +217,40 @@ async def chat_completions(request: Request):
     finally:
         if lock_id:
             await release_device_lock(provider.device_group, lock_id)
+
+
+async def _handle_local_llm_container(body: dict, stream: bool):
+    """asr-llm 컨테이너(vLLM) 직접 호출 — Provider Manager / Redis Stream 우회.
+
+    refactor/inference: chat·summary 모두 단일 모델(LLM_MODEL_NAME)로 통일.
+    Codex / tier-thinking은 별도 처리되어 여기 도달하지 않는다.
+    """
+    requested_model = body.get("model", "")
+    client = _get_openai_client(f"{LLM_BASE_URL}/v1", "none")
+
+    common_kwargs = {
+        "model": LLM_MODEL_NAME,  # vLLM serve 시 --served-model-name 와 일치해야 함
+        "messages": body.get("messages", []),
+        "max_tokens": body.get("max_tokens", 4096),
+        "temperature": body.get("temperature", 0.7),
+    }
+
+    if stream:
+        async def _vllm_stream():
+            response = await client.chat.completions.create(stream=True, **common_kwargs)
+            async for chunk in response:
+                # vLLM이 돌려준 model 필드를 클라이언트 요청 그대로 보존
+                d = chunk.model_dump()
+                d["model"] = requested_model or LLM_MODEL_NAME
+                yield f"data: {json.dumps(d)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_vllm_stream(), media_type="text/event-stream")
+
+    response = await client.chat.completions.create(stream=False, **common_kwargs)
+    payload = response.model_dump()
+    payload["model"] = requested_model or LLM_MODEL_NAME
+    return JSONResponse(payload)
 
 
 async def _handle_codex(body: dict) -> JSONResponse:
