@@ -1,14 +1,13 @@
 /**
  * ASR 재처리 모달
- * - 정확도 모드 선택: 신속(speed) / 정확도(accuracy)
  * - 화자 수 설정 (선택사항)
+ * (전사 모드는 컨테이너 단일화로 폐기, accuracyMode는 'speed'로 고정 송신)
  */
 
 import { useState } from 'react'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
-import { RadioGroup, RadioGroupItem } from '@/shared/components/ui/radio-group'
 import {
   Dialog,
   DialogContent,
@@ -39,7 +38,6 @@ export function AsrRetryModal({
   onConfirm,
   isLoading = false,
 }: AsrRetryModalProps) {
-  const [accuracyMode, setAccuracyMode] = useState<AccuracyMode>('speed')
   const [minSpeakers, setMinSpeakers] = useState<string>('')
   const [maxSpeakers, setMaxSpeakers] = useState<string>('')
   const [error, setError] = useState<string>('')
@@ -74,7 +72,7 @@ export function AsrRetryModal({
     }
 
     onConfirm({
-      accuracyMode,
+      accuracyMode: 'speed', // ASR 컨테이너 단일화 (whisper-turbo)
       minSpeakers: minVal,
       maxSpeakers: maxVal,
     })
@@ -82,7 +80,6 @@ export function AsrRetryModal({
 
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
-      setAccuracyMode('speed')
       setMinSpeakers('')
       setMaxSpeakers('')
       setError('')
@@ -101,46 +98,6 @@ export function AsrRetryModal({
         </DialogHeader>
 
         <div className="py-4 space-y-6">
-          <div>
-            <Label className="text-sm font-medium mb-3 block">처리 모드</Label>
-            <RadioGroup
-              value={accuracyMode}
-              onValueChange={(value) =>
-                setAccuracyMode(value as AccuracyMode)
-              }
-            >
-              <div className="grid grid-cols-2 gap-3">
-                <Label
-                  htmlFor="asr-modal-speed"
-                  className="flex flex-col space-y-1 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                >
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="speed" id="asr-modal-speed" />
-                    <span className="text-sm font-semibold">신속 모드</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground ml-6">
-                    빠른 처리 (whisper-turbo)
-                  </p>
-                </Label>
-                <Label
-                  htmlFor="asr-modal-accuracy"
-                  className="flex flex-col space-y-1 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                >
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem
-                      value="accuracy"
-                      id="asr-modal-accuracy"
-                    />
-                    <span className="text-sm font-semibold">정확도 모드</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground ml-6">
-                    높은 정확도 (whisper-large-v3)
-                  </p>
-                </Label>
-              </div>
-            </RadioGroup>
-          </div>
-
           <div>
             <Label className="text-sm font-medium mb-3 block">
               화자 수 (선택사항)

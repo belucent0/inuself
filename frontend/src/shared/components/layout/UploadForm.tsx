@@ -20,7 +20,6 @@ import { StreamingASRModal } from './StreamingASRModal'
 
 type SpeakerRange = 'auto' | '1-2' | '3-6' | '7-10' | '11+' | null
 type OcrMode = 'portray' | 'document' | null
-type AccuracyMode = 'speed' | 'accuracy'
 type OcrAccuracyMode = 'speed' | 'accuracy'
 
 export default function UploadForm() {
@@ -32,7 +31,6 @@ export default function UploadForm() {
   const [showOfficeModal, setShowOfficeModal] = useState(false)
   const [showStreamingModal, setShowStreamingModal] = useState(false)
   const [speakerRange, setSpeakerRange] = useState<SpeakerRange>('auto')
-  const [accuracyMode, setAccuracyMode] = useState<AccuracyMode>('speed')
   const [ocrMode, setOcrMode] = useState<OcrMode>(null)
   const [ocrAccuracyMode, setOcrAccuracyMode] = useState<OcrAccuracyMode>('speed')
   const navigate = useNavigate()
@@ -119,7 +117,6 @@ export default function UploadForm() {
   const handleModalClose = () => {
     setShowModal(false)
     setSelectedFile(null)
-    setAccuracyMode('speed')
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -254,13 +251,12 @@ export default function UploadForm() {
       await uploadApi.uploadContent(selectedFile, {
         minSpeakers,
         maxSpeakers,
-        accuracyMode,
+        accuracyMode: 'speed', // ASR 컨테이너 단일화 (whisper-turbo)
       })
       setStatus('')
       setShowModal(false)
       setSelectedFile(null)
       setSpeakerRange(null)
-      setAccuracyMode('speed')
 
       // 파일 입력 필드 초기화
       if (fileInputRef.current) {
@@ -368,36 +364,6 @@ export default function UploadForm() {
               </div>
             </RadioGroup>
 
-            <div className="mt-6">
-              <Label className="text-sm font-medium mb-3 block">전사 모드</Label>
-              <RadioGroup
-                value={accuracyMode}
-                onValueChange={(value) => setAccuracyMode(value as AccuracyMode)}
-              >
-                <div className="grid grid-cols-2 gap-3">
-                  <Label
-                    htmlFor="speed"
-                    className="flex flex-col space-y-1 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="speed" id="speed" />
-                      <span className="text-sm font-semibold">속도 우선</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground ml-6">빠른 처리</p>
-                  </Label>
-                  <Label
-                    htmlFor="accuracy"
-                    className="flex flex-col space-y-1 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="accuracy" id="accuracy" />
-                      <span className="text-sm font-semibold">정확도 우선</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground ml-6">높은 정확도</p>
-                  </Label>
-                </div>
-              </RadioGroup>
-            </div>
           </div>
 
           <DialogFooter>
