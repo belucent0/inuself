@@ -332,9 +332,15 @@ services:
     restart: unless-stopped
 
   # ─── 추론 컨테이너 (refactor/inference): WSL2 + AMD ROCm gfx1150 ───
-  # asr-llm: vLLM 0.20 + Gemma 4 E4B BF16 (always-on, util=0.30 dev mode)
-  #          util=0.30 필요: Gemma 4 multimodal vision 인코더가 +3 GB 점유 →
-  #          util=0.20에서는 KV cache 부족.
+  # asr-llm: vLLM 0.20 + Gemma 4 E4B BF16 (always-on, util=0.35 dev mode,
+  #          --enforce-eager). util=0.35 필요: Gemma 4 multimodal vision
+  #          인코더 +3 GB + max-model-len 8192 KV cache까지 수용 (4096은
+  #          transcript 요약 시 input+output 합산 4097로 즉시 초과).
+  #          --enforce-eager 필요: 8K context + ROCm + torch.compile 조합이
+  #          dev 환경에서 20분+ warmup 멈추는 문제 회피 (compile cache
+  #          무력화, 추론 ~20% 느림 but cold start 5분 내).
+  #          --revision 핀: HF Hub의 새 revision push 시 컨테이너 재기동만
+  #          해도 15GB 모델 자동 재다운로드 트리거되는 문제 차단.
   # asr-ocr: llama.cpp HIP + dots.ocr 1.7B Q8 (always-on, ~3.8 GB VRAM)
   #          Override model via env: OCR_MODEL_REPO / OCR_MODEL_FILE / OCR_MMPROJ_FILE
   # asr-whisper: transformers Whisper-large-v3-turbo FastAPI (lazy-load,
@@ -355,10 +361,12 @@ services:
       - HSA_ENABLE_DXG_DETECTION=1
     command: >
       vllm serve google/gemma-4-E4B-it
-      --max-model-len 4096
-      --gpu-memory-utilization 0.30
+      --revision c53e9d33178b12afbad4a48334d21e19b8c29761
+      --max-model-len 8192
+      --gpu-memory-utilization 0.35
       --max-num-seqs 4
       --enable-prefix-caching
+      --enforce-eager
       --dtype bfloat16
       --served-model-name gemma-4-E4B-it
       --host 0.0.0.0 --port 8000
