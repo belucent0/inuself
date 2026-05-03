@@ -17,7 +17,6 @@ import { DocumentUploadModal } from './DocumentUploadModal'
 import {
   type SpeakerRange,
   type OcrMode,
-  type AccuracyMode,
   isAudioFile,
   isDocumentFile,
   isOfficeDocument,
@@ -36,7 +35,6 @@ export function FileUploader() {
 
   // 문서 옵션
   const [ocrMode, setOcrMode] = useState<OcrMode>(null)
-  const [ocrAccuracyMode, setOcrAccuracyMode] = useState<AccuracyMode>('speed')
 
   const navigate = useNavigate()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -71,7 +69,6 @@ export function FileUploader() {
     } else if (isDocumentFile(file.name)) {
       setShowDocumentModal(true)
       setOcrMode(null)
-      setOcrAccuracyMode('speed')
     }
   }
 
@@ -138,7 +135,7 @@ export function FileUploader() {
     try {
       await uploadApi.uploadContent(selectedFile, {
         ocrMode,
-        ocrAccuracyMode,
+        ocrAccuracyMode: 'speed', // OCR 컨테이너 단일화 (dots.ocr)
       })
 
       setShowDocumentModal(false)
@@ -215,8 +212,6 @@ export function FileUploader() {
         filename={selectedFile?.name || ''}
         ocrMode={ocrMode}
         onOcrModeChange={setOcrMode}
-        ocrAccuracyMode={ocrAccuracyMode}
-        onOcrAccuracyModeChange={setOcrAccuracyMode}
         isUploading={isUploading}
         onUpload={handleDocumentUpload}
         onCancel={handleDocumentModalClose}

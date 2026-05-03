@@ -20,7 +20,6 @@ import { StreamingASRModal } from './StreamingASRModal'
 
 type SpeakerRange = 'auto' | '1-2' | '3-6' | '7-10' | '11+' | null
 type OcrMode = 'portray' | 'document' | null
-type OcrAccuracyMode = 'speed' | 'accuracy'
 
 export default function UploadForm() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -32,7 +31,6 @@ export default function UploadForm() {
   const [showStreamingModal, setShowStreamingModal] = useState(false)
   const [speakerRange, setSpeakerRange] = useState<SpeakerRange>('auto')
   const [ocrMode, setOcrMode] = useState<OcrMode>(null)
-  const [ocrAccuracyMode, setOcrAccuracyMode] = useState<OcrAccuracyMode>('speed')
   const navigate = useNavigate()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -106,7 +104,6 @@ export default function UploadForm() {
         // 문서 파일인 경우 OCR 모드 선택 모달 표시
         setShowOcrModal(true)
         setOcrMode(null)
-        setOcrAccuracyMode('speed')
       } else if (isOfficeDocument(file.name)) {
         // Office 문서는 별도 확인 모달 표시
         setShowOfficeModal(true)
@@ -139,13 +136,12 @@ export default function UploadForm() {
     try {
       await uploadApi.uploadContent(selectedFile, {
         ocrMode,
-        ocrAccuracyMode,
+        ocrAccuracyMode: 'speed', // OCR 컨테이너 단일화 (dots.ocr)
       })
       setStatus('')
       setShowOcrModal(false)
       setSelectedFile(null)
       setOcrMode(null)
-      setOcrAccuracyMode('speed')
 
       // 파일 입력 필드 초기화
       if (fileInputRef.current) {
@@ -434,37 +430,6 @@ export default function UploadForm() {
                 </Label>
               </div>
             </RadioGroup>
-
-            <div className="mt-6">
-              <Label className="text-sm font-medium mb-3 block">처리 모드</Label>
-              <RadioGroup
-                value={ocrAccuracyMode}
-                onValueChange={(value) => setOcrAccuracyMode(value as OcrAccuracyMode)}
-              >
-                <div className="grid grid-cols-2 gap-3">
-                  <Label
-                    htmlFor="ocr-speed"
-                    className="flex flex-col space-y-1 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="speed" id="ocr-speed" />
-                      <span className="text-sm font-semibold">신속 모드</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground ml-6">빠른 처리</p>
-                  </Label>
-                  <Label
-                    htmlFor="ocr-accuracy"
-                    className="flex flex-col space-y-1 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="accuracy" id="ocr-accuracy" />
-                      <span className="text-sm font-semibold">정확도 모드</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground ml-6">높은 정확도</p>
-                  </Label>
-                </div>
-              </RadioGroup>
-            </div>
           </div>
 
           <DialogFooter>
