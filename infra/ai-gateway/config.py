@@ -71,6 +71,9 @@ LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "300"))
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "http://asr-whisper:8001")
 ASR_REQUEST_TIMEOUT = float(os.getenv("ASR_REQUEST_TIMEOUT", "1800"))
 
+DIARIZE_BASE_URL = os.getenv("DIARIZE_BASE_URL", "http://asr-diarize:8003")
+DIARIZE_REQUEST_TIMEOUT = float(os.getenv("DIARIZE_REQUEST_TIMEOUT", "1800"))
+
 # ============================================================
 # Provider Health Check URL
 # ============================================================
