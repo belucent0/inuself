@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from fastapi.responses import JSONResponse
 
 from clients.stream_client import get_async_gpu_stream_client
@@ -18,6 +19,9 @@ from config import (
     DEPLOY_MODE,
     NPU_OCR_MODEL,
     GPU_OCR_MODEL,
+    OCR_BASE_URL,
+    OCR_MODEL_NAME,
+    OCR_REQUEST_TIMEOUT,
     RUNPOD_API_KEY,
     RUNPOD_ASR_BASE_URL,
     RUNPOD_VISION_BASE_URL,
@@ -168,55 +172,42 @@ async def _handle_diarization(body: dict) -> JSONResponse:
 
 
 async def _handle_ocr(body: dict) -> JSONResponse:
-    """OCR (이미지 텍스트 추출) 요청 처리."""
+    """OCR (이미지 텍스트 추출) 요청 처리.
+
+    refactor/inference 이후: dots.ocr 단일 컨테이너(asr-ocr:8080)로 통일.
+    accuracy_mode 파라미터는 호환을 위해 받지만 더 이상 분기하지 않는다
+    (Gemma 4 fast / Qwen-VL accurate 이원화 폐기 — 모든 OCR이 dots.ocr).
+    """
     extra = body.get("extra_body", {})
-    accuracy_mode = extra.get("accuracy_mode", "speed")
-    file_id = extra.get("file_id")
+    accuracy_mode = extra.get("accuracy_mode", "")  # 로깅용으로만 보존
     messages = body.get("messages", [])
 
-    # 이미지 + 프롬프트 추출
-    image_base64, text_prompt = _extract_vision_content(messages)
-
-    if not image_base64:
+    # 이미지가 있는지 형식만 확인 (직접 호출이라 base64 추출 불필요)
+    image_url, _ = _extract_vision_content(messages)
+    if not image_url:
         return JSONResponse({"error": "No image found in messages"}, status_code=400)
 
-    # 서버리스 모드
+    # 서버리스 모드 (RunPod) — 별도 라우팅 유지
     if DEPLOY_MODE == "serverless":
-        return await _handle_ocr_serverless(body, accuracy_mode)
+        return await _handle_ocr_serverless(body, accuracy_mode or "accuracy")
 
-    # 모델 선택
-    if accuracy_mode == "speed":
-        ocr_model = NPU_OCR_MODEL
-    else:
-        ocr_model = GPU_OCR_MODEL
+    # 로컬 컨테이너 모드: asr-ocr (dots.ocr llama-server) 직접 호출
+    payload = {
+        "model": OCR_MODEL_NAME,
+        "messages": messages,
+        "max_tokens": body.get("max_tokens", 2048),
+        "temperature": body.get("temperature", 0.1),
+    }
 
     try:
-        # base64 프리앰블 제거 (data:image/jpeg;base64,...)
-        if "," in image_base64:
-            image_base64 = image_base64.split(",", 1)[1]
+        async with httpx.AsyncClient(timeout=OCR_REQUEST_TIMEOUT) as client:
+            r = await client.post(f"{OCR_BASE_URL}/v1/chat/completions", json=payload)
+            r.raise_for_status()
+            return JSONResponse(r.json())
 
-        image_bytes = base64.b64decode(image_base64)
-
-        stream_client = get_async_gpu_stream_client()
-        result = await stream_client.request_ocr(
-            image_data=image_bytes,
-            model=ocr_model,
-            prompt=text_prompt or "Extract all text from this image.",
-            accuracy_mode=accuracy_mode,
-            timeout=300.0,
-            file_id=file_id,
-        )
-
-        # 결과 추출
-        if isinstance(result, dict):
-            content = result.get("text", result.get("content", json.dumps(result)))
-            if "choices" in result and result["choices"]:
-                content = result["choices"][0].get("message", {}).get("content", content)
-        else:
-            content = str(result)
-
-        return JSONResponse(build_openai_response(content, ocr_model))
-
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[OCR] upstream {e.response.status_code}: {e.response.text[:300]}")
+        return JSONResponse({"error": f"OCR upstream error: {e.response.status_code}"}, status_code=502)
     except Exception as e:
         logger.error(f"[OCR] Error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)

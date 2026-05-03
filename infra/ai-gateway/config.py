@@ -50,10 +50,19 @@ GPU_AUDIO_MODEL = os.getenv("GPU_AUDIO_MODEL", "whisper-turbo")
 NPU_AUDIO_MODEL = os.getenv("NPU_AUDIO_MODEL", "flm-audio")
 
 # ============================================================
-# OCR 모델명
+# OCR 모델명 (Provider Manager / 서버리스 fallback용 — local-gpu 모드는 OCR_BASE_URL 사용)
 # ============================================================
 NPU_OCR_MODEL = os.getenv("NPU_OCR_MODEL", "qwen3vl-it:4b")
 GPU_OCR_MODEL = os.getenv("GPU_OCR_MODEL", "qwen3-vl-8b")
+
+# ============================================================
+# 컨테이너 추론 백엔드 (refactor/inference)
+# - OCR_BASE_URL: dots.ocr llama-server (asr-ocr 컨테이너)
+#   accuracy/speed 분기 없이 단일 모델로 통일
+# ============================================================
+OCR_BASE_URL = os.getenv("OCR_BASE_URL", "http://asr-ocr:8080")
+OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "dots.ocr")
+OCR_REQUEST_TIMEOUT = float(os.getenv("OCR_REQUEST_TIMEOUT", "300"))
 
 # ============================================================
 # Provider Health Check URL
