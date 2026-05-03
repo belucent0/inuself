@@ -1,7 +1,8 @@
 """미디어 처리 라우트 — ASR, OCR, Diarization.
 
 POST /v1/chat/completions 에서 task_type으로 분기되어 호출됩니다.
-Redis Stream을 통해 Provider Manager → GPU/NPU 서버로 전달합니다.
+local-gpu 모드에서는 ai-gateway가 추론 컨테이너를 httpx로 직접 호출,
+serverless 모드에서는 RunPod API로 위임합니다.
 """
 
 import base64
@@ -14,11 +15,8 @@ from typing import Optional
 import httpx
 from fastapi.responses import JSONResponse
 
-from clients.stream_client import get_async_gpu_stream_client
 from config import (
     DEPLOY_MODE,
-    NPU_OCR_MODEL,
-    GPU_OCR_MODEL,
     OCR_BASE_URL,
     OCR_MODEL_NAME,
     OCR_REQUEST_TIMEOUT,
@@ -29,12 +27,6 @@ from config import (
     RUNPOD_API_KEY,
     RUNPOD_ASR_BASE_URL,
     RUNPOD_VISION_BASE_URL,
-)
-from services.device_lock import (
-    acquire_device_lock,
-    release_device_lock,
-    start_lock_heartbeat,
-    stop_lock_heartbeat,
 )
 from utils.response import build_openai_response
 
