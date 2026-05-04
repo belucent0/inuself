@@ -1,7 +1,7 @@
 """LLM 클라이언트 (비동기).
 
 LangGraph 노드에서 사용할 비동기 LLM 호출 함수를 제공합니다.
-기존 LiteLLM 프록시를 통해 GPU/NPU로 자동 라우팅됩니다.
+기존 AI Gateway를 통해 GPU/NPU로 자동 라우팅됩니다.
 """
 from __future__ import annotations
 

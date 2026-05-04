@@ -17,31 +17,24 @@
 ┌────────────────────────▼────────────────────────────────────────────┐
 │  APPLICATION                                                        │
 │  Backend (FastAPI) — Controllers → Services → Repositories          │
-│  LangGraph AI Agent — 9 Nodes · 6 Tools · 5 Modes                  │
+│  LangGraph AI Agent — 9 Nodes · 6 Tools · 5 Modes                   │
 └──────────┬──────────────────────────────────┬───────────────────────┘
-           │ Celery                            │ OpenAI SDK
+           │ Celery                            │ OpenAI SDK (httpx)
 ┌──────────▼──────────┐           ┌────────────▼──────────────────────┐
-│  WORKER             │           │  LLM PROXY                        │
-│  Celery Workers     │──── HTTP ─▶  LiteLLM + custom_handler         │
-│  파일 전처리        │           │  GPU Stream Client                 │
-│  (FFmpeg/PDF 변환)  │           │                                   │
-└─────────────────────┘           └────────────┬──────────────────────┘
-                                               │ Redis Stream
-┌──────────────────────────────────────────────┼──────────────────────┐
-│  DATA                                        │                      │
-│  PostgreSQL+pgvector   Valkey(Redis) ◄────────┘                     │
-│  MinIO (S3)            SearXNG                                      │
-└────────────────────────────┬────────────────────────────────────────┘
-═════════════════════════════╪════════════════════════════════════════
-  Host Environment           │ Redis Stream
-┌────────────────────────────▼────────────────────────────────────────┐
-│  PROVIDER MANAGER                                                   │
-│  Stream Processor · Provider Lifecycle · Job Tracker                │
-├─────────────────────────────────────────────────────────────────────┤
-│  GPU Servers                │  NPU Servers                          │
-│  llama-server · whisper-cpp │  FLM (ASR · LLM · OCR · Thinking)    │
-│  insanely-fast · diarize    │                                       │
-└─────────────────────────────────────────────────────────────────────┘
+│  WORKER             │           │  AI GATEWAY                       │
+│  Celery Workers     │──── HTTP ─▶  ai-gateway (FastAPI)             │
+│  파일 전처리        │           │  routing · tier 매핑 · serverless │
+│  (FFmpeg/PDF 변환)  │           └────┬───────────┬──────────┬───────┘
+└─────────────────────┘                │ httpx     │ httpx    │ httpx
+                                       ▼           ▼          ▼
+┌─────────────────────────┐   ┌────────────────────────────────────────┐
+│  DATA                   │   │  INFERENCE CONTAINERS (GPU/NPU)        │
+│  PostgreSQL + pgvector  │   │  ai-llm        : vLLM (Gemma 4 E4B)    │
+│  Valkey (Redis)         │   │  ai-asr        : Whisper-large-v3-turbo│
+│  MinIO (S3) · SearXNG   │   │  ai-diarize    : pyannote community-1  │
+└─────────────────────────┘   │  ai-ocr        : dots.ocr (llama.cpp)  │
+                              │  ai-embedding  : EmbeddingGemma 308M   │
+                              └────────────────────────────────────────┘
 ```
 
 ---
@@ -59,7 +52,7 @@
 | **WPI 심리검사** | 5유형 × 5차원 성격 분석, AI 에이전트 활용, 검사 결과에 개인 맞춤형 마음읽기 해설 제공 |
 | **YouTube 영상 처리** | 다운로드 → 전사 → 구조화 요약 |
 | **웹 검색 통합** | SearXNG 기반 딥서치, 멀티턴 검색 재시도 |
-| **AI 추론 게이트웨이** | LiteLLM 기반 단일 엔드포인트 — 로컬 GPU · NPU · 클라우드 API 통합 라우팅, Valkey 세마포어 동시성 제어 |
+| **AI 추론 게이트웨이** | ai-gateway (FastAPI + httpx) — 로컬 추론 컨테이너(vLLM · llama.cpp · transformers) 직결 호출, tier 기반 모델 매핑, serverless 폴백(Codex/RunPod) |
 | **옵저버빌리티** | Grafana + Prometheus + Loki + Tempo + Langfuse |
 
 ---
@@ -72,8 +65,8 @@
 | Backend | FastAPI + SQLAlchemy + Celery |
 | AI Agent | LangGraph + LangChain |
 | Database | PostgreSQL + pgvector · Valkey (Redis) · MinIO |
-| Inference | LiteLLM Proxy · llama.cpp · whisper.cpp · FLM (NPU) |
-| Infra | Docker Compose (17 services) · Nginx · PM2 |
+| Inference | ai-gateway (FastAPI) · vLLM · llama.cpp · transformers · pyannote |
+| Infra | Docker Compose · Nginx |
 | Observability | Grafana + Prometheus + Loki + Tempo + Langfuse |
 | CI/CD | GitHub Actions (품질 게이트 4종 + 자동 태깅) |
 
@@ -81,7 +74,7 @@
 
 ## 문서
 
-- 아키텍처 상세 → [`docs/architecture-v1.1.0.md`](docs/architecture-v1.1.0.md)
+- 아키텍처 상세 → [`docs/architecture-v1.2.0.md`](docs/architecture-v1.2.0.md)
 - GPU/ROCm 설치 가이드 → [`docs/archived/README-legacy.md`](docs/archived/README-legacy.md)
 
 ---

@@ -725,7 +725,7 @@ class IntentParserNode:
         """초기화.
 
         Args:
-            settings: 애플리케이션 설정 (LiteLLM 연결 정보 등)
+            settings: 애플리케이션 설정 (AI Gateway 연결 정보 등)
         """
         self.settings = settings
         self.tier_router = TierRouter(settings)

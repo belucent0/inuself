@@ -1,0 +1,8 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "messages": [
+    {"role": "user", "content": "한국어로 답변. AMD Radeon 890M에서 vLLM이 도는 것은 어떤 의미인가? 두 문장으로."}
+  ],
+  "max_tokens": 128,
+  "temperature": 0.3
+}

@@ -17,7 +17,6 @@ import { DocumentUploadModal } from './DocumentUploadModal'
 import {
   type SpeakerRange,
   type OcrMode,
-  type AccuracyMode,
   isAudioFile,
   isDocumentFile,
   isOfficeDocument,
@@ -33,11 +32,9 @@ export function FileUploader() {
 
   // 오디오 옵션
   const [speakerRange, setSpeakerRange] = useState<SpeakerRange>('auto')
-  const [accuracyMode, setAccuracyMode] = useState<AccuracyMode>('speed')
 
   // 문서 옵션
   const [ocrMode, setOcrMode] = useState<OcrMode>(null)
-  const [ocrAccuracyMode, setOcrAccuracyMode] = useState<AccuracyMode>('speed')
 
   const navigate = useNavigate()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -69,11 +66,9 @@ export function FileUploader() {
     if (isAudioFile(file.name)) {
       setShowAudioModal(true)
       setSpeakerRange('auto')
-      setAccuracyMode('speed')
     } else if (isDocumentFile(file.name)) {
       setShowDocumentModal(true)
       setOcrMode(null)
-      setOcrAccuracyMode('speed')
     }
   }
 
@@ -108,7 +103,7 @@ export function FileUploader() {
       await uploadApi.uploadContent(selectedFile, {
         minSpeakers: min,
         maxSpeakers: max,
-        accuracyMode,
+        accuracyMode: 'speed', // ASR 컨테이너 단일화 (whisper-turbo)
       })
 
       setShowAudioModal(false)
@@ -140,7 +135,7 @@ export function FileUploader() {
     try {
       await uploadApi.uploadContent(selectedFile, {
         ocrMode,
-        ocrAccuracyMode,
+        ocrAccuracyMode: 'speed', // OCR 컨테이너 단일화 (dots.ocr)
       })
 
       setShowDocumentModal(false)
@@ -206,8 +201,6 @@ export function FileUploader() {
         onOpenChange={setShowAudioModal}
         speakerRange={speakerRange}
         onSpeakerRangeChange={setSpeakerRange}
-        accuracyMode={accuracyMode}
-        onAccuracyModeChange={setAccuracyMode}
         isUploading={isUploading}
         onUpload={handleAudioUpload}
         onCancel={handleAudioModalClose}
@@ -219,8 +212,6 @@ export function FileUploader() {
         filename={selectedFile?.name || ''}
         ocrMode={ocrMode}
         onOcrModeChange={setOcrMode}
-        ocrAccuracyMode={ocrAccuracyMode}
-        onOcrAccuracyModeChange={setOcrAccuracyMode}
         isUploading={isUploading}
         onUpload={handleDocumentUpload}
         onCancel={handleDocumentModalClose}
