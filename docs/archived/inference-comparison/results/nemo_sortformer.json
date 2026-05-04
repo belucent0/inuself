@@ -1,0 +1,147 @@
+{
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 173.52,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 183.2,
+      "end": 240.08,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 256.72,
+      "end": 315.44,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 327.28,
+      "end": 353.28,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 382.16,
+      "end": 455.92,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 473.28,
+      "end": 526.96,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 527.44,
+      "end": 528.32,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 529.12,
+      "end": 529.92,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 530.16,
+      "end": 562.48,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 570.4,
+      "end": 828.24,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 831.6,
+      "end": 854.96,
+      "speaker": "speaker_0"
+    },
+    {
+      "start": 315.44,
+      "end": 320.8,
+      "speaker": "speaker_1"
+    },
+    {
+      "start": 320.96,
+      "end": 323.6,
+      "speaker": "speaker_1"
+    },
+    {
+      "start": 353.28,
+      "end": 357.76,
+      "speaker": "speaker_1"
+    },
+    {
+      "start": 371.68,
+      "end": 372.0,
+      "speaker": "speaker_1"
+    },
+    {
+      "start": 372.16,
+      "end": 376.16,
+      "speaker": "speaker_1"
+    },
+    {
+      "start": 562.48,
+      "end": 566.8,
+      "speaker": "speaker_1"
+    },
+    {
+      "start": 240.08,
+      "end": 256.72,
+      "speaker": "speaker_2"
+    },
+    {
+      "start": 320.64,
+      "end": 321.36,
+      "speaker": "speaker_2"
+    },
+    {
+      "start": 324.88,
+      "end": 327.28,
+      "speaker": "speaker_2"
+    },
+    {
+      "start": 355.44,
+      "end": 363.44,
+      "speaker": "speaker_2"
+    },
+    {
+      "start": 364.16,
+      "end": 370.8,
+      "speaker": "speaker_2"
+    },
+    {
+      "start": 374.72,
+      "end": 382.16,
+      "speaker": "speaker_2"
+    },
+    {
+      "start": 456.0,
+      "end": 465.52,
+      "speaker": "speaker_2"
+    },
+    {
+      "start": 465.68,
+      "end": 473.28,
+      "speaker": "speaker_2"
+    },
+    {
+      "start": 566.96,
+      "end": 570.4,
+      "speaker": "speaker_2"
+    },
+    {
+      "start": 173.6,
+      "end": 183.2,
+      "speaker": "speaker_3"
+    }
+  ],
+  "speakers": [
+    "speaker_0",
+    "speaker_1",
+    "speaker_2",
+    "speaker_3"
+  ],
+  "rtf": 0.3610468234222593,
+  "model": "nvidia/diar_sortformer_4spk-v1"
+}

@@ -1,0 +1,126 @@
+{
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 173.64499999999998,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "start": 173.64499999999998,
+      "end": 183.405,
+      "speaker": "SPEAKER_05"
+    },
+    {
+      "start": 183.405,
+      "end": 240.04,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "start": 240.04,
+      "end": 256.16499999999996,
+      "speaker": "SPEAKER_02"
+    },
+    {
+      "start": 256.16499999999996,
+      "end": 315.425,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "start": 315.425,
+      "end": 323.88,
+      "speaker": "SPEAKER_04"
+    },
+    {
+      "start": 324.6,
+      "end": 327.225,
+      "speaker": "SPEAKER_03"
+    },
+    {
+      "start": 327.225,
+      "end": 353.475,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "start": 353.475,
+      "end": 355.725,
+      "speaker": "SPEAKER_04"
+    },
+    {
+      "start": 355.725,
+      "end": 356.475,
+      "speaker": "SPEAKER_03"
+    },
+    {
+      "start": 356.475,
+      "end": 357.225,
+      "speaker": "SPEAKER_04"
+    },
+    {
+      "start": 357.225,
+      "end": 363.49,
+      "speaker": "SPEAKER_03"
+    },
+    {
+      "start": 363.88,
+      "end": 370.95,
+      "speaker": "SPEAKER_03"
+    },
+    {
+      "start": 371.32,
+      "end": 376.195,
+      "speaker": "SPEAKER_04"
+    },
+    {
+      "start": 376.195,
+      "end": 382.195,
+      "speaker": "SPEAKER_03"
+    },
+    {
+      "start": 382.195,
+      "end": 455.705,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "start": 455.705,
+      "end": 472.955,
+      "speaker": "SPEAKER_00"
+    },
+    {
+      "start": 472.955,
+      "end": 527.05,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "start": 527.33,
+      "end": 528.42,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "start": 528.84,
+      "end": 562.215,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "start": 562.215,
+      "end": 566.715,
+      "speaker": "SPEAKER_04"
+    },
+    {
+      "start": 566.715,
+      "end": 570.465,
+      "speaker": "SPEAKER_03"
+    },
+    {
+      "start": 570.465,
+      "end": 828.29,
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "start": 831.28,
+      "end": 855.04,
+      "speaker": "SPEAKER_01"
+    }
+  ],
+  "rtf": null,
+  "tool": "3D-Speaker"
+}

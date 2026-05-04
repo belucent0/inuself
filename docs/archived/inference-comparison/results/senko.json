@@ -1,0 +1,103 @@
+{
+  "segments": [
+    {
+      "speaker": "SPEAKER_01",
+      "start": 0.13,
+      "end": 173.342
+    },
+    {
+      "speaker": "SPEAKER_06",
+      "start": 173.538,
+      "end": 182.98799999999994
+    },
+    {
+      "speaker": "SPEAKER_01",
+      "start": 182.98799999999994,
+      "end": 239.796
+    },
+    {
+      "speaker": "SPEAKER_05",
+      "start": 239.796,
+      "end": 256.332
+    },
+    {
+      "speaker": "SPEAKER_01",
+      "start": 256.332,
+      "end": 315.39
+    },
+    {
+      "speaker": "SPEAKER_03",
+      "start": 315.554,
+      "end": 323.646
+    },
+    {
+      "speaker": "SPEAKER_02",
+      "start": 324.866,
+      "end": 327.11600000000004
+    },
+    {
+      "speaker": "SPEAKER_01",
+      "start": 327.11600000000004,
+      "end": 353.42800000000005
+    },
+    {
+      "speaker": "SPEAKER_03",
+      "start": 353.42800000000005,
+      "end": 355.82800000000015
+    },
+    {
+      "speaker": "SPEAKER_02",
+      "start": 355.82800000000015,
+      "end": 370.704
+    },
+    {
+      "speaker": "SPEAKER_03",
+      "start": 370.704,
+      "end": 376.2120000000001
+    },
+    {
+      "speaker": "SPEAKER_02",
+      "start": 376.2120000000001,
+      "end": 382.21200000000033
+    },
+    {
+      "speaker": "SPEAKER_01",
+      "start": 382.21200000000033,
+      "end": 455.9960000000001
+    },
+    {
+      "speaker": "SPEAKER_04",
+      "start": 455.9960000000001,
+      "end": 472.81200000000024
+    },
+    {
+      "speaker": "SPEAKER_01",
+      "start": 472.81200000000024,
+      "end": 562.334
+    },
+    {
+      "speaker": "SPEAKER_03",
+      "start": 562.466,
+      "end": 567.1160000000002
+    },
+    {
+      "speaker": "SPEAKER_02",
+      "start": 567.1160000000002,
+      "end": 570.1160000000002
+    },
+    {
+      "speaker": "SPEAKER_01",
+      "start": 570.1160000000002,
+      "end": 855.23
+    }
+  ],
+  "speakers": [
+    "SPEAKER_01",
+    "SPEAKER_02",
+    "SPEAKER_03",
+    "SPEAKER_04",
+    "SPEAKER_05",
+    "SPEAKER_06"
+  ],
+  "rtf": 0.5341885925656974
+}
