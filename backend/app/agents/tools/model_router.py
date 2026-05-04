@@ -60,7 +60,7 @@ class TierRouter:
         self._rule_embeddings: dict[str, list[list[float]]] = {}
         self._embeddings_initialized = False
 
-        # LiteLLM 프록시를 통한 임베딩 엔드포인트 (Redis Stream → Provider Manager → FLM 서버)
+        # AI Gateway를 통한 임베딩 엔드포인트 (Redis Stream → Provider Manager → FLM 서버)
         ai_gateway_url = getattr(settings, "ai_gateway_url", "http://ai-gateway:4000")
         self.embedding_url = f"{ai_gateway_url.rstrip('/')}/v1/embeddings"
         self.embedding_api_key = getattr(settings, "ai_gateway_api_key", "")
@@ -87,7 +87,7 @@ class TierRouter:
             return LLMTier.THINKING
 
         # 3. 임베딩 기반 유사도 매칭 — FLM 안정화 전까지 비활성화
-        # (활성화 시: LiteLLM → Redis Stream → Provider Manager → FLM 서버 경유, FLM DOWN이면 2분 블로킹)
+        # (활성화 시: AI Gateway → Redis Stream → Provider Manager → FLM 서버 경유, FLM DOWN이면 2분 블로킹)
         # try:
         #     selected = await self._embedding_based_routing(query)
         #     if selected:
@@ -195,7 +195,7 @@ class TierRouter:
                     headers=headers,
                     json={
                         "input": text,
-                        "model": "flm-embeddings"  # LiteLLM 모델명 → FLM embed-gemma:300m 경유
+                        "model": "flm-embeddings"  # AI Gateway 모델명 → FLM embed-gemma:300m 경유
                     }
                 )
 

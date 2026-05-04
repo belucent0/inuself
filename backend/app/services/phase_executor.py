@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from ..core.config import Settings
 from ..core.logging import logger
-from .litellm_client import request_litellm_completion
+from .ai_gateway_client import request_ai_gateway_completion
 
 
 @dataclass
@@ -100,7 +100,7 @@ class PhaseExecutor:
                     {"role": "user", "content": prompt},
                 ]
 
-                response = request_litellm_completion(
+                response = request_ai_gateway_completion(
                     settings=self.settings,
                     messages=messages,
                 )
@@ -163,7 +163,7 @@ class PhaseExecutor:
                     {"role": "user", "content": prompt},
                 ]
 
-                response = request_litellm_completion(
+                response = request_ai_gateway_completion(
                     settings=self.settings,
                     model=self.settings.ai_gateway_model_summarize,
                     messages=messages,

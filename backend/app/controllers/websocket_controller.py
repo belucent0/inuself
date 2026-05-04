@@ -143,27 +143,27 @@ async def websocket_asr_stream(
     await websocket.accept()
     
     settings = get_settings()
-    # LiteLLM Gateway URL 사용 (architecture v4: One Gateway)
-    litellm_base_url = os.getenv("AI_GATEWAY_URL", "http://localhost:4000")
-    # LiteLLM endpoint (OpenAI compatible)
-    transcribe_url = f"{litellm_base_url}/v1/audio/transcriptions"
+    # AI Gateway URL 사용 (architecture v4: One Gateway)
+    ai_gateway_base_url = os.getenv("AI_GATEWAY_URL", "http://localhost:4000")
+    # AI Gateway endpoint (OpenAI compatible)
+    transcribe_url = f"{ai_gateway_base_url}/v1/audio/transcriptions"
     api_key = os.getenv("AI_GATEWAY_API_KEY", "")
     
-    # LiteLLM Gateway 연결 확인
+    # AI Gateway 연결 확인
     try:
         import socket
         from urllib.parse import urlparse
-        parsed = urlparse(litellm_base_url)
+        parsed = urlparse(ai_gateway_base_url)
         host = parsed.hostname or "127.0.0.1"
         port = parsed.port or 4000
         
-        logger.info(f"[WebSocket ASR] Checking LiteLLM Gateway: {litellm_base_url} (host={host}, port={port})")
+        logger.info(f"[WebSocket ASR] Checking AI Gateway: {ai_gateway_base_url} (host={host}, port={port})")
         
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(2.0)
             result = s.connect_ex((host, port))
             if result != 0:
-                logger.error(f"[WebSocket ASR] LiteLLM Gateway connection failed: result={result}")
+                logger.error(f"[WebSocket ASR] AI Gateway connection failed: result={result}")
                 await websocket.send_json({
                     "type": "error",
                     "message": "AI Gateway에 연결할 수 없습니다. 서비스 상태를 확인해주세요.",
@@ -323,9 +323,9 @@ async def websocket_asr_stream(
                                     logger.info(f"[WebSocket ASR] Sent commit: segment_id={segment_id}, text_length={len(text)}")
                                     
                                     # LLM 후처리 (백그라운드): 언어 필터링 + 문법 교정
-                                    # LLM 후처리 (백그라운드): 언어 필터링 + 문법 교정 (LiteLLM 사용)
+                                    # LLM 후처리 (백그라운드): 언어 필터링 + 문법 교정 (AI Gateway 사용)
                                     asyncio.create_task(
-                                        process_llm_background(websocket, text, segment_id, litellm_base_url)
+                                        process_llm_background(websocket, text, segment_id, ai_gateway_base_url)
                                     )
                                 
                                 # 전체 텍스트 버퍼 업데이트
