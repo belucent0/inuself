@@ -11,7 +11,7 @@ import logging
 import re
 
 from worker.config import get_settings
-from .litellm_client import LiteLLMClientError, request_litellm_completion
+from .ai_gateway_client import AIGatewayClientError, request_ai_gateway_completion
 from .llamacpp_client import LlamaServerClientError, request_chat_completion
 
 from app.prompts.summary import (
@@ -60,11 +60,11 @@ def _split_text_into_chunks(text: str, max_chars: int = 25000, overlap_chars: in
 # LLM 호출 헬퍼
 # ============================================================
 
-def _call_llm(settings, messages: list[dict], use_litellm: bool) -> str:
+def _call_llm(settings, messages: list[dict], use_ai_gateway: bool) -> str:
     """LLM 호출 공통 함수 - 요약 전용 티어(tier-recap) 사용."""
-    if use_litellm:
+    if use_ai_gateway:
         # 요약 전용 모델 사용: tier-recap → gpt-oss-20b-mxfp4-GGUF
-        response = request_litellm_completion(
+        response = request_ai_gateway_completion(
             settings=settings,
             messages=messages,
             model=settings.ai_gateway_model_summarize,
@@ -86,7 +86,7 @@ def _call_llm(settings, messages: list[dict], use_litellm: bool) -> str:
 # 1단계: 키워드 + 목차 추출
 # ============================================================
 
-def _step1_keywords_toc(transcript: str, settings, use_litellm: bool) -> dict:
+def _step1_keywords_toc(transcript: str, settings, use_ai_gateway: bool) -> dict:
     """1단계: 키워드 + 목차 추출."""
     prompt = STEP1_KEYWORDS_TOC_TEMPLATE.format(transcript=transcript)
     messages = [
@@ -94,7 +94,7 @@ def _step1_keywords_toc(transcript: str, settings, use_litellm: bool) -> dict:
         {"role": "user", "content": prompt},
     ]
 
-    response = _call_llm(settings, messages, use_litellm)
+    response = _call_llm(settings, messages, use_ai_gateway)
     logger.info("[Step1] 키워드+목차 추출 완료: %d chars", len(response))
     logger.info("[Step1] LLM 응답 (앞 300자):\n%s", response[:300])
 
@@ -125,7 +125,7 @@ def _step1_keywords_toc(transcript: str, settings, use_litellm: bool) -> dict:
 # 2단계: 핵심요약 + 상세요약
 # ============================================================
 
-def _step2_summary(transcript: str, toc: str, settings, use_litellm: bool) -> str:
+def _step2_summary(transcript: str, toc: str, settings, use_ai_gateway: bool) -> str:
     """2단계: 핵심요약 + 상세요약."""
     prompt = STEP2_SUMMARY_TEMPLATE.format(toc=toc, transcript=transcript)
     messages = [
@@ -133,7 +133,7 @@ def _step2_summary(transcript: str, toc: str, settings, use_litellm: bool) -> st
         {"role": "user", "content": prompt},
     ]
 
-    response = _call_llm(settings, messages, use_litellm)
+    response = _call_llm(settings, messages, use_ai_gateway)
     logger.info("[Step2] 요약 작성 완료: %d chars", len(response))
     logger.info("[Step2] LLM 응답 (앞 300자):\n%s", response[:300])
 
@@ -193,7 +193,7 @@ def _normalize_summary_format(text: str) -> str:
 # 3단계: 제목 생성
 # ============================================================
 
-def _step3_title(summary: str, settings, use_litellm: bool) -> str:
+def _step3_title(summary: str, settings, use_ai_gateway: bool) -> str:
     """3단계: 제목 생성."""
     # 요약이 너무 길면 앞부분만 사용
     prompt = STEP3_TITLE_TEMPLATE.format(summary=summary[:3000])
@@ -202,7 +202,7 @@ def _step3_title(summary: str, settings, use_litellm: bool) -> str:
         {"role": "user", "content": prompt},
     ]
 
-    response = _call_llm(settings, messages, use_litellm)
+    response = _call_llm(settings, messages, use_ai_gateway)
 
     # "제목:" 접두사 제거
     title = response.strip()
@@ -251,7 +251,7 @@ def _compose_final_markdown(keywords: str, toc: str, summary: str) -> str:
 # 청크 병합 (긴 텍스트용)
 # ============================================================
 
-def _merge_step1_results(results: list[dict], settings, use_litellm: bool) -> dict:
+def _merge_step1_results(results: list[dict], settings, use_ai_gateway: bool) -> dict:
     """여러 청크의 1단계 결과를 통합."""
     if len(results) == 1:
         return results[0]
@@ -269,7 +269,7 @@ def _merge_step1_results(results: list[dict], settings, use_litellm: bool) -> di
         {"role": "user", "content": prompt},
     ]
 
-    response = _call_llm(settings, messages, use_litellm)
+    response = _call_llm(settings, messages, use_ai_gateway)
     logger.info("[Merge Step1] %d개 청크 통합 완료", len(results))
 
     # 파싱
@@ -291,7 +291,7 @@ def _merge_step1_results(results: list[dict], settings, use_litellm: bool) -> di
     return result
 
 
-def _merge_step2_summaries(summaries: list[str], settings, use_litellm: bool) -> str:
+def _merge_step2_summaries(summaries: list[str], settings, use_ai_gateway: bool) -> str:
     """여러 청크의 2단계 요약을 통합."""
     if len(summaries) == 1:
         return summaries[0]
@@ -309,7 +309,7 @@ def _merge_step2_summaries(summaries: list[str], settings, use_litellm: bool) ->
         {"role": "user", "content": prompt},
     ]
 
-    response = _call_llm(settings, messages, use_litellm)
+    response = _call_llm(settings, messages, use_ai_gateway)
     logger.info("[Merge Step2] %d개 요약 통합 완료", len(summaries))
 
     return response.strip()
@@ -375,7 +375,7 @@ def summarize_transcription(text: str) -> tuple[str, str]:
         raise ValueError("요약할 텍스트가 비어 있습니다.")
 
     settings = get_settings()
-    use_litellm = settings.llm_provider == "ai-gateway"
+    use_ai_gateway = settings.llm_provider == "ai-gateway"
 
     # 청크 분할
     max_chunk_chars = 25000
@@ -389,12 +389,12 @@ def summarize_transcription(text: str) -> tuple[str, str]:
         step1_results = []
         for i, chunk in enumerate(chunks, 1):
             logger.info("[Step1] 청크 %d/%d - 키워드+목차 추출", i, len(chunks))
-            result = _step1_keywords_toc(chunk, settings, use_litellm)
+            result = _step1_keywords_toc(chunk, settings, use_ai_gateway)
             step1_results.append(result)
 
         # 청크 통합 (여러 개인 경우)
         if len(step1_results) > 1:
-            merged_step1 = _merge_step1_results(step1_results, settings, use_litellm)
+            merged_step1 = _merge_step1_results(step1_results, settings, use_ai_gateway)
         else:
             merged_step1 = step1_results[0]
 
@@ -407,11 +407,11 @@ def summarize_transcription(text: str) -> tuple[str, str]:
         summaries = []
         for i, chunk in enumerate(chunks, 1):
             logger.info("[Step2] 청크 %d/%d - 요약 작성", i, len(chunks))
-            summary = _step2_summary(chunk, toc, settings, use_litellm)
+            summary = _step2_summary(chunk, toc, settings, use_ai_gateway)
             summaries.append(summary)
 
         if len(summaries) > 1:
-            merged_summary = _merge_step2_summaries(summaries, settings, use_litellm)
+            merged_summary = _merge_step2_summaries(summaries, settings, use_ai_gateway)
         else:
             merged_summary = summaries[0]
 
@@ -419,7 +419,7 @@ def summarize_transcription(text: str) -> tuple[str, str]:
         # 3단계: 제목 생성
         # ========================================
         logger.info("[Step3] 제목 생성")
-        title = _step3_title(merged_summary, settings, use_litellm)
+        title = _step3_title(merged_summary, settings, use_ai_gateway)
 
         # 제목 검증
         if not _validate_title(title, normalized):
@@ -434,7 +434,7 @@ def summarize_transcription(text: str) -> tuple[str, str]:
         logger.info("[Summarizer] 완료: title='%s', len=%d", title, len(final_md))
         return title, final_md
 
-    except (LiteLLMClientError, LlamaServerClientError) as e:
+    except (AIGatewayClientError, LlamaServerClientError) as e:
         logger.error("[Summarizer] LLM 호출 실패: %s", e)
         raise RuntimeError(f"요약 실패: {e}") from e
 

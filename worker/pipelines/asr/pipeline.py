@@ -18,11 +18,11 @@ from opentelemetry import context as otel_context
 
 from .diarization_utils import merge_segments_with_speakers, merge_by_diarization_segments
 
-# Architecture V6: Worker → LiteLLM → Audio Gateway
-# LiteLLM이 Prometheus + GPU 세마포어로 최적 Provider 선택
-from .litellm_audio_client import (
-    call_litellm_transcription,
-    call_litellm_diarization,
+# Architecture V6: Worker → AI Gateway → Audio Gateway
+# AI Gateway가 Prometheus + GPU 세마포어로 최적 Provider 선택
+from .ai_gateway_audio_client import (
+    call_ai_gateway_transcription,
+    call_ai_gateway_diarization,
     ASRProvider,
     DiarizationAnnotationWrapper,
     acquire_gpu_lock,
@@ -69,7 +69,7 @@ def run_asr_diarization_pipeline(
     Returns:
         PipelineResult
     """
-    # Architecture V6: GPU/ROCm 설정 불필요 - LiteLLM이 자동 라우팅
+    # Architecture V6: GPU/ROCm 설정 불필요 - AI Gateway가 자동 라우팅
     audio_file_path = Path(audio_file_path)
     logs = []
     
@@ -183,7 +183,7 @@ def _run_case4_parallel_processing(
     current_otel_context = otel_context.get_current()
 
     # V7.5: ASR+Diarization 묶음 잠금 획득 (Worker측에서 한 번만)
-    # 두 작업이 동일한 lock_id를 공유하여 LiteLLM에서 재획득 스킵
+    # 두 작업이 동일한 lock_id를 공유하여 AI Gateway에서 재획득 스킵
     print(f"\n[Parallel] Acquiring GPU lock for ASR+Diarization bundle...")
     lock_id = acquire_gpu_lock(timeout=LOCK_TTL_ASR, max_wait=3600.0)
     if lock_id:
@@ -202,7 +202,7 @@ def _run_case4_parallel_processing(
         # OpenTelemetry context 복원
         token = otel_context.attach(current_otel_context)
         try:
-            return call_litellm_transcription(
+            return call_ai_gateway_transcription(
                 audio_file_path=audio_file_path,
                 accuracy_mode=accuracy_mode,
                 language="ko",
@@ -217,7 +217,7 @@ def _run_case4_parallel_processing(
         # OpenTelemetry context 복원
         token = otel_context.attach(current_otel_context)
         try:
-            return call_litellm_diarization(
+            return call_ai_gateway_diarization(
                 audio_file_path=audio_file_path,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,

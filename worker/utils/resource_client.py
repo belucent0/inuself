@@ -1,8 +1,8 @@
-"""LiteLLM Resource Management Client.
+"""AI Gateway Resource Management Client.
 
 Architecture V6.5: Simplified Single-Server Architecture
 
-Worker에서 LiteLLM의 /resource/acquire, /resource/release 엔드포인트를 호출합니다.
+Worker에서 AI Gateway의 /resource/acquire, /resource/release 엔드포인트를 호출합니다.
 중앙집중 방식으로 리소스 경합을 방지합니다.
 
 V6.5 라우팅:
@@ -57,7 +57,7 @@ def acquire_resource(
     timeout: float = DEFAULT_ACQUIRE_TIMEOUT,
 ) -> ResourceInfo:
     """
-    LiteLLM에서 리소스 획득.
+    AI Gateway에서 리소스 획득.
 
     Args:
         resource_type: "gpu" 또는 "npu"
@@ -118,7 +118,7 @@ def acquire_resource(
 
 def release_resource(resource_type: str, task_type: str, task_id: str) -> bool:
     """
-    LiteLLM에서 리소스 해제.
+    AI Gateway에서 리소스 해제.
 
     Args:
         resource_type: "gpu" 또는 "npu"

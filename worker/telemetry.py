@@ -1,6 +1,6 @@
 """OpenTelemetry 분산 추적 설정 (Worker용).
 
-Celery 태스크 추적 및 LiteLLM/GPU 호출 추적을 위한 모듈.
+Celery 태스크 추적 및 AI Gateway/GPU 호출 추적을 위한 모듈.
 
 사용법:
     # celery_app.py에서 초기화
@@ -397,7 +397,7 @@ def trace_celery_task(
 
 
 # ============================================
-# LiteLLM/GPU 호출 추적
+# AI Gateway/GPU 호출 추적
 # ============================================
 
 
@@ -405,11 +405,11 @@ def trace_celery_task(
 def trace_llm_call(
     model: str, provider_type: str = "gpu", file_id: int = None, **extra_attributes
 ):
-    """LiteLLM API 호출 추적.
+    """AI Gateway API 호출 추적.
 
     사용 예:
         with trace_llm_call("whisper-large-v3", provider_type="gpu", file_id=123) as span:
-            response = litellm_client.transcription(...)
+            response = ai_gateway_client.transcription(...)
             span.set_attribute("output.length", len(response.text))
     """
     tracer = get_tracer("llm-client")
