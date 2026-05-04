@@ -1,0 +1,37 @@
+# Windows에서 git autocrlf=true 환경이 작업 트리에 CRLF를 적용해도
+# 컨테이너(리눅스)에서 실행되는 스크립트/엔트리포인트는 LF여야 한다.
+# 과거 inference-embedding/ai-ocr entrypoint.sh가 CRLF로 들어가
+# `\r': command not found` 으로 컨테이너 무한 restart한 사례가 있어 영구 차단.
+
+* text=auto eol=lf
+
+# 셸 스크립트 (컨테이너 entrypoint 등) - LF 강제
+*.sh        text eol=lf
+*.bash      text eol=lf
+
+# Dockerfile 계열
+Dockerfile  text eol=lf
+*.dockerfile text eol=lf
+
+# 컨테이너에서 실행되는 코드
+*.py        text eol=lf
+
+# 윈도우 전용 스크립트는 CRLF 유지
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# 바이너리 명시 (자동 줄바꿈 변환 금지)
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+*.zip       binary
+*.gz        binary
+*.tar       binary
+*.so        binary
+*.gguf      binary
+*.bin       binary
+*.safetensors binary
