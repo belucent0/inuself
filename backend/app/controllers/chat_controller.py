@@ -1,45 +1,22 @@
 """채팅 API 엔드포인트.
 
-OpenAI SDK를 사용하여 AI Gateway를 통해 GPU/NPU로 자동 라우팅됩니다.
+OpenAI SDK를 사용하여 AI Gateway를 통해 추론 컨테이너로 라우팅됩니다.
 """
 import os
-from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from openai import AsyncOpenAI
 
+from ..core.ai_gateway import get_async_openai_client
 from ..core.logging import logger
 from ..core.llm_tier import LLMTier
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
-def get_ai_gateway_base_url() -> str:
-    """AI Gateway URL 반환."""
-    return os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
-
-
-def get_ai_gateway_api_key() -> str:
-    """API 키 반환."""
-    return os.getenv("AI_GATEWAY_API_KEY", "")
-
-
 def get_ai_gateway_model() -> str:
-    """모델명 반환."""
-    # 티어 기반 라우팅 사용
+    """현재 채팅에 쓸 tier/모델명 — 환경변수 우선, 기본은 simple tier."""
     return os.getenv("AI_GATEWAY_MODEL", LLMTier.SIMPLE)
-
-
-@lru_cache(maxsize=1)
-def get_async_openai_client() -> AsyncOpenAI:
-    """AsyncOpenAI 클라이언트 싱글톤 (AI Gateway 연결)."""
-    base_url = get_ai_gateway_base_url().rstrip("/")
-    return AsyncOpenAI(
-        base_url=f"{base_url}",
-        api_key=get_ai_gateway_api_key(),
-        timeout=120.0,
-    )
 
 
 @router.post("/chat")
