@@ -65,7 +65,7 @@ interface ChatActions {
   appendStreamingContent: (token: string) => void
   addThinkingStep: (step: ThinkingStep) => void
   setSources: (sources: Source[]) => void
-  finishStreaming: (content: string, metadata?: Record<string, unknown>) => void
+  finishStreaming: (content: string, metadata?: Record<string, unknown>, messageId?: string) => void
   startStreamingMode: () => void
 
   // 내부 헬퍼 (스트리밍 콜백용)
@@ -243,18 +243,31 @@ export const useChatStore = create<ChatStore>()(
         },
       }), false, 'setSources'),
 
-      finishStreaming: (content, metadata = {}) => set((state) => ({
-        messages: [...state.messages, {
+      finishStreaming: (content, metadata = {}, messageId) => set((state) => {
+        const completedMessage: Message = {
+          message_id: messageId,
           role: 'assistant' as const,
           content,
           timestamp: Date.now() / 1000,
-          status: 'completed',
+          status: 'completed' as const,
           metadata: metadata as Message['metadata'],
-        }],
-        streaming: { ...initialStreamingState },
-        isLoading: false,
-        abortController: null,
-      }), false, 'finishStreaming'),
+        }
+
+        const messageIndex = messageId
+          ? state.messages.findIndex((message) => message.message_id === messageId)
+          : -1
+
+        return {
+          messages: messageIndex >= 0
+            ? state.messages.map((message, index) =>
+                index === messageIndex ? { ...message, ...completedMessage } : message
+              )
+            : [...state.messages, completedMessage],
+          streaming: { ...initialStreamingState },
+          isLoading: false,
+          abortController: null,
+        }
+      }, false, 'finishStreaming'),
 
       startStreamingMode: () => set({
         streaming: {
