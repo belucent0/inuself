@@ -333,8 +333,8 @@ services:
   # ─── 추론 컨테이너 (refactor/inference): WSL2 + AMD ROCm gfx1150 ───
   # ai-llm: vLLM 0.20 + Gemma 4 E4B BF16 (always-on, util=0.35 dev mode).
   #          util=0.35 필요: Gemma 4 multimodal vision 인코더 +3 GB +
-  #          max-model-len 8192 KV cache까지 수용 (4096은 transcript 요약 시
-  #          input+output 합산 4097로 즉시 초과).
+  #          max-model-len 32768 KV cache까지 수용 (검색 컨텍스트 + 출력 토큰
+  #          합산이 8k를 넘는 AI chat 요청 완화).
   #          torch.compile 캐시는 vllm-compile-cache 볼륨에 디스크 보존 →
   #          첫 빌드만 길고 다음 cold start부터 빠름. 첫 빌드 stuck 시
   #          --enforce-eager로 회귀 검토.
@@ -362,7 +362,7 @@ services:
     command: >
       vllm serve google/gemma-4-E4B-it
       --revision c53e9d33178b12afbad4a48334d21e19b8c29761
-      --max-model-len 8192
+      --max-model-len 32768
       --gpu-memory-utilization 0.35
       --max-num-seqs 4
       --enable-prefix-caching
