@@ -240,7 +240,7 @@ export function ChatPage() {
           case 'done':
             // 스트리밍 완료
             console.log('[ChatPage v1.0.0] Streaming done')
-            store.finishStreaming(eventData?.content || '', eventData?.metadata || {})
+            store.finishStreaming(eventData?.content || '', eventData?.metadata || {}, messageId)
             setMessageStatus('completed')
             eventSource.close()
             // messageId 파라미터 제거
