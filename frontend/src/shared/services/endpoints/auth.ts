@@ -5,6 +5,7 @@ export interface AuthUser {
   login_id: string
   name: string | null
   is_active: boolean
+  is_super: boolean
   created_at: string
 }
 

@@ -9,33 +9,6 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
-  # PM2 로그 (Windows 호스트의 Provider Manager)
-  - job_name: pm2
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: pm2
-          container: provider-manager
-          service_name: provider-manager
-          __path__: /host-logs/pm2-provider-manager-*.log
-    pipeline_stages:
-      # 헬스체크 로그 제외
-      - drop:
-          expression: 'GET http://localhost:8003/health'
-      - drop:
-          expression: '(GET|POST) /metrics'
-      # Python logging 형식 파싱: 2026-02-02 18:59:28,725 [INFO] message
-      - regex:
-          expression: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}: (?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) \[(?P<level>\w+)\] (?P<message>.*)'
-      - labels:
-          level:
-      # trace_id 추출 (32자리 hex 또는 백그라운드 작업용 00_00)
-      - regex:
-          expression: 'trace_id=(?P<trace_id>[a-f0-9]{32}|00_00)'
-      - labels:
-          trace_id:
-
   # Docker container logs via Docker SD
   - job_name: docker
     docker_sd_configs:
