@@ -1,6 +1,6 @@
 """Deep Search Pipeline - 웹 검색 기반 RAG 요약.
 
-SearXNG로 검색 → LiteLLM으로 요약 → Citation 매핑
+SearXNG로 검색 → AI Gateway으로 요약 → Citation 매핑
 """
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from worker.config import get_settings
-from worker.pipelines.llm.litellm_client import (
-    request_litellm_completion,
-    LiteLLMClientError,
+from worker.pipelines.llm.ai_gateway_client import (
+    request_ai_gateway_completion,
+    AIGatewayClientError,
 )
 from .client import (
     SearXNGClient,
@@ -87,7 +87,7 @@ def deep_search(
 
     1. SearXNG로 웹 검색
     2. 검색 결과를 Context로 구성
-    3. LiteLLM으로 RAG 요약
+    3. AI Gateway으로 RAG 요약
     4. Citation 매핑
 
     Args:
@@ -146,13 +146,13 @@ def deep_search(
     ]
 
     try:
-        summary = request_litellm_completion(
+        summary = request_ai_gateway_completion(
             settings=settings,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
         )
-    except LiteLLMClientError as exc:
+    except AIGatewayClientError as exc:
         logger.error("LLM summarization failed: %s", exc)
         return DeepSearchResult(
             query=query,

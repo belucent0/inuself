@@ -32,7 +32,7 @@ AI_GATEWAY_API_KEY = os.getenv("AI_GATEWAY_API_KEY", "")
 OCR_REQUEST_TIMEOUT = 300.0  # 5분
 
 
-def _call_ocr_via_litellm(
+def _call_ocr_via_ai_gateway(
     image_base64: str,
     prompt: str,
     model: str = "qwen3vl-it:4b",
@@ -41,9 +41,9 @@ def _call_ocr_via_litellm(
     on_processing_started: callable = None,
     file_id: str = None,
 ) -> str:
-    """V7.0: LiteLLM Proxy를 통해 OCR 요청.
+    """V7.0: AI Gateway를 통해 OCR 요청.
 
-    Worker → LiteLLM → custom_handler → Redis Stream → Provider Manager → GPU/NPU
+    Worker → AI Gateway → custom_handler → Redis Stream → Provider Manager → GPU/NPU
 
     Args:
         image_base64: Base64 인코딩된 이미지
@@ -58,13 +58,13 @@ def _call_ocr_via_litellm(
         OCR 결과 텍스트
     """
     # V7.0: accuracy_mode에 따라 모델명 결정
-    # LiteLLM config의 ocr-speed, ocr-accuracy 모델 사용
+    # AI Gateway config의 ocr-speed, ocr-accuracy 모델 사용
     if accuracy_mode == "speed":
         final_model = "ocr-speed"  # NPU (FLM)
     else:
         final_model = "ocr-accuracy"  # GPU (llama-ocr-server)
 
-    logger.info(f"[OCR Vision] Sending OCR via LiteLLM: model={final_model}, accuracy_mode={accuracy_mode}")
+    logger.info(f"[OCR Vision] Sending OCR via AI Gateway: model={final_model}, accuracy_mode={accuracy_mode}")
 
     # OpenAI Vision API 형식으로 요청
     url = f"{AI_GATEWAY_URL}/v1/chat/completions"
@@ -73,7 +73,7 @@ def _call_ocr_via_litellm(
         "Content-Type": "application/json",
     }
     
-    # OpenTelemetry trace context 주입 (Worker→LiteLLM 연결)
+    # OpenTelemetry trace context 주입 (Worker→AI Gateway 연결)
     try:
         from worker.telemetry import inject_trace_context
         logger.info(f"[Telemetry Debug] Headers before injection: {headers}")
@@ -119,18 +119,18 @@ def _call_ocr_via_litellm(
             # OpenAI 형식 응답에서 텍스트 추출
             if "choices" in result and len(result["choices"]) > 0:
                 content = result["choices"][0].get("message", {}).get("content", "")
-                logger.info(f"[OCR Vision] OCR completed via LiteLLM")
+                logger.info(f"[OCR Vision] OCR completed via AI Gateway")
                 return content.strip()
 
             raise ValueError(f"Unexpected OCR response format: {result}")
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"[OCR Vision] LiteLLM HTTP error: {e.response.status_code} - {e.response.text}")
+        logger.error(f"[OCR Vision] AI Gateway HTTP error: {e.response.status_code} - {e.response.text}")
         raise RuntimeError(f"OCR HTTP error: {e.response.status_code}")
     except httpx.TimeoutException:
         raise TimeoutError(f"OCR timeout after {timeout}s")
     except Exception as e:
-        logger.error(f"[OCR Vision] LiteLLM request failed: {e}")
+        logger.error(f"[OCR Vision] AI Gateway request failed: {e}")
         raise RuntimeError(f"OCR request failed: {e}")
 
 
@@ -354,16 +354,16 @@ class OcrVisionProcessor:
         current_ocr_provider = self._ocr_provider_override if self._ocr_provider_override is not None else self.settings.ocr_provider
         logger.debug(f"[OCR Vision] _call_llm_api: ocr_provider_override={self._ocr_provider_override}, settings.ocr_provider={self.settings.ocr_provider}, current_ocr_provider={current_ocr_provider}")
 
-        # V7.0: Redis Stream이 활성화되어 있으면 LiteLLM Proxy를 통해 OCR 요청
-        # Worker → LiteLLM → custom_handler → Redis Stream → Provider Manager → GPU/NPU
+        # V7.0: Redis Stream이 활성화되어 있으면 AI Gateway를 통해 OCR 요청
+        # Worker → AI Gateway → custom_handler → Redis Stream → Provider Manager → GPU/NPU
         if REDIS_STREAM_ENABLED and image_base64:
-            logger.info(f"[OCR Vision] Using LiteLLM Proxy for OCR (provider={current_ocr_provider})")
+            logger.info(f"[OCR Vision] Using AI Gateway for OCR (provider={current_ocr_provider})")
             # accuracy_mode 결정: flm이면 speed, 아니면 accuracy
             accuracy_mode = "speed" if current_ocr_provider == "flm" else "accuracy"
             model = "qwen3vl-it:4b" if current_ocr_provider == "flm" else "qwen3-vl"
 
-            # LiteLLM Proxy를 통해 OCR 요청
-            result = _call_ocr_via_litellm(
+            # AI Gateway를 통해 OCR 요청
+            result = _call_ocr_via_ai_gateway(
                 image_base64=image_base64,
                 prompt=prompt,
                 model=model,
@@ -589,7 +589,7 @@ class OcrVisionProcessor:
         """여러 이미지를 OCR 처리.
 
         Architecture V6.5: 리소스 게이트 제거
-        - LiteLLM Custom Handler가 GPU/NPU 라우팅 및 메모리 관리
+        - AI Gateway가 GPU/NPU 라우팅 및 메모리 관리
 
         Args:
             images: PIL Image 객체 목록
