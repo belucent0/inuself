@@ -29,7 +29,7 @@ class TestContextualizeTransformer:
     def mock_settings(self):
         """Mock 설정 객체."""
         settings = MagicMock()
-        settings.litellm_url = "http://localhost:8003/v1"
+        settings.ai_gateway_url = "http://localhost:8003/v1"
         return settings
 
     def test_should_apply_with_conversation_history(self, transformer):
@@ -191,7 +191,7 @@ class TestDecomposeTransformer:
     def mock_settings(self):
         """Mock 설정 객체."""
         settings = MagicMock()
-        settings.litellm_url = "http://localhost:8003/v1"
+        settings.ai_gateway_url = "http://localhost:8003/v1"
         return settings
 
     def test_should_apply_complex_query(self, transformer):
@@ -353,7 +353,7 @@ class TestHyDETransformer:
     def mock_settings(self):
         """Mock 설정 객체."""
         settings = MagicMock()
-        settings.litellm_url = "http://localhost:8003/v1"
+        settings.ai_gateway_url = "http://localhost:8003/v1"
         return settings
 
     def test_should_apply_factoid_query(self, transformer):
@@ -504,7 +504,7 @@ class TestQueryTransformationIntegration:
     @pytest.fixture
     def mock_settings(self):
         settings = MagicMock()
-        settings.litellm_url = "http://localhost:8003/v1"
+        settings.ai_gateway_url = "http://localhost:8003/v1"
         return settings
 
     @pytest.mark.asyncio

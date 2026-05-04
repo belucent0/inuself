@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..core.config import Settings
 from ..core.logging import logger
 from ..prompts.summary import SECTION_GENERATION_TEMPLATE, SUMMARY_SYSTEM_PROMPT
-from .litellm_client import request_litellm_completion_async
+from .ai_gateway_client import request_ai_gateway_completion_async
 from .section_state import SectionGenerationState
 
 
@@ -174,7 +174,7 @@ async def create_section_node(
         ]
 
         # LLM 호출 (비동기)
-        response = await request_litellm_completion_async(
+        response = await request_ai_gateway_completion_async(
             settings=settings,
             model=settings.ai_gateway_model_summarize,
             messages=messages,
@@ -365,7 +365,7 @@ async def fallback_section_node(
             {"role": "user", "content": prompt},
         ]
 
-        response = await request_litellm_completion_async(
+        response = await request_ai_gateway_completion_async(
             settings=settings,
             model=settings.ai_gateway_model_summarize,
             messages=messages,

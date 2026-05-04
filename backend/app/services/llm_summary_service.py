@@ -22,7 +22,7 @@ from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
 from ..repositories.transcription_repository import TranscriptionRepository
 from ..repositories.document_repository import DocumentRepository
-from .litellm_client import request_litellm_completion, LiteLLMClientError
+from .ai_gateway_client import request_ai_gateway_completion, AIGatewayClientError
 from .transcription_postprocess import segments_to_text_with_metadata
 from ..prompts.summary import (
     SUMMARY_SYSTEM_PROMPT,
@@ -547,7 +547,7 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
             {"role": "user", "content": phase1_prompt},
         ]
 
-        phase1_response = request_litellm_completion(
+        phase1_response = request_ai_gateway_completion(
             settings=settings, messages=phase1_messages
         )
         phase1_result = _parse_json_response(phase1_response)
@@ -593,7 +593,7 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
             {"role": "user", "content": phase2_prompt},
         ]
 
-        phase2_response = request_litellm_completion(
+        phase2_response = request_ai_gateway_completion(
             settings=settings, messages=phase2_messages
         )
         core_summary = phase2_response.strip()
@@ -628,7 +628,7 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
             {"role": "user", "content": phase3_prompt},
         ]
 
-        phase3_response = request_litellm_completion(
+        phase3_response = request_ai_gateway_completion(
             settings=settings, model=settings.ai_gateway_model_summarize, messages=phase3_messages
         )
         detail_content = phase3_response.strip()
@@ -719,7 +719,7 @@ def summarize_transcription_old(text: str) -> tuple[str, str]:
                 {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ]
-            response = request_litellm_completion(settings=settings, messages=messages)
+            response = request_ai_gateway_completion(settings=settings, messages=messages)
             result = _parse_json_response(response)
             summaries.append(result)
             logger.info(
@@ -770,7 +770,7 @@ def _merge_summaries(summaries: list[dict[str, Any]], settings) -> dict[str, Any
     ]
 
     try:
-        response = request_litellm_completion(settings=settings, messages=messages)
+        response = request_ai_gateway_completion(settings=settings, messages=messages)
         result = _parse_json_response(response)
 
         # 키워드 통합

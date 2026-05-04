@@ -13,14 +13,14 @@ from ..core.logging import logger
 from ..core.llm_tier import LLMTier
 
 
-def get_litellm_base_url() -> str:
+def get_ai_gateway_base_url() -> str:
     """AI Gateway URL 반환."""
     if gateway_url := os.getenv("AI_GATEWAY_URL"):
         return gateway_url
     return "http://localhost:4000"
 
 
-def get_litellm_api_key() -> str:
+def get_ai_gateway_api_key() -> str:
     """AI Gateway API 키 반환."""
     return os.getenv("AI_GATEWAY_API_KEY", "")
 
@@ -28,10 +28,10 @@ def get_litellm_api_key() -> str:
 @lru_cache(maxsize=1)
 def get_async_openai_client() -> AsyncOpenAI:
     """AsyncOpenAI 클라이언트 싱글톤."""
-    base_url = get_litellm_base_url().rstrip("/")
+    base_url = get_ai_gateway_base_url().rstrip("/")
     return AsyncOpenAI(
         base_url=f"{base_url}/v1",
-        api_key=get_litellm_api_key(),
+        api_key=get_ai_gateway_api_key(),
         timeout=30.0,
     )
 
@@ -155,12 +155,12 @@ async def post_process_with_llm(text: str, base_url: str = None) -> str:
     """
     ASR 전사 결과를 LLM으로 후처리.
     
-    OpenAI SDK를 통해 LiteLLM 프록시로 요청합니다.
+    OpenAI SDK를 통해 AI Gateway로 요청합니다.
     문법 교정, 구두점 추가, 띄어쓰기 교정 등을 수행합니다.
     
     Args:
         text: 원본 ASR 전사 텍스트
-        base_url: (deprecated, 무시됨) LiteLLM 프록시를 사용
+        base_url: (deprecated, 무시됨) AI Gateway를 사용
     
     Returns:
         후처리된 텍스트 (실패 시 원본 텍스트 반환)

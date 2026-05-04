@@ -1,6 +1,6 @@
 """Deep Search API 엔드포인트.
 
-SearXNG 검색 + LiteLLM 요약을 스트리밍으로 처리합니다.
+SearXNG 검색 + AI Gateway 요약을 스트리밍으로 처리합니다.
 SSE(Server-Sent Events)를 사용하여 검색 진행 상황과 결과를 실시간으로 전송합니다.
 """
 import hashlib
@@ -37,22 +37,22 @@ SEARCH_CACHE_PREFIX = "search:cache:"
 SEARCH_CACHE_TTL = 3600  # 1시간
 
 
-def get_litellm_base_url() -> str:
+def get_ai_gateway_base_url() -> str:
     return os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
 
 
-def get_litellm_api_key() -> str:
+def get_ai_gateway_api_key() -> str:
     return os.getenv("AI_GATEWAY_API_KEY", "")
 
 
-def get_litellm_model(reasoning_mode: bool = False) -> str:
+def get_ai_gateway_model(reasoning_mode: bool = False) -> str:
     """사용할 LLM 티어명 조회 (tier 라우팅 사용)."""
     return LLMTier.THINKING if reasoning_mode else LLMTier.SIMPLE
 
 
 @lru_cache(maxsize=1)
 def get_async_openai_client() -> AsyncOpenAI:
-    """LiteLLM용 AsyncOpenAI 클라이언트.
+    """AI Gateway용 AsyncOpenAI 클라이언트.
 
     timeout 설정:
     - connect: 연결 수립 30초
@@ -67,8 +67,8 @@ def get_async_openai_client() -> AsyncOpenAI:
         pool=30.0,         # 풀 연결 대기
     )
     return AsyncOpenAI(
-        base_url=get_litellm_base_url(),
-        api_key=get_litellm_api_key(),
+        base_url=get_ai_gateway_base_url(),
+        api_key=get_ai_gateway_api_key(),
         timeout=timeout,
     )
 
@@ -188,7 +188,7 @@ async def search_searxng(
 # ============================================================
 
 async def stream_llm_summary(query: str, search_results: list[dict], reasoning_mode: bool = False) -> AsyncGenerator[str, None]:
-    """LiteLLM으로 검색 결과 요약 (스트리밍)."""
+    """AI Gateway로 검색 결과 요약 (스트리밍)."""
     import time
     start_time = time.time()
 
@@ -205,7 +205,7 @@ async def stream_llm_summary(query: str, search_results: list[dict], reasoning_m
     ]
 
     client = get_async_openai_client()
-    model = get_litellm_model(reasoning_mode)
+    model = get_ai_gateway_model(reasoning_mode)
 
     # 추론 모드는 <think> 과정이 길어서 더 많은 토큰 필요
     max_tokens = 8192 if reasoning_mode else 2048

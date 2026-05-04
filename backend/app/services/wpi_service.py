@@ -46,7 +46,7 @@ from ..schemas.wpi import (
     WpiQuestion,
     WpiResponses,
 )
-from .litellm_client import request_litellm_completion
+from .ai_gateway_client import request_ai_gateway_completion
 from .wpi_profile_parser import load_combination_text, load_default_text
 
 
@@ -595,7 +595,7 @@ class WpiService:
             os.getenv("WPI_REPORT_SINGLE_PROMPT_TIMEOUT_SECONDS", "180")
         )
 
-        llm_call = lambda: request_litellm_completion(
+        llm_call = lambda: request_ai_gateway_completion(
             settings=self.settings,
             messages=messages,
             model=wpi_model,
