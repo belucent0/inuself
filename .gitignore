@@ -132,3 +132,6 @@ screenshots/
 
 # Private prompts (핵심 프롬프트 — 로컬 전용, 절대 커밋 금지)
 backend/app/prompts/wpi_report.py
+
+# WSL ROCm — deb extracted artifacts (symlinks blow up on Windows file system)
+infra/inference/librocdxg/extracted/

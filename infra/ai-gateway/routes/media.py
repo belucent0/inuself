@@ -1,7 +1,8 @@
 """미디어 처리 라우트 — ASR, OCR, Diarization.
 
 POST /v1/chat/completions 에서 task_type으로 분기되어 호출됩니다.
-Redis Stream을 통해 Provider Manager → GPU/NPU 서버로 전달합니다.
+local-gpu 모드에서는 ai-gateway가 추론 컨테이너를 httpx로 직접 호출,
+serverless 모드에서는 RunPod API로 위임합니다.
 """
 
 import base64
@@ -11,22 +12,21 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from fastapi.responses import JSONResponse
 
-from clients.stream_client import get_async_gpu_stream_client
 from config import (
     DEPLOY_MODE,
-    NPU_OCR_MODEL,
-    GPU_OCR_MODEL,
+    OCR_BASE_URL,
+    OCR_MODEL_NAME,
+    OCR_REQUEST_TIMEOUT,
+    ASR_BASE_URL,
+    ASR_REQUEST_TIMEOUT,
+    DIARIZE_BASE_URL,
+    DIARIZE_REQUEST_TIMEOUT,
     RUNPOD_API_KEY,
     RUNPOD_ASR_BASE_URL,
     RUNPOD_VISION_BASE_URL,
-)
-from services.device_lock import (
-    acquire_device_lock,
-    release_device_lock,
-    start_lock_heartbeat,
-    stop_lock_heartbeat,
 )
 from utils.response import build_openai_response
 
@@ -54,169 +54,118 @@ async def handle_media_request(body: dict) -> JSONResponse:
 async def _handle_asr(body: dict) -> JSONResponse:
     """ASR (음성인식) 요청 처리.
 
+    refactor/inference: asr-whisper 컨테이너(FastAPI) 직접 호출.
+    accuracy_mode 분기는 폐기 (whisper-turbo 단일).
+
     extra_body:
-        audio_base64, language, accuracy_mode, lock_id, file_id
+        audio_base64, language, accuracy_mode (무시)
     """
     extra = body.get("extra_body", {})
-    accuracy_mode = extra.get("accuracy_mode", "speed")
-    worker_lock_id = extra.get("lock_id")
+    accuracy_mode = extra.get("accuracy_mode", "")  # 호환만, 분기 안 함
     language = extra.get("language", "ko")
-    file_id = extra.get("file_id")
     audio_base64 = extra.get("audio_base64", "")
 
     if not audio_base64:
         return JSONResponse({"error": "audio_base64 is required"}, status_code=400)
 
-    # 서버리스 모드
+    # 서버리스 모드 (RunPod) — 별도 라우팅 유지
     if DEPLOY_MODE == "serverless":
-        return await _handle_asr_serverless(audio_base64, language, accuracy_mode)
+        return await _handle_asr_serverless(audio_base64, language, accuracy_mode or "speed")
 
-    # 모델/프로바이더 선택
-    if accuracy_mode == "accuracy":
-        asr_model = "whisper-large-v3"
-        provider_name = "insanely-fast"
-    else:
-        asr_model = "whisper-turbo"
-        provider_name = "whisper-cpp"
-
-    # 락 처리
-    lock_id = worker_lock_id
-    heartbeat = None
-    own_lock = False
-    tmp = None
-
-    if not lock_id:
-        lock_id = await acquire_device_lock("gpu", max_wait=3600.0)
-        own_lock = True
-        if lock_id:
-            heartbeat = start_lock_heartbeat(lock_id, device="gpu")
+    audio_bytes = base64.b64decode(audio_base64)
 
     try:
-        # audio_base64 → 임시 파일 (Redis Stream은 파일 경로/내용 전송)
-        audio_bytes = base64.b64decode(audio_base64)
-        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        tmp.write(audio_bytes)
-        tmp.close()
+        async with httpx.AsyncClient(timeout=ASR_REQUEST_TIMEOUT) as client:
+            files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
+            data = {"language": language, "return_timestamps": "true"}
+            r = await client.post(f"{ASR_BASE_URL}/transcribe", files=files, data=data)
+            r.raise_for_status()
+            result = r.json()
 
-        stream_client = get_async_gpu_stream_client()
-        result = await stream_client.request_transcription(
-            audio_file_path=Path(tmp.name),
-            model=asr_model,
-            language=language,
-            timeout=1800.0,
-        )
+        content = json.dumps(result, ensure_ascii=False)
+        return JSONResponse(build_openai_response(content, result.get("model", "whisper")))
 
-        # 결과를 OpenAI 포맷으로 래핑
-        content = json.dumps(result) if isinstance(result, dict) else str(result)
-        return JSONResponse(build_openai_response(content, asr_model))
-
-    finally:
-        if tmp:
-            Path(tmp.name).unlink(missing_ok=True)
-        if heartbeat:
-            stop_lock_heartbeat(heartbeat)
-        if own_lock and lock_id:
-            await release_device_lock("gpu", lock_id)
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[ASR] upstream {e.response.status_code}: {e.response.text[:300]}")
+        return JSONResponse({"error": f"ASR upstream error: {e.response.status_code}"}, status_code=502)
+    except Exception as e:
+        logger.error(f"[ASR] Error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 async def _handle_diarization(body: dict) -> JSONResponse:
-    """Diarization (화자 분리) 요청 처리."""
+    """Diarization (화자 분리) 요청 처리.
+
+    refactor/inference: asr-diarize 컨테이너(FastAPI) 직접 호출.
+    """
     extra = body.get("extra_body", {})
     audio_base64 = extra.get("audio_base64", "")
-    worker_lock_id = extra.get("lock_id")
     min_speakers = extra.get("min_speakers")
     max_speakers = extra.get("max_speakers")
 
     if not audio_base64:
         return JSONResponse({"error": "audio_base64 is required"}, status_code=400)
 
-    lock_id = worker_lock_id
-    heartbeat = None
-    own_lock = False
-    tmp = None
-
-    if not lock_id:
-        lock_id = await acquire_device_lock("gpu", max_wait=3600.0)
-        own_lock = True
-        if lock_id:
-            heartbeat = start_lock_heartbeat(lock_id, device="gpu")
+    audio_bytes = base64.b64decode(audio_base64)
 
     try:
-        audio_bytes = base64.b64decode(audio_base64)
-        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        tmp.write(audio_bytes)
-        tmp.close()
+        async with httpx.AsyncClient(timeout=DIARIZE_REQUEST_TIMEOUT) as client:
+            files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
+            data: dict[str, str] = {}
+            if min_speakers is not None:
+                data["min_speakers"] = str(int(min_speakers))
+            if max_speakers is not None:
+                data["max_speakers"] = str(int(max_speakers))
 
-        stream_client = get_async_gpu_stream_client()
-        result = await stream_client.request_diarization(
-            audio_file_path=Path(tmp.name),
-            min_speakers=int(min_speakers) if min_speakers else None,
-            max_speakers=int(max_speakers) if max_speakers else None,
-            timeout=1800.0,
-        )
+            r = await client.post(f"{DIARIZE_BASE_URL}/diarize", files=files, data=data)
+            r.raise_for_status()
+            result = r.json()
 
-        content = json.dumps(result) if isinstance(result, dict) else str(result)
-        return JSONResponse(build_openai_response(content, "diarization"))
+        content = json.dumps(result, ensure_ascii=False)
+        return JSONResponse(build_openai_response(content, result.get("model", "diarization")))
 
-    finally:
-        if tmp:
-            Path(tmp.name).unlink(missing_ok=True)
-        if heartbeat:
-            stop_lock_heartbeat(heartbeat)
-        if own_lock and lock_id:
-            await release_device_lock("gpu", lock_id)
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[Diarize] upstream {e.response.status_code}: {e.response.text[:300]}")
+        return JSONResponse({"error": f"Diarize upstream error: {e.response.status_code}"}, status_code=502)
+    except Exception as e:
+        logger.error(f"[Diarize] Error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 async def _handle_ocr(body: dict) -> JSONResponse:
-    """OCR (이미지 텍스트 추출) 요청 처리."""
-    extra = body.get("extra_body", {})
-    accuracy_mode = extra.get("accuracy_mode", "speed")
-    file_id = extra.get("file_id")
+    """OCR (이미지 텍스트 추출) 요청 처리.
+
+    refactor/inference 이후: dots.ocr 단일 컨테이너(asr-ocr:8080)로 통일.
+    accuracy_mode는 더 이상 분기하지 않으므로 폐기 (요청 본문에 와도 무시).
+    """
     messages = body.get("messages", [])
 
-    # 이미지 + 프롬프트 추출
-    image_base64, text_prompt = _extract_vision_content(messages)
-
-    if not image_base64:
+    # 이미지가 있는지 형식만 확인 (직접 호출이라 base64 추출 불필요)
+    image_url, _ = _extract_vision_content(messages)
+    if not image_url:
         return JSONResponse({"error": "No image found in messages"}, status_code=400)
 
-    # 서버리스 모드
+    # 서버리스 모드 (RunPod) — 별도 라우팅 유지
     if DEPLOY_MODE == "serverless":
-        return await _handle_ocr_serverless(body, accuracy_mode)
+        return await _handle_ocr_serverless(body)
 
-    # 모델 선택
-    if accuracy_mode == "speed":
-        ocr_model = NPU_OCR_MODEL
-    else:
-        ocr_model = GPU_OCR_MODEL
+    # 로컬 컨테이너 모드: asr-ocr (dots.ocr llama-server) 직접 호출
+    payload = {
+        "model": OCR_MODEL_NAME,
+        "messages": messages,
+        "max_tokens": body.get("max_tokens", 2048),
+        "temperature": body.get("temperature", 0.1),
+    }
 
     try:
-        # base64 프리앰블 제거 (data:image/jpeg;base64,...)
-        if "," in image_base64:
-            image_base64 = image_base64.split(",", 1)[1]
+        async with httpx.AsyncClient(timeout=OCR_REQUEST_TIMEOUT) as client:
+            r = await client.post(f"{OCR_BASE_URL}/v1/chat/completions", json=payload)
+            r.raise_for_status()
+            return JSONResponse(r.json())
 
-        image_bytes = base64.b64decode(image_base64)
-
-        stream_client = get_async_gpu_stream_client()
-        result = await stream_client.request_ocr(
-            image_data=image_bytes,
-            model=ocr_model,
-            prompt=text_prompt or "Extract all text from this image.",
-            accuracy_mode=accuracy_mode,
-            timeout=300.0,
-            file_id=file_id,
-        )
-
-        # 결과 추출
-        if isinstance(result, dict):
-            content = result.get("text", result.get("content", json.dumps(result)))
-            if "choices" in result and result["choices"]:
-                content = result["choices"][0].get("message", {}).get("content", content)
-        else:
-            content = str(result)
-
-        return JSONResponse(build_openai_response(content, ocr_model))
-
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[OCR] upstream {e.response.status_code}: {e.response.text[:300]}")
+        return JSONResponse({"error": f"OCR upstream error: {e.response.status_code}"}, status_code=502)
     except Exception as e:
         logger.error(f"[OCR] Error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -271,7 +220,7 @@ async def _handle_asr_serverless(
         Path(tmp.name).unlink(missing_ok=True)
 
 
-async def _handle_ocr_serverless(body: dict, accuracy_mode: str) -> JSONResponse:
+async def _handle_ocr_serverless(body: dict) -> JSONResponse:
     """서버리스 OCR 처리 (RunPod Vision)."""
     from openai import AsyncOpenAI
 

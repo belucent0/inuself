@@ -50,10 +50,29 @@ GPU_AUDIO_MODEL = os.getenv("GPU_AUDIO_MODEL", "whisper-turbo")
 NPU_AUDIO_MODEL = os.getenv("NPU_AUDIO_MODEL", "flm-audio")
 
 # ============================================================
-# OCR 모델명
+# OCR 모델명 (Provider Manager / 서버리스 fallback용 — local-gpu 모드는 OCR_BASE_URL 사용)
 # ============================================================
 NPU_OCR_MODEL = os.getenv("NPU_OCR_MODEL", "qwen3vl-it:4b")
 GPU_OCR_MODEL = os.getenv("GPU_OCR_MODEL", "qwen3-vl-8b")
+
+# ============================================================
+# 컨테이너 추론 백엔드 (refactor/inference)
+# - OCR_BASE_URL: dots.ocr llama-server (asr-ocr 컨테이너)
+#   accuracy/speed 분기 없이 단일 모델로 통일
+# ============================================================
+OCR_BASE_URL = os.getenv("OCR_BASE_URL", "http://asr-ocr:8080")
+OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "dots.ocr")
+OCR_REQUEST_TIMEOUT = float(os.getenv("OCR_REQUEST_TIMEOUT", "300"))
+
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://asr-llm:8000")
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemma-4-E4B-it")
+LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "300"))
+
+ASR_BASE_URL = os.getenv("ASR_BASE_URL", "http://asr-whisper:8001")
+ASR_REQUEST_TIMEOUT = float(os.getenv("ASR_REQUEST_TIMEOUT", "1800"))
+
+DIARIZE_BASE_URL = os.getenv("DIARIZE_BASE_URL", "http://asr-diarize:8003")
+DIARIZE_REQUEST_TIMEOUT = float(os.getenv("DIARIZE_REQUEST_TIMEOUT", "1800"))
 
 # ============================================================
 # Provider Health Check URL

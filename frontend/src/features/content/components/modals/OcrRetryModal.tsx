@@ -1,7 +1,7 @@
 /**
  * OCR 재처리 모달
  * - OCR 모드 선택: 이미지 묘사(portray) / 문서 분석(document)
- * - 정확도 모드 선택: 신속(speed) / 정확도(accuracy)
+ * (정확도 모드는 OCR 컨테이너 단일화로 폐기, accuracyMode는 'speed'로 고정 송신)
  */
 
 import { useState } from 'react'
@@ -46,17 +46,15 @@ export function OcrRetryModal({
   isLoading = false,
 }: OcrRetryModalProps) {
   const [ocrMode, setOcrMode] = useState<OcrMode | null>(null)
-  const [accuracyMode, setAccuracyMode] = useState<AccuracyMode>('speed')
 
   const handleConfirm = () => {
     if (!ocrMode) return
-    onConfirm(ocrMode, accuracyMode)
+    onConfirm(ocrMode, 'speed') // OCR 컨테이너 단일화 (dots.ocr)
   }
 
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
       setOcrMode(null)
-      setAccuracyMode('speed')
     }
     onOpenChange(newOpen)
   }
@@ -113,46 +111,6 @@ export function OcrRetryModal({
               </Label>
             </div>
           </RadioGroup>
-
-          <div className="mt-6">
-            <Label className="text-sm font-medium mb-3 block">처리 모드</Label>
-            <RadioGroup
-              value={accuracyMode}
-              onValueChange={(value) =>
-                setAccuracyMode(value as AccuracyMode)
-              }
-            >
-              <div className="grid grid-cols-2 gap-3">
-                <Label
-                  htmlFor="ocr-modal-speed"
-                  className="flex flex-col space-y-1 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                >
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="speed" id="ocr-modal-speed" />
-                    <span className="text-sm font-semibold">신속 모드</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground ml-6">
-                    빠른 처리
-                  </p>
-                </Label>
-                <Label
-                  htmlFor="ocr-modal-accuracy"
-                  className="flex flex-col space-y-1 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
-                >
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem
-                      value="accuracy"
-                      id="ocr-modal-accuracy"
-                    />
-                    <span className="text-sm font-semibold">정확도 모드</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground ml-6">
-                    높은 정확도
-                  </p>
-                </Label>
-              </div>
-            </RadioGroup>
-          </div>
         </div>
 
         <DialogFooter>
