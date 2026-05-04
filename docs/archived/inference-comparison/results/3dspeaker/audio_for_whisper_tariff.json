@@ -1,0 +1,122 @@
+{
+  "audio_for_whisper_tariff_0.0_173.645": {
+    "start": 0.0,
+    "stop": 173.64499999999998,
+    "speaker": 1
+  },
+  "audio_for_whisper_tariff_173.645_183.405": {
+    "start": 173.64499999999998,
+    "stop": 183.405,
+    "speaker": 5
+  },
+  "audio_for_whisper_tariff_183.405_240.04": {
+    "start": 183.405,
+    "stop": 240.04,
+    "speaker": 1
+  },
+  "audio_for_whisper_tariff_240.04_256.165": {
+    "start": 240.04,
+    "stop": 256.16499999999996,
+    "speaker": 2
+  },
+  "audio_for_whisper_tariff_256.165_315.425": {
+    "start": 256.16499999999996,
+    "stop": 315.425,
+    "speaker": 1
+  },
+  "audio_for_whisper_tariff_315.425_323.88": {
+    "start": 315.425,
+    "stop": 323.88,
+    "speaker": 4
+  },
+  "audio_for_whisper_tariff_324.6_327.225": {
+    "start": 324.6,
+    "stop": 327.225,
+    "speaker": 3
+  },
+  "audio_for_whisper_tariff_327.225_353.475": {
+    "start": 327.225,
+    "stop": 353.475,
+    "speaker": 1
+  },
+  "audio_for_whisper_tariff_353.475_355.725": {
+    "start": 353.475,
+    "stop": 355.725,
+    "speaker": 4
+  },
+  "audio_for_whisper_tariff_355.725_356.475": {
+    "start": 355.725,
+    "stop": 356.475,
+    "speaker": 3
+  },
+  "audio_for_whisper_tariff_356.475_357.225": {
+    "start": 356.475,
+    "stop": 357.225,
+    "speaker": 4
+  },
+  "audio_for_whisper_tariff_357.225_363.49": {
+    "start": 357.225,
+    "stop": 363.49,
+    "speaker": 3
+  },
+  "audio_for_whisper_tariff_363.88_370.95": {
+    "start": 363.88,
+    "stop": 370.95,
+    "speaker": 3
+  },
+  "audio_for_whisper_tariff_371.32_376.195": {
+    "start": 371.32,
+    "stop": 376.195,
+    "speaker": 4
+  },
+  "audio_for_whisper_tariff_376.195_382.195": {
+    "start": 376.195,
+    "stop": 382.195,
+    "speaker": 3
+  },
+  "audio_for_whisper_tariff_382.195_455.705": {
+    "start": 382.195,
+    "stop": 455.705,
+    "speaker": 1
+  },
+  "audio_for_whisper_tariff_455.705_472.955": {
+    "start": 455.705,
+    "stop": 472.955,
+    "speaker": 0
+  },
+  "audio_for_whisper_tariff_472.955_527.05": {
+    "start": 472.955,
+    "stop": 527.05,
+    "speaker": 1
+  },
+  "audio_for_whisper_tariff_527.33_528.42": {
+    "start": 527.33,
+    "stop": 528.42,
+    "speaker": 1
+  },
+  "audio_for_whisper_tariff_528.84_562.215": {
+    "start": 528.84,
+    "stop": 562.215,
+    "speaker": 1
+  },
+  "audio_for_whisper_tariff_562.215_566.715": {
+    "start": 562.215,
+    "stop": 566.715,
+    "speaker": 4
+  },
+  "audio_for_whisper_tariff_566.715_570.465": {
+    "start": 566.715,
+    "stop": 570.465,
+    "speaker": 3
+  },
+  "audio_for_whisper_tariff_570.465_828.29": {
+    "start": 570.465,
+    "stop": 828.29,
+    "speaker": 1
+  },
+  "audio_for_whisper_tariff_831.28_855.04": {
+    "start": 831.28,
+    "stop": 855.04,
+    "speaker": 1
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "messages": [
+    {"role": "user", "content": "Compute: 17 * 23 + 91. Show the steps."}
+  ],
+  "max_tokens": 100,
+  "temperature": 0.0
+}
