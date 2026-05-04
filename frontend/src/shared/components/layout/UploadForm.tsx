@@ -16,7 +16,6 @@ import { Label } from '@/shared/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/shared/components/ui/radio-group'
 import { Card, CardContent } from '@/shared/components/ui/card'
 import { toast } from 'sonner'
-import { StreamingASRModal } from './StreamingASRModal'
 
 type SpeakerRange = 'auto' | '1-2' | '3-6' | '7-10' | '11+' | null
 type OcrMode = 'portray' | 'document' | null
@@ -28,7 +27,6 @@ export default function UploadForm() {
   const [showModal, setShowModal] = useState(false)
   const [showOcrModal, setShowOcrModal] = useState(false)
   const [showOfficeModal, setShowOfficeModal] = useState(false)
-  const [showStreamingModal, setShowStreamingModal] = useState(false)
   const [speakerRange, setSpeakerRange] = useState<SpeakerRange>('auto')
   const [ocrMode, setOcrMode] = useState<OcrMode>(null)
   const navigate = useNavigate()
@@ -300,16 +298,6 @@ export default function UploadForm() {
             >
               파일 업로드
             </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setShowStreamingModal(true)}
-              disabled={isUploading}
-              className="w-full mt-2"
-              data-streaming-asr-trigger
-            >
-              실시간 전사 (Beta)
-            </Button>
             {status && (
               <p
                 className={
@@ -451,8 +439,6 @@ export default function UploadForm() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <StreamingASRModal open={showStreamingModal} onOpenChange={setShowStreamingModal} />
 
       {/* Office 문서 업로드 확인 모달 */}
       <Dialog open={showOfficeModal} onOpenChange={setShowOfficeModal}>
