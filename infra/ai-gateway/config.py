@@ -18,21 +18,21 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://asr-valkey:6379/0")
 # - OCR_BASE_URL: dots.ocr llama-server (asr-ocr 컨테이너)
 #   accuracy/speed 분기 없이 단일 모델로 통일
 # ============================================================
-OCR_BASE_URL = os.getenv("OCR_BASE_URL", "http://asr-ocr:8080")
+OCR_BASE_URL = os.getenv("OCR_BASE_URL", "http://ai-ocr:8080")
 OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "dots.ocr")
 OCR_REQUEST_TIMEOUT = float(os.getenv("OCR_REQUEST_TIMEOUT", "300"))
 
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://asr-llm:8000")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ai-llm:8000")
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemma-4-E4B-it")
 LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "300"))
 
-ASR_BASE_URL = os.getenv("ASR_BASE_URL", "http://asr-whisper:8001")
+ASR_BASE_URL = os.getenv("ASR_BASE_URL", "http://ai-asr:8001")
 ASR_REQUEST_TIMEOUT = float(os.getenv("ASR_REQUEST_TIMEOUT", "1800"))
 
-DIARIZE_BASE_URL = os.getenv("DIARIZE_BASE_URL", "http://asr-diarize:8003")
+DIARIZE_BASE_URL = os.getenv("DIARIZE_BASE_URL", "http://ai-diarize:8003")
 DIARIZE_REQUEST_TIMEOUT = float(os.getenv("DIARIZE_REQUEST_TIMEOUT", "1800"))
 
-EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://inference-embedding:8000")
+EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://ai-embedding:8000")
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "embeddinggemma-300m")
 EMBEDDING_REQUEST_TIMEOUT = float(os.getenv("EMBEDDING_REQUEST_TIMEOUT", "30"))
 
