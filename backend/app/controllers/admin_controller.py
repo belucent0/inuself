@@ -6,11 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.auth import require_admin
 from ..db.session import get_session
 from ..services.state_watchdog import StateWatchdog, WatchdogFinding, run_watchdog_scan
 from ..services.state_reconciler import StateReconciler, ReconcileAction, run_reconciler
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 class WatchdogFindingResponse(BaseModel):

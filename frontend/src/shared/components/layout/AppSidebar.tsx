@@ -92,7 +92,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const [searchQuery, setSearchQuery] = useState('')
 
   const { threads, removeThread, loadThreads } = useThreads()
-  const { logout } = useAuth()
+  const { user, logout } = useAuth()
+
+  const visibleNavItems = navigationItems.filter((item) =>
+    item.href === '/monitoring' ? user?.is_super === true : true
+  )
 
   useEffect(() => {
     if (pathname?.startsWith('/chat/')) {
@@ -187,7 +191,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarGroupLabel className="group-data-[collapsible=icon]:hidden">메뉴</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navigationItems.map((item) => {
+              {visibleNavItems.map((item) => {
                 const Icon = item.icon
                 const isActive = pathname === item.href || pathname?.startsWith(item.href + '/')
                 const isAIMode = item.label === 'AI 채팅'

@@ -20,7 +20,7 @@ import {
   ScanHistoryPage,
   ScanDetailPage,
 } from '@/pages'
-import { RootLayout } from '@/shared/components/layout'
+import { RootLayout, AdminRoute } from '@/shared/components/layout'
 
 const router = createBrowserRouter([
   {
@@ -60,8 +60,13 @@ const router = createBrowserRouter([
         element: <UploadPage />,
       },
       {
-        path: 'monitoring',
-        element: <MonitoringPage />,
+        element: <AdminRoute />,
+        children: [
+          {
+            path: 'monitoring',
+            element: <MonitoringPage />,
+          },
+        ],
       },
       {
         path: 'roadmap',
