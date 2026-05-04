@@ -72,8 +72,8 @@
 | Backend | FastAPI + SQLAlchemy + Celery |
 | AI Agent | LangGraph + LangChain |
 | Database | PostgreSQL + pgvector · Valkey (Redis) · MinIO |
-| Inference | LiteLLM Proxy · llama.cpp · whisper.cpp · FLM (NPU) |
-| Infra | Docker Compose (17 services) · Nginx · PM2 |
+| Inference | ai-gateway (FastAPI) · vLLM · llama.cpp · transformers · pyannote |
+| Infra | Docker Compose · Nginx |
 | Observability | Grafana + Prometheus + Loki + Tempo + Langfuse |
 | CI/CD | GitHub Actions (품질 게이트 4종 + 자동 태깅) |
 

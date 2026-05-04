@@ -332,7 +332,7 @@ services:
     restart: unless-stopped
 
   # ─── 추론 컨테이너 (refactor/inference): WSL2 + AMD ROCm gfx1150 ───
-  # asr-llm: vLLM 0.20 + Gemma 4 E4B BF16 (always-on, util=0.35 dev mode).
+  # ai-llm: vLLM 0.20 + Gemma 4 E4B BF16 (always-on, util=0.35 dev mode).
   #          util=0.35 필요: Gemma 4 multimodal vision 인코더 +3 GB +
   #          max-model-len 8192 KV cache까지 수용 (4096은 transcript 요약 시
   #          input+output 합산 4097로 즉시 초과).
@@ -341,15 +341,15 @@ services:
   #          --enforce-eager로 회귀 검토.
   #          --revision 핀: HF Hub의 새 revision push 시 컨테이너 재기동만
   #          해도 15GB 모델 자동 재다운로드 트리거되는 문제 차단.
-  # asr-ocr: llama.cpp HIP + dots.ocr 1.7B Q8 (always-on, ~3.8 GB VRAM)
+  # ai-ocr: llama.cpp HIP + dots.ocr 1.7B Q8 (always-on, ~3.8 GB VRAM)
   #          Override model via env: OCR_MODEL_REPO / OCR_MODEL_FILE / OCR_MMPROJ_FILE
-  # asr-whisper: transformers Whisper-large-v3-turbo FastAPI (lazy-load,
+  # ai-asr: transformers Whisper-large-v3-turbo FastAPI (lazy-load,
   #              첫 /transcribe 시 ~30s 모델 로드 후 메모리 상주)
-  # asr-diarize: pyannote.audio community-1 FastAPI (lazy-load, 같은 패턴)
+  # ai-diarize: pyannote.audio community-1 FastAPI (lazy-load, 같은 패턴)
 
-  asr-llm:
-    image: asr-llm:1.0.0
-    container_name: asr-llm
+  ai-llm:
+    image: ai-llm:1.0.0
+    container_name: ai-llm
     ports:
       - "18000:8000"   # OpenAI-compatible API
     devices:
@@ -382,9 +382,9 @@ services:
       retries: 3
       start_period: 600s   # vLLM 모델 로드 + Triton compile (cold ~10분)
 
-  asr-ocr:
-    image: asr-ocr:1.0.0
-    container_name: asr-ocr
+  ai-ocr:
+    image: ai-ocr:1.0.0
+    container_name: ai-ocr
     ports:
       - "18080:8080"   # OpenAI-compatible API (vision)
     devices:
@@ -409,9 +409,9 @@ services:
       retries: 3
       start_period: 180s
 
-  asr-whisper:
-    image: asr-whisper:1.0.0
-    container_name: asr-whisper
+  ai-asr:
+    image: ai-asr:1.0.0
+    container_name: ai-asr
     ports:
       - "18001:8001"   # FastAPI /transcribe — ai-gateway 직접 호출
     devices:
@@ -436,11 +436,43 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    # Bench/debug: docker exec asr-whisper python /bench/whisper_smoke.py /audio/<file>.wav
+    # Bench/debug: docker exec ai-asr python /bench/whisper_smoke.py /audio/<file>.wav
 
-  asr-diarize:
-    image: asr-diarize:1.0.0
-    container_name: asr-diarize
+  # ai-embedding: llama.cpp HIP + EmbeddingGemma 308M Q4 (Google 2025-09).
+  # Google EmbeddingGemma — 100+ 언어 multilingual MTEB 상위, 308M 경량.
+  # backend agents (TierRouter / Intent parser)가 사용. PR 이전엔 Provider Manager
+  # → host FLM 서버 경유였으나 FLM 종료로 silent fail. 본 컨테이너로 직결 복원.
+  ai-embedding:
+    image: ai-ocr:1.0.0   # llama.cpp HIP 이미지 재사용 (별도 빌드 불필요)
+    container_name: ai-embedding
+    ports:
+      - "18004:8000"   # OpenAI-compatible /v1/embeddings
+    devices:
+      - /dev/dxg
+    volumes:
+      - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so:ro
+      - hf-cache-fast:/root/.cache/huggingface
+      - ./infra/inference/embedding/entrypoint.sh:/scripts/entrypoint.sh:ro
+    environment:
+      - HSA_ENABLE_DXG_DETECTION=1
+      - EMB_MODEL_REPO=ggml-org/embeddinggemma-300M-qat-q4_0-GGUF
+      - EMB_MODEL_FILE=embeddinggemma-300M-qat-Q4_0.gguf
+    entrypoint: ["bash", "/scripts/entrypoint.sh"]
+    cap_add: [SYS_PTRACE]
+    security_opt: [seccomp=unconfined]
+    ipc: host
+    shm_size: 1g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  ai-diarize:
+    image: ai-diarize:1.0.0
+    container_name: ai-diarize
     ports:
       - "18003:8003"   # FastAPI /diarize — ai-gateway 직접 호출
     devices:
@@ -466,7 +498,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    # Bench/debug: docker exec asr-diarize python /bench/pyannote_smoke.py /audio/<file>.wav
+    # Bench/debug: docker exec ai-diarize python /bench/pyannote_smoke.py /audio/<file>.wav
 
   # AI Gateway — LiteLLM Proxy 대체 (FastAPI + openai SDK)
   # OpenAI-compatible API를 제공하며, Redis Stream으로 로컬 GPU/NPU 프로바이더에 요청 전달
@@ -475,7 +507,7 @@ services:
       context: ./infra/ai-gateway
       dockerfile: Dockerfile
     image: asr-ai-gateway:1.0.0
-    container_name: asr-ai-gateway
+    container_name: ai-gateway
     ports:
       - "4000:4000"
     volumes:
@@ -489,11 +521,12 @@ services:
       - CODEX_API_BASE=http://cli-proxy-api:8317/v1
       - CLIPROXY_API_KEY=${CLIPROXY_API_KEY:-}
       # 컨테이너 추론 백엔드 (refactor/inference)
-      - OCR_BASE_URL=http://asr-ocr:8080
-      - LLM_BASE_URL=http://asr-llm:8000
+      - OCR_BASE_URL=http://ai-ocr:8080
+      - LLM_BASE_URL=http://ai-llm:8000
       - LLM_MODEL_NAME=gemma-4-E4B-it
-      - ASR_BASE_URL=http://asr-whisper:8001
-      - DIARIZE_BASE_URL=http://asr-diarize:8003
+      - ASR_BASE_URL=http://ai-asr:8001
+      - DIARIZE_BASE_URL=http://ai-diarize:8003
+      - EMBEDDING_BASE_URL=http://ai-embedding:8000
       # OpenTelemetry 분산 추적
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - OTEL_SERVICE_NAME=asr-ai-gateway
@@ -587,5 +620,5 @@ volumes:
   tempo-data:
   cliproxy-auth-data:
   cliproxy-logs-data:
-  hf-cache-fast: # HuggingFace 모델 캐시 (asr-ocr/llm/whisper/diarize 공유)
-  vllm-compile-cache: # vLLM torch.compile 캐시 (asr-llm cold start 가속)
+  hf-cache-fast: # HuggingFace 모델 캐시 (ai-ocr/llm/whisper/diarize 공유)
+  vllm-compile-cache: # vLLM torch.compile 캐시 (ai-llm cold start 가속)
