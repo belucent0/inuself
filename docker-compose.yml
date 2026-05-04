@@ -438,6 +438,38 @@ services:
       start_period: 60s
     # Bench/debug: docker exec asr-whisper python /bench/whisper_smoke.py /audio/<file>.wav
 
+  # inference-embedding: llama.cpp HIP + EmbeddingGemma 308M Q4 (Google 2025-09).
+  # Google EmbeddingGemma — 100+ 언어 multilingual MTEB 상위, 308M 경량.
+  # backend agents (TierRouter / Intent parser)가 사용. PR 이전엔 Provider Manager
+  # → host FLM 서버 경유였으나 FLM 종료로 silent fail. 본 컨테이너로 직결 복원.
+  inference-embedding:
+    image: asr-ocr:1.0.0   # llama.cpp HIP 이미지 재사용 (별도 빌드 불필요)
+    container_name: inference-embedding
+    ports:
+      - "18004:8000"   # OpenAI-compatible /v1/embeddings
+    devices:
+      - /dev/dxg
+    volumes:
+      - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so:ro
+      - hf-cache-fast:/root/.cache/huggingface
+      - ./infra/inference/embedding/entrypoint.sh:/scripts/entrypoint.sh:ro
+    environment:
+      - HSA_ENABLE_DXG_DETECTION=1
+      - EMB_MODEL_REPO=ggml-org/embeddinggemma-300M-qat-q4_0-GGUF
+      - EMB_MODEL_FILE=embeddinggemma-300M-qat-Q4_0.gguf
+    entrypoint: ["bash", "/scripts/entrypoint.sh"]
+    cap_add: [SYS_PTRACE]
+    security_opt: [seccomp=unconfined]
+    ipc: host
+    shm_size: 1g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
   asr-diarize:
     image: asr-diarize:1.0.0
     container_name: asr-diarize
@@ -494,6 +526,7 @@ services:
       - LLM_MODEL_NAME=gemma-4-E4B-it
       - ASR_BASE_URL=http://asr-whisper:8001
       - DIARIZE_BASE_URL=http://asr-diarize:8003
+      - EMBEDDING_BASE_URL=http://inference-embedding:8000
       # OpenTelemetry 분산 추적
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - OTEL_SERVICE_NAME=asr-ai-gateway

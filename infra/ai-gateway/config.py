@@ -74,6 +74,10 @@ ASR_REQUEST_TIMEOUT = float(os.getenv("ASR_REQUEST_TIMEOUT", "1800"))
 DIARIZE_BASE_URL = os.getenv("DIARIZE_BASE_URL", "http://asr-diarize:8003")
 DIARIZE_REQUEST_TIMEOUT = float(os.getenv("DIARIZE_REQUEST_TIMEOUT", "1800"))
 
+EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://inference-embedding:8000")
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "embeddinggemma-300m")
+EMBEDDING_REQUEST_TIMEOUT = float(os.getenv("EMBEDDING_REQUEST_TIMEOUT", "30"))
+
 # ============================================================
 # Provider Health Check URL
 # ============================================================
