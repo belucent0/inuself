@@ -60,13 +60,22 @@ jobs:
           echo "백엔드가 응답하지 않습니다: http://${WIN_IP}:8000"
           exit 1
 
-      - name: Python 의존성 설치
+      - name: Python 의존성 설치 (영구 venv 캐시)
+        # self-hosted runner 환경에서 매 실행마다 venv 새로 생성 + PyPI 다운로드 시
+        # pip install이 비정상적으로 느려져 timeout 발생 (직접 WSL에서는 18초인데 CI는 3분+).
+        # ~/cache/eval-venv에 영구 venv를 두고 첫 실행만 install, 이후는 symlink로 재사용.
         run: |
-          python3 -m venv .eval-venv
-          .eval-venv/bin/pip install --quiet \
-            "langfuse>=2.0.0,<3.0.0" \
-            httpx>=0.27.0 \
-            pydantic>=2.0.0
+          CACHE_VENV="$HOME/cache/eval-venv"
+          if [ ! -x "$CACHE_VENV/bin/python" ]; then
+            mkdir -p "$HOME/cache"
+            python3 -m venv "$CACHE_VENV"
+            "$CACHE_VENV/bin/pip" install --quiet \
+              "langfuse>=2.0.0,<3.0.0" \
+              "httpx>=0.27.0" \
+              "pydantic>=2.0.0"
+          fi
+          ln -sfn "$CACHE_VENV" .eval-venv
+          .eval-venv/bin/python -c "import langfuse, httpx, pydantic; print('OK', langfuse.__version__)"
 
       - name: Langfuse 데이터셋 동기화
         env:
