@@ -1,9 +1,8 @@
 """ASR + 화자분리 메인 파이프라인.
 
-Architecture V7.0: Worker → Redis Stream → Provider Manager (Host)
-- 병렬 처리: ASR + 화자분리 동시 실행 (Redis Stream으로 Docker Desktop 크래시 해결)
-- Provider Manager가 GPU/NPU 서버 직접 호출 (localhost)
-- GPU/ROCm 의존성 없음 - 모든 AI 추론은 Host의 GPU 서버에서 실행
+v1.2.0: Worker → ai-gateway (httpx) → ai-asr · ai-diarize 컨테이너 직결.
+- 병렬 처리: ASR + 화자분리 동시 실행
+- 모든 AI 추론은 ai-* 컨테이너에서 수행, Worker는 호출·후처리만 담당.
 """
 import subprocess
 import tempfile

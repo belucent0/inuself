@@ -1,7 +1,7 @@
 """Celery 정리 태스크.
 
-Architecture V6.5: 리소스 게이트 제거됨 - AI Gateway가 직접 라우팅 및 메모리 관리
-임시 파일 정리 태스크만 유지됩니다.
+v1.2.0: ai-gateway가 라우팅·메모리 관리를 담당하고, 본 태스크는
+임시 파일 정리만 유지합니다.
 """
 import logging
 from datetime import datetime

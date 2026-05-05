@@ -1,9 +1,9 @@
 """OCR (문서 인식) 처리 프로세서.
 
 이 모듈은 파일에서 텍스트를 추출합니다.
-V8.1+: Worker에서 전처리(PDF → 이미지 변환) 수행
-결과는 S3에 저장하고 Redis Stream으로 완료를 알립니다.
-백엔드 DB에 직접 접근하지 않습니다.
+- 전처리(PDF/Office → 이미지 변환)는 Worker에서 수행
+- OCR 추론은 ai-gateway → ai-ocr 컨테이너(dots.ocr) httpx 직결 호출
+- 결과는 S3에 저장하고 stream:worker:results로 완료 알림 (백엔드가 consume)
 """
 from io import BytesIO
 from pathlib import Path

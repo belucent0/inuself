@@ -1,8 +1,7 @@
 """화자분리 유틸리티.
 
-Architecture V5: GPU/PyTorch 의존성 제거
-- 실제 화자분리는 Host의 diarization-server에서 실행
-- Worker는 API 응답 후처리만 담당
+v1.2.0: 실제 화자분리는 ai-diarize 컨테이너(pyannote)에서 수행.
+Worker는 ai-gateway 응답 후처리(speaker 라벨 정렬·통합 등)만 담당.
 """
 from typing import Any
 
