@@ -1,120 +1,78 @@
-"""
-Embedding 생성 유틸리티
+"""Embedding 생성 유틸리티.
 
-FLM embeddinggemma:300m 모델을 사용하여 텍스트 임베딩을 생성합니다.
-Backend → Redis Stream(stream:chat:requests) → Provider Manager → FLM 경로 사용.
+Backend → ai-gateway (`/v1/embeddings`) → ai-embedding 컨테이너(embeddinggemma-300m) httpx 직결.
+v1.1.0의 Redis Stream + Provider Manager 경로는 v1.2.0에서 폐기됨.
 """
 import asyncio
-import json
-import time
-import uuid
+import os
+
+import httpx
 from loguru import logger
 
-from ..core.redis import get_redis_client
 
-CHAT_STREAM = "stream:chat:requests"
-RESPONSE_STREAM = "stream:gpu:responses"
-
-
-def _generate_request_id() -> str:
-    """유니크 request_id 생성."""
-    return f"{uuid.uuid4().hex[:16]}_{int(time.time() * 1000)}"
+AI_GATEWAY_URL = os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
+AI_GATEWAY_API_KEY = os.getenv("AI_GATEWAY_API_KEY", "")
+DEFAULT_MODEL = "embeddinggemma-300m"
 
 
 async def create_embedding(
     text: str,
-    model: str = "embeddinggemma:300m",
+    model: str = DEFAULT_MODEL,
     timeout: float = 15.0,
-    max_retries: int = 3  # 시그니처 호환 유지 (내부적으로 미사용)
+    max_retries: int = 3,  # 시그니처 호환 유지 (내부적으로 미사용)
 ) -> list[float] | None:
-    """텍스트 임베딩 생성 (Redis Stream 경유)
+    """텍스트 임베딩 생성 (ai-gateway 경유).
 
     Args:
         text: 임베딩할 텍스트
-        model: 임베딩 모델 (기본: embeddinggemma:300m)
-        timeout: 응답 대기 타임아웃 (초)
+        model: 임베딩 모델 (기본: embeddinggemma-300m)
+        timeout: HTTP 타임아웃 (초)
         max_retries: 하위 호환 파라미터 (미사용)
 
     Returns:
         list[float]: 768차원 임베딩 벡터
         None: 실패 시
     """
-    redis_client = get_redis_client()
-    request_id = _generate_request_id()
-
-    request_data = {
-        "request_id": request_id,
-        "type": "embedding",
-        "text": text,
-        "model": model,
-        "timestamp": str(time.time()),
-    }
+    headers = {}
+    if AI_GATEWAY_API_KEY:
+        headers["Authorization"] = f"Bearer {AI_GATEWAY_API_KEY}"
 
     try:
-        # 요청 전송 전 현재 응답 스트림의 마지막 ID 확인 → 이후 메시지만 읽기 위해
-        tail = await redis_client.xrevrange(RESPONSE_STREAM, "+", "-", count=1)
-        last_id = tail[0][0] if tail else "0"
-
-        await redis_client.xadd(CHAT_STREAM, request_data)
-        logger.debug(f"Embedding request sent: request_id={request_id}, {len(text)} chars")
-    except Exception as e:
-        logger.error(f"Failed to send embedding request to Redis Stream: {e}")
-        return None
-
-    # XREAD로 응답 대기
-    start_time = time.time()
-
-    while time.time() - start_time < timeout:
-        try:
-            messages = await redis_client.xread(
-                {RESPONSE_STREAM: last_id},
-                count=10,
-                block=1000,
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{AI_GATEWAY_URL}/v1/embeddings",
+                headers=headers,
+                json={"input": text, "model": model},
             )
+            response.raise_for_status()
+            data = response.json()
 
-            if messages:
-                for _stream_name, stream_messages in messages:
-                    for message_id, message_data in stream_messages:
-                        last_id = message_id
+            embedding = data.get("data", [{}])[0].get("embedding", [])
+            if not embedding:
+                logger.warning(f"[Embedding] Empty embedding returned: {data}")
+                return None
 
-                        if message_data.get("request_id") != request_id:
-                            continue
+            logger.debug(f"[Embedding] {len(text)} chars → {len(embedding)} dims")
+            return embedding
 
-                        # processing_started 이벤트는 건너뜀
-                        if message_data.get("event") == "processing_started":
-                            continue
-
-                        if "error" in message_data:
-                            logger.error(f"Embedding error from provider: {message_data['error']}")
-                            return None
-
-                        if "result" in message_data:
-                            result = json.loads(message_data["result"])
-                            embedding = result.get("data", [{}])[0].get("embedding", [])
-
-                            if len(embedding) > 0:
-                                logger.debug(f"Embedding received: {len(text)} chars → {len(embedding)} dims")
-                                return embedding
-                            else:
-                                logger.warning(f"Empty embedding returned: {result}")
-                                return None
-
-        except Exception as e:
-            logger.warning(f"Redis read error, retrying: {e}")
-            await asyncio.sleep(1)
-            continue
-
-    logger.error(f"Embedding timeout after {timeout}s for request_id={request_id}")
-    return None
+    except httpx.TimeoutException:
+        logger.error(f"[Embedding] Timeout after {timeout}s ({len(text)} chars)")
+        return None
+    except httpx.HTTPStatusError as e:
+        logger.error(f"[Embedding] Upstream {e.response.status_code}: {e.response.text[:200]}")
+        return None
+    except Exception as e:
+        logger.error(f"[Embedding] Failed: {e}")
+        return None
 
 
 async def create_embeddings_batch(
     texts: list[str],
-    model: str = "embeddinggemma:300m",
+    model: str = DEFAULT_MODEL,
     batch_size: int = 10,
-    delay: float = 0.1
+    delay: float = 0.1,
 ) -> list[list[float] | None]:
-    """여러 텍스트의 임베딩을 배치로 생성
+    """여러 텍스트의 임베딩을 배치로 생성.
 
     Args:
         texts: 임베딩할 텍스트 리스트
@@ -125,7 +83,7 @@ async def create_embeddings_batch(
     Returns:
         list[list[float] | None]: 임베딩 리스트 (실패 시 None)
     """
-    embeddings = []
+    embeddings: list[list[float] | None] = []
 
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
@@ -138,35 +96,31 @@ async def create_embeddings_batch(
                 await asyncio.sleep(delay)
 
         if i + batch_size < len(texts):
-            logger.info(f"Batch progress: {i + len(batch)}/{len(texts)}")
+            logger.info(f"[Embedding] Batch progress: {i + len(batch)}/{len(texts)}")
 
     return embeddings
 
 
 async def warmup_embedding_service(timeout: float = 30.0) -> bool:
-    """FLM embedding 서비스 준비 확인 (Redis Stream 경유)
+    """ai-embedding 서비스 준비 확인 (warmup ping).
 
     Args:
-        timeout: 최대 대기 시간 (초)
+        timeout: HTTP 타임아웃 (초)
 
     Returns:
         bool: 준비 완료 여부
     """
-    logger.info("Warming up FLM embedding service via Redis Stream...")
-
+    logger.info("[Embedding] Warming up ai-embedding via ai-gateway...")
     embedding = await create_embedding("warmup", timeout=timeout)
-
     if embedding:
-        logger.info("✅ FLM embedding service is ready!")
+        logger.info("[Embedding] ai-embedding service is ready")
         return True
-    else:
-        logger.error("❌ Failed to warm up FLM embedding service")
-        return False
+    logger.error("[Embedding] Failed to warm up ai-embedding service")
+    return False
 
 
-# 동기 래퍼 (필요 시 사용)
-def create_embedding_sync(text: str, model: str = "embeddinggemma:300m") -> list[float] | None:
-    """동기 버전의 create_embedding
+def create_embedding_sync(text: str, model: str = DEFAULT_MODEL) -> list[float] | None:
+    """동기 버전의 create_embedding.
 
     Note:
         - asyncio 이벤트 루프가 없는 환경에서 사용
