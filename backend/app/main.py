@@ -283,7 +283,7 @@ def create_app() -> FastAPI:
     async def healthcheck():
         return {"status": "ok"}
 
-    # lemonade_experiment 등 외부 프로젝트 호환성을 위한 별칭
+    # /api/v1 prefix 호환 별칭
     @app.get("/api/v1/health", tags=["system"])
     async def healthcheck_v1():
         return {"status": "ok"}

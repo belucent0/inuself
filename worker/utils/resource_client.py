@@ -1,16 +1,11 @@
 """AI Gateway Resource Management Client.
 
-Architecture V6.5: Simplified Single-Server Architecture
-
 Worker에서 AI Gateway의 /resource/acquire, /resource/release 엔드포인트를 호출합니다.
 중앙집중 방식으로 리소스 경합을 방지합니다.
 
-V6.5 라우팅:
-- ASR 신속모드: whisper-cpp (GPU, 8001)
-- ASR 정확모드: insanely-fast (GPU, 8002)
-- LLM/OCR 신속모드: flm-server (NPU, 11434) - qwen3vl-it:4b
-- LLM/OCR 정확모드: llama-server (GPU, 8080) - Router mode
-- Diarization: pyannote (GPU, 8003)
+v1.2.0 현행: ai-gateway가 추론 컨테이너(ai-llm/ai-asr/ai-ocr/ai-diarize/ai-embedding)를
+httpx로 직접 호출하며, provider 선택은 ai-gateway 내부에서 추상화됩니다.
+본 클라이언트는 워커 측 동시 실행 제어(GPU/NPU 자원 잠금)에 사용됩니다.
 """
 import os
 import httpx

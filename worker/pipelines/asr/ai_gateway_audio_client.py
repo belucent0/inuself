@@ -1,14 +1,14 @@
 """AI Gateway chat completion 엔드포인트를 통한 ASR/Diarization 요청 클라이언트.
 
-Architecture V7.5:
-- ASR: Worker → AI Gateway HTTP (/v1/chat/completions, task_type=asr) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
-- Diarization: Worker → AI Gateway HTTP (/v1/chat/completions, task_type=diarization) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
-- LLM: Worker → AI Gateway HTTP → custom_handler.astreaming() → Redis Stream → Provider Manager → GPU
-- OCR: Worker → AI Gateway HTTP → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
+v1.2.0 현행 흐름:
+- ASR: Worker → ai-gateway (/v1/chat/completions, task_type=asr) → ai-asr 컨테이너
+- Diarization: Worker → ai-gateway (task_type=diarization) → ai-diarize 컨테이너
+- LLM: Worker → ai-gateway → ai-llm (vLLM)
+- OCR: Worker → ai-gateway → ai-ocr
 
-V7.5 변경사항:
-- ASR+Diarization 묶음 잠금: pipeline.py에서 lock_id 획득 후 전달
-- lock_id가 전달되면 AI Gateway에서 잠금 재획득 스킵 (이미 획득됨)
+ASR+Diarization 묶음 잠금:
+- pipeline.py에서 lock_id 획득 후 전달
+- lock_id가 전달되면 ai-gateway에서 잠금 재획득 스킵 (이미 획득됨)
 - GPU 리소스 독점: ASR+Diarization 실행 중 다른 GPU 작업 대기
 """
 import base64

@@ -371,7 +371,7 @@ HTTP Request
 | `auth_controller.py` | `/api/auth` | AuthService |
 | `content_controller.py` | `/api/contents` | ContentService, FileService |
 | `ai_chat_controller.py` | `/api/threads` | ThreadService, LangGraph Agent |
-| `chat_controller.py` | `/api/chat` | LiteLLMClient |
+| `chat_controller.py` | `/api/chat` | AI Gateway (OpenAI SDK) |
 | `search_controller.py` | `/api/search` | SearchService (SearXNG) |
 | `scan_controller.py` | `/api/scan` | WpiService, ScanRepository |
 | `admin_controller.py` | `/api/admin` | StateWatchdog, StateReconciler |
@@ -413,7 +413,7 @@ queued → analyzing → searching → thinking → generating → completed
 | FileService | file_service.py | 파일 업로드/다운로드, S3 연동 |
 | ThreadService | thread_service.py | AI 스레드/메시지 관리 |
 | WpiService | wpi_service.py | WPI 채점, 프로필 생성, AI 보고서 |
-| LiteLLMClient | litellm_client.py | LiteLLM 프록시 호출 |
+| AIGatewayClient | ai_gateway_client.py | AI Gateway 통한 LLM 요청 (OpenAI SDK) |
 | YoutubeService | youtube_service.py | YouTube URL 검증 및 메타데이터 |
 | OcrService | ocr_service.py | OCR 처리 (MarkItDown, Tesseract) |
 | TranscriptionPostprocess | transcription_postprocess.py | ASR 후처리, 화자 클러스터링 |
