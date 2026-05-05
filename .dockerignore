@@ -7,7 +7,6 @@
 venv
 rocm_env
 litellm_env
-infra/provider_manager/venv
 *.pyc
 *.pyo
 *.pyd

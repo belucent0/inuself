@@ -144,9 +144,6 @@ async def lifespan(app: FastAPI):
     watchdog_scheduler_task = asyncio.create_task(watchdog_scheduler.start())
     logger.info("[Lifespan] StateWatchdog scheduler started (interval: 5m)")
 
-    # NOTE: 워커는 PM2로 별도 관리됩니다 (worker/celery_app.py 사용)
-    logger.info("[Lifespan] Workers are managed externally via PM2")
-
     yield
 
     # 종료 시: WatchdogScheduler 중지

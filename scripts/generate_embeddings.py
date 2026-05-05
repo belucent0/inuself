@@ -58,7 +58,7 @@ async def generate_and_store_embeddings():
         logger.info("Warming up FLM embedding service...")
         warmup_success = await warmup_embedding_service(timeout=30.0)
         if not warmup_success:
-            logger.error("Failed to start FLM service. Please check provider-manager.")
+            logger.error("Failed to warm up embedding service. Please check ai-gateway / ai-embedding container.")
             return
 
         # 3. 배치 처리
