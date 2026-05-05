@@ -187,10 +187,9 @@ def call_ai_gateway_transcription(
     lock_id: str | None = None,  # V7.5: Worker에서 획득한 GPU 잠금 ID
     file_id: str = None,  # Backend 상태 업데이트용
 ) -> tuple[dict[str, Any], float, float, ASRProvider]:
-    """AI Gateway chat completion 엔드포인트를 통한 ASR 요청.
+    """ai-gateway chat completion 엔드포인트를 통한 ASR 요청.
 
-    Architecture V7.4: OCR과 동일한 방식
-    - Worker → AI Gateway (/v1/chat/completions) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
+    v1.2.0: Worker → ai-gateway (/v1/chat/completions, task_type=asr) → ai-asr 컨테이너 직결.
     - extra_body에 task_type=asr, audio_base64 전달
 
     Args:
@@ -322,10 +321,9 @@ def call_ai_gateway_diarization(
     resource_timeout: float = 120.0,
     lock_id: str | None = None,  # V7.5: Worker에서 획득한 GPU 잠금 ID
 ) -> tuple[DiarizationAnnotationWrapper, float, float, dict | None, Any, dict]:
-    """AI Gateway chat completion 엔드포인트를 통한 Diarization 요청.
+    """ai-gateway chat completion 엔드포인트를 통한 Diarization 요청.
 
-    Architecture V7.4: ASR과 동일한 방식
-    - Worker → AI Gateway (/v1/chat/completions) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
+    v1.2.0: Worker → ai-gateway (/v1/chat/completions, task_type=diarization) → ai-diarize 컨테이너 직결.
 
     Args:
         audio_file_path: 오디오 파일 경로

@@ -1,7 +1,7 @@
 [project]
 name = "torch-asr-worker"
 version = "0.1.0"
-description = "Celery Worker for ASR pipeline (Architecture V5: API-based, no GPU dependencies)"
+description = "Celery Worker for ASR/OCR/LLM pipeline (v1.2.0: ai-gateway httpx 직결)"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 

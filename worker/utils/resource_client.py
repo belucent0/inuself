@@ -346,8 +346,6 @@ def select_resource_type_dynamic(task_type: str, accuracy_mode: str = "speed") -
     """
     Prometheus 기반 동적 리소스 타입 선택.
 
-    V6.5: 단일 FLM 서버로 OCR/LLM 통합, 메모리 문제 해결
-
     NPU 우선 방식:
     1. NPU 사용량 < 70%: NPU 사용
     2. NPU 바쁘고 GPU 사용량 < 70%: GPU 사용
@@ -369,9 +367,6 @@ def select_resource_type_dynamic(task_type: str, accuracy_mode: str = "speed") -
     if task_type == "diarization":
         logger.info("[Resource] Diarization -> GPU (forced)")
         return "gpu"
-
-    # V6.5: OCR 신속모드는 NPU 사용 가능 (통합 FLM 서버로 메모리 문제 해결)
-    # (이전 버전에서는 OCR을 GPU로 강제했지만, V6.5에서는 불필요)
 
     # Prometheus 조회
     try:

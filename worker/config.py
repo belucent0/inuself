@@ -1,6 +1,5 @@
 """워커 설정 모듈 - 환경변수 기반 독립 설정."""
 
-import os
 from functools import lru_cache
 from pathlib import Path
 from pydantic import Field, field_validator
@@ -48,7 +47,6 @@ class WorkerSettings(BaseSettings):
     # ========================================
     # 워커 설정
     # ========================================
-    worker_type: str = Field("asr", validation_alias="WORKER_TYPE")
     max_workers: int = 2
     task_queue_type: str = Field("celery", validation_alias="TASK_QUEUE_TYPE")
 
@@ -61,8 +59,7 @@ class WorkerSettings(BaseSettings):
     asr_chunk_threshold_minutes: int = 25
 
     # ========================================
-    # AI Gateway 설정 (V4 표준)
-    # 모든 LLM 요청은 AI Gateway를 통해 라우팅됨
+    # AI Gateway 설정 (모든 LLM/OCR/ASR/임베딩 요청은 ai-gateway 경유)
     # ========================================
     ai_gateway_url: str = Field(
         "http://localhost:4000", validation_alias="AI_GATEWAY_URL"
@@ -82,7 +79,7 @@ class WorkerSettings(BaseSettings):
         return v
 
     # ========================================
-    # LLM 공통 설정 (AI Gateway 또는 직접 호출 시 사용)
+    # LLM 공통 설정
     # ========================================
     llm_provider: str = Field("ai-gateway", validation_alias="LLM_PROVIDER")
     llm_system_prompt: str = (
@@ -91,28 +88,14 @@ class WorkerSettings(BaseSettings):
     llm_context_length: int = 15000
     llm_temperature: float = 0.1
     llm_top_p: float = 0.9
-    llm_max_tokens: int = 3072  # V6.6: JSON 응답 + 상세 요약을 위해 증가
-
-    # ========================================
-    # On-Demand LLM 서버 설정 (OCR 정밀모드용)
-    # llama.cpp 서버를 필요시 띄우는 경우에만 사용
-    # ========================================
-    llm_server_path: str = Field("", validation_alias="LLM_SERVER_PATH")
-    llm_server_model: str = Field("", validation_alias="LLM_SERVER_MODEL")
-    llm_server_port: int = Field(8080, validation_alias="LLM_SERVER_PORT")
-    llm_server_threads: int = Field(8, validation_alias="LLM_SERVER_THREADS")
-    llm_server_gpu_layers: int = Field(99, validation_alias="LLM_SERVER_GPU_LAYERS")
-    llm_server_batch_size: int = Field(512, validation_alias="LLM_SERVER_BATCH_SIZE")
+    llm_max_tokens: int = 3072
 
     # ========================================
     # OCR 설정
     # ========================================
-    ocr_server_port: int = Field(8082, validation_alias="OCR_SERVER_PORT")
-    ocr_provider: str = Field(
-        "flm", validation_alias="OCR_PROVIDER"
-    )  # flm=NPU, llamacpp=GPU
-    ocr_model_path: str = Field("", validation_alias="OCR_SERVER_MODEL")
-    ocr_server_mmproj: str = Field("", validation_alias="OCR_SERVER_MMPROJ")
+    # ocr_provider: vision.py에서 이미지 크기 분기·ai-gateway accuracy_mode 매핑 키.
+    # "flm" → speed mode, "llamacpp_server" → accuracy mode (의미는 모호하지만 식별자로 활성).
+    ocr_provider: str = Field("flm", validation_alias="OCR_PROVIDER")
     poppler_path: str = Field("", validation_alias="POPPLER_PATH")
     libreoffice_path: str = Field("", validation_alias="LIBREOFFICE_PATH")
 
@@ -120,46 +103,6 @@ class WorkerSettings(BaseSettings):
     # 임시 파일 경로
     # ========================================
     temp_dir: Path = Path("data/temp")
-
-    # ========================================
-    # 헬퍼 프로퍼티
-    # ========================================
-    @property
-    def is_ocr_worker(self) -> bool:
-        """워커 타입이 OCR인지 여부."""
-        return self.worker_type.lower() == "ocr"
-
-    @property
-    def worker_model_path(self) -> str:
-        """워커 타입에 맞는 llama.cpp 모델 경로 반환."""
-        if self.is_ocr_worker and self.ocr_model_path:
-            return self.ocr_model_path
-        return self.llm_server_model
-
-    @property
-    def worker_mmproj_path(self) -> str:
-        """Vision 모델용 mmproj 경로 반환."""
-        if self.is_ocr_worker:
-            return self.ocr_server_mmproj
-        return ""
-
-    @property
-    def ocr_api_base_url(self) -> str:
-        """OCR API base URL."""
-        if self.ocr_provider == "flm":
-            return os.getenv("FLM_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-        else:
-            return f"http://localhost:{self.ocr_server_port}"
-
-    @property
-    def ocr_api_model_name(self) -> str:
-        """OCR API 모델 이름."""
-        if self.ocr_provider == "flm":
-            return os.getenv("FLM_OCR_MODEL", "qwen3vl-it:4b")
-        else:
-            return (
-                self.ocr_model_path.split("/")[-1] if self.ocr_model_path else "default"
-            )
 
 
 @lru_cache
