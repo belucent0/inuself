@@ -1240,8 +1240,7 @@ worker/
 │   │   └── __init__.py    # OCR 실행 진입점 (ai-gateway → ai-ocr)
 │   ├── llm/
 │   │   ├── __init__.py             # LLM 실행 진입점
-│   │   ├── ai_gateway_client.py    # ai-gateway → ai-llm
-│   │   └── llamacpp_client.py      # 직접 호출 옵션 (분기 사용)
+│   │   └── ai_gateway_client.py    # ai-gateway → ai-llm
 │   └── search/
 │       └── __init__.py    # 검색 파이프라인
 │
