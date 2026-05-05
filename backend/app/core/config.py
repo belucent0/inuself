@@ -68,8 +68,8 @@ class Settings(BaseSettings):
     # 워커 타입 설정
     worker_type: str = Field("llm", validation_alias="WORKER_TYPE")
 
-    # LLM 요약 설정 (llama.cpp 서버)
-    llm_provider: str = "llamacpp_server"  # "llamacpp_server" | "flm" | "ai-gateway"
+    # LLM provider (v1.2.0: ai-gateway 단일 라우터)
+    llm_provider: str = "ai-gateway"
 
     # AI Gateway 설정
     ai_gateway_url: str = Field(

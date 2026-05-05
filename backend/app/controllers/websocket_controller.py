@@ -1,10 +1,6 @@
 """WebSocket 엔드포인트."""
-import asyncio
-import json
-
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 
-from ..core.config import get_settings
 from ..core.logging import logger
 from ..websocket.dependencies import ConnectionManagerDep
 
@@ -14,22 +10,6 @@ router = APIRouter(prefix="/ws", tags=["websocket"])
 async def test_router():
     """라우터 테스트용 엔드포인트"""
     return {"status": "ok", "message": "WebSocket router is working"}
-
-async def _send_provider_control(action: str, provider: str):
-    """Provider Manager에게 제어 메시지 전송."""
-    try:
-        import redis.asyncio as redis
-        settings = get_settings()
-        r = redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
-        message = {
-            "action": action,
-            "provider": provider
-        }
-        await r.publish("provider.control", json.dumps(message))
-        await r.close()
-        logger.info(f"[WebSocket] Sent provider signal: {action} {provider}")
-    except Exception as e:
-        logger.error(f"[WebSocket] Failed to send provider signal: {e}")
 
 @router.get("/debug-headers")
 async def debug_headers(request: Request):
@@ -89,9 +69,6 @@ async def websocket_file_progress_global(
             "channel": channel,
             "message": "Global File Progress Channel",
         })
-
-        # 채팅/요약용 모델은 실제 요청 시에만 시작 (VRAM 절약)
-        # asyncio.create_task(_send_provider_control("start", "llama"))
 
         while True:
             data = await websocket.receive_text()

@@ -1,22 +1,19 @@
 """Tier 기반 라우터.
 
-임베딩 유사도 기반으로 쿼리의 복잡도를 판단하여 적절한 "능력 티어"를 결정합니다.
-실제 모델 선택은 인프라 레이어(stream_processor.py)에서 담당합니다.
+쿼리의 모드·길이·키워드로 적절한 "능력 티어"를 결정합니다. 실제 모델 매핑은
+`infra/shared/tier_config.py` 의 `TIER_MODEL_MAP`이 담당합니다.
 
 설계 원칙:
-- Backend(LangGraph): WHAT - "이 쿼리에 어떤 능력이 필요한가?" (tier 결정)
-- Infrastructure(StreamProcessor): HOW - "그 능력을 어떤 모델로 제공할 것인가?" (model 결정)
+- Backend(LangGraph): WHAT — "이 쿼리에 어떤 능력이 필요한가?" (tier 결정)
+- Infrastructure(ai-gateway): HOW — "그 능력을 어떤 모델로 제공할 것인가?" (model 결정)
 """
 from __future__ import annotations
 
 import json
 from loguru import logger
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from functools import lru_cache
-
-import math
-import httpx
 
 from ...core.llm_tier import LLMTier
 
@@ -38,10 +35,9 @@ def _load_routing_rules() -> dict:
 
 
 class TierRouter:
-    """임베딩 기반 Tier 라우터.
+    """규칙 기반 Tier 라우터.
 
-    쿼리와 라우팅 규칙의 예시 문장들 간 유사도를 계산하여
-    적합한 능력 티어를 결정합니다.
+    쿼리의 모드·길이·키워드로 적합한 능력 티어를 결정합니다.
 
     Tiers:
     - tier-simple: 간단한 작업 (인사, 짧은 질문)
@@ -57,13 +53,6 @@ class TierRouter:
         self.settings = settings
         self.rules = _load_routing_rules()
         self.default_tier = self.rules.get("default_tier", LLMTier.SIMPLE)
-        self._rule_embeddings: dict[str, list[list[float]]] = {}
-        self._embeddings_initialized = False
-
-        # AI Gateway를 통한 임베딩 엔드포인트 (Redis Stream → Provider Manager → FLM 서버)
-        ai_gateway_url = getattr(settings, "ai_gateway_url", "http://ai-gateway:4000")
-        self.embedding_url = f"{ai_gateway_url.rstrip('/')}/v1/embeddings"
-        self.embedding_api_key = getattr(settings, "ai_gateway_api_key", "")
 
     async def select_tier(self, query: str, mode: str = None, context_size: int = 0) -> str:
         """쿼리에 적합한 능력 티어 선택.
@@ -86,158 +75,8 @@ class TierRouter:
             logger.info(f"[TierRouter] Large context ({context_size}) -> tier-thinking")
             return LLMTier.THINKING
 
-        # 3. 임베딩 기반 유사도 매칭 — FLM 안정화 전까지 비활성화
-        # (활성화 시: AI Gateway → Redis Stream → Provider Manager → FLM 서버 경유, FLM DOWN이면 2분 블로킹)
-        # try:
-        #     selected = await self._embedding_based_routing(query)
-        #     if selected:
-        #         return selected
-        # except Exception as e:
-        #     logger.warning(f"[TierRouter] Embedding routing failed: {e}, using rule-based fallback")
-
-        # 4. 규칙 기반 라우팅
+        # 3. 규칙 기반 라우팅
         return self._rule_based_routing(query)
-
-    async def _embedding_based_routing(self, query: str) -> Optional[str]:
-        """임베딩 기반 라우팅.
-
-        Args:
-            query: 사용자 쿼리
-
-        Returns:
-            선택된 티어명 또는 None
-        """
-        # 규칙 임베딩 초기화 (최초 1회)
-        if not self._embeddings_initialized:
-            await self._initialize_rule_embeddings()
-
-        if not self._rule_embeddings:
-            return None
-
-        # 쿼리 임베딩 생성
-        query_embedding = await self._get_embedding(query)
-        if query_embedding is None:
-            return None
-
-        # 각 규칙과 유사도 계산
-        best_match = None
-        best_score = 0.0
-
-        for rule in self.rules.get("rules", []):
-            rule_name = rule["name"]
-            threshold = rule.get("score_threshold", 0.7)
-
-            if rule_name not in self._rule_embeddings:
-                continue
-
-            # 규칙의 모든 예시와 유사도 계산, 최대값 사용
-            rule_embs = self._rule_embeddings[rule_name]
-            similarities = [
-                self._cosine_similarity(query_embedding, emb)
-                for emb in rule_embs
-            ]
-            max_similarity = max(similarities) if similarities else 0.0
-
-            logger.debug(f"[TierRouter] Rule '{rule_name}': max_similarity={max_similarity:.3f}, threshold={threshold}")
-
-            if max_similarity >= threshold and max_similarity > best_score:
-                best_score = max_similarity
-                best_match = rule
-
-        if best_match:
-            tier = best_match["tier"]
-            logger.info(f"[TierRouter] Embedding match: rule='{best_match['name']}', score={best_score:.3f} -> {tier}")
-            return tier
-
-        return None
-
-    async def _initialize_rule_embeddings(self):
-        """라우팅 규칙의 예시 문장들을 임베딩으로 변환."""
-        logger.info("[TierRouter] Initializing rule embeddings...")
-
-        for rule in self.rules.get("rules", []):
-            rule_name = rule["name"]
-            utterances = rule.get("utterances", [])
-
-            if not utterances:
-                continue
-
-            embeddings = []
-            for utterance in utterances:
-                emb = await self._get_embedding(utterance)
-                if emb is not None:
-                    embeddings.append(emb)
-
-            if embeddings:
-                self._rule_embeddings[rule_name] = embeddings
-                logger.debug(f"[TierRouter] Rule '{rule_name}': {len(embeddings)} embeddings loaded")
-
-        self._embeddings_initialized = True
-        logger.info(f"[TierRouter] Rule embeddings initialized: {len(self._rule_embeddings)} rules")
-
-    async def _get_embedding(self, text: str) -> Optional[list[float]]:
-        """텍스트의 임베딩 벡터 생성.
-
-        Args:
-            text: 임베딩할 텍스트
-
-        Returns:
-            임베딩 벡터 또는 None
-        """
-        try:
-            headers = {}
-            if self.embedding_api_key:
-                headers["Authorization"] = f"Bearer {self.embedding_api_key}"
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    self.embedding_url,
-                    headers=headers,
-                    json={
-                        "input": text,
-                        "model": "flm-embeddings"  # AI Gateway 모델명 → FLM embed-gemma:300m 경유
-                    }
-                )
-
-                if response.status_code != 200:
-                    logger.warning(f"[TierRouter] Embedding API error: {response.status_code}")
-                    return None
-
-                data = response.json()
-                # OpenAI 호환 응답 형식
-                if "data" in data and len(data["data"]) > 0:
-                    return data["data"][0]["embedding"]
-
-                return None
-
-        except httpx.ConnectError:
-            logger.debug("[TierRouter] Embedding server not available")
-            return None
-        except Exception as e:
-            logger.warning(f"[TierRouter] Embedding request failed: {e}")
-            return None
-
-    def _cosine_similarity(self, vec1: list[float], vec2: list[float]) -> float:
-        """코사인 유사도 계산 (순수 Python, numpy 불필요).
-
-        Args:
-            vec1: 벡터 1
-            vec2: 벡터 2
-
-        Returns:
-            유사도 (0.0 ~ 1.0)
-        """
-        if len(vec1) != len(vec2):
-            return 0.0
-
-        dot_product = sum(a * b for a, b in zip(vec1, vec2))
-        norm_a = math.sqrt(sum(a * a for a in vec1))
-        norm_b = math.sqrt(sum(b * b for b in vec2))
-
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-
-        return dot_product / (norm_a * norm_b)
 
     def _rule_based_routing(self, query: str) -> str:
         """규칙 기반 라우팅 (폴백).

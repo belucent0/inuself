@@ -293,10 +293,6 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME:-asr-media}
-      # Architecture V7.0: Redis Stream을 통해 Host의 Provider Manager로 요청
-      # Worker → Redis Stream → Provider Manager (Host) → GPU/NPU 서버
-      # host.docker.internal HTTP 통신 제거 (Docker Desktop 크래시 방지)
-      - REDIS_STREAM_ENABLED=true
       # Prometheus for metrics (optional)
       - PROMETHEUS_URL=http://asr-prometheus:9090
       # AI Gateway 설정 (LLM 요약용)
