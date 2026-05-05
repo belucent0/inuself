@@ -67,38 +67,33 @@ S3_SECRET_KEY=torchdev-secret
 S3_BUCKET=asr-media
 
 # LLM 설정 (선택)
-LLM_BASE_URL=http://localhost:8080
-LLM_MODEL_NAME=Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf
+LLM_BASE_URL=http://ai-llm:8000
+LLM_MODEL_NAME=gemma-4-E4B-it
 ```
 
 ## 실행
 
-### PM2 사용 (권장)
+### Docker Compose (권장 · 운영 기본)
 
 ```bash
 # 프로젝트 루트에서
-pm2 start ecosystem.config.js
+docker compose up -d worker
 
-# 개별 워커
-pm2 start ecosystem.config.js --only worker-asr
-pm2 start ecosystem.config.js --only worker-llm
-pm2 start ecosystem.config.js --only worker-ocr
+# 로그 확인
+docker compose logs -f worker
 ```
 
-### 직접 Celery 실행
+`docker-compose.yml`의 `worker` 서비스는 `asr-worker-unified` 컨테이너로
+ASR/LLM/OCR/YouTube 큐를 모두 처리합니다.
+
+### 직접 Celery 실행 (개발/디버그)
 
 ```bash
 # 프로젝트 루트에서 (worker 패키지 접근용)
 cd C:\timblo\torch-test
 
-# ASR 워커
-celery -A worker.celery_app worker --pool=solo --queues=asr --hostname=worker-asr@%h
-
-# LLM 워커
-celery -A worker.celery_app worker --pool=solo --queues=llm --hostname=worker-llm@%h
-
-# OCR 워커
-celery -A worker.celery_app worker --pool=solo --queues=ocr --hostname=worker-ocr@%h
+# 단일 워커가 모든 큐 처리
+celery -A worker.celery_app worker --pool=solo --queues=asr,llm,ocr,youtube --hostname=worker-unified@%h
 ```
 
 ## 큐 구성
@@ -145,7 +140,7 @@ result = send_llm_task(content_id=123, text="요약할 텍스트")
 
 1. Redis 연결 확인: `redis-cli ping`
 2. Celery 브로커 URL 확인: `.env`의 `REDIS_URL`
-3. 워커 로그 확인: `pm2 logs worker-asr`
+3. 워커 로그 확인: `docker compose logs -f worker`
 
 ### GPU가 인식되지 않음
 

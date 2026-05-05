@@ -1,7 +1,8 @@
-"""LiteLLM 티어 라우팅 설정 - Single Source of Truth.
+"""AI Gateway 티어 라우팅 설정 - Single Source of Truth.
 
 모든 티어 관련 설정은 이 파일에서만 정의합니다.
-custom_handler.py, stream_processor.py 등에서 import하여 사용합니다.
+backend/worker가 "능력 티어"(tier-simple/tier-thinking/tier-recap)로 요청하면
+ai-gateway가 본 매핑을 통해 실제 모델명·추론 컨테이너로 변환합니다.
 """
 import os
 import logging
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 # Tier-based Model Routing (3개 티어)
 # ============================================================
 # Backend는 "능력 티어"만 결정하고,
-# LiteLLM/Provider Manager에서 실제 모델로 변환합니다.
+# ai-gateway가 본 매핑을 통해 실제 모델로 변환합니다.
 #
 # 티어 종류:
 # - tier-simple: 간단한 작업 (인사, 짧은 질문)
@@ -21,9 +22,9 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 TIER_MODEL_MAP = {
-    "tier-simple": os.getenv("FLM_LLM_SIMPLE_MODEL", "lfm2:2.6b"),
-    "tier-thinking": os.getenv("FLM_THINKING_MODEL", "qwen3-tk:4b"),
-    "tier-recap": os.getenv("LEMONADE_SUMMARIZE_MODEL", "gpt-oss-20b-mxfp4-GGUF"),
+    "tier-simple": os.getenv("TIER_SIMPLE_MODEL", "gemma-4-E4B-it"),
+    "tier-thinking": os.getenv("TIER_THINKING_MODEL", "gemma-4-E4B-it"),
+    "tier-recap": os.getenv("RECAP_SUMMARIZE_MODEL", "gemma-4-E4B-it"),
 }
 
 
@@ -31,10 +32,10 @@ def resolve_tier_to_model(model_name: str) -> str:
     """티어명을 실제 모델명으로 변환.
 
     Args:
-        model_name: 요청된 모델명 (예: "tier-simple", "lfm2:2.6b")
+        model_name: 요청된 모델명 (예: "tier-simple", "gemma-4-E4B-it")
 
     Returns:
-        실제 모델명 (예: "lfm2:2.6b", "lfm2-trans:2.6b")
+        실제 모델명
     """
     if model_name.startswith("tier-"):
         resolved = TIER_MODEL_MAP.get(model_name, TIER_MODEL_MAP.get("tier-simple"))
@@ -51,7 +52,9 @@ def get_available_tiers() -> list[str]:
 # ============================================================
 # Tier-based Routing Policy (NPU/GPU 우선순위)
 # ============================================================
-# 각 티어별로 primary/fallback 디바이스와 대기 정책을 정의합니다.
+# v1.2.0 현재: local-gpu 모드에서는 모든 LLM 요청이 vLLM(ai-llm 컨테이너,
+# gemma-4-E4B-it)으로 단일 라우팅되어 본 정책은 사용되지 않습니다.
+# NPU 도입(향후)이나 NPU/GPU 혼합 운영 시 활용하기 위해 정의를 보존합니다.
 #
 # - primary: 우선 사용할 디바이스 (npu 또는 gpu)
 # - fallback: primary busy 시 사용할 대체 디바이스
@@ -65,12 +68,12 @@ TIER_ROUTING_POLICY = {
         "queue_on_busy": True,
     },
     "tier-thinking": {
-        "primary": "npu",   # 실제 동작에 맞춤: qwen3-tk:4b는 FLM(NPU)에서 실행
-        "fallback": "gpu",  # GPU llama-server는 fallback으로 유지
+        "primary": "npu",
+        "fallback": "gpu",
         "queue_on_busy": True,
     },
     "tier-recap": {
-        "primary": "gpu",   # lemonade-server (GPU) 전용
+        "primary": "gpu",
         "fallback": "gpu",
         "queue_on_busy": True,
     },

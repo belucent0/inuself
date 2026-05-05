@@ -1,12 +1,11 @@
-"""OCR Vision 모듈 - Qwen3-VL을 사용한 이미지 OCR.
+"""OCR Vision 모듈 - 이미지 OCR.
 
-이미지에서 텍스트를 추출하는 GPU/NPU 작업을 담당합니다.
+이미지에서 텍스트를 추출하는 OCR 작업을 담당합니다.
 이미지 전처리(PDF → 이미지 변환 등)는 백엔드에서 수행합니다.
 
-Architecture V7.0: Redis Stream 기반 OCR 요청
-- Worker (Docker) → Redis Stream → Provider Manager (Host) → GPU/NPU 서버
-- Docker → Host HTTP 통신 제거로 Docker Desktop 크래시 방지
-- 신속모드: FLM (NPU), 정확도 모드: llama-ocr-server (GPU)
+v1.2.0 현행: Worker → ai-gateway → ai-ocr 컨테이너(dots.ocr) httpx 직결.
+REDIS_STREAM_ENABLED=true 분기는 옛 Provider Manager 경로 호환용으로 보존되며,
+v1.2.0 운영에서는 ai-gateway 직결 경로만 사용됩니다.
 """
 
 import base64

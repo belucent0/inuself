@@ -4,15 +4,27 @@
 > **Last Updated:** 2026-02-01  
 > **Role:** Message Broker (Streams), Event Bus (Pub/Sub) & High-Speed Cache
 
+> ⚠️ **v1.2.0 마이그레이션 경고** (2026-05-04 갱신)
+>
+> 본 문서의 추론 라우팅용 Stream 키들(`stream:media:requests`, `stream:chat:requests`,
+> `stream:recap:requests`, `gpu:responses`)은 **Provider Manager + LiteLLM 프록시
+> 구조를 위한 것으로 v1.2.0에서 폐기되었습니다.** 현재 backend/worker는 ai-gateway가
+> 추론 컨테이너(`ai-llm`/`ai-asr`/`ai-ocr`/`ai-embedding`/`ai-diarize`)를 httpx로
+> 직접 호출하며, 워커 작업 큐는 **Celery (Redis broker)** 만 사용합니다.
+>
+> Pub/Sub `events:*` 채널과 `volatile-lru` 메모리 정책은 그대로 유효합니다.
+> 본 문서는 v1.1 시점의 SoT로 보존되며, 현행 운영 다이어그램은
+> [`architecture-v1.2.0.md`](./architecture-v1.2.0.md)를 참조하세요.
+
 ---
 
 ## 📋 Quick Overview (핵심 요약)
 
 | 구분 | 이름 (Key/Channel) | 용도 | 특징 |
 | :--- | :--- | :--- | :--- |
-| **Stream** | `stream:media:requests` | **ASR/OCR (파일 처리)** | **MAXLEN 50**. 무거운 데이터 격리. |
-| **Stream** | `stream:chat:requests` | **Chat/Reasoning** | **MAXLEN 3000**. 가벼운 텍스트. |
-| **Stream** | `stream:recap:requests`| **Summary** | **MAXLEN 1000**. 백그라운드 처리. |
+| **Stream** ⚠️ | `stream:media:requests` | ASR/OCR (파일 처리) — *v1.2.0 폐기* | MAXLEN 50. 무거운 데이터 격리. |
+| **Stream** ⚠️ | `stream:chat:requests` | Chat/Reasoning — *v1.2.0 폐기* | MAXLEN 3000. 가벼운 텍스트. |
+| **Stream** ⚠️ | `stream:recap:requests`| Summary — *v1.2.0 폐기* | MAXLEN 1000. 백그라운드 처리. |
 | **Pub/Sub**| `events:*` | **실시간 알림** | 저장 안 됨. Frontend 진행률 표시용. |
 | **Policy** | `volatile-lru` | **메모리 정책** | 메모리 부족 시 **TTL 있는 캐시만 삭제**. |
 
