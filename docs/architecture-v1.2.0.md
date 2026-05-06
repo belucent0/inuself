@@ -1,8 +1,10 @@
-# Architecture v1.2.0
+# Architecture v1.2.0 (현행)
 
-> **Timblo AI Platform — 종합 아키텍처 문서**
+> **Timblo AI Platform — 종합 아키텍처 문서 (Source of Truth)**
 >
 > 작성일: 2026-05-04 | 버전: v1.2.0 | 대상 코드베이스: `develop` 브랜치
+>
+> 이 문서가 현재 운영 architecture를 기술하는 단일 SoT입니다. 옛 버전(v1.0.x / v1.1.0)은 `docs/archived/`로 이동되었으며, 옛 architecture(LiteLLM Proxy / Provider Manager / PM2 / Host 프로세스 / Redis Stream 추론 라우팅 / FLM NPU 등)는 모두 폐기되었습니다.
 
 ---
 
@@ -11,8 +13,9 @@
 | 버전 | 날짜 | 주요 변경 |
 |------|------|-----------|
 | v1.0.0 | 2026-02-21 | Worker-Backend 분리, 초기 종합 문서 |
+| v1.0.1 | 2026-02-21 | lemonade-server / LLMTier 상수 / model_copy 정리 (incremental) |
 | v1.1.0 | 2026-02-27 | Frontend 상세, Backend 레이어, AI Agent 전체, WPI, DB 스키마, API 레퍼런스, Valkey 구조 추가 |
-| **v1.2.0** | 2026-05-04 | Provider Manager(Redis Stream + Host PM2 프로세스) · LiteLLM 프록시 폐기. ai-gateway가 추론 컨테이너(`ai-llm`/`ai-asr`/`ai-diarize`/`ai-ocr`/`ai-embedding`) httpx 직결 호출. WSL ROCm 컨테이너 운영으로 통일. |
+| **v1.2.0** | 2026-05-04 | **현행.** Provider Manager(Redis Stream + Host PM2 프로세스) · LiteLLM 프록시 · FLM NPU 통합 · 옛 추론 Stream(`stream:chat:requests` 등) 모두 폐기. ai-gateway가 추론 컨테이너(`ai-llm`/`ai-asr`/`ai-diarize`/`ai-ocr`/`ai-embedding`) httpx 직결 호출. WSL ROCm 컨테이너 운영으로 통일. backend/worker 코드의 `litellm` 명칭도 `ai_gateway`로 일소(PR #124, #127). |
 
 ---
 
@@ -368,7 +371,7 @@ HTTP Request
 | `auth_controller.py` | `/api/auth` | AuthService |
 | `content_controller.py` | `/api/contents` | ContentService, FileService |
 | `ai_chat_controller.py` | `/api/threads` | ThreadService, LangGraph Agent |
-| `chat_controller.py` | `/api/chat` | LiteLLMClient |
+| `chat_controller.py` | `/api/chat` | AI Gateway (OpenAI SDK) |
 | `search_controller.py` | `/api/search` | SearchService (SearXNG) |
 | `scan_controller.py` | `/api/scan` | WpiService, ScanRepository |
 | `admin_controller.py` | `/api/admin` | StateWatchdog, StateReconciler |
@@ -410,7 +413,7 @@ queued → analyzing → searching → thinking → generating → completed
 | FileService | file_service.py | 파일 업로드/다운로드, S3 연동 |
 | ThreadService | thread_service.py | AI 스레드/메시지 관리 |
 | WpiService | wpi_service.py | WPI 채점, 프로필 생성, AI 보고서 |
-| LiteLLMClient | litellm_client.py | LiteLLM 프록시 호출 |
+| AIGatewayClient | ai_gateway_client.py | AI Gateway 통한 LLM 요청 (OpenAI SDK) |
 | YoutubeService | youtube_service.py | YouTube URL 검증 및 메타데이터 |
 | OcrService | ocr_service.py | OCR 처리 (MarkItDown, Tesseract) |
 | TranscriptionPostprocess | transcription_postprocess.py | ASR 후처리, 화자 클러스터링 |
@@ -565,12 +568,12 @@ class GraphState(TypedDict):
 
 IntentParserNode의 TierRouter가 쿼리 복잡도에 따라 LLM Tier를 결정합니다.
 
-| Tier | LiteLLM 모델 | 특징 |
-|------|-------------|------|
-| `tier-simple` | FLM NPU / 빠른 모델 | 저지연, 일반 대화 |
-| `tier-thinking` | Codex(primary) → GPU qwen3(fallback) | 복잡한 추론, 분석 |
-| `tier-recap` | 요약 특화 모델 | 문서 요약 |
-| `codex-medium` | CLIProxy API (OpenAI) | WPI 보고서, 코드 생성 |
+| Tier | 모델 (v1.2.0) | 특징 |
+|------|--------------|------|
+| `tier-simple` | `gemma-4-E4B-it` (ai-llm vLLM) | 저지연, 일반 대화 |
+| `tier-thinking` | `gemma-4-E4B-it` (local) → Codex(serverless fallback) | 복잡한 추론, 분석 |
+| `tier-recap` | `gemma-4-E4B-it` (요약 전용 라우팅) | 문서 요약 |
+| `codex-medium` | CLIProxy API (OpenAI Codex) | WPI 보고서, 코드 생성 (serverless 모드) |
 
 ### 4.7 검색 재시도 플로우 (V8.4)
 
@@ -697,9 +700,9 @@ scan_result (
     │ ContentService.create()  → DB: file(QUEUED) + content
     ▼
 [Celery Worker: asr/ocr queue]
-    │ ASR Pipeline (오디오): WAV → Whisper → 전사 텍스트
-    │ OCR Pipeline (문서): PDF/Image → MarkItDown/Tesseract → 텍스트
-    │ LLM Pipeline: 전사/OCR 텍스트 → FLM → 요약 (JSONB)
+    │ ASR Pipeline (오디오): WAV → ai-asr (Whisper-large-v3-turbo) → 전사 텍스트
+    │ OCR Pipeline (문서): PDF/Image → MarkItDown/Tesseract + ai-ocr (dots.ocr) → 텍스트
+    │ LLM Pipeline: 전사/OCR 텍스트 → ai-gateway → ai-llm (Gemma 4) → 요약 (JSONB)
     ▼
 [Valkey Pub/Sub]
     │ PUBLISH events:file_progress:{file_id}
@@ -907,7 +910,7 @@ content (
     user_id         UUID FK → user,
     title           VARCHAR,
     summary_md      TEXT,               -- LLM 생성 요약 (Markdown)
-    embedding       vector(768),        -- FLM gemma:300m 임베딩
+    embedding       vector(768),        -- ai-embedding (EmbeddingGemma 300M)
     status          ENUM (file.status와 동기화),
     metadata        JSONB,
     created_at      TIMESTAMP,
@@ -1086,9 +1089,9 @@ counseling_session (
 
 | 테이블 | 컬럼 | 차원 | 모델 |
 |--------|------|------|------|
-| content | embedding | 768D | FLM gemma:300m |
-| speaker_profile | voice_embedding | 512D | Pyannote |
-| client | profile_embedding | 768D | 범용 임베딩 |
+| content | embedding | 768D | ai-embedding (EmbeddingGemma 300M) |
+| speaker_profile | voice_embedding | 512D | pyannote (ai-diarize) |
+| client | profile_embedding | 768D | ai-embedding (EmbeddingGemma 300M) |
 
 ---
 
@@ -1228,15 +1231,16 @@ worker/
 ├── logging_config.py      # 로깅 설정
 ├── telemetry.py           # OpenTelemetry 분산 추적
 │
-├── pipelines/             # GPU/NPU 실행 파이프라인
+├── pipelines/             # ai-gateway 호출 파이프라인 (GPU 추론은 컨테이너에서)
 │   ├── asr/
-│   │   ├── __init__.py    # ASR 실행 진입점
-│   │   └── vad_utils.py   # Voice Activity Detection
+│   │   ├── __init__.py             # ASR 실행 진입점
+│   │   ├── ai_gateway_audio_client.py  # ai-gateway → ai-asr/ai-diarize
+│   │   └── vad_utils.py            # Voice Activity Detection
 │   ├── ocr/
-│   │   └── __init__.py    # OCR 실행 진입점
+│   │   └── __init__.py    # OCR 실행 진입점 (ai-gateway → ai-ocr)
 │   ├── llm/
-│   │   ├── __init__.py    # LLM 실행 진입점
-│   │   └── llamacpp_client.py  # llama.cpp HTTP 클라이언트
+│   │   ├── __init__.py             # LLM 실행 진입점
+│   │   └── ai_gateway_client.py    # ai-gateway → ai-llm
 │   └── search/
 │       └── __init__.py    # 검색 파이프라인
 │
@@ -1263,10 +1267,10 @@ Processor (Task ↔ Pipeline 브릿지)
     │ Backend API로 결과 전송
     │ Valkey Pub/Sub 진행률 발행
     ▼
-Pipeline (GPU/NPU 실제 실행)
-    │ pipelines/asr/ → Whisper 모델 호출
-    │ pipelines/ocr/ → Tesseract / EasyOCR 호출
-    └ pipelines/llm/ → llamacpp_client (llama.cpp HTTP)
+Pipeline (ai-gateway 호출, 실제 추론은 ai-* 컨테이너 GPU에서)
+    │ pipelines/asr/ → ai-gateway → ai-asr (Whisper) / ai-diarize (pyannote)
+    │ pipelines/ocr/ → ai-gateway → ai-ocr (dots.ocr)
+    └ pipelines/llm/ → ai-gateway → ai-llm (vLLM Gemma 4)
 ```
 
 ### 11.4 큐 분리 전략
@@ -1378,24 +1382,9 @@ client ← ai-gateway SSE 스트림
 
 ## 13. Valkey Data Architecture
 
-### 13.1 Stream 토폴로지 (3-Track Strategy)
+> v1.1.0 시기에는 추론 요청도 Valkey Stream(`stream:chat:requests` / `stream:media:requests` / `stream:gpu:responses` 등)으로 Provider Manager에 라우팅했지만, v1.2.0에서 ai-gateway가 추론 컨테이너를 httpx로 직접 호출하면서 **Stream은 추론 경로에서 제거됨**. 현재 Valkey 사용처는 **Pub/Sub 이벤트 + 캐시 + 동시성 세마포어** 3가지뿐.
 
-| 스트림 키 | MAXLEN | 데이터 성격 | 용도 |
-|-----------|--------|----------|------|
-| `stream:media:requests` | 50 | Very High (MB) | ASR/OCR 파일 바이너리 |
-| `stream:chat:requests` | 3,000 | Low (KB) | Chat/Thinking 텍스트 |
-| `stream:recap:requests` | 1,000 | Medium (KB) | Summarization |
-| `stream:provider:events` | 1,000 | Low | 시스템 제어 신호 |
-| `stream:gpu:responses` | 300 | Medium | 작업 결과 반환 |
-
-**Consumer Group 패턴:**
-```
-XGROUP CREATE stream:chat:requests provider-workers $ MKSTREAM
-XREADGROUP GROUP provider-workers worker-1 COUNT 1 BLOCK 5000 STREAMS stream:chat:requests >
-XACK stream:chat:requests provider-workers {message_id}
-```
-
-### 13.2 Pub/Sub 채널
+### 13.1 Pub/Sub 채널
 
 | 채널 패턴 | 용도 | 발행자 | 구독자 |
 |-----------|------|--------|--------|
@@ -1405,40 +1394,32 @@ XACK stream:chat:requests provider-workers {message_id}
 | `events:content_created` | 콘텐츠 생성 완료 | Worker | Backend |
 | `events:file_progress:global` | 전역 파일 진행률 | Worker | Backend WebSocket |
 
-### 13.3 Cache Key 패턴 & TTL
+### 13.2 Cache Key 패턴 & TTL
 
 | 키 패턴 | TTL | 용도 |
 |---------|-----|------|
 | `cache:search:{hash}` | 3,600s (1시간) | 웹 검색 결과 캐시 |
 | `history:{session_id}` | 604,800s (7일) | 대화 히스토리 |
 | `job:{job_id}` | 86,400s (24시간) | 작업 임시 데이터 |
-| `worker:{device}:active` | 3,600s (1시간) | GPU/NPU 동시성 잠금 |
+| `worker:{device}:active` | 3,600s (1시간) | GPU 동시성 세마포어 |
 
-### 13.4 메모리 정책
+### 13.3 메모리 정책
 
 ```yaml
 maxmemory: 2gb
 maxmemory-policy: volatile-lru    # TTL 있는 키부터 LRU 삭제
 ```
 
-스트림(TTL 없음)은 보존, 캐시(TTL 있음)부터 삭제.
-
-### 13.5 데이터 플로우 요약 (v1.2.0)
-
-추론 호출은 ai-gateway 직결로 전환되어 **Stream 사용 안 함**. Valkey는 캐시·세마포어·Pub/Sub 이벤트 용도만 유지.
+### 13.4 데이터 플로우 요약 (v1.2.0)
 
 ```
-Backend ── HTTP ──► ai-gateway ── HTTP ──► ai-llm/ai-asr/ai-ocr/...
-   │                                              (vLLM/llama.cpp/transformers)
-   │
-   ▼
-Valkey (캐시/세마포어)
-   ▲
-   │── PUBLISH events:file_progress ── Worker
-   │── SUBSCRIBE events:* ──► Backend SSE/WebSocket
-```
+Backend ── HTTP ──► ai-gateway ── HTTP ──► ai-llm / ai-asr / ai-ocr / ai-diarize / ai-embedding
+                                              (vLLM / transformers / llama.cpp / pyannote)
 
-> v1.1.0에 존재했던 `stream:chat:requests`, `stream:media:requests`, `stream:gpu:responses` 등 추론용 스트림은 v1.2.0에서 코드 경로상 더 이상 사용되지 않음 (legacy 호환 키만 일부 유지).
+Worker ── PUBLISH events:* ──► Valkey ──► SUBSCRIBE events:* ──► Backend SSE/WebSocket
+Backend ── SET cache:search ──► Valkey ──► GET cache:search
+Backend / Worker ── SET worker:gpu:active ──► Valkey (TTL-based 세마포어)
+```
 
 ---
 
@@ -1575,6 +1556,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | 파일 | 비고 |
 |------|------|
 | `docs/archived/architecture-v1.1.0.md` | 2026-02-27 작성, v1.2.0으로 대체 (Provider Manager + LiteLLM 시기) |
+| `docs/archived/architecture-v1.0.1.md` | 2026-02-21 작성, v1.0.0 incremental 갱신 (lemonade-server / LLMTier / model_copy 정리) |
 | `docs/archived/architecture-v1.0.0.md` | 2026-02-21 작성, v1.1.0으로 대체 |
 | `docs/archived/architecture-v8.5.md` | 이전 V8 계열 아키텍처 |
 | `docs/archived/architecture-v8.2.md` | V8.2 (LangGraph 도입) |

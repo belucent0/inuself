@@ -65,11 +65,8 @@ class Settings(BaseSettings):
         25  # 이 길이 이상인 파일만 청킹 적용 (30분 = 1800초)
     )
 
-    # 워커 타입 설정
-    worker_type: str = Field("llm", validation_alias="WORKER_TYPE")
-
-    # LLM 요약 설정 (llama.cpp 서버)
-    llm_provider: str = "llamacpp_server"  # "llamacpp_server" | "flm" | "ai-gateway"
+    # LLM provider (v1.2.0: ai-gateway 단일 라우터)
+    llm_provider: str = "ai-gateway"
 
     # AI Gateway 설정
     ai_gateway_url: str = Field(
@@ -104,87 +101,15 @@ class Settings(BaseSettings):
     )
     llm_temperature: float = 0.4
     llm_top_p: float = 0.9
-    llm_max_tokens: int = 3072  # V6.6: JSON 응답 + 상세 요약을 위해 증가
-    llm_n_threads: int = 8
+    llm_max_tokens: int = 3072
 
-    # LLM API 서버 설정 (공통 - 모든 OpenAI 호환 API 사용, provider와 무관)
-    llm_base_url: str = "http://localhost:8080"
-    llm_model_name: str = ""
-
-    # LLM 서버 설정 (요청마다 시작/종료, provider와 무관)
-    llm_server_path: str = Field(
-        "", validation_alias="LLM_SERVER_PATH"
-    )  # 서버 실행 파일 경로
-    llm_server_model: str = Field(
-        "", validation_alias="LLM_SERVER_MODEL"
-    )  # 모델 파일 경로
-    ocr_server_mmproj: str = Field(
-        "", validation_alias="OCR_SERVER_MMPROJ"
-    )  # Vision 모델용 mmproj 파일 경로
-    llm_server_port: int = Field(8080, validation_alias="LLM_SERVER_PORT")  # 서버 포트
-    llm_server_threads: int = Field(
-        8, validation_alias="LLM_SERVER_THREADS"
-    )  # 스레드 수
-    llm_server_gpu_layers: int = Field(
-        99, validation_alias="LLM_SERVER_GPU_LAYERS"
-    )  # GPU 레이어 수
-    llm_server_batch_size: int = Field(
-        512, validation_alias="LLM_SERVER_BATCH_SIZE"
-    )  # 배치 크기
-
-    # llama.cpp 모델 경로
-    ocr_model_path: str = Field(
-        "", validation_alias="OCR_SERVER_MODEL"
-    )  # OCR 비전 모델 경로
-
-    # OCR 설정 (poppler 경로)
+    # 문서 변환용 외부 바이너리 경로 (PDF/Office → 이미지)
     poppler_path: str = Field(
         "", validation_alias="POPPLER_PATH"
     )  # poppler bin 디렉토리 경로 (예: C:\poppler\bin)
-
-    # LibreOffice 설정 (Office 문서 변환용)
     libreoffice_path: str = Field(
         "", validation_alias="LIBREOFFICE_PATH"
-    )  # LibreOffice 실행 파일 경로 (예: C:\Program Files\LibreOffice\program\soffice.exe 또는 /usr/bin/libreoffice)
-
-    @property
-    def llm_api_base_url(self) -> str:
-        """LLM API 서버 URL (환경변수 LLM_BASE_URL 사용)"""
-        return self.llm_base_url
-
-    @property
-    def llm_api_model_name(self) -> str:
-        """LLM API 모델 이름 (환경변수 LLM_MODEL_NAME 사용)"""
-        return self.llm_model_name
-
-    @property
-    def is_ocr_worker(self) -> bool:
-        """워커 타입이 OCR인지 여부."""
-        return self.worker_type.lower() == "ocr"
-
-    @property
-    def worker_model_path(self) -> str:
-        """
-        워커 타입에 맞는 llama.cpp 모델 경로 반환.
-
-        우선순위:
-        1. OCR 워커: OCR_SERVER_MODEL
-        2. LLM 워커: LLM_SERVER_MODEL
-        """
-        if self.is_ocr_worker and self.ocr_model_path:
-            return self.ocr_model_path
-        return self.llm_server_model
-
-    @property
-    def worker_mmproj_path(self) -> str:
-        """
-        Vision 모델용 mmproj 경로 반환.
-
-        OCR 워커일 때만 OCR_SERVER_MMPROJ 사용. LLM 워커는 기본적으로 mmproj 없이 텍스트 모델을 사용.
-        """
-        if self.is_ocr_worker:
-            return self.ocr_server_mmproj
-        return ""
+    )  # LibreOffice 실행 파일 경로
 
     # CORS 설정
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://asr.timblo.io,http://asr.timblo.io:3000"

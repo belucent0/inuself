@@ -142,9 +142,6 @@ services:
       - OTEL_LOGS_EXPORTER=none
       # Metrics/Logs SDK 완전 비활성화 (404 에러 방지)
       - OTEL_SDK_DISABLED_INSTRUMENTATIONS=metrics,logging,openai
-      # FLM Model Configuration (Backend용 - 검색 요약)
-      - FLM_LLM_MODEL=${FLM_LLM_MODEL:-lfm2:2.6b}
-      - FLM_THINKING_MODEL=${FLM_THINKING_MODEL:-lfm2.5-tk:1.2b}
       # Langfuse LLM Observability
       - LANGFUSE_HOST=http://langfuse:3000/langfuse
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-pk-lf-torch-dev}
@@ -243,7 +240,6 @@ services:
       - ./infra/promtail/config.yaml:/etc/promtail/config.yaml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./logs:/host-logs:ro # PM2 로그 수집용
     command: -config.file=/etc/promtail/config.yaml
     depends_on:
       - loki
@@ -297,10 +293,6 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-torchdev}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-changeme}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME:-asr-media}
-      # Architecture V7.0: Redis Stream을 통해 Host의 Provider Manager로 요청
-      # Worker → Redis Stream → Provider Manager (Host) → GPU/NPU 서버
-      # host.docker.internal HTTP 통신 제거 (Docker Desktop 크래시 방지)
-      - REDIS_STREAM_ENABLED=true
       # Prometheus for metrics (optional)
       - PROMETHEUS_URL=http://asr-prometheus:9090
       # AI Gateway 설정 (LLM 요약용)
@@ -321,7 +313,6 @@ services:
       - OTEL_LOGS_EXPORTER=none
       # Metrics/Logs SDK 완전 비활성화 (404 에러 방지)
       - OTEL_SDK_DISABLED_INSTRUMENTATIONS=metrics,logging,openai
-      # Note: Worker는 FLM 모델 환경변수 사용 안 함 (Backend에서만 사용)
     depends_on:
       valkey:
         condition: service_healthy
@@ -334,8 +325,8 @@ services:
   # ─── 추론 컨테이너 (refactor/inference): WSL2 + AMD ROCm gfx1150 ───
   # ai-llm: vLLM 0.20 + Gemma 4 E4B BF16 (always-on, util=0.35 dev mode).
   #          util=0.35 필요: Gemma 4 multimodal vision 인코더 +3 GB +
-  #          max-model-len 8192 KV cache까지 수용 (4096은 transcript 요약 시
-  #          input+output 합산 4097로 즉시 초과).
+  #          max-model-len 32768 KV cache까지 수용 (검색 컨텍스트 + 출력 토큰
+  #          합산이 8k를 넘는 AI chat 요청 완화).
   #          torch.compile 캐시는 vllm-compile-cache 볼륨에 디스크 보존 →
   #          첫 빌드만 길고 다음 cold start부터 빠름. 첫 빌드 stuck 시
   #          --enforce-eager로 회귀 검토.
@@ -363,7 +354,7 @@ services:
     command: >
       vllm serve google/gemma-4-E4B-it
       --revision c53e9d33178b12afbad4a48334d21e19b8c29761
-      --max-model-len 8192
+      --max-model-len 32768
       --gpu-memory-utilization 0.35
       --max-num-seqs 4
       --enable-prefix-caching

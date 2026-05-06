@@ -1,14 +1,14 @@
-"""LiteLLM chat completion 엔드포인트를 통한 ASR/Diarization 요청 클라이언트.
+"""AI Gateway chat completion 엔드포인트를 통한 ASR/Diarization 요청 클라이언트.
 
-Architecture V7.5:
-- ASR: Worker → LiteLLM HTTP (/v1/chat/completions, task_type=asr) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
-- Diarization: Worker → LiteLLM HTTP (/v1/chat/completions, task_type=diarization) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
-- LLM: Worker → LiteLLM HTTP → custom_handler.astreaming() → Redis Stream → Provider Manager → GPU
-- OCR: Worker → LiteLLM HTTP → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
+v1.2.0 현행 흐름:
+- ASR: Worker → ai-gateway (/v1/chat/completions, task_type=asr) → ai-asr 컨테이너
+- Diarization: Worker → ai-gateway (task_type=diarization) → ai-diarize 컨테이너
+- LLM: Worker → ai-gateway → ai-llm (vLLM)
+- OCR: Worker → ai-gateway → ai-ocr
 
-V7.5 변경사항:
-- ASR+Diarization 묶음 잠금: pipeline.py에서 lock_id 획득 후 전달
-- lock_id가 전달되면 LiteLLM에서 잠금 재획득 스킵 (이미 획득됨)
+ASR+Diarization 묶음 잠금:
+- pipeline.py에서 lock_id 획득 후 전달
+- lock_id가 전달되면 ai-gateway에서 잠금 재획득 스킵 (이미 획득됨)
 - GPU 리소스 독점: ASR+Diarization 실행 중 다른 GPU 작업 대기
 """
 import base64
@@ -38,7 +38,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://valkey:6379/0")
 try:
     _redis_client = redis.from_url(REDIS_URL, decode_responses=False)
 except Exception as e:
-    logger.warning(f"[LiteLLM Client] Redis client init failed: {e}")
+    logger.warning(f"[AIGateway Client] Redis client init failed: {e}")
     _redis_client = None
 
 # ASR+Diarization 작업 TTL (10분, heartbeat로 자동 갱신)
@@ -178,7 +178,7 @@ except ImportError:
                     yield seg
 
 
-def call_litellm_transcription(
+def call_ai_gateway_transcription(
     audio_file_path: Path,
     accuracy_mode: str = "speed",
     language: str = "ko",
@@ -187,10 +187,9 @@ def call_litellm_transcription(
     lock_id: str | None = None,  # V7.5: Worker에서 획득한 GPU 잠금 ID
     file_id: str = None,  # Backend 상태 업데이트용
 ) -> tuple[dict[str, Any], float, float, ASRProvider]:
-    """LiteLLM chat completion 엔드포인트를 통한 ASR 요청.
+    """ai-gateway chat completion 엔드포인트를 통한 ASR 요청.
 
-    Architecture V7.4: OCR과 동일한 방식
-    - Worker → LiteLLM (/v1/chat/completions) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
+    v1.2.0: Worker → ai-gateway (/v1/chat/completions, task_type=asr) → ai-asr 컨테이너 직결.
     - extra_body에 task_type=asr, audio_base64 전달
 
     Args:
@@ -199,7 +198,7 @@ def call_litellm_transcription(
         language: 언어 코드
         timeout: ASR 요청 타임아웃 (초)
         resource_timeout: (미사용, 호환성 유지)
-        lock_id: Worker에서 획득한 GPU 잠금 ID (V7.5: LiteLLM에서 재획득 스킵)
+        lock_id: Worker에서 획득한 GPU 잠금 ID (V7.5: AI Gateway에서 재획득 스킵)
         file_id: 파일 ID (Backend 상태 업데이트용)
 
     Returns:
@@ -215,14 +214,14 @@ def call_litellm_transcription(
 
     # OpenTelemetry trace 확인
     current_trace_id = get_trace_id()
-    logger.info(f"[LiteLLM ASR] Requesting transcription: model={model}, accuracy_mode={accuracy_mode}, trace_id={current_trace_id}")
+    logger.info(f"[AIGateway ASR] Requesting transcription: model={model}, accuracy_mode={accuracy_mode}, trace_id={current_trace_id}")
 
     # Audio 파일을 base64로 인코딩
     with open(audio_file_path, "rb") as f:
         audio_content = f.read()
         audio_base64 = base64.b64encode(audio_content).decode('utf-8')
 
-    # LiteLLM chat completion 요청
+    # AI Gateway chat completion 요청
     url = f"{AI_GATEWAY_URL}/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
@@ -233,7 +232,7 @@ def call_litellm_transcription(
     try:
         inject_trace_context(headers)
     except Exception as e:
-        logger.warning(f"[LiteLLM ASR] Failed to inject trace context: {e}")
+        logger.warning(f"[AIGateway ASR] Failed to inject trace context: {e}")
 
     # Chat completion 형식으로 ASR 요청
     extra_body = {
@@ -243,10 +242,10 @@ def call_litellm_transcription(
         "accuracy_mode": accuracy_mode,
     }
 
-    # V7.5: Worker에서 획득한 lock_id 전달 (LiteLLM에서 재획득 스킵)
+    # V7.5: Worker에서 획득한 lock_id 전달 (AI Gateway에서 재획득 스킵)
     if lock_id:
         extra_body["lock_id"] = lock_id
-        logger.info(f"[LiteLLM ASR] Passing lock_id to LiteLLM: {lock_id[:8]}...")
+        logger.info(f"[AIGateway ASR] Passing lock_id to AI Gateway: {lock_id[:8]}...")
 
     # file_id 전달 (Backend 상태 업데이트용)
     if file_id:
@@ -283,13 +282,13 @@ def call_litellm_transcription(
             raise ValueError(f"Unexpected response format: {result}")
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"[LiteLLM ASR] HTTP error: {e.response.status_code} - {e.response.text}")
+        logger.error(f"[AIGateway ASR] HTTP error: {e.response.status_code} - {e.response.text}")
         raise RuntimeError(f"ASR HTTP error: {e.response.status_code}")
     except httpx.TimeoutException:
-        logger.error(f"[LiteLLM ASR] Timeout after {timeout}s")
+        logger.error(f"[AIGateway ASR] Timeout after {timeout}s")
         raise TimeoutError(f"ASR timeout after {timeout}s")
     except Exception as e:
-        logger.error(f"[LiteLLM ASR] Request failed: {e}")
+        logger.error(f"[AIGateway ASR] Request failed: {e}")
         raise RuntimeError(f"ASR request failed: {e}")
 
     total_time = time.time() - start_time
@@ -305,15 +304,15 @@ def call_litellm_transcription(
     else:
         provider = ASRProvider.INSANELY_FAST if accuracy_mode == "accuracy" else ASRProvider.WHISPER_CPP
 
-    logger.info(f"[LiteLLM ASR] Transcription completed in {total_time:.2f}s")
-    logger.info(f"[LiteLLM ASR] Provider used: {provider.value}")
-    logger.info(f"[LiteLLM ASR] Text length: {len(transcription_result.get('text', ''))}")
+    logger.info(f"[AIGateway ASR] Transcription completed in {total_time:.2f}s")
+    logger.info(f"[AIGateway ASR] Provider used: {provider.value}")
+    logger.info(f"[AIGateway ASR] Text length: {len(transcription_result.get('text', ''))}")
 
     # 호환성: (결과, 대기시간, 처리시간, Provider)
     return transcription_result, 0.0, total_time, provider
 
 
-def call_litellm_diarization(
+def call_ai_gateway_diarization(
     audio_file_path: Path,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
@@ -322,10 +321,9 @@ def call_litellm_diarization(
     resource_timeout: float = 120.0,
     lock_id: str | None = None,  # V7.5: Worker에서 획득한 GPU 잠금 ID
 ) -> tuple[DiarizationAnnotationWrapper, float, float, dict | None, Any, dict]:
-    """LiteLLM chat completion 엔드포인트를 통한 Diarization 요청.
+    """ai-gateway chat completion 엔드포인트를 통한 Diarization 요청.
 
-    Architecture V7.4: ASR과 동일한 방식
-    - Worker → LiteLLM (/v1/chat/completions) → custom_handler.acompletion() → Redis Stream → Provider Manager → GPU
+    v1.2.0: Worker → ai-gateway (/v1/chat/completions, task_type=diarization) → ai-diarize 컨테이너 직결.
 
     Args:
         audio_file_path: 오디오 파일 경로
@@ -334,7 +332,7 @@ def call_litellm_diarization(
         return_embeddings: 임베딩 반환 여부 (미지원, 호환성 유지)
         timeout: Diarization 요청 타임아웃 (초)
         resource_timeout: (미사용, 호환성 유지)
-        lock_id: Worker에서 획득한 GPU 잠금 ID (V7.5: LiteLLM에서 재획득 스킵)
+        lock_id: Worker에서 획득한 GPU 잠금 ID (V7.5: AI Gateway에서 재획득 스킵)
 
     Returns:
         (diarization, load_time, inference_time, embeddings_dict, pipeline, params)
@@ -343,14 +341,14 @@ def call_litellm_diarization(
 
     # OpenTelemetry trace 확인
     current_trace_id = get_trace_id()
-    logger.info(f"[LiteLLM Diarization] Requesting: min_speakers={min_speakers}, max_speakers={max_speakers}, trace_id={current_trace_id}")
+    logger.info(f"[AI Gateway Diarization] Requesting: min_speakers={min_speakers}, max_speakers={max_speakers}, trace_id={current_trace_id}")
 
     # Audio 파일을 base64로 인코딩
     with open(audio_file_path, "rb") as f:
         audio_content = f.read()
         audio_base64 = base64.b64encode(audio_content).decode('utf-8')
 
-    # LiteLLM chat completion 요청
+    # AI Gateway chat completion 요청
     url = f"{AI_GATEWAY_URL}/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {AI_GATEWAY_API_KEY}",
@@ -361,7 +359,7 @@ def call_litellm_diarization(
     try:
         inject_trace_context(headers)
     except Exception as e:
-        logger.warning(f"[LiteLLM Diarization] Failed to inject trace context: {e}")
+        logger.warning(f"[AI Gateway Diarization] Failed to inject trace context: {e}")
 
     # Chat completion 형식으로 Diarization 요청
     extra_body = {
@@ -371,10 +369,10 @@ def call_litellm_diarization(
         "max_speakers": max_speakers,
     }
 
-    # V7.5: Worker에서 획득한 lock_id 전달 (LiteLLM에서 재획득 스킵)
+    # V7.5: Worker에서 획득한 lock_id 전달 (AI Gateway에서 재획득 스킵)
     if lock_id:
         extra_body["lock_id"] = lock_id
-        logger.info(f"[LiteLLM Diarization] Passing lock_id to LiteLLM: {lock_id[:8]}...")
+        logger.info(f"[AI Gateway Diarization] Passing lock_id to AI Gateway: {lock_id[:8]}...")
 
     payload = {
         "model": "diarization",
@@ -406,13 +404,13 @@ def call_litellm_diarization(
             raise ValueError(f"Unexpected response format: {result}")
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"[LiteLLM Diarization] HTTP error: {e.response.status_code} - {e.response.text}")
+        logger.error(f"[AI Gateway Diarization] HTTP error: {e.response.status_code} - {e.response.text}")
         raise RuntimeError(f"Diarization HTTP error: {e.response.status_code}")
     except httpx.TimeoutException:
-        logger.error(f"[LiteLLM Diarization] Timeout after {timeout}s")
+        logger.error(f"[AI Gateway Diarization] Timeout after {timeout}s")
         raise TimeoutError(f"Diarization timeout after {timeout}s")
     except Exception as e:
-        logger.error(f"[LiteLLM Diarization] Request failed: {e}")
+        logger.error(f"[AI Gateway Diarization] Request failed: {e}")
         raise RuntimeError(f"Diarization request failed: {e}")
 
     total_time = time.time() - start_time
@@ -421,8 +419,8 @@ def call_litellm_diarization(
     segments = diarization_result.get("segments", [])
     num_speakers = diarization_result.get("num_speakers", 0)
 
-    logger.info(f"[LiteLLM Diarization] Completed in {total_time:.2f}s")
-    logger.info(f"[LiteLLM Diarization] Speakers: {num_speakers}, Segments: {len(segments)}")
+    logger.info(f"[AI Gateway Diarization] Completed in {total_time:.2f}s")
+    logger.info(f"[AI Gateway Diarization] Speakers: {num_speakers}, Segments: {len(segments)}")
 
     # DiarizationAnnotationWrapper로 변환 (기존 API 호환)
     diarization = DiarizationAnnotationWrapper(segments)

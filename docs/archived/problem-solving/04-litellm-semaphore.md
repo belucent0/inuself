@@ -1,5 +1,7 @@
 # LiteLLM 세마포어: 프로세스 경계를 넘는 GPU 자원 조율
 
+> **Historical Record (v1.1.0 시기)** — 이 문서는 LiteLLM Proxy + Provider Manager 구조에서의 GPU 세마포어 설계를 기록합니다. 현재(v1.2.0~) architecture는 ai-gateway가 추론 컨테이너를 직접 호출하므로 이 세마포어 모델은 사용하지 않습니다. 현행 구조는 [`docs/architecture-v1.2.0.md`](../architecture-v1.2.0.md) 참조.
+>
 > **프로젝트**: LLM 기반 문서요약 + AI 채팅 서비스
 > **기간**: 2025년 하반기 ~ 2026년 1월
 > **역할**: 인프라 설계 및 구현 (단독)

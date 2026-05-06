@@ -3,12 +3,17 @@
 모니터링 페이지에서 사용하는 Langfuse 집계/트레이스 조회용 읽기 전용 엔드포인트.
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
+from ..core.auth import require_admin
 from ..services.langfuse_dashboard_service import LangfuseDashboardService
 
-router = APIRouter(prefix="/admin/langfuse", tags=["langfuse"])
+router = APIRouter(
+    prefix="/admin/langfuse",
+    tags=["langfuse"],
+    dependencies=[Depends(require_admin)],
+)
 service = LangfuseDashboardService()
 
 

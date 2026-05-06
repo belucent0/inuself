@@ -128,7 +128,7 @@ def configure_worker_telemetry(**kwargs):
     setup_worker_telemetry(service_name="asr-worker")
 
 
-# V6.5: 리소스 게이트 제거됨 - LiteLLM Custom Handler가 직접 라우팅 및 메모리 관리
+# V6.5: 리소스 게이트 제거됨 - AI Gateway가 직접 라우팅 및 메모리 관리
 # 태스크 실패/취소 시 로깅만 수행
 
 

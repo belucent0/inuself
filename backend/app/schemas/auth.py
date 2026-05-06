@@ -69,6 +69,7 @@ class AuthUserResponse(BaseModel):
     login_id: str = Field(validation_alias="email")
     name: str | None
     is_active: bool
+    is_super: bool
     created_at: datetime
 
 

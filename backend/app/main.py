@@ -144,9 +144,6 @@ async def lifespan(app: FastAPI):
     watchdog_scheduler_task = asyncio.create_task(watchdog_scheduler.start())
     logger.info("[Lifespan] StateWatchdog scheduler started (interval: 5m)")
 
-    # NOTE: 워커는 PM2로 별도 관리됩니다 (worker/celery_app.py 사용)
-    logger.info("[Lifespan] Workers are managed externally via PM2")
-
     yield
 
     # 종료 시: WatchdogScheduler 중지
@@ -286,7 +283,7 @@ def create_app() -> FastAPI:
     async def healthcheck():
         return {"status": "ok"}
 
-    # lemonade_experiment 등 외부 프로젝트 호환성을 위한 별칭
+    # /api/v1 prefix 호환 별칭
     @app.get("/api/v1/health", tags=["system"])
     async def healthcheck_v1():
         return {"status": "ok"}

@@ -6,17 +6,19 @@
 
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌──────────────────┐
-│  Frontend   │───▶│   Backend   │───▶│   Worker    │───▶│ Provider Manager │
-│  (Next.js)  │    │  (FastAPI)  │    │  (Celery)   │    │     (PM2)        │
+│  Frontend   │───▶│   Backend   │───▶│ AI Gateway  │───▶│ Inference        │
+│  (Vite/React)│   │  (FastAPI)  │    │  (FastAPI)  │    │ Containers (ai-*)│
 └─────────────┘    └─────────────┘    └─────────────┘    └──────────────────┘
        │                  │                  │                    │
        │                  ▼                  ▼                    ▼
        │           trace_id=abc123    trace_id=abc123     trace_id=abc123
        │                  │                  │                    │
+       │                  │           Worker (Celery) ────────────┤
+       │                  │                  │                    │
        │                  └────────┬─────────┴────────────────────┘
        │                           ▼
        │                    ┌─────────────┐
-       │                    │  Promtail   │ ◀── Docker SD + PM2 logs
+       │                    │  Promtail   │ ◀── Docker SD (모든 컨테이너 로그)
        │                    └──────┬──────┘
        │                           ▼
        │                    ┌─────────────┐
@@ -48,8 +50,11 @@
 | **Promtail** | 로그 수집 에이전트 | 9080 |
 
 **Promtail 수집 대상:**
-- Docker 컨테이너 로그 (자동 발견)
-- PM2 로그 (Provider Manager)
+- Docker 컨테이너 로그 자동 발견 (Docker Service Discovery)
+  - 애플리케이션: `asr-backend`, `asr-frontend`, `asr-worker-unified`, `asr-nginx`, `asr-cli-proxy-api`
+  - AI Gateway / 추론: `ai-gateway`, `ai-llm`, `ai-asr`, `ai-diarize`, `ai-ocr`, `ai-embedding`
+  - 데이터: `asr-postgres`, `asr-valkey`, `asr-minio`, `asr-searxng`
+  - 옵저빌리티: `asr-prometheus`, `asr-grafana`, `asr-loki`, `asr-promtail`, `asr-tempo`, `asr-flower`, `asr-langfuse`
 
 ### 2. 분산 추적 (Jaeger + Tempo)
 
@@ -88,7 +93,7 @@
 1. **Frontend**: 요청 시 `traceparent` 헤더 생성
 2. **Backend**: OpenTelemetry로 trace context 수신, 로그에 trace_id 자동 포함
 3. **Worker**: Celery 태스크 헤더에서 traceparent 추출, 로그에 trace_id 포함
-4. **Provider Manager**: Redis Stream 메시지에서 traceparent 추출, 로그에 trace_id 포함
+4. **AI Gateway**: 들어온 traceparent 헤더를 그대로 추론 컨테이너 호출(`httpx`)에 전파, 로그에 trace_id 포함
 
 ### 로그 포맷
 
@@ -108,8 +113,8 @@
 |--------|------|------|
 | Backend | `backend/app/core/logging.py` | Loguru patcher |
 | Worker | `worker/logging_config.py` | Loguru patcher |
-| LiteLLM Proxy | `infra/litellm/run_proxy.py` | logging.Formatter |
-| Provider Manager | `infra/provider_manager/main.py` | logging.Formatter |
+| AI Gateway | `infra/ai-gateway/main.py` (`middleware/telemetry.py`) | OpenTelemetry + Loguru |
+| 추론 컨테이너 | `infra/inference/{llm,asr,diarize,ocr,embedding}/server.py` | 컨테이너 stdout (Promtail 수집) |
 
 ---
 
@@ -149,7 +154,7 @@ URL: http://localhost:3002
 URL: http://localhost:16686
 ```
 
-1. Service 선택: `asr-backend`, `asr-worker`, `provider-manager`
+1. Service 선택: `asr-backend`, `asr-worker-unified`, `ai-gateway`, `ai-llm`, `ai-asr`, `ai-diarize`, `ai-ocr`, `ai-embedding`
 2. Find Traces 클릭
 3. 특정 trace 클릭 → 전체 span 타임라인 확인
 
@@ -273,7 +278,7 @@ location ~ ^/grafana/(login|admin|org|profile|datasources) {
 | 파일 | 설명 |
 |------|------|
 | `infra/loki/config.yaml` | Loki 설정 (S3 저장소) |
-| `infra/promtail/config.yaml` | Promtail 설정 (Docker SD, PM2) |
+| `infra/promtail/config.yaml` | Promtail 설정 (Docker Service Discovery) |
 | `infra/tempo/config.yaml` | Tempo 설정 |
 | `infra/grafana/provisioning/datasources/datasource.yml` | Grafana 데이터소스 (Prometheus, Loki, Tempo, PostgreSQL) |
 | `infra/grafana/dashboards/docker-logs.json` | 로그 대시보드 |
@@ -310,17 +315,22 @@ curl -s "http://localhost:3100/loki/api/v1/label/container/values"
 viewers_can_edit = true
 ```
 
-### Provider Manager 로그가 수집 안 됨
+### 추론 컨테이너(`ai-*`) 로그가 수집 안 됨
 
-1. `docker-compose.yml`에서 promtail 볼륨 마운트 확인:
+1. Promtail이 Docker socket에 접근 가능한지 확인:
    ```yaml
-   volumes:
-     - ./logs:/host-logs:ro
+   # infra/promtail/config.yaml — docker_sd_configs 활성화
    ```
 
-2. PM2 로그 경로 확인:
+2. 컨테이너 정상 기동 확인:
    ```bash
-   pm2 show provider-manager | grep log
+   docker logs ai-llm --tail 20
+   docker ps --filter name=ai-
+   ```
+
+3. Loki에서 컨테이너 라벨 검색:
+   ```bash
+   curl -s "http://localhost:3100/loki/api/v1/label/container/values" | jq '.data[] | select(startswith("ai-"))'
    ```
 
 ---
@@ -352,3 +362,4 @@ compactor:
 | v1.0 | 2026-02-02 | 초기 버전 - Loki, Promtail, Tempo, trace_id 연계 로깅 |
 | v1.1 | 2026-02-02 | LiteLLM trace_id 추가, 00_00 형식, 헬스체크 필터링, Grafana 보안 |
 | v1.2 | 2026-02-03 | Content Pipeline 대시보드 추가 - PostgreSQL 데이터소스, ASR/OCR/LLM 요약 파이프라인 모니터링 |
+| v1.3 | 2026-05-04 | Provider Manager(PM2) · LiteLLM Proxy · NPU(FLM) 폐기 반영. ai-gateway + 추론 컨테이너(`ai-*`) 직결 구조로 다이어그램·서비스 목록·trace 흐름 갱신 |

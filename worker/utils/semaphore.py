@@ -20,7 +20,7 @@ class WorkerLock:
             # NPU 작업 수행
             ...
 
-    이 Lock이 활성화되어 있으면, LiteLLM Router는 해당 자원을 'busy'로 간주하고
+    이 Lock이 활성화되어 있으면, AI Gateway Router는 해당 자원을 'busy'로 간주하고
     다른 자원(GPU)으로 트래픽을 우회합니다.
     """
 

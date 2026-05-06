@@ -72,7 +72,7 @@ async def _process_job_async(
 
     # [Phase 1] LLM 호출 (단순화)
     try:
-        from worker.pipelines.llm.litellm_client import request_litellm_completion
+        from worker.pipelines.llm.ai_gateway_client import request_ai_gateway_completion
 
         # 리소스 획득 이벤트 발행 (LLM 호출 직전)
         publish_llm_started(file_id)
@@ -81,7 +81,7 @@ async def _process_job_async(
         logger.info(f"[LLM] Calling LLM with {len(messages)} messages...")
 
         # LLM 호출 (messages 그대로)
-        response = request_litellm_completion(
+        response = request_ai_gateway_completion(
             settings=get_settings(),
             messages=messages,
             model=get_settings().ai_gateway_model_summarize,

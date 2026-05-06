@@ -7,16 +7,15 @@ import hashlib
 import json
 import os
 import re
-from functools import lru_cache
 from typing import Optional, AsyncGenerator
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
+from ..core.ai_gateway import get_async_openai_client
 from ..core.config import get_settings
 from ..core.logging import logger
 from ..core.llm_tier import LLMTier
@@ -37,40 +36,9 @@ SEARCH_CACHE_PREFIX = "search:cache:"
 SEARCH_CACHE_TTL = 3600  # 1시간
 
 
-def get_ai_gateway_base_url() -> str:
-    return os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
-
-
-def get_ai_gateway_api_key() -> str:
-    return os.getenv("AI_GATEWAY_API_KEY", "")
-
-
 def get_ai_gateway_model(reasoning_mode: bool = False) -> str:
-    """사용할 LLM 티어명 조회 (tier 라우팅 사용)."""
+    """사용할 tier — reasoning이면 thinking, 아니면 simple."""
     return LLMTier.THINKING if reasoning_mode else LLMTier.SIMPLE
-
-
-@lru_cache(maxsize=1)
-def get_async_openai_client() -> AsyncOpenAI:
-    """AI Gateway용 AsyncOpenAI 클라이언트.
-
-    timeout 설정:
-    - connect: 연결 수립 30초
-    - read: 각 청크 읽기 600초 (추론 모드의 긴 TTFT 대응)
-    """
-    from httpx import Timeout
-
-    timeout = Timeout(
-        connect=30.0,      # 연결 수립
-        read=600.0,        # 각 청크 읽기 (TTFT 포함) - 추론 모드 대응
-        write=30.0,        # 쓰기
-        pool=30.0,         # 풀 연결 대기
-    )
-    return AsyncOpenAI(
-        base_url=get_ai_gateway_base_url(),
-        api_key=get_ai_gateway_api_key(),
-        timeout=timeout,
-    )
 
 
 async def get_redis_client() -> Redis:
@@ -204,7 +172,7 @@ async def stream_llm_summary(query: str, search_results: list[dict], reasoning_m
         {"role": "user", "content": user_message},
     ]
 
-    client = get_async_openai_client()
+    client = get_async_openai_client(long_running=True)
     model = get_ai_gateway_model(reasoning_mode)
 
     # 추론 모드는 <think> 과정이 길어서 더 많은 토큰 필요

@@ -1,6 +1,6 @@
 # AI 통합 플랫폼
 
-> 음성 인식 · 문서 처리 · AI 대화 에이전트를 하나의 플랫폼에서 — AMD GPU/NPU 가속
+> 음성 인식 · 문서 처리 · AI 대화 에이전트를 하나의 플랫폼에서 — AMD ROCm GPU 가속
 
 ---
 
@@ -28,7 +28,7 @@
 └─────────────────────┘                │ httpx     │ httpx    │ httpx
                                        ▼           ▼          ▼
 ┌─────────────────────────┐   ┌────────────────────────────────────────┐
-│  DATA                   │   │  INFERENCE CONTAINERS (GPU/NPU)        │
+│  DATA                   │   │  INFERENCE CONTAINERS (ROCm GPU)       │
 │  PostgreSQL + pgvector  │   │  ai-llm        : vLLM (Gemma 4 E4B)    │
 │  Valkey (Redis)         │   │  ai-asr        : Whisper-large-v3-turbo│
 │  MinIO (S3) · SearXNG   │   │  ai-diarize    : pyannote community-1  │
@@ -44,8 +44,7 @@
 | 기능 | 설명 |
 |------|------|
 | **AI 대화 에이전트** | LangGraph — 9 노드 · 6 도구 · 5 모드 (일반 / 딥서치 / 문서 / YouTube / WPI) |
-| **실시간 음성 인식** | WebSocket 스트리밍 + NPU 가속 (FastFlowLM/Whisper), LLM 후처리 |
-| **배치 음성 전사** | 음성·영상 파일 업로드 → whisper.cpp (GPU) 고정밀 전사 + 화자 분리, 상담 녹취록 처리 지원 |
+| **배치 음성 전사** | 음성·영상 파일 업로드 → ai-asr (Whisper-large-v3-turbo, ROCm GPU) 고정밀 전사 + ai-diarize 화자 분리, 상담 녹취록 처리 지원 |
 | **화자 분리** | Pyannote.audio + AMD GPU (ROCm) 가속, 배치 고정밀 모드 |
 | **문서 OCR & 요약** | PDF/이미지 → LLM Vision 처리, Celery 비동기 파이프라인 |
 | **LLM 요약** | 전사 결과 · 문서 · 영상 콘텐츠를 LLM으로 구조화 요약 |
