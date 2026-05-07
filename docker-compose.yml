@@ -323,15 +323,15 @@ services:
     restart: unless-stopped
 
   # ─── 추론 컨테이너 (refactor/inference): WSL2 + AMD ROCm gfx1150 ───
-  # ai-llm: vLLM 0.20 + Gemma 4 E4B BF16 (always-on, util=0.35 dev mode).
-  #          util=0.35 필요: Gemma 4 multimodal vision 인코더 +3 GB +
-  #          max-model-len 32768 KV cache까지 수용 (검색 컨텍스트 + 출력 토큰
-  #          합산이 8k를 넘는 AI chat 요청 완화).
+  # ai-llm: vLLM 0.20 + Qwen3-4B-Instruct-2507 BF16 (always-on, util=0.45).
+  #          gfx1150에서 측정 결과 6.8 tok/s — Gemma 4 E4B(5.0) 대비 +36%, 한국어
+  #          품질 동급/우위. text-only dense 4B라 multimodal vision encoder
+  #          OOM 위험 없음. 양자화(AWQ/MXFP4)는 INT4 GEMM native 부재로 도리어
+  #          슬로다운 (Qwen3-8B-AWQ 1.5 / gpt-oss-20b MXFP4 0.7 측정 확인) →
+  #          BF16 dense가 본 환경 sweet spot.
   #          torch.compile 캐시는 vllm-compile-cache 볼륨에 디스크 보존 →
   #          첫 빌드만 길고 다음 cold start부터 빠름. 첫 빌드 stuck 시
   #          --enforce-eager로 회귀 검토.
-  #          --revision 핀: HF Hub의 새 revision push 시 컨테이너 재기동만
-  #          해도 15GB 모델 자동 재다운로드 트리거되는 문제 차단.
   # ai-ocr: llama.cpp HIP + dots.ocr 1.7B Q8 (always-on, ~3.8 GB VRAM)
   #          Override model via env: OCR_MODEL_REPO / OCR_MODEL_FILE / OCR_MMPROJ_FILE
   # ai-asr: transformers Whisper-large-v3-turbo FastAPI (lazy-load,
@@ -352,14 +352,13 @@ services:
     environment:
       - HSA_ENABLE_DXG_DETECTION=1
     command: >
-      vllm serve google/gemma-4-E4B-it
-      --revision c53e9d33178b12afbad4a48334d21e19b8c29761
-      --max-model-len 32768
-      --gpu-memory-utilization 0.35
+      vllm serve Qwen/Qwen3-4B-Instruct-2507
+      --max-model-len 16384
+      --gpu-memory-utilization 0.45
       --max-num-seqs 4
       --enable-prefix-caching
       --dtype bfloat16
-      --served-model-name gemma-4-E4B-it
+      --served-model-name qwen3-4b-instruct
       --host 0.0.0.0 --port 8000
     cap_add: [SYS_PTRACE]
     security_opt: [seccomp=unconfined]
@@ -514,7 +513,7 @@ services:
       # 컨테이너 추론 백엔드 (refactor/inference)
       - OCR_BASE_URL=http://ai-ocr:8080
       - LLM_BASE_URL=http://ai-llm:8000
-      - LLM_MODEL_NAME=gemma-4-E4B-it
+      - LLM_MODEL_NAME=qwen3-4b-instruct
       - ASR_BASE_URL=http://ai-asr:8001
       - DIARIZE_BASE_URL=http://ai-diarize:8003
       - EMBEDDING_BASE_URL=http://ai-embedding:8000

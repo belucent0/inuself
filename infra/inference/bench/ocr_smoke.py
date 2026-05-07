@@ -1,4 +1,8 @@
-"""Gemma 4 multimodal OCR smoke test via vLLM OpenAI-compatible API.
+"""(legacy) Multimodal OCR smoke test via ai-llm.
+
+ai-llm이 text-only Qwen3-4B-Instruct로 교체된 후 image input은 vLLM에서 거절됩니다.
+실제 OCR 검증은 ai-ocr 컨테이너(port 18080, dots.ocr) 또는 ai-gateway /v1/chat/completions
+(OCR 라우팅이 ai-ocr으로 자동 분기)를 사용하세요.
 
 Usage:
     python ocr_smoke.py /path/to/image.jpg [prompt]
@@ -28,7 +32,7 @@ def main() -> None:
     image_path = Path(sys.argv[1])
     prompt = sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_PROMPT
     base_url = "http://localhost:18000/v1/chat/completions"
-    model = "gemma-4-E4B-it"
+    model = "qwen3-4b-instruct"
 
     img_bytes = image_path.read_bytes()
     b64 = base64.b64encode(img_bytes).decode()

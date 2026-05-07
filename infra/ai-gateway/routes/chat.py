@@ -155,7 +155,7 @@ async def _handle_tier_thinking(body: dict):
     except (openai.APIError, openai.APITimeoutError, openai.APIConnectionError) as e:
         logger.warning(f"[Chat] Codex failed ({e}), falling back to asr-llm container")
         # refactor/inference: Provider Manager 우회 — asr-llm 컨테이너로 직결.
-        # Gemma 4 E4B는 thinking 정확도가 Codex보다 낮지만 fallback 안전망 역할.
+        # Qwen3-4B-Instruct는 thinking 정확도가 Codex보다 낮지만 fallback 안전망 역할.
         return await _handle_local_llm_container(body, body.get("stream", False))
 
 

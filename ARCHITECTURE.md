@@ -37,7 +37,7 @@ flowchart TD
     %% 추론 컨테이너 (ai-* prefix, 모두 ROCm)
     subgraph Inference_Containers [Inference Containers - GPU ROCm gfx1150]
         direction TB
-        AI_LLM[ai-llm vLLM Gemma 4 E4B]
+        AI_LLM[ai-llm vLLM Qwen3-4B-Instruct]
         AI_ASR[ai-asr Whisper-large-v3-turbo]
         AI_DIARIZE[ai-diarize pyannote community-1]
         AI_OCR[ai-ocr dots.ocr llama.cpp]
@@ -91,7 +91,7 @@ flowchart TD
 
 | 컨테이너 | 모델 | 백엔드 |
 |---------|------|--------|
-| `ai-llm` | Gemma 4 E4B BF16 (revision pin) | vLLM (8K context) |
+| `ai-llm` | Qwen3-4B-Instruct-2507 BF16 | vLLM (16K context) |
 | `ai-asr` | Whisper-large-v3-turbo | transformers pipeline |
 | `ai-diarize` | pyannote community-1 | pyannote-audio (ROCm) |
 | `ai-ocr` | dots.ocr Q8 GGUF | llama.cpp HIP |

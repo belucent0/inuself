@@ -95,7 +95,7 @@ docker-compose.yml
 ├── ai-gateway     :4000       — FastAPI 추론 라우터 (httpx + AsyncOpenAI)
 ├── cli-proxy-api  :8317/:1455 — OAuth CLI Proxy (Codex 접근, serverless 폴백)
 │
-├── ai-llm         :8000       — vLLM Gemma 4 E4B (BF16, ROCm)
+├── ai-llm         :8000       — vLLM Qwen3-4B-Instruct-2507 (BF16, ROCm)
 ├── ai-asr         :8001       — Whisper-large-v3-turbo (transformers)
 ├── ai-diarize     :8003       — pyannote community-1 (ROCm)
 ├── ai-ocr         :8080       — dots.ocr Q8 GGUF (llama.cpp HIP)
@@ -570,9 +570,9 @@ IntentParserNode의 TierRouter가 쿼리 복잡도에 따라 LLM Tier를 결정�
 
 | Tier | 모델 (v1.2.0) | 특징 |
 |------|--------------|------|
-| `tier-simple` | `gemma-4-E4B-it` (ai-llm vLLM) | 저지연, 일반 대화 |
-| `tier-thinking` | `gemma-4-E4B-it` (local) → Codex(serverless fallback) | 복잡한 추론, 분석 |
-| `tier-recap` | `gemma-4-E4B-it` (요약 전용 라우팅) | 문서 요약 |
+| `tier-simple` | `qwen3-4b-instruct` (ai-llm vLLM) | 저지연, 일반 대화 |
+| `tier-thinking` | `qwen3-4b-instruct` (local) → Codex(serverless fallback) | 복잡한 추론, 분석 |
+| `tier-recap` | `qwen3-4b-instruct` (요약 전용 라우팅) | 문서 요약 |
 | `codex-medium` | CLIProxy API (OpenAI Codex) | WPI 보고서, 코드 생성 (serverless 모드) |
 
 ### 4.7 검색 재시도 플로우 (V8.4)
@@ -1337,9 +1337,9 @@ infra/ai-gateway/
 
 | Tier | Local 모델 | Serverless 폴백 | 용도 |
 |------|-----------|-----------------|------|
-| `tier-simple` | `gemma-4-E4B-it` (ai-llm) | codex-low | 짧은 응답, 분류 |
-| `tier-standard` | `gemma-4-E4B-it` (ai-llm) | codex-medium | 일반 채팅, RAG |
-| `tier-thinking` | `gemma-4-E4B-it` (ai-llm) | codex-high | 추론, WPI 보고서 |
+| `tier-simple` | `qwen3-4b-instruct` (ai-llm) | codex-low | 짧은 응답, 분류 |
+| `tier-standard` | `qwen3-4b-instruct` (ai-llm) | codex-medium | 일반 채팅, RAG |
+| `tier-thinking` | `qwen3-4b-instruct` (ai-llm) | codex-high | 추론, WPI 보고서 |
 | `embedding` | `embeddinggemma-300m` (ai-embedding) | bge-small-en-v1.5 (RunPod) | 벡터화 |
 | `asr` | Whisper-large-v3-turbo (ai-asr) | — | 음성 전사 |
 | `diarization` | pyannote community-1 (ai-diarize) | — | 화자 분리 |
@@ -1351,7 +1351,7 @@ infra/ai-gateway/
 
 | 컨테이너 | 이미지/베이스 | GPU 사용 | 모델 | 컨텍스트 |
 |---------|--------------|---------|------|---------|
-| `ai-llm` | `vllm/vllm-openai` (ROCm) | gfx1150 | Gemma 4 E4B BF16 (revision pin) | 8192 |
+| `ai-llm` | `vllm/vllm-openai` (ROCm) | gfx1150 | Qwen3-4B-Instruct-2507 BF16 | 16384 |
 | `ai-asr` | `huggingface/transformers-pytorch-rocm` | gfx1150 | Whisper-large-v3-turbo | — |
 | `ai-diarize` | `pyannote-audio` (custom ROCm build) | gfx1150 | community-1 | — |
 | `ai-ocr` | `llama.cpp` (HIP build) | gfx1150 | dots.ocr Q8 GGUF | 8192 |
@@ -1367,7 +1367,7 @@ infra/ai-gateway/
 ```
 client → ai-gateway POST /v1/chat/completions {model: "tier-thinking", messages: [...]}
    │
-   ▼ services/routing.py: tier_thinking → model="gemma-4-E4B-it", base=ai-llm
+   ▼ services/routing.py: tier_thinking → model="qwen3-4b-instruct", base=ai-llm
    │
    ▼ httpx AsyncClient stream: POST http://ai-llm:8000/v1/chat/completions
    │
