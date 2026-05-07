@@ -138,7 +138,7 @@ async def _llm_judge(
         headers = {"Authorization": f"Bearer {JUDGE_AI_GATEWAY_API_KEY}"} if JUDGE_AI_GATEWAY_API_KEY else {}
         async with httpx.AsyncClient() as http:
             resp = await http.post(
-                f"{JUDGE_AI_GATEWAY_URL}/chat/completions",
+                f"{JUDGE_AI_GATEWAY_URL}/v1/chat/completions",
                 headers=headers,
                 json={
                     "model": JUDGE_MODEL,
