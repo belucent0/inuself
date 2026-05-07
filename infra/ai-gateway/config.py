@@ -23,7 +23,7 @@ OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "dots.ocr")
 OCR_REQUEST_TIMEOUT = float(os.getenv("OCR_REQUEST_TIMEOUT", "300"))
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ai-llm:8000")
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemma-4-E4B-it")
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3-4b-instruct")
 LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "300"))
 
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "http://ai-asr:8001")
