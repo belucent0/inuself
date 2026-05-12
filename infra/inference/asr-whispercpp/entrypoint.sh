@@ -9,10 +9,13 @@ set -e
 MODEL_PATH="/models/${WHISPER_MODEL_FILE}"
 
 # named volume(whisper-models)에 모델이 없으면 다운로드. 이미지 layer 1.6GB 굽기 회피.
+# `set -e` + wget 실패 시 .tmp 잔여물이 볼륨에 영구 남는 것을 방지하는 trap.
 if [ ! -f "${MODEL_PATH}" ]; then
     echo "[entrypoint] downloading ${WHISPER_MODEL_FILE} → ${MODEL_PATH}"
-    wget -q --show-progress --progress=bar:force -O "${MODEL_PATH}.tmp" "${WHISPER_MODEL_URL}"
+    trap 'rm -f "${MODEL_PATH}.tmp"' EXIT
+    wget -q -O "${MODEL_PATH}.tmp" "${WHISPER_MODEL_URL}"
     mv "${MODEL_PATH}.tmp" "${MODEL_PATH}"
+    trap - EXIT
 fi
 
 /usr/local/bin/whisper-server \

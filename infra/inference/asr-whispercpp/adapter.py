@@ -31,7 +31,8 @@ _WHISPER_HOST = os.getenv("WHISPER_BACKEND_HOST", "127.0.0.1")
 _WHISPER_PORT = int(os.getenv("WHISPER_BACKEND_PORT", "8002"))
 _WHISPER_URL = f"http://{_WHISPER_HOST}:{_WHISPER_PORT}"
 _MODEL_NAME = os.getenv("WHISPER_MODEL", "whisper-large-v3-turbo")
-_REQUEST_TIMEOUT_S = float(os.getenv("WHISPER_REQUEST_TIMEOUT_S", "1800"))
+# ai-gateway/config.py의 ASR_REQUEST_TIMEOUT과 동일한 env 이름·기본값 사용.
+_REQUEST_TIMEOUT_S = float(os.getenv("ASR_REQUEST_TIMEOUT", "1800"))
 
 
 async def _wait_whisper_ready(timeout_s: float = 600.0) -> None:
@@ -46,7 +47,7 @@ async def _wait_whisper_ready(timeout_s: float = 600.0) -> None:
                     return
             except (httpx.ConnectError, httpx.ReadTimeout):
                 pass
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.2)
     raise RuntimeError(f"whisper-server did not become ready at {_WHISPER_URL} within {timeout_s}s")
 
 
@@ -61,7 +62,7 @@ app = FastAPI(title="asr-whispercpp-adapter", version="1.0.0", lifespan=lifespan
 
 
 @app.get("/health")
-async def health() -> dict:
+async def health() -> dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
             r = await client.get(_WHISPER_URL + "/")
