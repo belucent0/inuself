@@ -354,8 +354,8 @@ services:
     command: >
       vllm serve Qwen/Qwen3-4B-Instruct-2507
       --max-model-len 16384
-      --gpu-memory-utilization 0.45
-      --max-num-seqs 4
+      --gpu-memory-utilization 0.22
+      --max-num-seqs 3
       --enable-prefix-caching
       --dtype bfloat16
       --served-model-name qwen3-4b-instruct
@@ -399,11 +399,52 @@ services:
       retries: 3
       start_period: 180s
 
+  # ai-asr: 현행 production — whisper.cpp HIP build (Whisper Large-v3-turbo F16).
+  # gfx1150 ROCm 벤치마크 결과 (한국어 14:45 audio_for_whisper_tariff.wav):
+  #   - RTF 0.351 (2.85x realtime), 환각 최소 ("다음 영상에서 만나요" ×2)
+  #   - Q5_0 (RTF 0.414) / Q8_0 (RTF 0.352, 환각 심함) 대비 F16 우위
+  # 외부 인터페이스: :8001/transcribe (기존 transformers ai-asr와 동일 — adapter.py가 변환)
+  # 내부: whisper-server :8002/inference (localhost 전용)
+  # 메모리: ~1.85GB (모델 1.6GB + KV/compute 0.25GB)
   ai-asr:
-    image: ai-asr:1.0.0
+    image: ai-asr-whispercpp:1.0.0
     container_name: ai-asr
     ports:
-      - "18001:8001"   # FastAPI /transcribe — ai-gateway 직접 호출
+      - "18001:8001"
+    devices:
+      - /dev/dxg
+    volumes:
+      - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so:ro
+      - whisper-models:/models   # entrypoint.sh가 첫 부팅 시 1.6GB 모델 다운로드 → 재빌드 시 재사용
+      - ./media/wav:/audio:ro
+    environment:
+      - HSA_ENABLE_DXG_DETECTION=1
+      - WHISPER_MODEL_FILE=ggml-large-v3-turbo.bin
+      - WHISPER_THREADS=8
+      - WHISPER_MODEL=whisper-large-v3-turbo
+    cap_add: [SYS_PTRACE]
+    security_opt: [seccomp=unconfined]
+    ipc: host
+    shm_size: 2g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s   # whisper-server 모델 로드 (~8s) + adapter 대기
+    # Bench/debug: docker exec ai-asr whisper-cli -m /models/ggml-large-v3-turbo.bin -f /audio/<wav>
+
+  # ai-asr-transformers: legacy — transformers + PyTorch ROCm Whisper (이전 구현).
+  # gfx1150 환경에서 RTF 1.4 (실시간보다 느림) + chunked pipeline의 텍스트 누락 이슈로
+  # whisper.cpp HIP로 교체. profiles=legacy로 기본 안 띄움.
+  # 비교 측정 또는 fallback 필요 시: docker compose --profile legacy up ai-asr-transformers
+  ai-asr-transformers:
+    image: ai-asr:1.0.0
+    container_name: ai-asr-transformers
+    profiles: ["legacy"]
+    ports:
+      - "18011:8001"
     devices:
       - /dev/dxg
     volumes:
@@ -415,6 +456,9 @@ services:
     environment:
       - HSA_ENABLE_DXG_DETECTION=1
       - WHISPER_MODEL=openai/whisper-large-v3-turbo
+      - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=0
+      - WHISPER_BATCH_SIZE=16
+      - WHISPER_CHUNK_LENGTH_S=30
     cap_add: [SYS_PTRACE]
     security_opt: [seccomp=unconfined]
     ipc: host
@@ -425,8 +469,7 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 60s
-    # Bench/debug: docker exec ai-asr python /bench/whisper_smoke.py /audio/<file>.wav
+      start_period: 300s
 
   # ai-embedding: llama.cpp HIP + EmbeddingGemma 308M Q4 (Google 2025-09).
   # Google EmbeddingGemma — 100+ 언어 multilingual MTEB 상위, 308M 경량.
@@ -612,3 +655,4 @@ volumes:
   cliproxy-logs-data:
   hf-cache-fast: # HuggingFace 모델 캐시 (ai-ocr/llm/whisper/diarize 공유)
   vllm-compile-cache: # vLLM torch.compile 캐시 (ai-llm cold start 가속)
+  whisper-models: # whisper.cpp GGML 모델 (ai-asr가 entrypoint.sh로 첫 부팅 시 다운로드)
