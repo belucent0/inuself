@@ -372,6 +372,9 @@ services:
       retries: 3
       start_period: 600s   # vLLM 모델 로드 + Triton compile (cold ~10분)
 
+  # ai-ocr: dots.ocr 전용 OCR 모델 (instruction-following 약함, 단순 OCR 빠름).
+  # 현 worker prompt(chat instructions + HTML 태그 요구)와 호환 안 됨 — 별도
+  # 단순 prompt 도입(후속 PR) 전까지는 ai-ocr-qwen 라우팅이 default.
   ai-ocr:
     image: ai-ocr:1.0.0
     container_name: ai-ocr
@@ -398,6 +401,38 @@ services:
       timeout: 10s
       retries: 3
       start_period: 180s
+
+  # ai-ocr-qwen: Qwen3-VL-4B-Instruct-GGUF (Q4_K_M ~2.5GB + mmproj-F16 ~836MB).
+  # 일반 VLM이라 chat instructions + HTML 태그 요구 정상 처리 — 현 worker
+  # prompt 호환. document OCR + portray + 일반 vision 모두 처리 가능.
+  # 메모리 ~3.3GB. dots.ocr와 동시 로드 가능 (32GB 한도 내).
+  ai-ocr-qwen:
+    image: ai-ocr:1.0.0   # 동일 llama.cpp HIP 이미지 재사용 (모델만 env 다름)
+    container_name: ai-ocr-qwen
+    ports:
+      - "18081:8080"
+    devices:
+      - /dev/dxg
+    volumes:
+      - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so:ro
+      - hf-cache-fast:/root/.cache/huggingface
+    environment:
+      - HSA_ENABLE_DXG_DETECTION=1
+      - OCR_MODEL_REPO=unsloth/Qwen3-VL-4B-Instruct-GGUF
+      - OCR_MODEL_FILE=Qwen3-VL-4B-Instruct-Q4_K_M.gguf
+      - OCR_MMPROJ_FILE=mmproj-F16.gguf
+      - OCR_CTX_SIZE=8192
+    cap_add: [SYS_PTRACE]
+    security_opt: [seccomp=unconfined]
+    ipc: host
+    shm_size: 4g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 300s   # 첫 부팅 시 HF에서 모델 다운로드 시간 여유
 
   # ai-asr: 현행 production — whisper.cpp HIP build (Whisper Large-v3-turbo F16).
   # gfx1150 ROCm 벤치마크 결과 (한국어 14:45 audio_for_whisper_tariff.wav):
@@ -554,7 +589,9 @@ services:
       - CODEX_API_BASE=http://cli-proxy-api:8317/v1
       - CLIPROXY_API_KEY=${CLIPROXY_API_KEY:-}
       # 컨테이너 추론 백엔드 (refactor/inference)
-      - OCR_BASE_URL=http://ai-ocr:8080
+      # OCR default 라우팅 — Qwen3-VL 4B (chat instructions 호환).
+      # dots.ocr(ai-ocr:8080)는 단순 prompt 도입 후 별도 라우팅으로 분기 예정.
+      - OCR_BASE_URL=http://ai-ocr-qwen:8080
       - LLM_BASE_URL=http://ai-llm:8000
       - LLM_MODEL_NAME=qwen3-4b-instruct
       - ASR_BASE_URL=http://ai-asr:8001
