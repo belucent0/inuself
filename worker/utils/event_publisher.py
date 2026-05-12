@@ -11,6 +11,7 @@ from redis import Redis
 
 from worker.config import get_settings
 from worker.logging_config import logger
+from worker.utils.result_publisher import UUIDEncoder
 
 settings = get_settings()
 
@@ -24,6 +25,11 @@ def _get_redis() -> Redis:
     if _redis_client is None:
         _redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
     return _redis_client
+
+
+def _publish(channel: str, event: dict[str, Any]) -> None:
+    """Redis Pub/Sub 발행. UUID 등 비표준 타입은 UUIDEncoder가 처리."""
+    _get_redis().publish(channel, json.dumps(event, cls=UUIDEncoder))
 
 
 def publish_file_progress(
@@ -73,8 +79,7 @@ def publish_file_progress(
         if metadata:
             event["metadata"] = metadata
 
-        redis = _get_redis()
-        redis.publish(channel, json.dumps(event))
+        _publish(channel, event)
 
         logger.debug(
             "[EventPublisher] Published file_progress: file_id={}, step={}, progress={}%",
@@ -115,8 +120,7 @@ def publish_asr_stream(file_id: int, segment: dict[str, Any]) -> None:
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-        redis = _get_redis()
-        redis.publish(channel, json.dumps(event))
+        _publish(channel, event)
 
         logger.debug(
             "[EventPublisher] Published asr_stream: file_id={}, is_final={}",
@@ -151,8 +155,7 @@ def publish_llm_stream(file_id: int, token: str, is_final: bool = False) -> None
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-        redis = _get_redis()
-        redis.publish(channel, json.dumps(event))
+        _publish(channel, event)
 
         logger.debug(
             "[EventPublisher] Published llm_stream: file_id={}, is_final={}",
@@ -194,8 +197,7 @@ def publish_content_created(
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-        redis = _get_redis()
-        redis.publish(channel, json.dumps(event))
+        _publish(channel, event)
 
         logger.info(
             "[EventPublisher] Published content_created: content_id={}, filename={}",
