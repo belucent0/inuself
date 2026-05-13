@@ -1,6 +1,6 @@
-# OCR 백엔드 마이그레이션 + 벤치마크 — dots.ocr → Qwen3-VL(llama.cpp) → vLLM Qwen3-VL
+# OCR 백엔드 마이그레이션 + 벤치마크 — FLM(NPU) → dots.ocr → Qwen3-VL(llama.cpp) → vLLM Qwen3-VL
 
-> 한 문장 요약: silent fail하던 dots.ocr를 Qwen3-VL로 교체해 OCR 복구하고, 별도 OCR 컨테이너로 운영하던 Qwen3-VL을 vLLM에 통합해 chat/요약/OCR을 단일 모델로 단순화.
+> 한 문장 요약: NPU(FLM)가 WSL에서 동작 안 해 GPU 컨테이너 백엔드로 마이그레이션 — dots.ocr는 chat prompt와 호환 안 됨 → Qwen3-VL 4B로 복구 → vLLM 통합으로 chat/요약/OCR 단일 모델로 단순화.
 
 ## 0. 배경 (Context)
 
@@ -24,15 +24,31 @@ worker prompt 형태 (chat-style):
 
 ---
 
-## 1. 시작 시점 (dots.ocr)
+## 1. 이전 운영 — FLM (NPU 백엔드, WSL 마이그레이션 이전)
 
-이전 production: `ggml-org/dots.ocr-GGUF` Q8 (**1.7B params OCR 전용 모델**, llama.cpp HIP build).
+가장 오래 운영한 OCR 백엔드는 **FLM(NPU)** 이었음. document/portray 모드 분기, HTML 태그 요구 같은 현재 worker prompt 구조도 NPU 시절부터 확립.
+
+**한계 (전환 동기)**: NPU는 **WSL 환경에서 작동 안 함**. WSL2 + docker 컨테이너로 마이그레이션하면서 NPU 백엔드 사용 불가 → GPU 백엔드 검토 시작.
+
+> worker config의 `ocr_provider: "flm"` default 값 및 docker-compose의 "FLM 종료로 silent fail" 코멘트는 이 시점 흔적.
+
+**PoC만 진행하고 폐기한 후보**: PaddleOCR (실제 운영 X).
+
+→ NPU 시절의 worker prompt(chat-style + HTML 태그)를 그대로 가져갈 수 있는 GPU 백엔드를 찾는 것이 컨테이너 마이그레이션의 출발점.
+
+---
+
+## 2. 컨테이너 1차 시도 — dots.ocr
+
+`ggml-org/dots.ocr-GGUF` Q8 (**1.7B params OCR 전용 모델**, llama.cpp HIP build).
 
 **선택 이유**: OCR 전용으로 학습되어 가볍고 빠를 것으로 기대 (Q8 양자화 + 작은 모델 + 한국어 학습 데이터 포함).
 
 **메모리**: 3.9 GB (model 1.7 + mmproj 1.6 + KV/compute 0.6)
 
 ### 문제 발견 (2026-05-12, dev 컨텐츠 `019e1c58-...`)
+
+> NPU 시절부터 확립된 worker prompt(chat-style + HTML 태그 요구)는 일반 VLM 가정. dots.ocr는 OCR 전용 학습이라 이 prompt를 따라가지 못함.
 
 사용자가 이미지 OCR 요청 → silent fail:
 
@@ -65,7 +81,7 @@ worker의 chat-style prompt(system message + HTML 태그 요구)를 따라가지
 
 ---
 
-## 2. 1단계 마이그레이션 — `ai-ocr-qwen` 별도 컨테이너 (PR #144, 2026-05-12)
+## 3. 컨테이너 2차 시도 — `ai-ocr-qwen` 별도 컨테이너 (PR #144, 2026-05-12)
 
 새 컨테이너 추가: `ai-ocr-qwen` (포트 18081, 기존 ai-ocr와 별도)
 
@@ -93,7 +109,7 @@ worker의 chat-style prompt(system message + HTML 태그 요구)를 따라가지
 
 ---
 
-## 3. 2단계 마이그레이션 — vLLM Qwen3-VL 통합 (PR #145, 2026-05-13)
+## 4. 컨테이너 3차 마이그레이션 — vLLM Qwen3-VL 통합 (PR #145, 2026-05-13)
 
 ### 동기
 - vLLM 0.20.1+가 Qwen3-VL 정식 지원 (`Qwen3VLForConditionalGeneration`)
@@ -152,7 +168,7 @@ vllm serve Qwen/Qwen3-VL-4B-Instruct
 
 ---
 
-## 4. 결정 — vLLM Qwen3-VL 4B BF16 채택
+## 5. 결정 — vLLM Qwen3-VL 4B BF16 채택
 
 ### 채택 이유
 1. **chat/요약/OCR 단일 모델·단일 인프라** — 운영/모니터링/로깅 단순화
@@ -166,15 +182,16 @@ vllm serve Qwen/Qwen3-VL-4B-Instruct
 
 ---
 
-## 5. 후속 작업
+## 6. 후속 작업
 
 - **dots.ocr 재활용 가능성**: `profiles: ["legacy"]`로 보존 — 단순 prompt OCR(고속/저비용 케이스) 도입 시 별도 라우팅으로 분기 후보
 - **Qwen3-VL 8B PoC**: BF16 17 GB + max-model-len 8192로 fit 가능. quality 잠재 vs 메모리 trade-off. 별도 PoC PR
 - **dots.ocr 폐기**: legacy profile에서 일정 기간 후 완전 제거 검토
+- **FLM(NPU) 재검토**: NPU가 WSL 환경에서 동작 가능해지면 FLM 백엔드 재도입 검토. 현재 GPU 동시 처리로 충분하므로 우선순위 낮음
 
 ---
 
-## 6. 참고
+## 7. 참고
 
 - **vLLM의 vision encoder profiling**: worst-case 256 GB 시도 → `--limit-mm-per-prompt` 필수 (없으면 OOM)
 - **`max_pixels=1003520`** (1280×784) = Qwen-VL series 표준 max. 더 큰 이미지는 자동 분할
