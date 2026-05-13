@@ -378,6 +378,45 @@ services:
       retries: 3
       start_period: 600s   # vLLM 모델 로드 + Triton compile (cold ~10분)
 
+  # ai-asr-vllm (PoC): vLLM이 직접 Whisper-large-v3-turbo 서빙.
+  # /v1/audio/transcriptions OpenAI 호환 endpoint 제공.
+  # whisper.cpp HIP F16(RTF 0.35) 대비 속도/품질 비교 후 채택 결정.
+  # 메모리: model ~3GB + KV/audio buffer ~2GB ≈ 5GB
+  # profiles=poc로 default 안 띄움. 측정 시: `docker compose --profile poc up ai-asr-vllm`
+  ai-asr-vllm:
+    image: ai-llm:1.0.0
+    container_name: ai-asr-vllm
+    profiles: ["poc"]
+    ports:
+      - "18002:8000"
+    devices:
+      - /dev/dxg
+    volumes:
+      - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so:ro
+      - hf-cache-fast:/root/.cache/huggingface
+      - vllm-compile-cache:/root/.cache/vllm
+    environment:
+      - HSA_ENABLE_DXG_DETECTION=1
+      - VLLM_MAX_AUDIO_CLIP_FILESIZE_MB=200   # tariff 28MB 등 큰 파일 허용
+    command: >
+      vllm serve openai/whisper-large-v3-turbo
+      --dtype bfloat16
+      --gpu-memory-utilization 0.10
+      --max-num-seqs 4
+      --served-model-name whisper-large-v3-turbo
+      --host 0.0.0.0 --port 8000
+    cap_add: [SYS_PTRACE]
+    security_opt: [seccomp=unconfined]
+    ipc: host
+    shm_size: 4g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/models"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 600s
+
   # ai-ocr (dots.ocr): vLLM Qwen3-VL 통합 후 OCR 라우팅에서 제외됨.
   # 단순 prompt OCR(고속/저비용 케이스) 도입 시 재활용 후보로 profile=legacy 분리.
   # 평소 안 띄움. 사용: `docker compose --profile legacy up ai-ocr`
