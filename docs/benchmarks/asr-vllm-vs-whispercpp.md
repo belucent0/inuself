@@ -1,6 +1,6 @@
-# ASR 백엔드 마이그레이션 + 벤치마크 — transformers → whisper.cpp HIP → vLLM Whisper
+# ASR 백엔드 마이그레이션 + 벤치마크 — Vulkan → transformers → whisper.cpp HIP → vLLM Whisper
 
-> 한 문장 요약: 환각 + chunk 누락이 있던 transformers Whisper를 whisper.cpp HIP로 교체해 RTF 0.35를 확보했고, 환각이 남는 마지막 문제를 vLLM Whisper 통합으로 해소.
+> 한 문장 요약: GPU 가속을 잃지 않으면서 컨테이너 기반 운영을 가능하게 하기 위한 ASR 백엔드 마이그레이션 흐름. WSL2 컨테이너에서 Vulkan GPU 추론 불가 → 컨테이너용 transformers ROCm은 너무 느림 → whisper.cpp HIP F16으로 속도 회복 → 환각 잔존 문제를 vLLM Whisper 통합으로 해소.
 
 ## 0. 배경 (Context)
 
@@ -17,36 +17,61 @@
 ### 사용 시나리오
 사용자가 dev.inuself.me에 오디오/영상 업로드 → worker(Celery)가 ai-gateway 통해 ASR 호출 → 화자분리(diarize) + LLM 요약 자동 처리.
 
-요구 기준: RTF < 1.0, 환각/누락 최소, JSON 결과 구조화.
+요구 기준: RTF < 1.0, 환각/누락 최소, JSON 결과 구조화, **컨테이너 기반 운영**.
+
+### 컨테이너 기반 운영이 필요한 이유
+다른 추론 컴포넌트(LLM, OCR, 화자분리, embedding)와 동일 인프라 패턴으로 묶어 ai-gateway · worker · 모니터링을 일관되게 관리하기 위함. 호스트 직접 설치 방식은 OS 의존성/버전 관리/배포 자동화 측면에서 확장성 떨어짐.
 
 ---
 
-## 1. 시작 시점 (transformers + PyTorch ROCm)
+## 1. 이전 운영 — whisper.cpp Vulkan (호스트 바이너리, 컨테이너 없음)
+
+가장 오래 사용한 백엔드. `whisper.cpp`를 `-DGGML_VULKAN=ON`으로 빌드해 호스트에서 직접 실행. AMD GPU Vulkan 드라이버 사용해 GPU 가속.
+
+**작동했던 점**:
+- 속도/품질 production 수준
+- AMD GPU 가속
+
+**한계 (전환 동기)**:
+- **WSL2 docker 컨테이너 안에서 Vulkan은 llvmpipe (CPU 소프트웨어 렌더링)만 작동** — AMD GPU 접근 불가
+- WSL2 Vulkan ICD는 `radeon_icd.json` 있지만 enumerate 실패 (Native RADV는 `/dev/dri/*` 필요, WSL2는 `/dev/dxg`만 제공)
+- Microsoft Dozen driver(D3D12→Vulkan bridge)는 별도 셋업 필요 + 검증 안 됨
+
+→ 다른 서비스들과 동일하게 컨테이너 기반으로 운영하기 위해 GPU 가속을 유지할 수 있는 대안 필요.
+
+---
+
+## 2. 컨테이너 1차 시도 — transformers + PyTorch ROCm
 
 base 이미지의 transformers Whisper pipeline 사용. SDPA / AOTriton Flash attention 시도.
+선택 이유: 컨테이너에 가장 손쉽게 도입 가능 (이미지에 PyTorch + transformers 이미 포함).
 
 ### 문제 발견 (2026-05-08 ~ 11)
 
 **실제 사례 — dev 컨텐츠 `019e0341-...` (영어 20분 영상)**:
 - 업로드 후 **4일째 "인식중" 상태 hang**, 결과 안 나옴
-- 측정: RTF 1.4 (실시간보다 느림)
+- 측정: RTF 1.4 (실시간보다 느림) — Vulkan 시절 속도에 한참 못 미침
 - `compression_ratio_threshold` 필터가 chunk 결과 다수 거부 → 텍스트 누락
 - AOTriton Flash 켜면 환각 폭발 (`vanilla vanilla...` ×100 반복)
 - 끄면 RTF는 회복 but 누락 그대로
+
+→ 컨테이너 기반은 충족했지만 **속도가 production 사용 불가 수준**. Vulkan 시절 속도를 컨테이너 안에서도 회복할 방법 필요.
 
 ### 후보 평가
 
 | 후보 | 결과 |
 |------|------|
+| Vulkan 재시도 (Dozen ICD 셋업) | ❌ WSL2 Vulkan은 llvmpipe(CPU)만 작동 — gfx1150 직접 access 안 됨. Dozen은 D3D12 위 에뮬레이션이라 ROCm 대비 빠를 보장 없음 |
 | CTranslate2 ROCm (faster-whisper) | ❌ 빌드 실패 — davidguttman 패치(ROCm 6.x)가 ROCm 7.2의 thrust/hipblas API 변경과 호환 안 됨 |
-| whisper.cpp Vulkan (Dozen driver) | ❌ WSL2 Vulkan은 llvmpipe(CPU)만 작동, AMD iGPU access 안 됨 |
-| **whisper.cpp HIP** (ROCm native) | ✅ gfx1150 정상 작동, RTF 0.35 |
+| **whisper.cpp HIP** (ROCm native) | ✅ gfx1150 정상 작동, RTF 0.35로 Vulkan 시절 속도 회복 |
 
 ---
 
-## 2. 1단계 마이그레이션 — whisper.cpp HIP F16 (PR #143, 2026-05-12)
+## 3. 컨테이너 2차 시도 — whisper.cpp HIP F16 (PR #143, 2026-05-12)
 
 `-DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1150` cmake 빌드. 별도 컨테이너 `ai-asr` + FastAPI adapter(`/transcribe` ↔ whisper-server `/inference` 변환).
+
+**선택 이유**: Vulkan 시절과 동일한 whisper.cpp 인프라(검증된 코드) + ROCm HIP 백엔드로 GPU 가속 회복 + 컨테이너 운영 가능. 세 요구사항 동시 충족.
 
 ### Quantization 선택 — F16 채택
 
@@ -67,7 +92,7 @@ base 이미지의 transformers Whisper pipeline 사용. SDPA / AOTriton Flash at
 
 ---
 
-## 3. 2단계 PoC — vLLM Whisper 통합 검증 (이번 PR)
+## 4. 컨테이너 3차 PoC — vLLM Whisper 통합 검증 (이번 PR)
 
 ### 동기
 PR #145에서 vLLM이 Qwen3-VL을 통합하면서 **vLLM이 chat/요약/OCR을 한 컨테이너에서 처리** 중. 만약 ASR도 vLLM에 들어가면 **인프라 단일화** + whisper.cpp 컨테이너 폐기 가능.
@@ -127,7 +152,7 @@ vLLM Whisper 결과 (앞/뒤):
 
 ---
 
-## 4. 결정 — vLLM Whisper 채택
+## 5. 결정 — vLLM Whisper 채택
 
 ### 옵션
 - **A. vLLM Whisper 채택** — ai-asr를 vLLM Whisper로 교체. quality + 인프라 단순화. 메모리 +3.65 GB
@@ -145,7 +170,7 @@ vLLM Whisper 결과 (앞/뒤):
 
 ---
 
-## 5. 후속 작업 (별도 PR)
+## 6. 후속 작업 (별도 PR)
 
 이번 PoC PR은 **벤치마크 + `docker-compose`에 `ai-asr-vllm` profile=poc 추가**만. Production migration은 별도 PR:
 
@@ -156,7 +181,7 @@ vLLM Whisper 결과 (앞/뒤):
 
 ---
 
-## 6. 참고
+## 7. 참고
 
 - **모델**: 전 구간 Whisper Large-v3-Turbo 유지. 추론 엔진만 교체.
 - **vLLM 환경 변수**: `VLLM_MAX_AUDIO_CLIP_FILESIZE_MB` 기본 25 MB (큰 파일은 명시 필요 — tariff 28 MB라 200으로 설정).
@@ -165,7 +190,8 @@ vLLM Whisper 결과 (앞/뒤):
 - **CT2 ROCm 재시도 가치**: 낮음. 현재 whisper.cpp/vLLM 모두 production 수준이고, vLLM이 ASR도 통합하면 별도 추론 엔진 추가 필요 없음 (`docs/benchmarks/`에 별도 조사 결과 기록).
 
 ### 관련 PR
-- PR #143 (머지): transformers → whisper.cpp HIP F16
+- 이전 (호스트 운영): whisper.cpp Vulkan (별도 PR 추적 없음 — 컨테이너 마이그레이션 이전 시기)
+- PR #143 (머지): transformers ROCm → whisper.cpp HIP F16 (컨테이너 기반에서 속도 회복)
 - PR #145 (머지): vLLM Qwen3-4B-Instruct → Qwen3-VL-4B-Instruct (chat/요약/OCR 통합)
-- 이번 PR (PoC): vLLM Whisper 추가 검증, 채택 결정
+- 이번 PR #146 (PoC): vLLM Whisper 추가 검증 + 마이그레이션 history 문서
 - 후속 PR (예정): vLLM Whisper production migration
