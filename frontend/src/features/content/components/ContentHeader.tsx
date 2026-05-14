@@ -9,7 +9,8 @@ import { useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
   Download,
-  RotateCcw,
+  Mic,
+  Sparkles,
   Trash2,
   FileText,
   Music,
@@ -21,7 +22,13 @@ import { Badge } from '@/shared/components/ui/badge'
 import { DeleteConfirmDialog } from '@/shared/components/DeleteConfirmDialog'
 import { cn } from '@/shared/utils/cn'
 import type { ContentDetail } from '../types'
-import { STATUS_LABELS, getStatusVariant, getFileExtension } from '../types'
+import {
+  STATUS_LABELS,
+  getStatusVariant,
+  getFileExtension,
+  getSpeakerCount,
+  getDurationSeconds,
+} from '../types'
 
 interface ContentHeaderProps {
   content: ContentDetail
@@ -64,21 +71,14 @@ export function ContentHeader({ content, onDelete, onRetryClick }: ContentHeader
     }
   }
 
-  const isFailedStatus = ['ASR_FAILED', 'OCR_FAILED', 'SUMMARY_FAILED'].includes(content.status)
-  const retryType = content.status === 'ASR_FAILED'
-    ? 'asr'
-    : content.status === 'OCR_FAILED'
-      ? 'ocr'
-      : 'summary'
-
   const Icon = CONTENT_TYPE_ICONS[content.content_type] || FileText
 
   const metaParts: string[] = []
   if (content.content_type === 'AUDIO' && content.transcription) {
-    metaParts.push(`${content.transcription.speakers?.length || 0}명 화자`)
-    if (content.transcription.duration_seconds) {
-      const mins = Math.floor(content.transcription.duration_seconds / 60)
-      metaParts.push(`${mins}분`)
+    metaParts.push(`${getSpeakerCount(content)}명 화자`)
+    const duration = getDurationSeconds(content)
+    if (duration) {
+      metaParts.push(`${Math.floor(duration / 60)}분`)
     }
   }
   if (content.content_type === 'DOCUMENT' && content.document) {
@@ -109,27 +109,41 @@ export function ContentHeader({ content, onDelete, onRetryClick }: ContentHeader
               </a>
             </Button>
           )}
-          {isFailedStatus && onRetryClick && (
+          {onRetryClick && content.content_type === 'AUDIO' && (
             <Button
               variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => onRetryClick(retryType)}
-              title="재시도"
+              size="sm"
+              className="h-8 gap-1.5"
+              onClick={() => onRetryClick('asr')}
+              title="음성을 다시 인식합니다"
             >
-              <RotateCcw className="h-4 w-4" />
+              <Mic className="h-4 w-4" />
+              재전사
+            </Button>
+          )}
+          {onRetryClick && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1.5"
+              onClick={() => onRetryClick('summary')}
+              title="LLM 요약을 다시 생성합니다"
+            >
+              <Sparkles className="h-4 w-4" />
+              재요약
             </Button>
           )}
           {onDelete && (
             <Button
               variant="ghost"
-              size="icon"
-              className={cn('h-8 w-8', 'text-destructive hover:text-destructive')}
+              size="sm"
+              className={cn('h-8 gap-1.5', 'text-destructive hover:text-destructive')}
               onClick={() => setDeleteDialogOpen(true)}
               disabled={isDeleting}
               title="삭제"
             >
               <Trash2 className="h-4 w-4" />
+              삭제
             </Button>
           )}
         </div>

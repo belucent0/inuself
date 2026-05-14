@@ -1,13 +1,13 @@
 /**
  * ASR 재처리 모달
- * - 화자 수 설정 (선택사항)
+ * - 화자 수 범위 선택 (RadioGroup) — AudioUploadModal과 동일 UX
  * (전사 모드는 컨테이너 단일화로 폐기, accuracyMode는 'speed'로 고정 송신)
  */
 
 import { useState } from 'react'
 import { Button } from '@/shared/components/ui/button'
-import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/shared/components/ui/radio-group'
 import {
   Dialog,
   DialogContent,
@@ -16,6 +16,11 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/shared/components/ui/dialog'
+import {
+  SPEAKER_RANGE_OPTIONS,
+  getSpeakerRange,
+  type SpeakerRange,
+} from '@/features/upload/types'
 
 export type AccuracyMode = 'speed' | 'accuracy'
 
@@ -38,51 +43,20 @@ export function AsrRetryModal({
   onConfirm,
   isLoading = false,
 }: AsrRetryModalProps) {
-  const [minSpeakers, setMinSpeakers] = useState<string>('')
-  const [maxSpeakers, setMaxSpeakers] = useState<string>('')
-  const [error, setError] = useState<string>('')
+  const [speakerRange, setSpeakerRange] = useState<SpeakerRange>('auto')
 
   const handleConfirm = () => {
-    setError('')
-
-    let minVal: number | undefined
-    let maxVal: number | undefined
-
-    if (minSpeakers.trim()) {
-      const parsed = parseInt(minSpeakers.trim())
-      if (isNaN(parsed) || parsed < 1) {
-        setError('최소 화자 수는 1 이상의 정수여야 합니다.')
-        return
-      }
-      minVal = parsed
-    }
-
-    if (maxSpeakers.trim()) {
-      const parsed = parseInt(maxSpeakers.trim())
-      if (isNaN(parsed) || parsed < 1) {
-        setError('최대 화자 수는 1 이상의 정수여야 합니다.')
-        return
-      }
-      maxVal = parsed
-    }
-
-    if (minVal !== undefined && maxVal !== undefined && minVal > maxVal) {
-      setError('최소 화자 수는 최대 화자 수보다 작거나 같아야 합니다.')
-      return
-    }
-
+    const { min, max } = getSpeakerRange(speakerRange)
     onConfirm({
       accuracyMode: 'speed', // ASR 컨테이너 단일화 (whisper-turbo)
-      minSpeakers: minVal,
-      maxSpeakers: maxVal,
+      minSpeakers: min,
+      maxSpeakers: max,
     })
   }
 
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
-      setMinSpeakers('')
-      setMaxSpeakers('')
-      setError('')
+      setSpeakerRange('auto')
     }
     onOpenChange(newOpen)
   }
@@ -91,57 +65,30 @@ export function AsrRetryModal({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>ASR 재처리 옵션</DialogTitle>
+          <DialogTitle>참석자 수</DialogTitle>
           <DialogDescription>
-            음성 인식 처리 옵션을 선택하세요.
+            *실제 발화자를 기준으로 입력하면 인식률이 향상됩니다.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="py-4 space-y-6">
-          <div>
-            <Label className="text-sm font-medium mb-3 block">
-              화자 수 (선택사항)
-            </Label>
+        <div className="py-4">
+          <RadioGroup
+            value={speakerRange || ''}
+            onValueChange={(value) => setSpeakerRange(value as SpeakerRange)}
+          >
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
+              {SPEAKER_RANGE_OPTIONS.map((option) => (
                 <Label
-                  htmlFor="asr-modal-min-speakers"
-                  className="text-xs text-muted-foreground"
+                  key={option.value}
+                  htmlFor={`asr-retry-${option.value}`}
+                  className="flex items-center space-x-2 rounded-md border border-input bg-background p-3 hover:bg-accent hover:text-accent-foreground cursor-pointer [&:has([data-state=checked])]:border-primary"
                 >
-                  최소 화자 수
+                  <RadioGroupItem value={option.value} id={`asr-retry-${option.value}`} />
+                  <span className="text-sm font-normal">{option.label}</span>
                 </Label>
-                <Input
-                  id="asr-modal-min-speakers"
-                  type="number"
-                  min="1"
-                  value={minSpeakers}
-                  onChange={(e) => setMinSpeakers(e.target.value)}
-                  placeholder="자동"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label
-                  htmlFor="asr-modal-max-speakers"
-                  className="text-xs text-muted-foreground"
-                >
-                  최대 화자 수
-                </Label>
-                <Input
-                  id="asr-modal-max-speakers"
-                  type="number"
-                  min="1"
-                  value={maxSpeakers}
-                  onChange={(e) => setMaxSpeakers(e.target.value)}
-                  placeholder="자동"
-                />
-              </div>
+              ))}
             </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              비워두면 자동으로 결정됩니다.
-            </p>
-          </div>
-
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          </RadioGroup>
         </div>
 
         <DialogFooter>
