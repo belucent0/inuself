@@ -73,6 +73,16 @@ export function ContentHeader({ content, onDelete, onRetryClick }: ContentHeader
 
   const Icon = CONTENT_TYPE_ICONS[content.content_type] || FileText
 
+  // 처리 중 상태(progressing): 재처리 버튼 비활성화 — 중복 클릭 방지
+  const PROGRESSING_STATUSES = [
+    'PULLING',
+    'PROCESSING',
+    'OCR_PROCESSING',
+    'SUMMARY_QUEUED',
+    'SUMMARIZING',
+  ] as const
+  const isProgressing = (PROGRESSING_STATUSES as readonly string[]).includes(content.status)
+
   const metaParts: string[] = []
   if (content.content_type === 'AUDIO' && content.transcription) {
     metaParts.push(`${getSpeakerCount(content)}명 화자`)
@@ -115,7 +125,8 @@ export function ContentHeader({ content, onDelete, onRetryClick }: ContentHeader
               size="sm"
               className="h-8 gap-1.5"
               onClick={() => onRetryClick('asr')}
-              title="음성을 다시 인식합니다"
+              disabled={isProgressing}
+              title={isProgressing ? '처리 중입니다' : '음성을 다시 인식합니다'}
             >
               <Mic className="h-4 w-4" />
               재전사
@@ -127,7 +138,8 @@ export function ContentHeader({ content, onDelete, onRetryClick }: ContentHeader
               size="sm"
               className="h-8 gap-1.5"
               onClick={() => onRetryClick('summary')}
-              title="LLM 요약을 다시 생성합니다"
+              disabled={isProgressing}
+              title={isProgressing ? '처리 중입니다' : 'LLM 요약을 다시 생성합니다'}
             >
               <Sparkles className="h-4 w-4" />
               재요약
