@@ -80,7 +80,7 @@ class ContentStateMachine(BaseStateMachine[FileStatus]):
         FileStatus.PROCESSING: 60,  # ASR 60분 (긴 오디오)
         FileStatus.OCR_PROCESSING: 30,  # OCR 30분
         FileStatus.SUMMARY_QUEUED: 30,  # 요약 대기 30분
-        FileStatus.SUMMARIZING: 15,  # LLM 요약 15분
+        FileStatus.SUMMARIZING: 35,  # LLM 요약 — BlockGenerator partial retry cap 30분 + 여유 5분
     }
 
     # 상태별 메타정보
@@ -124,7 +124,7 @@ class ContentStateMachine(BaseStateMachine[FileStatus]):
             name="요약중",
             description="LLM 요약 처리 중",
             is_terminal=False,
-            timeout_minutes=15,
+            timeout_minutes=35,
             retryable=True,
         ),
         FileStatus.COMPLETED: StateInfo(

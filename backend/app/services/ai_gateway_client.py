@@ -22,6 +22,7 @@ from openai import (
 from openai.types.chat import ChatCompletionMessageParam
 
 from ..core.config import Settings
+from .circuit_breaker import CircuitBreakerOpenError, vllm_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +236,9 @@ async def request_ai_gateway_completion_async(
     AsyncOpenAI SDK를 사용하여 AI Gateway와 통신합니다.
     이벤트 루프를 블로킹하지 않으므로 FastAPI와 함께 사용하기에 적합합니다.
     """
+    # circuit breaker 차단 중이면 즉시 fail (partial retry loop의 라운드 진입 직전 검사)
+    vllm_breaker.assert_closed()
+
     client = get_async_openai_client(
         settings.ai_gateway_url, settings.ai_gateway_api_key
     )
@@ -315,6 +319,7 @@ async def request_ai_gateway_completion_async(
                     len(content),
                     finish_reason,
                 )
+                vllm_breaker.record_success()
                 return content.strip()
 
         except APIStatusError as exc:
@@ -333,11 +338,15 @@ async def request_ai_gateway_completion_async(
                     elapsed += effective_retry_interval
                     continue
 
+            # 5xx (서버 오류)는 vLLM 다운 신호로 보고 회로 카운트
+            if 500 <= exc.status_code < 600:
+                vllm_breaker.record_failure()
             error_msg = f"AI Gateway HTTP error ({exc.status_code}): {exc.message}"
             logger.error(error_msg)
             raise AIGatewayClientError(error_msg) from exc
 
         except APITimeoutError as exc:
+            vllm_breaker.record_failure()
             error_msg = f"AI Gateway timeout: {exc}"
             logger.error(error_msg)
             raise AIGatewayClientError(error_msg) from exc
@@ -352,9 +361,14 @@ async def request_ai_gateway_completion_async(
                 await asyncio.sleep(effective_retry_interval)
                 elapsed += effective_retry_interval
                 continue
+            vllm_breaker.record_failure()
             error_msg = f"AI Gateway connection error (retry timeout): {exc}"
             logger.error(error_msg)
             raise AIGatewayClientError(error_msg) from exc
+
+        except CircuitBreakerOpenError:
+            # 회로가 호출 도중 추가 열림 등은 호출자에게 그대로 노출
+            raise
 
         except Exception as exc:
             error_msg = f"AI Gateway request failed: {exc}"

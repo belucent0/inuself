@@ -35,6 +35,8 @@ from ..prompts.summary import (
     PHASE2_SUMMARY_TEMPLATE,
 )
 from .section_executor import SectionGraphExecutor, PhaseExecutionError
+from .block_generator import BlockGenerator
+from .summary_renderer import extract_title, render_markdown
 
 
 def _split_text_into_chunks(
@@ -866,8 +868,10 @@ class LlmSummaryService:
             await self.session.commit()
             return
 
-        # 3단계 요약 실행 (새로운 파이프라인)
-        logger.info("Starting 3-phase LLM summarization for file_id={}", file_id)
+        # generic block 기반 요약 실행 (partial retry + incremental persistence)
+        logger.info(
+            "Starting block-based LLM summarization for file_id={}", file_id
+        )
 
         start = time.perf_counter()
         try:
@@ -882,20 +886,46 @@ class LlmSummaryService:
             )
             await self.session.commit()
 
-            # 2단계 요약 실행 (LangGraph 기반 SectionGraphExecutor)
-            executor = SectionGraphExecutor(self.settings)
-            title, summary_md = await executor.execute(text_to_summarize)
+            generator = BlockGenerator(self.settings, template_id="default")
 
-        except PhaseExecutionError as exc:
-            logger.exception("LLM summarization failed for file_id={}", file_id)
-            await self.file_repo.add_llm_log(
-                file_id,
-                log={"event": "summarizing_failed", "error": str(exc)},
-                message=f"LLM summarization failed: {exc}",
+            # 병렬 LLM 호출이 동시에 콜백을 트리거하므로 매번 새 session을 열어 race 회피.
+            from ..db.session import AsyncSessionLocal
+            from ..repositories.file_repository import FileRepository as _FileRepo
+
+            async def _on_block_complete(block, state) -> None:
+                async with AsyncSessionLocal() as cb_session:
+                    cb_repo = _FileRepo(cb_session)
+                    await cb_repo.update_summary_sections(file_id, state.to_dict())
+                    await cb_session.commit()
+
+            state = await generator.generate(
+                text_to_summarize,
+                on_block_complete=_on_block_complete,
             )
-            await self.file_repo.update_file_status(file_id, FileStatus.SUMMARY_FAILED)
-            await self.session.commit()
-            raise
+
+            template = generator.template
+            summary_md = render_markdown(template, state)
+            title = extract_title(state) or _extract_title_fallback(text_to_summarize)
+
+            if not state.all_required_success(template):
+                await self.file_repo.add_llm_log(
+                    file_id,
+                    log={
+                        "event": "summarizing_partial_failure",
+                        "round": state.round,
+                        "failed_blocks": [
+                            b.key for b in state.blocks.values()
+                            if b.status.value != "success"
+                        ],
+                    },
+                    message="LLM summarization partial failure (cap reached)",
+                )
+                await self.file_repo.update_file_status(
+                    file_id, FileStatus.SUMMARY_FAILED
+                )
+                await self.session.commit()
+                return
+
         except Exception as exc:
             logger.exception(
                 "Unexpected error during summarization for file_id={}", file_id
