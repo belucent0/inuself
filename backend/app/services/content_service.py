@@ -349,17 +349,6 @@ class ContentService:
                 }
 
             elif retry_type == "summary":
-                # LLM Summary 재처리
-                if not file_content or file_content.status not in [
-                    FileStatus.SUMMARY_FAILED,
-                    FileStatus.SUMMARY_QUEUED,
-                    FileStatus.SUMMARIZING,
-                    FileStatus.COMPLETED,
-                ]:
-                    raise ValueError(
-                        f"Cannot retry LLM summary for file with status: {file_content.status.value if file_content else 'UNKNOWN'}"
-                    )
-
                 # 텍스트 추출 (타입에 따라)
                 from ..repositories.transcription_repository import (
                     TranscriptionRepository,
@@ -390,10 +379,13 @@ class ContentService:
                         f"(content_type: {file_obj.content_type.value})"
                     )
 
-                # 상태를 SUMMARY_QUEUED로 변경 (재처리이므로 validate=False)
-                await file_repo.update_file_status(
-                    content_id, FileStatus.SUMMARY_QUEUED, triggered_by="manual_retry", validate=False
-                )
+                # 원자 lock 획득 — 중복 retry 차단.
+                # 사용자가 빠르게 두 번 누르더라도 첫 호출만 통과한다.
+                acquired = await file_repo.try_acquire_summarizing_lock(content_id)
+                if not acquired:
+                    raise ValueError(
+                        "Cannot retry LLM summary: already in progress or invalid status"
+                    )
                 await file_repo.add_llm_log(
                     file_id=content_id,
                     log={"event": "manual_retry", "type": "llm_summary"},
@@ -401,81 +393,50 @@ class ContentService:
                 )
                 await self.session.commit()
 
-                # LLM 작업 큐잉 - [Phase 1] 프롬프트 주입 패턴
+                # LLM 작업 실행 — BlockGenerator (partial retry + incremental persistence)
                 if text_to_summarize:
-                    # SectionGraphExecutor (LangGraph 기반) 사용
-                    executor = SectionGraphExecutor(self.settings)
-
                     try:
-                        # 상태를 SUMMARIZING으로 변경
-                        await file_repo.update_file_status(
-                            content_id, FileStatus.SUMMARIZING, triggered_by="manual_retry"
-                        )
-                        await file_repo.add_llm_log(
-                            file_id=content_id,
-                            log={"event": "manual_retry", "type": "llm_summary"},
-                            message="Manual LLM summary retry requested by user",
-                        )
-                        await self.session.commit()
 
-                        # [NEW] LangGraph 기반 3단계 요약 실행
-                        # Phase 1: 메타데이터 추출 (기존)
-                        from .llm_summary_service import summarize_transcription_3phase
+                        from .summary_runner import summarize_with_block_generator
 
-                        loop = asyncio.get_running_loop()
-                        # Phase 1: 메타데이터 추출 (OTEL context 전파)
-                        metadata = await loop.run_in_executor(
-                            None,
-                            preserve_otel_context(
-                                lambda: extract_metadata(text_to_summarize, self.settings)
-                            ),
+                        title, summary_md, success = await summarize_with_block_generator(
+                            content_id, text_to_summarize,
                         )
 
-                        # Phase 2~N: LangGraph 병렬 섹션 생성 (먼저 실행)
-                        sections, detailed_md, logs = await executor.generate_sections(
-                            toc=metadata.get("toc", []),
-                            transcript=text_to_summarize,
-                            keywords=metadata.get("keywords", []),
-                            title=metadata.get("title", "요약"),
-                            max_retries=3,
+                        final_status = (
+                            FileStatus.COMPLETED if success else FileStatus.SUMMARY_FAILED
                         )
-
-                        # 핵심 요약 생성 (섹션 생성 이후 - 실제 섹션 내용 기반)
-                        core_summary = executor.get_core_summary(metadata, sections)
-
-                        # 결과 조합
-                        summary_md = executor.generate_summary_md(
-                            metadata, core_summary, sections
-                        )
-                        title = metadata.get("title", "요약")
-
-                        # 결과 저장
-                        await file_repo.update_title(content_id, title)
-                        await file_repo.update_summary_markdown(content_id, summary_md)
-                        await file_repo.update_file_status(
-                            content_id, FileStatus.COMPLETED
-                        )
+                        if title:
+                            await file_repo.update_title(content_id, title)
+                        if summary_md:
+                            await file_repo.update_summary_markdown(content_id, summary_md)
+                        await file_repo.update_file_status(content_id, final_status)
                         await file_repo.add_llm_log(
                             file_id=content_id,
                             log={
-                                "event": "summarizing_completed",
-                                "langgraph": True,
-                                "sections": len(sections),
+                                "event": "summarizing_completed" if success else "summarizing_partial_failure",
+                                "block_generator": True,
+                                "success": success,
                             },
-                            message="LLM summarization completed (LangGraph)",
+                            message=(
+                                "LLM summarization completed (BlockGenerator)"
+                                if success
+                                else "LLM summarization partial failure (cap reached)"
+                            ),
                         )
                         await self.session.commit()
 
                         logger.info(
-                            "Manual LLM retry completed (LangGraph): file_id=%s, title='%s', sections=%d, summary_length=%d",
-                            content_id,
-                            title[:50],
-                            len(sections),
-                            len(summary_md),
+                            "Manual LLM retry: file_id=%s, success=%s, title='%s', summary_length=%d",
+                            content_id, success, title[:50], len(summary_md),
                         )
                         return {
-                            "success": True,
-                            "message": "LLM summary reprocessing completed (LangGraph)",
+                            "success": success,
+                            "message": (
+                                "LLM summary reprocessing completed"
+                                if success
+                                else "LLM summary partial failure (재요약 가능)"
+                            ),
                             "file_id": content_id,
                         }
 
@@ -651,34 +612,55 @@ class ContentService:
             progress = PipelineProgress(file_id)
 
             try:
-                await file_repo.update_file_status(file_id, FileStatus.SUMMARIZING)
+                # 원자 lock 획득 — 같은 file_id에 대한 중복 실행 차단
+                acquired = await file_repo.try_acquire_summarizing_lock(file_id)
+                if not acquired:
+                    logger.info(
+                        f"LLM retry skipped (already in progress): file_id={file_id}"
+                    )
+                    return
                 await session.commit()
                 progress.llm_started()
 
-                executor = SectionGraphExecutor(on_progress=progress.llm_progress)
-                title, summary_md = await executor.execute(text_to_summarize)
+                from .summary_runner import summarize_with_block_generator
 
+                title, summary_md, success = await summarize_with_block_generator(
+                    file_id, text_to_summarize, progress.llm_progress,
+                )
+
+                final_status = (
+                    FileStatus.COMPLETED if success else FileStatus.SUMMARY_FAILED
+                )
                 if title:
                     await file_repo.update_title(file_id, title)
                 if summary_md:
                     await file_repo.update_summary_markdown(file_id, summary_md)
 
-                await file_repo.update_file_status(file_id, FileStatus.COMPLETED)
+                await file_repo.update_file_status(file_id, final_status)
                 await file_repo.add_llm_log(
                     file_id,
                     log={
-                        "event": "llm_completed",
+                        "event": "llm_completed" if success else "llm_partial_failure",
                         "title_length": len(title),
                         "summary_length": len(summary_md),
+                        "success": success,
                     },
-                    message="LLM summarization completed (manual retry, direct execution)",
+                    message=(
+                        "LLM summarization completed (manual retry, BlockGenerator)"
+                        if success
+                        else "LLM partial failure (manual retry, cap reached)"
+                    ),
                 )
                 await session.commit()
 
-                logger.info(f"LLM completed (manual retry): file_id={file_id}")
-                progress.llm_completed(**({"title": title} if title else {}))
+                if success:
+                    logger.info(f"LLM completed (manual retry): file_id={file_id}")
+                    progress.llm_completed(**({"title": title} if title else {}))
+                else:
+                    logger.warning(f"LLM partial failure (manual retry): file_id={file_id}")
+                    progress.llm_failed("일부 섹션 생성 실패 (재요약 가능)")
 
-            except (PhaseExecutionError, Exception) as exc:
+            except Exception as exc:
                 logger.error(f"LLM failed (manual retry): file_id={file_id}, error={exc}")
                 await file_repo.update_file_status(file_id, FileStatus.SUMMARY_FAILED)
                 await file_repo.add_llm_log(

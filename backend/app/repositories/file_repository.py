@@ -268,6 +268,51 @@ class FileRepository:
         await self.session.execute(stmt)
         await self.session.flush()
 
+    async def try_acquire_summarizing_lock(self, file_id: UUID) -> bool:
+        """SUMMARY_QUEUED/SUMMARY_FAILED/COMPLETED → SUMMARIZING 원자 전이로 lock 획득.
+
+        True 반환 시 호출자가 단독 BlockGenerator 실행 권한 보유.
+        False면 이미 SUMMARIZING 중이거나 잘못된 상태. 호출자는 retry 거부.
+
+        race 차단: 사용자가 재요약 버튼을 빠르게 두 번 눌러도 첫 호출만 1을 받음.
+        """
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(models.Content)
+            .where(
+                models.Content.file_id == file_id,
+                models.Content.status.in_(
+                    [
+                        models.FileStatus.SUMMARY_QUEUED,
+                        models.FileStatus.SUMMARY_FAILED,
+                        models.FileStatus.COMPLETED,
+                    ]
+                ),
+            )
+            .values(status=models.FileStatus.SUMMARIZING, updated_at=now)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return result.rowcount == 1
+
+    async def update_summary_sections(
+        self, file_id: UUID, sections_data: dict
+    ) -> None:
+        """generic block 데이터 업데이트. partial retry 우산 incremental persistence용.
+
+        block 한 개가 완료될 때마다 호출되며, sections_data 전체를 atomic하게 덮어쓴다.
+        JSONB partial update 대신 전체 덮어쓰기를 택한 이유: SectionsState가
+        in-memory 단일 객체로 관리되어 부분 update 필요성이 낮고 트랜잭션 단순.
+        """
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(models.Content)
+            .where(models.Content.file_id == file_id)
+            .values(summary_sections=sections_data, updated_at=now)
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()
+
     async def update_title(self, file_id: UUID, title: str) -> None:
         """파일 제목 업데이트 (Content만 업데이트)."""
         now = datetime.now(timezone.utc)
