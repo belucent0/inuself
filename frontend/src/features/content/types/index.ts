@@ -39,12 +39,35 @@ export interface ContentSummary {
   }
 }
 
+export type SummaryBlockStatus = 'pending' | 'in_progress' | 'success' | 'failed' | 'skipped'
+
+export interface SummaryBlock {
+  key: string
+  label: string
+  type: 'text' | 'list' | 'long_text' | string
+  status: SummaryBlockStatus
+  content: string | string[] | null
+  attempts: number
+  last_error?: string | null
+  depends_on?: string[]
+  completed_at?: string | null
+}
+
+export interface SummarySections {
+  template_id: string
+  started_at: string
+  updated_at: string
+  round: number
+  blocks: SummaryBlock[]
+}
+
 export interface ContentDetail extends ContentSummary {
   file_url?: string
   media_url?: string
   summary?: string
   summary_html?: string
   summary_md?: string
+  summary_sections?: SummarySections | null
   transcription?: TranscriptionData
   document?: DocumentData
   ocr_logs?: string[]
