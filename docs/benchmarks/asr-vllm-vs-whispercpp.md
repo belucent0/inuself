@@ -170,18 +170,239 @@ vLLM Whisper 결과 (앞/뒤):
 
 ---
 
-## 6. 후속 작업 (별도 PR)
+## 6. Production Migration 완료 (2026-05-14, `feat/vllm-whisper-production`)
 
-이번 PoC PR은 **벤치마크 + `docker-compose`에 `ai-asr-vllm` profile=poc 추가**만. Production migration은 별도 PR:
+PoC PR #146 이후 production 경로 전환. 핵심 변경: **worker 코드 무수정** — ai-gateway가 어댑터 책임.
 
-- [ ] `vllm[audio]` 의존성을 `ai-llm` 이미지에 baked-in (현재 PoC는 `pip install librosa soundfile av` 런타임 설치 — 컨테이너 recreate 시 사라짐)
-- [ ] ai-gateway `ASR_BASE_URL`을 `http://ai-asr-vllm:8000`으로 전환
-- [ ] worker가 `/v1/audio/transcriptions` 호출하도록 변경 (현재 `/transcribe` adapter API)
-- [ ] whisper.cpp HIP 컨테이너(`ai-asr`)를 `profiles: ["legacy"]`로 보존 → 일정 기간 후 폐기
+- [x] `ai-asr-vllm` `profile=poc` 제거 (기본 활성)
+- [x] whisper.cpp `ai-asr` 컨테이너 `profiles: ["legacy"]` 강등 (fallback 보존)
+- [x] ai-gateway `ASR_BASE_URL` → `http://ai-asr-vllm:8000`
+- [x] ai-gateway `_handle_asr`: `/transcribe` → `/v1/audio/transcriptions` (OpenAI 호환) + verbose_json → worker 호환 포맷 변환
+- [x] **language 옵셔널 분기 추가**: 빈 값/`auto`/`none` 수신 시 vLLM에 전달하지 않고 자동 감지 위임 → 영한 혼합/영어 단일 콘텐츠 환각 해결
+- [ ] `vllm[audio]` 의존성을 `ai-llm` 이미지에 baked-in (별도 PR — 현재는 ai-asr-vllm이 자체 의존성 보유)
+
+### 6.1 production 전환 후 검증 (2026-05-14)
+
+ai-gateway 통한 end-to-end 흐름 검증.
+
+| 파일 | 크기 | 길이 | RTF | 언어 | 환각 | 비고 |
+|------|------|------|-----|------|------|------|
+| test_10s.wav | 0.3 MB | 10s | 0.808 | ko 강제 | 없음 | 초기 검증 |
+| sample.wav | 1 MB | 34s | 0.485 | ko 강제 | 없음 | 한국어 단편 |
+| audio_for_whisper_tariff.wav (ko 강제) | 27 MB | 15min | 0.448 | ko 강제 | 없음 | 긴 한국어 |
+| audio_for_whisper_tariff.wav (auto) | 27 MB | 15min | **0.375** | auto→ko | 없음 | **자동 감지가 더 빠름** |
+| bigtech.mp4 (en 강제) | 16 MB | 6min | 0.463 | en **강제** | **있음** | "It's not a goal" 반복 환각 |
+| bigtech.mp4 (auto) | 16 MB | 6min | 0.402 | auto→ko | 없음 | **자동 감지로 환각 해결** |
+| I lost my 200000 job.mp4 (auto) | 76 MB | 20min | **0.340** | auto→en | 없음 | **이전 4일 hangs 컨텐츠 해결** |
+
+핵심 발견: **vLLM Whisper는 mp4 binary 직접 수신 가능** (내부 ffmpeg 처리). ai-gateway 변환 불필요.
+
+### 6.2 language 정책
+
+| 시나리오 | 권장 language 인자 |
+|---|---|
+| 한국어 단일 | `ko` 또는 `auto` (둘 다 OK, auto가 약간 빠름) |
+| 영어 단일 | `auto` (또는 `en`) |
+| 영한 혼합 (한국어 위주) | **`auto`** — ko 강제 동급 결과 + 영어 단일 대응력 보너스 |
+| 알 수 없음 | **`auto`** |
+
+→ 운영 기본값을 `auto`로 가는 것이 합리적. ai-gateway는 이미 옵셔널 처리 — worker가 `auto`/빈값 송신 시 자동 감지 위임.
 
 ---
 
-## 7. 참고
+## 7. 동시성 측정 — vLLM continuous batching 효과 (2026-05-14)
+
+### 7.1 동기
+
+기존 whisper.cpp는 worker GPU lock으로 ASR 단일성을 강제 운영 중(`worker:gpu:active`). vLLM Whisper는 `--max-num-seqs 4`로 continuous batching 지원 → **동시 처리 시 GPU idle gap 활용해 throughput 향상 가능** 가설.
+
+### 7.2 측정 — sample.wav (34s 한국어)
+
+| N | total_time | avg_latency | throughput | vs N=1 | 이론 효율 |
+|---|---|---|---|---|---|
+| 1 | 18.89s | 18.89s | 0.053 req/s | 1.00× | - |
+| **2** | **27.17s** | 27.05s | 0.074 req/s | **1.39×** | **70%** |
+| 4 | 45.57s | 45.20s | 0.088 req/s | 1.66× | 42% |
+
+### 7.3 측정 — audio_for_whisper_tariff.wav (15min 한국어, 본격 워크로드)
+
+| N | total_time | avg_latency | throughput | vs N=1 | 이론 효율 |
+|---|---|---|---|---|---|
+| 1 | 338.5s | 338.5s | 0.00295 req/s | 1.00× | - |
+| **2** | **455.22s** | 429.25s | 0.00439 req/s | **1.49×** | **75%** |
+
+**관찰**: 긴 파일이 동시성 효율 더 좋음 (75% > 70%) — decode idle gap이 길수록 batching 효과↑.
+
+품질: text_len 미세 차이(~1~4%)는 batched inference의 BF16 비결정성. segments 개수 거의 동일 → 누락/환각 아님.
+
+### 7.4 4건 처리 풀세트 매트릭스 — whisper.cpp vs vLLM
+
+동일 audio (tariff.wav, 15min 한국어) 4건 처리. ai-asr / ai-asr-vllm 컨테이너 동시 메모리 점유 상태에서 측정 (fair 비교).
+
+| 백엔드 | N=1 (큐) | N=2 | N=3 | N=4 | 평균 |
+|---|---|---|---|---|---|
+| **whisper.cpp HIP** | 767.76s | 771.49s | 760.20s | 797.38s | **774s** |
+| vLLM Whisper | ~1354s (추정 4×338.5) | ~910s (추정 2×455.22) | 1097.86s | **815.26s** | 1044s |
+
+### 7.5 per-request 패턴 분석
+
+#### whisper.cpp HIP — 서버 inference slot 1개 (직렬 처리)
+
+N=3 예: req#0=199s, req#1=378s, req#2=567s, req#3=560s
+```
+t=0:    req#0,1,2 동시 호출 (req#1,2는 서버 큐 대기)
+t=199:  req#0 끝 → req#1 처리 시작, req#3 진입
+t=378:  req#1 끝 → req#2 처리 시작
+t=567:  req#2 끝 → req#3 처리 시작
+t=760:  req#3 끝
+```
+
+→ **동시성 N과 무관하게 ~770s** (서버 슬롯 1개 직렬 처리). 클라이언트가 동시 호출해도 whisper-server 내부에서 큐잉.
+
+#### vLLM Whisper — continuous batching (병렬 처리)
+
+N=3 비효율 패턴: req#1 먼저 끝(613s) → req#3 단독 처리(484s) → 마지막에 단일 처리 비효율
+
+N=4 최적 패턴: 4건 모두 한 batch로 동시 처리 → 815s
+
+### 7.6 발견 요약 (재정립)
+
+1. **whisper.cpp HIP가 모든 동시성 케이스에서 vLLM보다 빠름** (770s vs 815s 최저, 6% 차이)
+2. **단건 RTF**: whisper.cpp **0.213** vs vLLM **0.375** — whisper.cpp 단건 inference 1.8× 빠름 (gfx1150 native F16 hw 가속 + warm server-resident)
+3. **vLLM의 동시 batching 능력으로도 단건 손해를 못 메움** (단일 노드 4건 환경)
+4. **vLLM N=3은 비효율 패턴** — 4건 + 3 동시 = 끝에 1건 단독 처리로 N=4보다 느림
+
+### 7.7 vLLM 채택 정당화 재정립
+
+| 측면 | 우위 백엔드 | 비고 |
+|---|---|---|
+| 속도 (4건 워크로드) | **whisper.cpp HIP** | 평균 774s vs vLLM N=4 815s |
+| 환각 해결 | **vLLM** | whisper.cpp는 5.7% 더 긴 텍스트(환각 추정) |
+| 자동 언어 감지 | **vLLM** | bigtech/lostjob mp4 검증 |
+| mp4 직접 처리 | **vLLM** | 내부 ffmpeg |
+| 인프라 단순화 | **vLLM** | ai-llm과 동일 vLLM 스택 |
+| 메모리 효율 | **whisper.cpp** | 1.85GB vs 5GB |
+
+→ vLLM 채택 근거는 **속도 아님**. 인프라/품질/유연성. 속도가 최우선이면 whisper.cpp HIP 유지가 합리적.
+
+### 7.8 동시 처리 시나리오별 비교 — 자원/사용자 관점
+
+7.4 매트릭스의 절대 시간 비교는 "**1 컨테이너 vs 1 컨테이너**" 한정. 자원/사용자 관점으로 보면 vLLM의 동시 처리 메커니즘이 의미를 가진다.
+
+#### 7.8.1 핵심 차이 — 1 인스턴스로 N건 동시 처리 가능
+
+| 4건 동시 처리 시 자원 | whisper.cpp 매칭 | vLLM 1 인스턴스 |
+|---|---|---|
+| VRAM | **4 컨테이너 × 1.85GB = 7.4GB** | **5GB** |
+| 컨테이너 수 | 4개 | 1개 |
+| 라우팅 로직 | load balancer 필요 (nginx upstream 등) | 불필요 |
+| 운영 관리 | 4× 컴플렉시티 | 단일 |
+
+whisper.cpp는 서버 inference slot 1개라 다중 사용자 동시 처리 시 **N 인스턴스 띄워야 함**. 본 환경(iGPU 32GB UMA)에서 ai-llm 16GB와 함께 운영 시 자원 빠듯.
+
+#### 7.8.2 시나리오 1 — 단일 사용자, 단발 요청
+
+| 메트릭 | whisper.cpp HIP | vLLM Whisper |
+|---|---|---|
+| Latency | **192s** | 338s |
+
+→ **whisper.cpp 압승**. 1.8× 빠른 응답.
+
+#### 7.8.3 시나리오 2 — 4명 동시 요청, **단일 인스턴스만** 운영
+
+| 메트릭 | whisper.cpp N=1 (직렬) | vLLM N=4 (batched) |
+|---|---|---|
+| 1번째 결과 | 192s | 815s |
+| 4번째 결과 (max) | **768s** | 815s |
+| 평균 latency | 480s | 815s |
+
+→ **whisper.cpp 우위 (latency)**. 단, 첫 응답은 whisper.cpp가 빠르지만 max 응답은 비슷.
+
+#### 7.8.4 시나리오 3 — 4명 동시 요청, **인스턴스 확장 허용**
+
+| 메트릭 | whisper.cpp **4 인스턴스** | vLLM **1 인스턴스** |
+|---|---|---|
+| 모두 결과 | **192s (병렬)** | 815s |
+| VRAM 점유 | 7.4GB | **5GB** |
+| 컨테이너 수 | **4개** | 1개 |
+| ai-llm(16GB) 동시 운영 가능성 | 빠듯 (16+7.4+1.5=24.9GB) | **여유 (16+5+1.5=22.5GB)** |
+
+→ **latency는 whisper.cpp 4 인스턴스 압승**, **메모리/운영 단순성은 vLLM 우위**.
+
+#### 7.8.5 시나리오 4 — 큐 누적된 peak 시간
+
+큐 1000건 누적 시 단일 인스턴스 처리:
+- whisper.cpp 1 인스턴스: 1000 × 192s = **53시간**
+- vLLM 1 인스턴스 N=4: 1000/4 × 815s = **56시간**
+
+→ 단일 인스턴스로는 둘 다 한계. **다중 인스턴스가 진짜 throughput 해결책**. 그러나 vLLM은 1 인스턴스에서 4 동시 처리 가능 → **적은 인스턴스로 같은 throughput 달성**.
+
+#### 7.8.6 vLLM 동시 처리의 실질 장점 (정리)
+
+| # | 장점 | 본 프로젝트 적용도 |
+|---|---|---|
+| 1 | **1 인스턴스로 N=4 동시 처리** | iGPU 32GB UMA에서 ai-llm 동시 운영 필수 → **메모리 절약 큰 가치** |
+| 2 | **인프라 단일화** (라우터 불필요) | docker compose 1 서비스로 끝 |
+| 3 | **확장성 곡선** | whisper.cpp는 flat, vLLM은 우상향. 다중 사용자 전망 시 의미 ↑ |
+| 4 | **OpenAI API 표준** | 추후 다른 ASR 백엔드 교체 시 ai-gateway 코드 손대지 않음 |
+| 5 | **모델/vLLM 버전 업그레이드 자동화** | vLLM 0.21+에서 CUDA graph ROCm 확장 시 자동 가속 |
+
+#### 7.8.7 vLLM 동시 처리의 한계
+
+| # | 한계 | 본 프로젝트 영향 |
+|---|---|---|
+| 1 | **단건 inference 절대 속도 느림** (RTF 0.375 vs 0.213) | 단일 사용자 latency 손해 |
+| 2 | **동시 batching 효율 75%** | LLM(95%+ 효율)보단 낮음 — Whisper는 max_seq_len 448로 짧아서 |
+| 3 | **N=3 같은 비균등 batch 비효율** | 4건 + N=3 = 끝에 1건 단독 처리, N=4보다 느림 |
+
+#### 7.8.8 본 프로젝트 환경 종합 평가
+
+iGPU 32GB UMA + ai-llm 동시 운영 + 사용자 수~수십 명 환경:
+
+| 평가 항목 | 평가 |
+|---|---|
+| 단일 사용자 단발 호출 | whisper.cpp 우위 (latency 1.8× 빠름) |
+| **다중 동시 사용자 처리 (자원 제한)** | **vLLM 우위** (1 인스턴스로 N=4, whisper.cpp는 4 인스턴스 필요) |
+| 환각/품질 | vLLM 우위 |
+| 인프라 단순화 | vLLM 우위 |
+| 미래 확장성 | vLLM 우위 (OpenAI 표준, vLLM 버전 업, multi-modal 통합) |
+
+→ **vLLM 채택은 "현재 단일 사용자 latency 손해 6%를 미래 확장성 + 자원 효율 + 품질에 투자"하는 의사결정.**
+
+### 7.9 Triton 도입 효과 재검토 (실측 기반)
+
+| 옵션 | 단일 노드 ASR throughput |
+|---|---|
+| whisper.cpp HIP (현 legacy) | **770s/4건 (최저)** |
+| vLLM Whisper N=1 (현 운영) | 1354s/4건 |
+| vLLM Whisper N=4 (lock 완화 시) | 815s/4건 |
+| Triton + vLLM backend | **vLLM과 동급** (dynamic batching 동일 메커니즘) |
+
+→ **단일 노드 ASR throughput 향상에 Triton 도입 정당화 불가**. Triton의 가치는 다른 곳 (다중 모델 통합 서빙, ensemble 파이프라인, 모델 라이프사이클 관리, 포트폴리오).
+
+### 7.10 운영 정책 권고 (재정립)
+
+#### worker GPU lock 정책
+
+| 옵션 | 효과 | ROI |
+|---|---|---|
+| **현 N=1 lock 유지** | 안정 | **권장** — lock 완화 ROI 작음 |
+| N=2 semaphore (vLLM) | +49% throughput | 그러나 whisper.cpp 큐 처리(770s) 못 이김 |
+| lock 제거 | 이론상 최대 throughput | OOM 위험 + 효과 마진적 |
+
+**권장: 현 N=1 lock 유지.** vLLM의 continuous batching 메커니즘은 존재하지만 단일 노드 단일 사용자 환경에선 실익 작음. Triton/Ray Serve 검토 시점에 다시 평가.
+
+#### 대안 시나리오
+
+| 운영 우선순위 | 권장 백엔드 |
+|---|---|
+| **속도 critical, 환각 감수** | whisper.cpp HIP 유지 (legacy → primary 회복) |
+| **품질/인프라 우선** ← 현재 선택 | vLLM Whisper (현 운영) |
+| 다중 사용자 (수십+ 동시) 전망 | vLLM Whisper + worker lock 완화 (continuous batching 실익) |
+
+---
+
+## 8. 참고
 
 - **모델**: 전 구간 Whisper Large-v3-Turbo 유지. 추론 엔진만 교체.
 - **vLLM 환경 변수**: `VLLM_MAX_AUDIO_CLIP_FILESIZE_MB` 기본 25 MB (큰 파일은 명시 필요 — tariff 28 MB라 200으로 설정).
@@ -193,5 +414,7 @@ vLLM Whisper 결과 (앞/뒤):
 - 이전 (호스트 운영): whisper.cpp Vulkan (별도 PR 추적 없음 — 컨테이너 마이그레이션 이전 시기)
 - PR #143 (머지): transformers ROCm → whisper.cpp HIP F16 (컨테이너 기반에서 속도 회복)
 - PR #145 (머지): vLLM Qwen3-4B-Instruct → Qwen3-VL-4B-Instruct (chat/요약/OCR 통합)
-- 이번 PR #146 (PoC): vLLM Whisper 추가 검증 + 마이그레이션 history 문서
-- 후속 PR (예정): vLLM Whisper production migration
+- PR #146 (머지): vLLM Whisper PoC + 마이그레이션 history 문서
+- PR #147 (머지): docs(ocr) NPU(FLM) 시절 history 보충
+- **이번 PR (`feat/vllm-whisper-production`)**: vLLM Whisper production migration + 자동 언어 감지 + 동시성 측정
+- 후속 PR (예정): worker GPU lock N=2 semaphore (ASR throughput 향상)

@@ -75,6 +75,18 @@ export interface DocumentData {
   html_content?: string
 }
 
+export function getSpeakerCount(
+  content: Pick<ContentSummary, 'speakers' | 'transcription'>
+): number {
+  return content.transcription?.speakers?.length ?? content.speakers?.length ?? 0
+}
+
+export function getDurationSeconds(
+  content: Pick<ContentSummary, 'duration_seconds' | 'transcription'>
+): number | undefined {
+  return content.transcription?.duration_seconds ?? content.duration_seconds
+}
+
 // 상태 레이블 매핑
 export const STATUS_LABELS: Record<ContentStatus, string> = {
   QUEUED: '대기중',

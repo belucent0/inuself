@@ -26,7 +26,8 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ai-llm:8000")
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3-4b-instruct")
 LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "300"))
 
-ASR_BASE_URL = os.getenv("ASR_BASE_URL", "http://ai-asr:8001")
+ASR_BASE_URL = os.getenv("ASR_BASE_URL", "http://ai-asr-vllm:8000")
+ASR_MODEL_NAME = os.getenv("ASR_MODEL_NAME", "whisper-large-v3-turbo")
 ASR_REQUEST_TIMEOUT = float(os.getenv("ASR_REQUEST_TIMEOUT", "1800"))
 
 DIARIZE_BASE_URL = os.getenv("DIARIZE_BASE_URL", "http://ai-diarize:8003")
