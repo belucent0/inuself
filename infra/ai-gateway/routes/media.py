@@ -21,6 +21,7 @@ from config import (
     OCR_MODEL_NAME,
     OCR_REQUEST_TIMEOUT,
     ASR_BASE_URL,
+    ASR_MODEL_NAME,
     ASR_REQUEST_TIMEOUT,
     DIARIZE_BASE_URL,
     DIARIZE_REQUEST_TIMEOUT,
@@ -54,11 +55,11 @@ async def handle_media_request(body: dict) -> JSONResponse:
 async def _handle_asr(body: dict) -> JSONResponse:
     """ASR (음성인식) 요청 처리.
 
-    refactor/inference: asr-whisper 컨테이너(FastAPI) 직접 호출.
-    accuracy_mode 분기는 폐기 (whisper-turbo 단일).
+    ai-asr-vllm 컨테이너의 OpenAI 호환 endpoint(/v1/audio/transcriptions) 호출.
+    vLLM이 verbose_json 응답을 반환하면 worker 호환 포맷(text/segments/language/model)으로 매핑한다.
 
     extra_body:
-        audio_base64, language, accuracy_mode (무시)
+        audio_base64, language, accuracy_mode (호환만, 분기 안 함)
     """
     extra = body.get("extra_body", {})
     accuracy_mode = extra.get("accuracy_mode", "")  # 호환만, 분기 안 함
@@ -77,13 +78,38 @@ async def _handle_asr(body: dict) -> JSONResponse:
     try:
         async with httpx.AsyncClient(timeout=ASR_REQUEST_TIMEOUT) as client:
             files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
-            data = {"language": language, "return_timestamps": "true"}
-            r = await client.post(f"{ASR_BASE_URL}/transcribe", files=files, data=data)
-            r.raise_for_status()
-            result = r.json()
+            data = {
+                "model": ASR_MODEL_NAME,
+                "response_format": "verbose_json",
+                "temperature": "0",
+            }
+            # language가 빈 값/None/auto이면 vLLM 자동 감지에 위임 (다국어 콘텐츠 환각 방지).
+            # 명시 지정 시에만 강제 (한국어 단일 콘텐츠 등 운영 정책에 따른 hint).
+            if language and language.lower() not in ("", "auto", "none"):
+                data["language"] = language
 
-        content = json.dumps(result, ensure_ascii=False)
-        return JSONResponse(build_openai_response(content, result.get("model", "whisper")))
+            r = await client.post(
+                f"{ASR_BASE_URL}/v1/audio/transcriptions", files=files, data=data
+            )
+            r.raise_for_status()
+            vllm_result = r.json()
+
+        # vLLM verbose_json → worker 호환 포맷 변환
+        # vLLM 응답: {text, language, duration, segments: [{id, start, end, text, ...}]}
+        # worker 기대: {text, segments: [{start, end, text}], language, model}
+        segments = [
+            {"start": seg.get("start", 0.0), "end": seg.get("end", 0.0), "text": seg.get("text", "")}
+            for seg in vllm_result.get("segments", [])
+        ]
+        worker_result = {
+            "text": vllm_result.get("text", ""),
+            "segments": segments,
+            "language": vllm_result.get("language", language),
+            "model": ASR_MODEL_NAME,
+        }
+
+        content = json.dumps(worker_result, ensure_ascii=False)
+        return JSONResponse(build_openai_response(content, ASR_MODEL_NAME))
 
     except httpx.HTTPStatusError as e:
         logger.error(f"[ASR] upstream {e.response.status_code}: {e.response.text[:300]}")
