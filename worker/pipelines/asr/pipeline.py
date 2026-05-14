@@ -204,7 +204,9 @@ def _run_case4_parallel_processing(
             return call_ai_gateway_transcription(
                 audio_file_path=audio_file_path,
                 accuracy_mode=accuracy_mode,
-                language="ko",
+                # vLLM Whisper 자동 언어 감지 위임. 영한 혼합/영어 단일 콘텐츠 환각 방지.
+                # ai-gateway가 "auto" 수신 시 vLLM에 language 파라미터 전달하지 않음.
+                language="auto",
                 lock_id=lock_id,  # V7.5: Worker측 잠금 ID 전달
                 file_id=str(file_id) if file_id else None,  # Backend 상태 업데이트용
             )
@@ -402,6 +404,10 @@ def _run_case4_parallel_processing(
         for seg in merged_segments
         if seg.get("text", "").strip()
     )
+    # segment id 부여 — frontend가 segment.id로 unique key/active 비교에 사용 (UI 회귀 방지).
+    # diarization merge 단계에서 새 dict 생성하며 id 누락되므로 최종 단계에서 재부여.
+    for idx, seg in enumerate(merged_segments):
+        seg["id"] = idx
     transcription = {
         "text": final_text,
         "language": asr_result.get("language", "ko"),

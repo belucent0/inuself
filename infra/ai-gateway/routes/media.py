@@ -96,10 +96,16 @@ async def _handle_asr(body: dict) -> JSONResponse:
 
         # vLLM verbose_json → worker 호환 포맷 변환
         # vLLM 응답: {text, language, duration, segments: [{id, start, end, text, ...}]}
-        # worker 기대: {text, segments: [{start, end, text}], language, model}
+        # worker 기대: {text, segments: [{id, start, end, text}], language, model}
+        # id 보존: frontend가 segment.id로 unique key/active 비교에 사용. 누락 시 모든 segment 동시 활성화 회귀.
         segments = [
-            {"start": seg.get("start", 0.0), "end": seg.get("end", 0.0), "text": seg.get("text", "")}
-            for seg in vllm_result.get("segments", [])
+            {
+                "id": seg.get("id", idx),
+                "start": seg.get("start", 0.0),
+                "end": seg.get("end", 0.0),
+                "text": seg.get("text", ""),
+            }
+            for idx, seg in enumerate(vllm_result.get("segments", []))
         ]
         worker_result = {
             "text": vllm_result.get("text", ""),
