@@ -704,6 +704,102 @@ class ContentService:
             ),
         }
 
+    async def translate_transcription_content(
+        self,
+        content_id: UUID,
+        target_lang: str = "ko",
+        user_id: UUID | None = None,
+    ) -> dict:
+        """Transcript 청크 단위 번역 — BG task로 시작 후 즉시 응답.
+
+        실제 번역(LLM 호출 N회, 분 단위)은 별도 task에서 실행되며 진행 상황은
+        PR-B SSE chunk_completed/translation_finalized 이벤트로 frontend에 전달.
+        """
+        from ..db.models import ContentType, FileStatus
+        from ..repositories.file_repository import FileRepository
+
+        file_repo = FileRepository(self.session)
+        file_obj = await file_repo.get_file(content_id)
+        if not file_obj:
+            raise ValueError(f"Content not found: {content_id}")
+        file_content = file_obj.content
+        if user_id and file_content and file_content.user_id != user_id:
+            raise ValueError("You don't have permission to translate this content")
+        if file_obj.content_type != ContentType.AUDIO:
+            raise ValueError(
+                "Translation is supported only for AUDIO content (with transcription)"
+            )
+        if file_content and file_content.status != FileStatus.COMPLETED:
+            raise ValueError("Translation requires COMPLETED status")
+
+        await file_repo.add_llm_log(
+            file_id=content_id,
+            log={"event": "translation_requested", "target_lang": target_lang},
+            message=f"Translation requested: target_lang={target_lang}",
+        )
+        await self.session.commit()
+
+        # BG task로 launch — endpoint는 즉시 응답
+        asyncio.create_task(self._run_translation_bg(content_id, target_lang))
+
+        return {
+            "status": "accepted",
+            "target_lang": target_lang,
+            "message": "번역이 백그라운드에서 시작되었습니다",
+        }
+
+    async def _run_translation_bg(
+        self, content_id: UUID, target_lang: str,
+    ) -> None:
+        """별도 BG task: translate_transcription 실행 + 완료 로그."""
+        from ..db.session import AsyncSessionLocal
+        from ..repositories.file_repository import FileRepository
+        from .translation_runner import translate_transcription
+
+        try:
+            result = await translate_transcription(content_id, target_lang=target_lang)
+        except Exception as exc:
+            logger.exception(
+                "Translation BG task failed for file_id=%s", content_id
+            )
+            async with AsyncSessionLocal() as session:
+                repo = FileRepository(session)
+                await repo.add_llm_log(
+                    file_id=content_id,
+                    log={
+                        "event": "translation_failed",
+                        "target_lang": target_lang,
+                        "error": str(exc),
+                    },
+                    message=f"Translation failed: {exc}",
+                )
+                await session.commit()
+            return
+
+        async with AsyncSessionLocal() as session:
+            repo = FileRepository(session)
+            await repo.add_llm_log(
+                file_id=content_id,
+                log={
+                    "event": "translation_completed" if result["success"] else "translation_partial_failure",
+                    "target_lang": target_lang,
+                    **result,
+                },
+                message=(
+                    f"Translation completed: {result['translated_chunks']}/{result['total_chunks']}"
+                    if result["success"]
+                    else f"Translation partial failure: {result['failed_chunks']} chunks failed"
+                ),
+            )
+            await session.commit()
+
+        logger.info(
+            "Translation: file_id=%s, success=%s, %d/%d chunks (failed=%d)",
+            content_id, result["success"],
+            result["translated_chunks"], result["total_chunks"],
+            result["failed_chunks"],
+        )
+
     async def _run_llm_summary_background(
         self, file_id: int, text_to_summarize: str
     ) -> None:

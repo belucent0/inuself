@@ -417,6 +417,33 @@ async def retry_processing(
         raise HTTPException(status_code=500, detail=f"재처리 실패: {str(exc)}") from exc
 
 
+@router.post("/{content_id}/translate", tags=["contents"])
+async def translate_content(
+    content_id: UUID,
+    target_lang: str = Query("ko", description="번역 대상 언어 (현재 'ko'만 지원)"),
+    user_id: UUID = Depends(get_current_user_id),
+    service: ContentService = Depends(get_service),
+):
+    """Transcript 청크 단위 한국어 번역 (PR-Translate.1 수동 트리거).
+
+    AUDIO + COMPLETED 콘텐츠에만 허용. 5세그먼트씩 청크 단위로 LLM 호출,
+    이미 번역된 segment는 skip. PR-B SSE 인프라로 chunk 완료 이벤트 발행 →
+    frontend 점진 표시.
+    """
+    try:
+        return await service.translate_transcription_content(
+            content_id, target_lang=target_lang, user_id=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.exception("Translation failed")
+        raise HTTPException(status_code=500, detail=f"번역 실패: {str(exc)}") from exc
+
+
 @router.post(
     "/{content_id}/summary/blocks/{block_key}/regenerate",
     tags=["contents"],

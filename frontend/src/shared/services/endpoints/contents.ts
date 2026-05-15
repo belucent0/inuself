@@ -104,10 +104,27 @@ export async function regenerateSummaryBlock(
   )
 }
 
+/**
+ * Transcript 청크 단위 한국어 번역 (PR-Translate.1)
+ */
+export async function translateContent(
+  id: string,
+  targetLang: string = 'ko',
+): Promise<{
+  success: boolean
+  translated_chunks: number
+  total_chunks: number
+  failed_chunks: number
+}> {
+  const params = new URLSearchParams({ target_lang: targetLang })
+  return httpClient.post(`/contents/${id}/translate?${params.toString()}`)
+}
+
 export const contentsApi = {
   getContents,
   getContent,
   deleteContents,
   retryProcessing,
   regenerateSummaryBlock,
+  translateContent,
 }

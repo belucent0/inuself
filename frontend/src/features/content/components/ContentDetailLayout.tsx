@@ -196,6 +196,7 @@ export function ContentDetailLayout({
                   segments={content.transcription!.segments}
                   speakers={content.transcription!.speakers}
                   mediaRef={mediaRef}
+                  contentId={content.id}
                 />
               )}
               {hasDocument && content.document && (
@@ -242,6 +243,7 @@ export function ContentDetailLayout({
                 segments={content.transcription!.segments}
                 speakers={content.transcription!.speakers}
                 mediaRef={mediaRef}
+                contentId={content.id}
               />
             )}
             {hasDocument && content.document && (
