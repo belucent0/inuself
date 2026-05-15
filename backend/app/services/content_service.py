@@ -715,8 +715,11 @@ class ContentService:
         실제 번역(LLM 호출 N회, 분 단위)은 별도 task에서 실행되며 진행 상황은
         PR-B SSE chunk_completed/translation_finalized 이벤트로 frontend에 전달.
         """
+        from datetime import datetime, timezone
+
         from ..db.models import ContentType, FileStatus
         from ..repositories.file_repository import FileRepository
+        from ..repositories.transcription_repository import TranscriptionRepository
 
         file_repo = FileRepository(self.session)
         file_obj = await file_repo.get_file(content_id)
@@ -731,6 +734,28 @@ class ContentService:
             )
         if file_content and file_content.status != FileStatus.COMPLETED:
             raise ValueError("Translation requires COMPLETED status")
+
+        # per-content translation lock — 동일 콘텐츠 중복 BG 차단.
+        # stale(90초 이상 업데이트 없음) 감지로 backend 재시작 잔존 회복.
+        STALE_THRESHOLD_SECONDS = 90
+        transcription_repo = TranscriptionRepository(self.session)
+        transcription_obj = await transcription_repo.get_by_file_id(content_id)
+        if transcription_obj and transcription_obj.transcription:
+            progress = (transcription_obj.transcription or {}).get("translation_progress") or {}
+            if progress.get("active"):
+                updated_at_str = progress.get("updated_at")
+                is_stale = True
+                if updated_at_str:
+                    try:
+                        last = datetime.fromisoformat(updated_at_str)
+                        age = (datetime.now(timezone.utc) - last).total_seconds()
+                        is_stale = age >= STALE_THRESHOLD_SECONDS
+                    except (ValueError, TypeError):
+                        is_stale = True
+                if not is_stale:
+                    raise ValueError(
+                        "Translation is already in progress for this content"
+                    )
 
         await file_repo.add_llm_log(
             file_id=content_id,
