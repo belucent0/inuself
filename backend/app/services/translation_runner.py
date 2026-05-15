@@ -39,10 +39,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # 정책
 # ---------------------------------------------------------------------------
-CHUNK_SIZE = 5  # 한 청크에 묶을 segment 수
+CHUNK_SIZE = 4  # 한 청크에 묶을 segment 수 (응답 토큰 줄여 timeout 회피)
 MAX_ROUNDS = 5
 ROUND_BACKOFF_SECONDS = (5, 30, 120, 300, 600)
-CHUNK_CONCURRENCY = 2  # vLLM 큐 과부하 회피 (PR-A SECTION_CONCURRENCY와 동일 정책)
+# vLLM 큐 폭주 → AI Gateway timeout 회피를 위해 직렬 처리. 다른 사용자/요약 작업과
+# GPU 경합이 일어나면 동시 호출이 누적되어 응답 시간이 폭증하기 때문.
+CHUNK_CONCURRENCY = 1
 MAX_TOTAL_SECONDS = 30 * 60
 
 
