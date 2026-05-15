@@ -104,6 +104,30 @@ class SectionsState:
             "blocks": [b.to_dict() for b in self.blocks.values()],
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SectionsState":
+        """DB JSONB → in-memory SectionsState 복원. 부분 재생성 시 활용."""
+        state = cls(
+            template_id=data["template_id"],
+            started_at=data["started_at"],
+            updated_at=data["updated_at"],
+            round=data.get("round", 0),
+        )
+        for b_data in data.get("blocks", []):
+            block = BlockState(
+                key=b_data["key"],
+                label=b_data["label"],
+                type=b_data["type"],
+                status=BlockStatus(b_data["status"]),
+                content=b_data.get("content"),
+                attempts=b_data.get("attempts", 0),
+                last_error=b_data.get("last_error"),
+                depends_on=tuple(b_data.get("depends_on", [])),
+                completed_at=b_data.get("completed_at"),
+            )
+            state.blocks[block.key] = block
+        return state
+
     def touch(self) -> None:
         self.updated_at = _now_iso()
 

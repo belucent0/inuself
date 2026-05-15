@@ -11,9 +11,10 @@ from typing import Callable
 
 from ..core.logging import logger
 from ..db.session import AsyncSessionLocal
+from ..repositories.content_repository import ContentRepository
 from ..repositories.file_repository import FileRepository
 from ..utils.event_publisher import publish_file_progress
-from .block_generator import BlockGenerator
+from .block_generator import BlockGenerator, SectionsState
 from .summary_renderer import extract_title, render_markdown
 from .summary_templates import BlockStatus
 
@@ -112,6 +113,125 @@ async def summarize_with_block_generator(
     except Exception as exc:
         logger.warning(
             "[summary_runner] summary_finalized SSE publish failed: file_id={}, err={}",
+            file_id, exc,
+        )
+
+    return title, summary_md, success
+
+
+async def regenerate_block(
+    file_id, block_key: str, text: str,
+):
+    """단일 block(또는 같은 group_extracts 내 형제 block들)을 재생성한다.
+
+    기존 summary_sections를 그대로 둔 채 target block만 pending으로 reset 후
+    BlockGenerator(initial_state=...)로 재시도. 다른 block은 SUCCESS 상태가
+    유지되어 LLM 호출 없이 그대로 통과한다.
+
+    Args:
+        file_id: Content.file_id (UUID)
+        block_key: 재생성 대상 block key (예: 'title', 'section_2')
+        text: 요약 입력 텍스트 (transcription / OCR 본문)
+
+    Returns:
+        (title, summary_md, success): summarize_with_block_generator와 동일 형식.
+    """
+    # 1. 현재 sections 로드
+    async with AsyncSessionLocal() as session:
+        content_repo = ContentRepository(session)
+        content = await content_repo.get_by_file_id(file_id)
+        if not content or not content.summary_sections:
+            raise ValueError(f"summary_sections not found for file_id={file_id}")
+        sections_data = content.summary_sections
+
+    state = SectionsState.from_dict(sections_data)
+    generator = BlockGenerator(template_id=state.template_id)
+    template = generator.template
+
+    # 2. 재생성 대상 결정 — group_extracts에 속하면 group 전체 reset
+    group = template.group_for(block_key)
+    keys_to_reset: tuple[str, ...] = group if group else (block_key,)
+
+    # dynamic block(section_*)도 단일 key로 처리
+    for key in keys_to_reset:
+        if key not in state.blocks:
+            # section_N이 아직 expand 안 됐을 수도 — 안전하게 skip
+            continue
+        state.blocks[key].status = BlockStatus.PENDING
+        state.blocks[key].content = None
+        state.blocks[key].last_error = None
+        state.blocks[key].completed_at = None
+
+    # 3. 재시작 라운드 카운터 리셋 (백오프 영향 회피)
+    state.round = 0
+
+    async def _persist(block, st):
+        async with AsyncSessionLocal() as cb_session:
+            cb_repo = FileRepository(cb_session)
+            await cb_repo.update_summary_sections(file_id, st.to_dict())
+            await cb_session.commit()
+
+        blocks = list(st.blocks.values())
+        total = len(blocks) or 1
+        done = sum(1 for b in blocks if b.status == BlockStatus.SUCCESS)
+        failed = sum(1 for b in blocks if b.status == BlockStatus.FAILED)
+        pct = round((done / total) * 100, 1)
+
+        try:
+            publish_file_progress(
+                file_id=file_id,
+                status="block_regenerating",
+                step="summary_block",
+                progress=pct,
+                message=f"'{block.label}' 재생성",
+                metadata={
+                    "event_subtype": "block_regenerated",
+                    "block_key": block.key,
+                    "block_label": block.label,
+                    "block_status": block.status.value,
+                    "blocks_done": done,
+                    "blocks_failed": failed,
+                    "blocks_total": total,
+                    "template_id": st.template_id,
+                    "regenerate_target": block_key,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "[summary_runner] block_regenerated SSE publish failed: file_id={}, err={}",
+                file_id, exc,
+            )
+
+    state = await generator.generate(text, initial_state=state, on_block_complete=_persist)
+    success = state.all_required_success(template)
+    summary_md = render_markdown(template, state) if success else ""
+    title = extract_title(state)
+
+    # 종료 이벤트
+    try:
+        blocks = list(state.blocks.values())
+        total = len(blocks) or 1
+        done = sum(1 for b in blocks if b.status == BlockStatus.SUCCESS)
+        failed = sum(1 for b in blocks if b.status == BlockStatus.FAILED)
+        publish_file_progress(
+            file_id=file_id,
+            status="block_regenerated",
+            step="summary_finalized",
+            progress=100.0 if success else round((done / total) * 100, 1),
+            message=f"'{block_key}' 재생성 완료" if success else f"'{block_key}' 재생성 실패",
+            metadata={
+                "event_subtype": "block_regenerate_finalized",
+                "success": success,
+                "blocks_done": done,
+                "blocks_failed": failed,
+                "blocks_total": total,
+                "template_id": state.template_id,
+                "regenerate_target": block_key,
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "[summary_runner] block_regenerate_finalized SSE publish failed: file_id={}, err={}",
             file_id, exc,
         )
 

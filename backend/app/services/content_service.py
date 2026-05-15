@@ -598,6 +598,112 @@ class ContentService:
                 f"Invalid retry_type: {retry_type}. Must be 'asr' or 'summary'"
             )
 
+    async def regenerate_summary_block(
+        self,
+        content_id: UUID,
+        block_key: str,
+        user_id: UUID | None = None,
+    ) -> dict:
+        """단일 block(또는 group_extracts 형제 block)만 재생성한다.
+
+        PR-C: 사용자가 SummaryDisplay의 block hover [↻] 클릭 시 호출. 전체
+        재요약과 달리 content.status는 변경하지 않고 sections.blocks[k]만
+        pending → success로 갱신. 다른 block은 SUCCESS 그대로 유지되어 LLM
+        호출 없이 통과.
+
+        Args:
+            content_id: Content.file_id (= File.id)
+            block_key: 재생성 대상 block key (예: 'title', 'section_2')
+            user_id: 소유자 검증용 (선택)
+
+        Returns:
+            {"success": bool, "block_key": str, "message": str}
+        """
+        from ..db.models import ContentType
+        from ..repositories.document_repository import DocumentRepository
+        from ..repositories.file_repository import FileRepository
+        from ..repositories.transcription_repository import TranscriptionRepository
+        from .summary_runner import regenerate_block
+
+        file_repo = FileRepository(self.session)
+        file_obj = await file_repo.get_file(content_id)
+        if not file_obj:
+            raise ValueError(f"Content not found: {content_id}")
+        file_content = file_obj.content
+        if user_id and file_content and file_content.user_id != user_id:
+            raise ValueError("You don't have permission to regenerate this content")
+        if not file_content or not file_content.summary_sections:
+            raise ValueError(
+                "No summary_sections found — run full summarization first"
+            )
+
+        # text 추출 (retry_processing의 summary 분기와 동일 로직)
+        transcription_repo = TranscriptionRepository(self.session)
+        document_repo = DocumentRepository(self.session)
+        text_to_summarize = ""
+        if file_obj.content_type == ContentType.AUDIO:
+            transcription = await transcription_repo.get_by_file_id(content_id)
+            if transcription and transcription.transcription:
+                text_to_summarize = str(
+                    transcription.transcription.get("text", "")
+                ).strip()
+        elif file_obj.content_type in (ContentType.DOCUMENT, ContentType.PORTRAY):
+            document = await document_repo.get_by_file_id(content_id)
+            if document:
+                text_to_summarize = (document.ocr_text or "").strip()
+        if not text_to_summarize:
+            raise ValueError("No text available for block regeneration")
+
+        await file_repo.add_llm_log(
+            file_id=content_id,
+            log={
+                "event": "block_regenerate_requested",
+                "block_key": block_key,
+            },
+            message=f"Block regenerate requested: {block_key}",
+        )
+        await self.session.commit()
+
+        # BlockGenerator로 부분 재생성
+        title, summary_md, success = await regenerate_block(
+            content_id, block_key, text_to_summarize,
+        )
+
+        # 결과 저장 — title/summary_md 갱신 (status는 그대로 유지)
+        if success:
+            if title:
+                await file_repo.update_title(content_id, title)
+            if summary_md:
+                await file_repo.update_summary_markdown(content_id, summary_md)
+        await file_repo.add_llm_log(
+            file_id=content_id,
+            log={
+                "event": "block_regenerate_completed" if success else "block_regenerate_failed",
+                "block_key": block_key,
+                "success": success,
+            },
+            message=(
+                f"Block '{block_key}' regenerate completed"
+                if success
+                else f"Block '{block_key}' regenerate failed"
+            ),
+        )
+        await self.session.commit()
+
+        logger.info(
+            "Block regenerate: file_id=%s, block_key=%s, success=%s",
+            content_id, block_key, success,
+        )
+        return {
+            "success": success,
+            "block_key": block_key,
+            "message": (
+                f"'{block_key}' 재생성 완료"
+                if success
+                else f"'{block_key}' 재생성 실패"
+            ),
+        }
+
     async def _run_llm_summary_background(
         self, file_id: int, text_to_summarize: str
     ) -> None:

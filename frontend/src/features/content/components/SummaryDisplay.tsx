@@ -2,13 +2,19 @@
  * 요약 표시 컴포넌트
  * - 상태별 분기: 대기/처리중/실패/완료
  * - SUMMARIZING + summary_sections 시 block 단위 점진 렌더링
- * - COMPLETED 시 summary_md를 MarkdownContent로 렌더링
+ * - COMPLETED + summary_sections 시 block 단위 카드 + hover [↻] 부분 재생성
+ * - sections 없을 때만 summary_md 마크다운 렌더링
  */
 
+import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import type { ContentDetail, SummaryBlock, SummarySections } from '../types'
 import { MarkdownContent } from '@/features/chat/components/MarkdownContent'
 import { Button } from '@/shared/components/ui/button'
 import { Badge } from '@/shared/components/ui/badge'
+import { contentsApi } from '@/shared/services/endpoints/contents'
+import { contentKeys } from '@/shared/hooks/useContents'
 import {
   Loader2,
   AlertCircle,
@@ -42,10 +48,88 @@ function getSectionBlocks(sections: SummarySections): SummaryBlock[] {
 }
 
 /**
- * 점진 렌더링: SUMMARIZING 중이라도 완료된 block만 골라 부분 표시.
- * keywords/headings/section_* 순으로 toc 순서 보존.
+ * Hover 시 [↻] 버튼 노출 카드 — block 단위 부분 재생성 트리거.
+ * COMPLETED 상태에서만 활성. SUMMARIZING 중에는 disabled.
  */
-function ProgressiveSummary({ sections }: { sections: SummarySections }) {
+function RegenerableBlockCard({
+  contentId,
+  block,
+  blockLabel,
+  isInteractive,
+  onRegenerating,
+  children,
+}: {
+  contentId: string
+  block: { key: string; status: string }
+  blockLabel: string
+  isInteractive: boolean
+  onRegenerating: (key: string | null) => void
+  children: React.ReactNode
+}) {
+  const [hovered, setHovered] = useState(false)
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: () => contentsApi.regenerateSummaryBlock(contentId, block.key),
+    onMutate: () => {
+      onRegenerating(block.key)
+      toast.info(`'${blockLabel}' 재생성 중...`)
+    },
+    onSuccess: (data) => {
+      toast.success(data.message || `'${blockLabel}' 재생성 완료`)
+      queryClient.invalidateQueries({ queryKey: contentKeys.detail(contentId) })
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : '재생성 실패'
+      toast.error(`'${blockLabel}' 재생성 실패: ${msg}`)
+    },
+    onSettled: () => {
+      onRegenerating(null)
+    },
+  })
+
+  const isPending = mutation.isPending
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {children}
+      {isInteractive && (hovered || isPending) && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="absolute top-1 right-1 h-7 w-7 bg-background/80 backdrop-blur shadow-sm"
+          onClick={() => mutation.mutate()}
+          disabled={isPending}
+          title={`'${blockLabel}' 재생성`}
+        >
+          {isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RotateCcw className="h-3.5 w-3.5" />
+          )}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * block 단위 렌더링: SUMMARIZING/COMPLETED 모두 사용. 완료된 block만 표시.
+ * COMPLETED + isInteractive=true 시 각 block hover [↻] → 부분 재생성.
+ */
+function ProgressiveSummary({
+  contentId,
+  sections,
+  isInteractive,
+}: {
+  contentId: string
+  sections: SummarySections
+  isInteractive: boolean
+}) {
+  const [regeneratingKey, setRegeneratingKey] = useState<string | null>(null)
   const title = findBlock(sections, 'title')
   const keywords = findBlock(sections, 'keywords')
   const headings = findBlock(sections, 'headings')
@@ -60,80 +144,111 @@ function ProgressiveSummary({ sections }: { sections: SummarySections }) {
     ? (headings.content as string[])
     : []
 
+  // 진행 중 카드 (SUMMARIZING 또는 부분 재생성 중)
+  const showProgressCard = !isInteractive || regeneratingKey !== null
+
   return (
     <div className="space-y-5">
-      <div className="rounded-lg border bg-card p-4">
-        <div className="flex items-center gap-2 mb-2">
-          <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          <span className="text-sm font-medium">요약 생성 중</span>
-          <Badge variant="outline" className="text-xs ml-auto">
-            {success}/{total} 완료
-            {failed > 0 && <span className="text-destructive ml-1">· 재시도 {failed}</span>}
-          </Badge>
+      {showProgressCard && (
+        <div className="rounded-lg border bg-card p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            <span className="text-sm font-medium">
+              {regeneratingKey ? `'${regeneratingKey}' 재생성 중` : '요약 생성 중'}
+            </span>
+            <Badge variant="outline" className="text-xs ml-auto">
+              {success}/{total} 완료
+              {failed > 0 && <span className="text-destructive ml-1">· 재시도 {failed}</span>}
+            </Badge>
+          </div>
+          <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          {!isInteractive && (
+            <p className="text-xs text-muted-foreground mt-2">
+              섹션이 완료되는 대로 아래에 점진적으로 표시됩니다
+            </p>
+          )}
         </div>
-        <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-          <div
-            className="h-full bg-primary transition-all duration-300"
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <p className="text-xs text-muted-foreground mt-2">
-          섹션이 완료되는 대로 아래에 점진적으로 표시됩니다
-        </p>
-      </div>
+      )}
 
       {title?.status === 'success' && typeof title.content === 'string' && (
-        <div>
-          <h2 className="text-lg font-semibold">{title.content}</h2>
-        </div>
+        <RegenerableBlockCard
+          contentId={contentId}
+          block={{ key: 'title', status: title.status }}
+          blockLabel="제목"
+          isInteractive={isInteractive}
+          onRegenerating={setRegeneratingKey}
+        >
+          <h2 className="text-lg font-semibold pr-9">{title.content}</h2>
+        </RegenerableBlockCard>
       )}
 
       {keywords?.status === 'success' && Array.isArray(keywords.content) && (
-        <div>
-          <h3 className="text-sm font-semibold mb-2">키워드</h3>
-          <div className="flex flex-wrap gap-1.5">
-            {(keywords.content as string[]).map((kw, i) => (
-              <Badge key={i} variant="secondary" className="text-xs">
-                {kw}
-              </Badge>
-            ))}
+        <RegenerableBlockCard
+          contentId={contentId}
+          block={{ key: 'keywords', status: keywords.status }}
+          blockLabel="키워드"
+          isInteractive={isInteractive}
+          onRegenerating={setRegeneratingKey}
+        >
+          <div className="pr-9">
+            <h3 className="text-sm font-semibold mb-2">키워드</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {(keywords.content as string[]).map((kw, i) => (
+                <Badge key={i} variant="secondary" className="text-xs">
+                  {kw}
+                </Badge>
+              ))}
+            </div>
           </div>
-        </div>
+        </RegenerableBlockCard>
       )}
 
       {sectionLabels.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold mb-2">목차</h3>
-          <ul className="text-sm space-y-1 ml-1">
-            {sectionLabels.map((label, i) => {
-              const block = sectionBlocks.find(
-                (b) => b.key === `section_${i}` || b.label === label
-              )
-              const isDone = block?.status === 'success'
-              const isFailed = block?.status === 'failed'
-              return (
-                <li key={i} className="flex items-center gap-2">
-                  {isDone ? (
-                    <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
-                  ) : isFailed ? (
-                    <RotateCcw className="h-3.5 w-3.5 text-muted-foreground animate-pulse shrink-0" />
-                  ) : (
-                    <Loader2 className="h-3.5 w-3.5 text-muted-foreground animate-spin shrink-0" />
-                  )}
-                  <span
-                    className={
-                      isDone
-                        ? 'text-foreground'
-                        : 'text-muted-foreground'
-                    }
-                  >
-                    {label}
-                  </span>
-                </li>
-              )
-            })}
-          </ul>
-        </div>
+        <RegenerableBlockCard
+          contentId={contentId}
+          block={{ key: 'headings', status: headings?.status || 'success' }}
+          blockLabel="목차"
+          isInteractive={isInteractive}
+          onRegenerating={setRegeneratingKey}
+        >
+          <div className="pr-9">
+            <h3 className="text-sm font-semibold mb-2">목차</h3>
+            <ul className="text-sm space-y-1 ml-1">
+              {sectionLabels.map((label, i) => {
+                const block = sectionBlocks.find(
+                  (b) => b.key === `section_${i}` || b.label === label
+                )
+                const isDone = block?.status === 'success'
+                const isFailed = block?.status === 'failed'
+                return (
+                  <li key={i} className="flex items-center gap-2">
+                    {isDone ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                    ) : isFailed ? (
+                      <RotateCcw className="h-3.5 w-3.5 text-muted-foreground animate-pulse shrink-0" />
+                    ) : (
+                      <Loader2 className="h-3.5 w-3.5 text-muted-foreground animate-spin shrink-0" />
+                    )}
+                    <span
+                      className={
+                        isDone
+                          ? 'text-foreground'
+                          : 'text-muted-foreground'
+                      }
+                    >
+                      {label}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        </RegenerableBlockCard>
       )}
 
       {sectionBlocks.some((b) => b.status === 'success') && (
@@ -142,12 +257,21 @@ function ProgressiveSummary({ sections }: { sections: SummarySections }) {
           {sectionBlocks
             .filter((b) => b.status === 'success' && typeof b.content === 'string')
             .map((b) => (
-              <div key={b.key} className="rounded-md border bg-card/50 p-3">
-                <h4 className="text-sm font-medium mb-1.5">{b.label}</h4>
-                <p className="text-sm text-muted-foreground whitespace-pre-line">
-                  {b.content as string}
-                </p>
-              </div>
+              <RegenerableBlockCard
+                key={b.key}
+                contentId={contentId}
+                block={{ key: b.key, status: b.status }}
+                blockLabel={b.label}
+                isInteractive={isInteractive}
+                onRegenerating={setRegeneratingKey}
+              >
+                <div className="rounded-md border bg-card/50 p-3 pr-10">
+                  <h4 className="text-sm font-medium mb-1.5">{b.label}</h4>
+                  <p className="text-sm text-muted-foreground whitespace-pre-line">
+                    {b.content as string}
+                  </p>
+                </div>
+              </RegenerableBlockCard>
             ))}
         </div>
       )}
@@ -239,7 +363,11 @@ export function SummaryDisplay({
   if (content.status === 'SUMMARIZING' && sections && countSuccessBlocks(sections) > 0) {
     return (
       <div className="max-w-3xl">
-        <ProgressiveSummary sections={sections} />
+        <ProgressiveSummary
+          contentId={content.id}
+          sections={sections}
+          isInteractive={false}
+        />
       </div>
     )
   }
@@ -250,6 +378,20 @@ export function SummaryDisplay({
     )
   }
 
+  // COMPLETED: sections가 있으면 block 단위 카드 + hover [↻] 부분 재생성
+  if (sections && countSuccessBlocks(sections) > 0) {
+    return (
+      <div className="max-w-3xl">
+        <ProgressiveSummary
+          contentId={content.id}
+          sections={sections}
+          isInteractive={true}
+        />
+      </div>
+    )
+  }
+
+  // sections 없으면 fallback: 기존 markdown 렌더링
   return (
     <div className="space-y-6 max-w-3xl">
       {summaryText ? (

@@ -92,9 +92,22 @@ export async function retryProcessing(
   return httpClient.post<{ message: string }>(`/contents/${id}/retry?${params.toString()}`)
 }
 
+/**
+ * 단일 summary block 재생성 (PR-C 부분 재생성)
+ */
+export async function regenerateSummaryBlock(
+  id: string,
+  blockKey: string,
+): Promise<{ success: boolean; block_key: string; message: string }> {
+  return httpClient.post<{ success: boolean; block_key: string; message: string }>(
+    `/contents/${id}/summary/blocks/${blockKey}/regenerate`
+  )
+}
+
 export const contentsApi = {
   getContents,
   getContent,
   deleteContents,
   retryProcessing,
+  regenerateSummaryBlock,
 }
