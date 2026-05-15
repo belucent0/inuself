@@ -48,6 +48,31 @@ function getSectionBlocks(sections: SummarySections): SummaryBlock[] {
 }
 
 /**
+ * 본문 success 섹션의 첫 문장을 핵심 요약 bullet로 추출.
+ * backend summary_renderer._build_core_summary와 동일 로직.
+ */
+const CORE_SUMMARY_MAX_ITEMS = 5
+function buildCoreSummary(sectionBlocks: SummaryBlock[]): string[] {
+  const lines: string[] = []
+  for (const block of sectionBlocks.slice(0, CORE_SUMMARY_MAX_ITEMS)) {
+    if (block.status !== 'success') continue
+    const content = (typeof block.content === 'string' ? block.content : '').trim()
+    if (!content) continue
+    let first = content
+    for (const sep of ['.', '!', '?']) {
+      const cut = content.indexOf(sep)
+      if (cut >= 0) {
+        first = content.slice(0, cut + 1)
+        break
+      }
+    }
+    first = first.trim()
+    if (first) lines.push(first)
+  }
+  return lines
+}
+
+/**
  * Hover 시 [↻] 버튼 노출 카드 — block 단위 부분 재생성 트리거.
  * COMPLETED 상태에서만 활성. SUMMARIZING 중에는 disabled.
  */
@@ -183,7 +208,7 @@ function ProgressiveSummary({
           isInteractive={isInteractive}
           onRegenerating={setRegeneratingKey}
         >
-          <h2 className="text-lg font-semibold pr-9">{title.content}</h2>
+          <h2 className="text-xl font-semibold pr-9">{title.content}</h2>
         </RegenerableBlockCard>
       )}
 
@@ -196,10 +221,10 @@ function ProgressiveSummary({
           onRegenerating={setRegeneratingKey}
         >
           <div className="pr-9">
-            <h3 className="text-sm font-semibold mb-2">키워드</h3>
+            <h3 className="text-lg font-semibold mb-2">키워드</h3>
             <div className="flex flex-wrap gap-1.5">
               {(keywords.content as string[]).map((kw, i) => (
-                <Badge key={i} variant="secondary" className="text-xs">
+                <Badge key={i} variant="secondary" className="text-sm">
                   {kw}
                 </Badge>
               ))}
@@ -217,8 +242,8 @@ function ProgressiveSummary({
           onRegenerating={setRegeneratingKey}
         >
           <div className="pr-9">
-            <h3 className="text-sm font-semibold mb-2">목차</h3>
-            <ul className="text-sm space-y-1 ml-1">
+            <h3 className="text-lg font-semibold mb-2">목차</h3>
+            <ul className="text-base space-y-1 ml-1">
               {sectionLabels.map((label, i) => {
                 const block = sectionBlocks.find(
                   (b) => b.key === `section_${i}` || b.label === label
@@ -251,9 +276,30 @@ function ProgressiveSummary({
         </RegenerableBlockCard>
       )}
 
+      {(() => {
+        const successSections = sectionBlocks.filter(
+          (b) => b.status === 'success' && typeof b.content === 'string'
+        )
+        const coreSummary = buildCoreSummary(successSections)
+        if (coreSummary.length === 0) return null
+        return (
+          <div>
+            <h3 className="text-lg font-semibold mb-2">핵심 요약</h3>
+            <ul className="space-y-1.5 ml-1">
+              {coreSummary.map((line, i) => (
+                <li key={i} className="text-base leading-relaxed flex gap-2">
+                  <span className="text-muted-foreground select-none">·</span>
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )
+      })()}
+
       {sectionBlocks.some((b) => b.status === 'success') && (
         <div className="space-y-4">
-          <h3 className="text-sm font-semibold">상세 내용</h3>
+          <h3 className="text-lg font-semibold">상세 내용</h3>
           {sectionBlocks
             .filter((b) => b.status === 'success' && typeof b.content === 'string')
             .map((b) => (
@@ -266,8 +312,8 @@ function ProgressiveSummary({
                 onRegenerating={setRegeneratingKey}
               >
                 <div className="rounded-md border bg-card/50 p-3 pr-10">
-                  <h4 className="text-sm font-medium mb-1.5">{b.label}</h4>
-                  <p className="text-sm text-muted-foreground whitespace-pre-line">
+                  <h4 className="text-base font-semibold mb-2">{b.label}</h4>
+                  <p className="text-base leading-relaxed whitespace-pre-line">
                     {b.content as string}
                   </p>
                 </div>
