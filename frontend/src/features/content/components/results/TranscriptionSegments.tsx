@@ -9,7 +9,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, type RefObject } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import type { TranscriptionSegment } from '../../types'
+import type { TranscriptionSegment, TranslationProgress } from '../../types'
 import type { FileProgressEvent } from '@/features/upload/types'
 import { Badge } from '@/shared/components/ui/badge'
 import { Switch } from '@/shared/components/ui/switch'
@@ -27,6 +27,8 @@ interface TranscriptionSegmentsProps {
   speakers: string[]
   mediaRef: RefObject<HTMLMediaElement | null>
   contentId: string
+  /** API 응답으로 받은 서버측 번역 진행 상태 (새로고침 복원용) */
+  serverTranslationProgress?: TranslationProgress
 }
 
 function formatTime(seconds: number): string {
@@ -56,6 +58,7 @@ export function TranscriptionSegments({
   speakers,
   mediaRef,
   contentId,
+  serverTranslationProgress,
 }: TranscriptionSegmentsProps) {
   const [currentSegmentId, setCurrentSegmentId] = useState<number | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
@@ -63,12 +66,49 @@ export function TranscriptionSegments({
   const segmentRefs = useRef<Map<number, HTMLDivElement>>(new Map())
 
   // PR-Translate.2: BG SSE chunk_completed / translation_finalized 직접 구독
+  // PR-Translate.2-fix: 새로고침 시 서버측 translation_progress로 복원
   const [translationProgress, setTranslationProgress] = useState<{
     done: number
     total: number
     failed: number
     active: boolean
-  } | null>(null)
+  } | null>(() => {
+    if (!serverTranslationProgress) return null
+    return {
+      done: serverTranslationProgress.chunks_done,
+      total: serverTranslationProgress.chunks_total,
+      failed: serverTranslationProgress.chunks_failed,
+      active: serverTranslationProgress.active,
+    }
+  })
+
+  // 서버측 progress가 갱신될 때 (React Query refetch 후) sync
+  useEffect(() => {
+    if (!serverTranslationProgress) return
+    // 사용자가 직접 mutate 트리거한 직후라면 SSE가 더 fresh — 덮어쓰지 않음
+    setTranslationProgress((prev) => {
+      // 진행 중이고 서버 데이터가 더 진행된 상태면 sync
+      if (
+        !prev ||
+        serverTranslationProgress.chunks_done > prev.done ||
+        prev.active !== serverTranslationProgress.active
+      ) {
+        return {
+          done: serverTranslationProgress.chunks_done,
+          total: serverTranslationProgress.chunks_total,
+          failed: serverTranslationProgress.chunks_failed,
+          active: serverTranslationProgress.active,
+        }
+      }
+      return prev
+    })
+  }, [
+    serverTranslationProgress?.chunks_done,
+    serverTranslationProgress?.chunks_total,
+    serverTranslationProgress?.chunks_failed,
+    serverTranslationProgress?.active,
+    serverTranslationProgress,
+  ])
 
   const translateMutation = useMutation({
     mutationFn: () => contentsApi.translateContent(contentId, 'ko'),

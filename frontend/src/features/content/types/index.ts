@@ -74,6 +74,17 @@ export interface ContentDetail extends ContentSummary {
   llm_logs?: string[]
 }
 
+export interface TranslationProgress {
+  active: boolean
+  target_lang: string
+  chunks_done: number
+  chunks_failed: number
+  chunks_total: number
+  started_at?: string
+  updated_at?: string
+  success?: boolean
+}
+
 export interface TranscriptionData {
   segments: TranscriptionSegment[]
   speakers: string[]
@@ -81,6 +92,8 @@ export interface TranscriptionData {
   diarization_metadata?: {
     segment_embeddings?: number[][]
   }
+  /** PR-Translate 새로고침 복원용 BG 진행 상태 */
+  translation_progress?: TranslationProgress
 }
 
 export interface TranscriptionSegment {

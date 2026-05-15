@@ -197,6 +197,7 @@ export function ContentDetailLayout({
                   speakers={content.transcription!.speakers}
                   mediaRef={mediaRef}
                   contentId={content.id}
+                  serverTranslationProgress={content.transcription!.translation_progress}
                 />
               )}
               {hasDocument && content.document && (
@@ -244,6 +245,7 @@ export function ContentDetailLayout({
                 speakers={content.transcription!.speakers}
                 mediaRef={mediaRef}
                 contentId={content.id}
+                serverTranslationProgress={content.transcription!.translation_progress}
               />
             )}
             {hasDocument && content.document && (
