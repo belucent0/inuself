@@ -93,3 +93,24 @@ class TranscriptionRepository:
         transcription_obj.transcription = transcription
         await self.session.flush()
         return transcription_obj
+
+    async def update_transcription_jsonb(
+        self,
+        file_id: UUID,
+        transcription: dict,
+    ) -> None:
+        """transcription JSONB 컬럼만 부분 update (번역 점진 저장용).
+
+        speakers/duration_seconds는 건드리지 않는다. SQLAlchemy ORM의
+        JSONB mutable 추적이 segment 단위 수정에는 트리거되지 않으므로
+        매번 dict 전체를 새 객체로 재할당한다.
+        """
+        content_id = await self._get_content_id_from_file_id(file_id)
+        if not content_id:
+            raise ValueError(f"Content not found for file_id={file_id}")
+        transcription_obj = await self.get_by_content_id(content_id)
+        if not transcription_obj:
+            raise ValueError("Transcription not found")
+        # 새 dict 객체로 재할당 — SQLAlchemy가 변경 감지
+        transcription_obj.transcription = dict(transcription)
+        await self.session.flush()

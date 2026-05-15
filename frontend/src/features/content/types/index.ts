@@ -89,6 +89,8 @@ export interface TranscriptionSegment {
   start: number
   end: number
   speaker?: string
+  /** PR-Translate.1: 청크 번역 완료 시 채워짐. 미번역 segment는 undefined. */
+  translation_ko?: string
 }
 
 export interface DocumentData {
