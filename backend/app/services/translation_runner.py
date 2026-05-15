@@ -58,6 +58,41 @@ class ChunkState:
     translations: list[str] = field(default_factory=list)
 
 
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _persist_progress_only(file_id: UUID, transcription_data: dict) -> None:
+    """transcription JSONB 전체 patch — translation_progress 변경분 반영."""
+    async with AsyncSessionLocal() as cb_session:
+        cb_repo = TranscriptionRepository(cb_session)
+        await cb_repo.update_transcription_jsonb(file_id, transcription_data)
+        await cb_session.commit()
+
+
+def _update_progress_dict(
+    transcription_data: dict,
+    chunk_states: list[ChunkState],
+    target_lang: str,
+    active: bool,
+) -> None:
+    """transcription_data["translation_progress"] in-place 갱신."""
+    done = sum(1 for s in chunk_states if s.status == "success")
+    failed = sum(1 for s in chunk_states if s.status == "failed")
+    total = len(chunk_states)
+    prev = transcription_data.get("translation_progress") or {}
+    transcription_data["translation_progress"] = {
+        "active": active,
+        "target_lang": target_lang,
+        "chunks_done": done,
+        "chunks_failed": failed,
+        "chunks_total": total,
+        "started_at": prev.get("started_at") or _now_iso(),
+        "updated_at": _now_iso(),
+    }
+
+
 # ---------------------------------------------------------------------------
 # 메인 진입점
 # ---------------------------------------------------------------------------
@@ -112,6 +147,10 @@ async def translate_transcription(file_id: UUID, target_lang: str = "ko") -> dic
             "failed_chunks": 0,
         }
 
+    # 진행 상태 dict 초기화 — 새로고침 시 frontend 복원 가능
+    _update_progress_dict(transcription_data, chunk_states, target_lang, active=True)
+    await _persist_progress_only(file_id, transcription_data)
+
     settings = get_settings()
     started = time.monotonic()
 
@@ -157,6 +196,11 @@ async def translate_transcription(file_id: UUID, target_lang: str = "ko") -> dic
     success_count = sum(1 for s in chunk_states if s.status == "success")
     failed_count = sum(1 for s in chunk_states if s.status == "failed")
     success = failed_count == 0 and success_count == total_chunks
+
+    # active=false로 마감 — 새로고침해도 진행 카드 안 보이게
+    _update_progress_dict(transcription_data, chunk_states, target_lang, active=False)
+    transcription_data["translation_progress"]["success"] = success
+    await _persist_progress_only(file_id, transcription_data)
 
     try:
         publish_file_progress(
@@ -230,6 +274,12 @@ async def _translate_one_chunk(
         logger.warning(
             f"[Translation] chunk {state.chunk_idx} failed (attempt {state.attempts}): {exc}"
         )
+        # 실패도 progress에 반영 (재시도 카운트)
+        _update_progress_dict(transcription_data, chunk_states, target_lang, active=True)
+        try:
+            await _persist_progress_only(file_id, transcription_data)
+        except Exception:
+            pass
         await _publish_chunk_event(
             file_id, state, chunk_states, target_lang, success=False
         )
@@ -241,6 +291,9 @@ async def _translate_one_chunk(
     state.translations = translations
     state.status = "success"
     state.last_error = None
+
+    # translation_progress 갱신 (새로고침 복원 + frontend 카드 정확도)
+    _update_progress_dict(transcription_data, chunk_states, target_lang, active=True)
 
     # DB 저장 (callback별 새 session — race 회피)
     transcription_data["segments"] = segments
