@@ -35,6 +35,7 @@ class ContentBaseSchema(BaseModel):
     duration_seconds: float = 0.0
     status: ContentStatus
     summary_md: str | None = None
+    summary_sections: dict[str, Any] | None = None
     title: str | None = None
     created_at: datetime
     updated_at: datetime | None = Field(None)  # File 모델에는 없지만 하위 호환성을 위해 유지
