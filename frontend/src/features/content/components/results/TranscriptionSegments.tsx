@@ -67,47 +67,63 @@ export function TranscriptionSegments({
 
   // PR-Translate.2: BG SSE chunk_completed / translation_finalized 직접 구독
   // PR-Translate.2-fix: 새로고침 시 서버측 translation_progress로 복원
+  //
+  // Stale 감지: backend restart 등으로 BG task가 죽어도 DB의 active=true가
+  // 그대로 남으면 frontend가 영원히 "진행 중"으로 표시되는 회귀가 있다.
+  // updated_at이 STALE_THRESHOLD_MS 이상 오래된 active=true는 stale로 간주해
+  // active=false로 다운그레이드한다 (사용자가 다시 트리거 가능하게).
+  const STALE_THRESHOLD_MS = 90 * 1000  // 90초 이상 업데이트 없으면 stale
+  const sanitizedServerProgress = useMemo(() => {
+    if (!serverTranslationProgress) return null
+    let active = serverTranslationProgress.active
+    if (active && serverTranslationProgress.updated_at) {
+      const last = new Date(serverTranslationProgress.updated_at).getTime()
+      if (!isNaN(last) && Date.now() - last > STALE_THRESHOLD_MS) {
+        active = false  // stale → 비활성
+      }
+    }
+    return { ...serverTranslationProgress, active }
+  }, [serverTranslationProgress])
+
   const [translationProgress, setTranslationProgress] = useState<{
     done: number
     total: number
     failed: number
     active: boolean
   } | null>(() => {
-    if (!serverTranslationProgress) return null
+    if (!sanitizedServerProgress) return null
     return {
-      done: serverTranslationProgress.chunks_done,
-      total: serverTranslationProgress.chunks_total,
-      failed: serverTranslationProgress.chunks_failed,
-      active: serverTranslationProgress.active,
+      done: sanitizedServerProgress.chunks_done,
+      total: sanitizedServerProgress.chunks_total,
+      failed: sanitizedServerProgress.chunks_failed,
+      active: sanitizedServerProgress.active,
     }
   })
 
   // 서버측 progress가 갱신될 때 (React Query refetch 후) sync
   useEffect(() => {
-    if (!serverTranslationProgress) return
-    // 사용자가 직접 mutate 트리거한 직후라면 SSE가 더 fresh — 덮어쓰지 않음
+    if (!sanitizedServerProgress) return
     setTranslationProgress((prev) => {
-      // 진행 중이고 서버 데이터가 더 진행된 상태면 sync
       if (
         !prev ||
-        serverTranslationProgress.chunks_done > prev.done ||
-        prev.active !== serverTranslationProgress.active
+        sanitizedServerProgress.chunks_done > prev.done ||
+        prev.active !== sanitizedServerProgress.active
       ) {
         return {
-          done: serverTranslationProgress.chunks_done,
-          total: serverTranslationProgress.chunks_total,
-          failed: serverTranslationProgress.chunks_failed,
-          active: serverTranslationProgress.active,
+          done: sanitizedServerProgress.chunks_done,
+          total: sanitizedServerProgress.chunks_total,
+          failed: sanitizedServerProgress.chunks_failed,
+          active: sanitizedServerProgress.active,
         }
       }
       return prev
     })
   }, [
-    serverTranslationProgress?.chunks_done,
-    serverTranslationProgress?.chunks_total,
-    serverTranslationProgress?.chunks_failed,
-    serverTranslationProgress?.active,
-    serverTranslationProgress,
+    sanitizedServerProgress?.chunks_done,
+    sanitizedServerProgress?.chunks_total,
+    sanitizedServerProgress?.chunks_failed,
+    sanitizedServerProgress?.active,
+    sanitizedServerProgress,
   ])
 
   const translateMutation = useMutation({

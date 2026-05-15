@@ -12,6 +12,11 @@ on:
         required: false
         default: ""
 
+# vLLM(ai-llm) 공유 자원이라 LLM-eval 워크플로를 같은 group으로 직렬화.
+concurrency:
+  group: vllm-shared
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

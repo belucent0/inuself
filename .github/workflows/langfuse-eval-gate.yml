@@ -18,6 +18,12 @@ on:
       - ready_for_review
   workflow_dispatch:
 
+# vLLM(ai-llm)이 공유 자원이라 모든 LLM-eval 워크플로를 같은 group으로 묶어 직렬화.
+# 동시 실행 시 max_num_seqs=3 한도로 인해 큐 폭주 발생.
+concurrency:
+  group: vllm-shared
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
