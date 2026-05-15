@@ -62,10 +62,37 @@ export interface FileProgressEvent {
   timestamp?: string
   channel?: string
   metadata?: {
+    // ASR/upload 메타
     title?: string
     duration_seconds?: number
     speakers?: string[]
     page_count?: number
+    // 공통: backend publish_file_progress가 발행하는 step 구분자
+    event_subtype?:
+      | 'block_completed'
+      | 'summary_finalized'
+      | 'block_regenerated'
+      | 'block_regenerate_finalized'
+      | 'chunk_completed'
+      | 'translation_finalized'
+      | string
+    // PR-B/C 요약 block 진행
+    block_key?: string
+    block_label?: string
+    block_status?: string
+    blocks_done?: number
+    blocks_failed?: number
+    blocks_total?: number
+    template_id?: string
+    regenerate_target?: string
+    // PR-Translate 번역 청크 진행
+    target_lang?: string
+    chunk_idx?: number
+    chunk_status?: string
+    chunks_done?: number
+    chunks_failed?: number
+    chunks_total?: number
+    success?: boolean
   }
 }
 

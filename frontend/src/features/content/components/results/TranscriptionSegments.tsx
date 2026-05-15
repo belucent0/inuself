@@ -6,17 +6,19 @@
  * - PR-Translate.1: 보기 모드 토글 (원문/한국어/양쪽) + 수동 번역 트리거
  */
 
-import { useState, useEffect, useRef, useMemo, type RefObject } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, type RefObject } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import type { TranscriptionSegment } from '../../types'
+import type { FileProgressEvent } from '@/features/upload/types'
 import { Badge } from '@/shared/components/ui/badge'
 import { Switch } from '@/shared/components/ui/switch'
 import { Label } from '@/shared/components/ui/label'
 import { Button } from '@/shared/components/ui/button'
-import { Captions, Languages, Loader2 } from 'lucide-react'
+import { Captions, Languages, Loader2, CheckCircle2 } from 'lucide-react'
 import { cn } from '@/shared/utils/cn'
 import { contentsApi } from '@/shared/services/endpoints/contents'
+import { useFileProgressSSE } from '@/shared/hooks/useFileProgressSSE'
 
 type ViewMode = 'original' | 'translated' | 'both'
 
@@ -60,17 +62,64 @@ export function TranscriptionSegments({
   const [viewMode, setViewMode] = useState<ViewMode>('original')
   const segmentRefs = useRef<Map<number, HTMLDivElement>>(new Map())
 
+  // PR-Translate.2: BG SSE chunk_completed / translation_finalized 직접 구독
+  const [translationProgress, setTranslationProgress] = useState<{
+    done: number
+    total: number
+    failed: number
+    active: boolean
+  } | null>(null)
+
   const translateMutation = useMutation({
     mutationFn: () => contentsApi.translateContent(contentId, 'ko'),
+    onMutate: () => {
+      // chunk_completed 첫 이벤트가 올 때까지 active 상태로 표시
+      setTranslationProgress({ done: 0, total: 0, failed: 0, active: true })
+    },
     onSuccess: () => {
-      // endpoint는 즉시 "accepted" 응답. 실제 진행은 BG + SSE invalidate로 갱신.
       toast.info('번역 시작 — 청크가 완료되는 대로 표시됩니다')
     },
     onError: (err: unknown) => {
+      setTranslationProgress(null)
       const msg = err instanceof Error ? err.message : '번역 실패'
       toast.error(`번역 시작 실패: ${msg}`)
     },
   })
+
+  const { addListener, removeListener } = useFileProgressSSE()
+
+  const handleProgress = useCallback(
+    (event: FileProgressEvent) => {
+      if (event.file_id !== contentId) return
+      const meta = event.metadata
+      if (!meta?.event_subtype) return
+
+      if (meta.event_subtype === 'chunk_completed') {
+        setTranslationProgress({
+          done: meta.chunks_done ?? 0,
+          total: meta.chunks_total ?? 0,
+          failed: meta.chunks_failed ?? 0,
+          active: true,
+        })
+      } else if (meta.event_subtype === 'translation_finalized') {
+        const done = meta.chunks_done ?? 0
+        const total = meta.chunks_total ?? 0
+        const failed = meta.chunks_failed ?? 0
+        setTranslationProgress({ done, total, failed, active: false })
+        if (meta.success) {
+          toast.success(`번역 완료 (${done}/${total} 청크)`)
+        } else {
+          toast.warning(`번역 일부 실패: ${done}/${total} 청크 (실패 ${failed})`)
+        }
+      }
+    },
+    [contentId]
+  )
+
+  useEffect(() => {
+    addListener(handleProgress)
+    return () => removeListener(handleProgress)
+  }, [addListener, removeListener, handleProgress])
 
   const translatedCount = useMemo(
     () => segments.filter((s) => !!s.translation_ko).length,
@@ -117,7 +166,13 @@ export function TranscriptionSegments({
 
   const showOriginal = viewMode === 'original' || viewMode === 'both'
   const showTranslated = viewMode === 'translated' || viewMode === 'both'
-  const isTranslating = translateMutation.isPending
+  // BG SSE 활성 상태 (chunk_completed 진행 중) 또는 mutation 자체 pending
+  const isTranslating =
+    translateMutation.isPending || (translationProgress?.active ?? false)
+  const progressPct =
+    translationProgress && translationProgress.total > 0
+      ? Math.round((translationProgress.done / translationProgress.total) * 100)
+      : 0
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -183,10 +238,42 @@ export function TranscriptionSegments({
         </div>
       </div>
 
-      {/* 진행 상황 안내 */}
+      {/* 번역 진행 카드 (SSE chunk_completed 기반) */}
       {isTranslating && (
-        <div className="shrink-0 px-4 py-1.5 text-xs text-muted-foreground bg-muted/30 border-b">
-          번역 중 — 청크가 완료되는 대로 표시됩니다 ({translatedCount}/{segments.length} 세그먼트)
+        <div className="shrink-0 px-4 py-2.5 border-b bg-card/60 space-y-1.5">
+          <div className="flex items-center gap-2 text-xs">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+            <span className="font-medium">번역 중</span>
+            {translationProgress && translationProgress.total > 0 ? (
+              <span className="text-muted-foreground">
+                {translationProgress.done}/{translationProgress.total} 청크 ·{' '}
+                {translatedCount}/{segments.length} 세그먼트
+                {translationProgress.failed > 0 && (
+                  <span className="text-destructive ml-1">
+                    · 재시도 {translationProgress.failed}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">시작 중...</span>
+            )}
+          </div>
+          <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{
+                width: `${translationProgress && translationProgress.total > 0 ? progressPct : 5}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+      {!isTranslating && translationProgress && !translationProgress.active && translationProgress.done > 0 && translationProgress.done === translationProgress.total && (
+        <div className="shrink-0 px-4 py-1.5 text-xs border-b bg-card/40 flex items-center gap-2">
+          <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+          <span className="text-muted-foreground">
+            방금 번역 완료 ({translationProgress.done}/{translationProgress.total} 청크)
+          </span>
         </div>
       )}
 
