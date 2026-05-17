@@ -661,8 +661,14 @@ services:
       # ai-llm이 Qwen3-VL-4B-Instruct를 서빙하며 OpenAI vision API 호환.
       - OCR_BASE_URL=http://ai-llm:8000
       - OCR_MODEL_NAME=qwen3-4b-instruct
-      - LLM_BASE_URL=http://ai-llm:8000
-      - LLM_MODEL_NAME=qwen3-4b-instruct
+      # 실험: chat을 ai-translate(EXAONE 4.0-1.2B)로 라우팅.
+      # CI eval에서 Qwen3-VL-4B(~10 tokens/s)가 누적 컨텍스트 turn에서 180초+
+      # 응답으로 timeout 폭주. EXAONE 1.2B는 ~30-60 tokens/s 예상이라 timeout
+      # 회피 + dev chat 응답도 개선 기대. quality 회귀 시 본 변경 원복하고 별도
+      # chat 전용 sLLM 트랙으로 전환.
+      # OCR(vision)은 그대로 ai-llm 유지 (Qwen3-VL의 vision encoder 필요).
+      - LLM_BASE_URL=http://ai-translate:8000
+      - LLM_MODEL_NAME=exaone-translate
       - ASR_BASE_URL=http://ai-asr-vllm:8000
       - DIARIZE_BASE_URL=http://ai-diarize:8003
       - EMBEDDING_BASE_URL=http://ai-embedding:8000
