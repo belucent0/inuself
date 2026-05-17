@@ -257,9 +257,13 @@ async def _translate_one_chunk(
     )
 
     try:
+        # PR-Translate.3: 번역은 ai-translate 컨테이너(EXAONE 4.0-1.2B) 직접 호출.
+        # ai-llm(Qwen3-VL-4B)의 GPU 큐 경합 분리 + 한국어 dual-training 모델로 quality ↑.
         response = await request_ai_gateway_completion_async(
             settings=settings,
-            model=settings.ai_gateway_model_summarize,
+            base_url=settings.ai_translate_url,
+            api_key="none",  # 내부 컨테이너 인증 없음
+            model=settings.ai_translate_model,
             messages=[
                 {"role": "system", "content": TRANSLATION_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
