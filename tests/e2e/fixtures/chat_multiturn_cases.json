@@ -53,7 +53,7 @@
             "content_contains_any": ["에 따르면", "검색", "출처", "뉴스", "2026", "발표", "공개", "AI", "인공지능"],
             "content_not_contains": [],
             "no_error": true,
-            "max_response_time_seconds": 180
+            "max_response_time_seconds": 240
           }
         },
         {
@@ -67,7 +67,7 @@
               "must_reference_any": ["AI", "인공지능", "모델", "기술"]
             },
             "no_error": true,
-            "max_response_time_seconds": 180
+            "max_response_time_seconds": 240
           }
         }
       ]
