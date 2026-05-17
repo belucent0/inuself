@@ -441,13 +441,13 @@ services:
       - HSA_ENABLE_DXG_DETECTION=1
     # EXAONE 4.0은 Llama 호환 architecture → vLLM 정식 지원.
     # 1.2B bf16 ≈ 2.4GB weights + KV cache 합쳐 ~3GB. ai-llm(Qwen3-VL-4B) GPU
-    # 점유 고려해 utilization 0.08 (≈2.5GB)로 조여둠. max-num-seqs=2: 우리
-    # CHUNK_CONCURRENCY=1이라 사실상 한 콘텐츠당 직렬이고, 다른 콘텐츠 동시
-    # 번역 대비 여유분만 둠. 추후 처리량 부족 시 늘리는 게 안전.
+    # 점유 고려해 utilization 0.06 (≈1.9GB)로 더 조여둠 — 32GB VRAM 한도에서
+    # ai-llm OOM(exit 137) 발생 후 ai-translate 마진 축소. max-num-seqs=2:
+    # 우리 CHUNK_CONCURRENCY=1이라 사실상 직렬, 동시 콘텐츠 대비 여유분만 둠.
     command: >
       vllm serve LGAI-EXAONE/EXAONE-4.0-1.2B
       --max-model-len 8192
-      --gpu-memory-utilization 0.08
+      --gpu-memory-utilization 0.06
       --max-num-seqs 2
       --enable-prefix-caching
       --dtype bfloat16
