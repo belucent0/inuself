@@ -230,22 +230,31 @@ async def request_ai_gateway_completion_async(
     request_timeout_seconds: float | None = None,
     max_retry_time: int | None = None,
     retry_interval: int | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
 ) -> str:
     """AI Gateway를 통한 비동기 Chat Completion 요청.
 
     AsyncOpenAI SDK를 사용하여 AI Gateway와 통신합니다.
     이벤트 루프를 블로킹하지 않으므로 FastAPI와 함께 사용하기에 적합합니다.
+
+    base_url/api_key를 명시 지정하면 AI Gateway 대신 해당 endpoint를 직접
+    호출한다 (PR-Translate.3: ai-translate 컨테이너 직접 호출용).
     """
     # circuit breaker 차단 중이면 즉시 fail (partial retry loop의 라운드 진입 직전 검사)
     vllm_breaker.assert_closed()
 
-    client = get_async_openai_client(
-        settings.ai_gateway_url, settings.ai_gateway_api_key
+    effective_base_url = base_url or settings.ai_gateway_url
+    effective_api_key = (
+        api_key if api_key is not None else settings.ai_gateway_api_key
     )
+    client = get_async_openai_client(effective_base_url, effective_api_key)
 
     model_name = model or settings.ai_gateway_model
 
-    logger.info("[AI Gateway/Async] Request: model=%s", model_name)
+    logger.info(
+        "[AI Gateway/Async] Request: model=%s, base=%s", model_name, effective_base_url
+    )
 
     # 재시도 로직 (모델 로딩 대기)
     effective_request_timeout = (
