@@ -37,7 +37,7 @@ def get_openai_client(base_url: str, api_key: str) -> OpenAI:
     return OpenAI(
         base_url=f"{base_url.rstrip('/')}/v1",
         api_key=api_key,
-        timeout=120.0,
+        timeout=300.0,
     )
 
 
@@ -47,7 +47,7 @@ def get_async_openai_client(base_url: str, api_key: str) -> AsyncOpenAI:
     return AsyncOpenAI(
         base_url=f"{base_url.rstrip('/')}/v1",
         api_key=api_key,
-        timeout=120.0,
+        timeout=300.0,
     )
 
 
@@ -101,7 +101,7 @@ def request_ai_gateway_completion(
 
     # 재시도 로직 (모델 로딩 대기)
     effective_request_timeout = (
-        request_timeout_seconds if request_timeout_seconds is not None else 120.0
+        request_timeout_seconds if request_timeout_seconds is not None else 300.0
     )
     effective_max_retry_time = max_retry_time if max_retry_time is not None else 180
     effective_retry_interval = retry_interval if retry_interval is not None else 3
@@ -258,7 +258,7 @@ async def request_ai_gateway_completion_async(
 
     # 재시도 로직 (모델 로딩 대기)
     effective_request_timeout = (
-        request_timeout_seconds if request_timeout_seconds is not None else 120.0
+        request_timeout_seconds if request_timeout_seconds is not None else 300.0
     )
     effective_max_retry_time = max_retry_time if max_retry_time is not None else 180
     effective_retry_interval = retry_interval if retry_interval is not None else 3
