@@ -16,13 +16,6 @@ from worker.config import get_settings
 from worker.logging_config import logger
 from worker.utils.event_loop import setup_worker_event_loop, cleanup_worker_event_loop
 from worker.utils.storage import download_file, upload_json
-
-# from worker.utils.postprocess import (
-#     split_long_segments,
-#     merge_consecutive_speaker_segments,
-#     rebuild_speaker_stats,
-#     rebuild_transcription_text,
-# )
 from worker.utils.event_publisher import publish_file_progress
 from worker.utils.result_publisher import (
     publish_asr_started,

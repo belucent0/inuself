@@ -27,8 +27,6 @@ from ..utils.task_queue_adapter import get_task_queue
 from ..utils.progress_tracker import PipelineProgress
 from .transcription_postprocess import (
     segments_to_text_with_metadata,
-    split_long_segments,
-    merge_consecutive_speaker_segments,
     rebuild_speaker_stats,
     rebuild_transcription_text,
 )
@@ -291,42 +289,25 @@ class StreamConsumer:
             result_data = download_json(result_s3_key)
             transcription_data = result_data.get("transcription", {})
 
-            # Worker Raw Segment 후처리 (트랜잭션 밖에서 실행)
-            original_segments = transcription_data.get("segments", [])
+            # Worker가 ASR + diarization을 결합한 segment를 그대로 사용한다.
+            # (이전엔 split_long_segments(max=30)로 30초마다 강제 분할했으나
+            #  FLM 모드가 폐지되어 dead code였고, whisper 결과를 무효화하는
+            #  회귀 원인이었음. worker 결과를 신뢰한다.)
+            segments = transcription_data.get("segments", [])
 
-            if original_segments:
-                logger.info(
-                    f"Applying post-processing for file_id={file_id} (segments: {len(original_segments)})"
+            if segments:
+                transcription_data["text"] = rebuild_transcription_text(segments)
+                speaker_stats = rebuild_speaker_stats(segments)
+                num_speakers = len(speaker_stats)
+                speaker_labels = sorted(speaker_stats.keys())
+
+                transcription_data.setdefault("diarization_metadata", {}).update(
+                    {"num_speakers": num_speakers, "speaker_labels": speaker_labels}
                 )
-
-                split_segments = split_long_segments(
-                    original_segments, max_duration=30.0
-                )
-                processed_segments = merge_consecutive_speaker_segments(
-                    split_segments, max_duration=30.0
-                )
-
-                transcription_data["segments"] = processed_segments
-                transcription_data["text"] = rebuild_transcription_text(
-                    processed_segments
-                )
-
-                new_speaker_stats = rebuild_speaker_stats(processed_segments)
-
-                if "diarization_metadata" not in transcription_data:
-                    transcription_data["diarization_metadata"] = {}
-                transcription_data["diarization_metadata"].update(
-                    {
-                        "num_speakers": len(new_speaker_stats),
-                        "speaker_labels": sorted(new_speaker_stats.keys()),
-                    }
-                )
-
-                num_speakers = len(new_speaker_stats)
-                speaker_labels = sorted(new_speaker_stats.keys())
 
                 logger.info(
-                    f"Post-processing completed: {len(original_segments)} -> {len(processed_segments)} segments"
+                    f"Transcription accepted: {len(segments)} segments, "
+                    f"{num_speakers} speakers"
                 )
 
             # 트랜잭션 1: Transcription 저장 및 상태 업데이트 (DB 작업만)
