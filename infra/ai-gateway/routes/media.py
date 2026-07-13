@@ -8,7 +8,11 @@ serverless 모드에서는 RunPod API로 위임합니다.
 import base64
 import json
 import logging
+import sys
 import tempfile
+import wave
+from array import array
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +36,102 @@ from config import (
 from utils.response import build_openai_response
 
 logger = logging.getLogger(__name__)
+
+# ponytail: mirrors vLLM 0.20.1rc1 defaults; remove when upstream uses real chunk starts.
+_VLLM_CHUNK_SECONDS = 30
+_VLLM_SPLIT_SEARCH_SECONDS = 1
+_VLLM_ENERGY_WINDOW_SECONDS = 0.1
+
+
+def _vllm_chunk_timeline(audio_bytes: bytes) -> tuple[list[float], float] | None:
+    """Reproduce vLLM's low-energy chunk boundaries for 16 kHz PCM WAV."""
+    try:
+        with wave.open(BytesIO(audio_bytes), "rb") as wav:
+            if (
+                wav.getnchannels() != 1
+                or wav.getsampwidth() != 2
+                or wav.getframerate() != 16000
+            ):
+                return None
+            sample_rate = wav.getframerate()
+            total_samples = wav.getnframes()
+            chunk_size = sample_rate * _VLLM_CHUNK_SECONDS
+            search_size = sample_rate * _VLLM_SPLIT_SEARCH_SECONDS
+            window_size = int(sample_rate * _VLLM_ENERGY_WINDOW_SECONDS)
+            starts = [0.0]
+            cursor = 0
+
+            while cursor + chunk_size < total_samples:
+                search_start = cursor + chunk_size - search_size
+                wav.setpos(search_start)
+                samples = array("h")
+                samples.frombytes(wav.readframes(search_size))
+                if sys.byteorder != "little":
+                    samples.byteswap()
+
+                offset = min(
+                    range(0, len(samples) - window_size, window_size),
+                    key=lambda start: sum(
+                        sample * sample
+                        for sample in samples[start : start + window_size]
+                    ),
+                )
+                cursor = search_start + offset
+                starts.append(cursor / sample_rate)
+
+            return starts, total_samples / sample_rate
+    except (EOFError, wave.Error):
+        return None
+
+
+def _correct_vllm_chunk_timestamps(
+    segments: list[dict], audio_bytes: bytes
+) -> list[dict]:
+    """Correct vLLM offsets that use chunk_index * 30 instead of real starts."""
+    timeline = _vllm_chunk_timeline(audio_bytes)
+    if timeline is None:
+        return segments
+
+    starts, duration = timeline
+    corrected = []
+    max_shift = 0.0
+    for original in segments:
+        segment = dict(original)
+        try:
+            seek = float(segment["seek"])
+        except (KeyError, TypeError, ValueError):
+            corrected.append(segment)
+            continue
+
+        chunk_index = round(seek / _VLLM_CHUNK_SECONDS)
+        nominal_start = chunk_index * _VLLM_CHUNK_SECONDS
+        if chunk_index >= len(starts) or abs(seek - nominal_start) > 0.001:
+            corrected.append(segment)
+            continue
+
+        delta = starts[chunk_index] - nominal_start
+        max_shift = max(max_shift, abs(delta))
+        chunk_end = (
+            starts[chunk_index + 1]
+            if chunk_index + 1 < len(starts)
+            else duration
+        )
+        for key in ("start", "end"):
+            if segment.get(key) is not None:
+                segment[key] = min(
+                    chunk_end,
+                    max(starts[chunk_index], float(segment[key]) + delta),
+                )
+        segment["seek"] = starts[chunk_index]
+        corrected.append(segment)
+
+    if max_shift:
+        logger.info(
+            "[ASR] Corrected vLLM chunk timestamps: chunks=%d, max_shift=%.2fs",
+            len(starts),
+            max_shift,
+        )
+    return corrected
 
 
 async def handle_media_request(body: dict) -> JSONResponse:
@@ -98,6 +198,9 @@ async def _handle_asr(body: dict) -> JSONResponse:
         # vLLM 응답: {text, language, duration, segments: [{id, start, end, text, ...}]}
         # worker 기대: {text, segments: [{id, start, end, text}], language, model}
         # id 보존: frontend가 segment.id로 unique key/active 비교에 사용. 누락 시 모든 segment 동시 활성화 회귀.
+        raw_segments = _correct_vllm_chunk_timestamps(
+            vllm_result.get("segments", []), audio_bytes
+        )
         segments = [
             {
                 "id": seg.get("id", idx),
@@ -105,7 +208,7 @@ async def _handle_asr(body: dict) -> JSONResponse:
                 "end": seg.get("end", 0.0),
                 "text": seg.get("text", ""),
             }
-            for idx, seg in enumerate(vllm_result.get("segments", []))
+            for idx, seg in enumerate(raw_segments)
         ]
         worker_result = {
             "text": vllm_result.get("text", ""),
