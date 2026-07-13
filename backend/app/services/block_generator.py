@@ -52,6 +52,8 @@ SECTION_MIN_LENGTH = 50
 # vLLM 부하 회피: 본문 섹션 병렬 호출 동시성 상한
 # (vLLM Qwen3-VL-4B의 안정 동시 처리량 ≈ 2~3개. 그 이상은 큐 폭주로 timeout 유발)
 SECTION_CONCURRENCY = 2
+SUMMARY_MAX_TOKENS = 2400
+SUMMARY_TRANSCRIPT_CHARS = 10000  # ponytail: use tokenizer budgeting if the model or prompt changes
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +295,9 @@ class BlockGenerator:
             b.attempts += 1
 
         try:
-            prompt = PHASE1_STRUCTURE_TEMPLATE_V2.format(transcript=transcript[:10000])
+            prompt = PHASE1_STRUCTURE_TEMPLATE_V2.format(
+                transcript=transcript[:SUMMARY_TRANSCRIPT_CHARS]
+            )
             response = await request_ai_gateway_completion_async(
                 settings=self.settings,
                 model=self.settings.ai_gateway_model_summarize,
@@ -301,6 +305,7 @@ class BlockGenerator:
                     {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
+                max_tokens=SUMMARY_MAX_TOKENS,
             )
             parsed = self._parse_metadata_response(response)
         except CircuitBreakerOpenError:
@@ -379,7 +384,7 @@ class BlockGenerator:
                     toc="|".join(headings),
                     keywords="|".join(keywords),
                     title=title,
-                    transcript=transcript,
+                    transcript=transcript[:SUMMARY_TRANSCRIPT_CHARS],
                 )
                 response = await request_ai_gateway_completion_async(
                     settings=self.settings,
@@ -388,6 +393,7 @@ class BlockGenerator:
                         {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
                     ],
+                    max_tokens=SUMMARY_MAX_TOKENS,
                 )
                 content = self._parse_section_response(response)
                 if len(content) < SECTION_MIN_LENGTH:
