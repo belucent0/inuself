@@ -164,7 +164,7 @@ export const useChatStore = create<ChatStore>()(
       // 메시지 전송
       // --------------------------------------------------------
       regenerate: async (mode = 'auto', model) => {
-        const { threadId, messages, _startStreaming, _appendToken, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming } = get()
+        const { threadId, messages, _startStreaming, _appendToken, setStreamingContent, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming } = get()
         if (!threadId) return
 
         // 마지막 assistant 메시지 제거
@@ -179,6 +179,7 @@ export const useChatStore = create<ChatStore>()(
         try {
           await regenerateStream(threadId, mode, model, {
             onToken: _appendToken,
+            onContent: setStreamingContent,
             onThinkingStep: _addThinkingStep,
             onSource: _addSource,
             onSources: _setSources,

@@ -1,7 +1,9 @@
 """Task Queue 추상화 레이어 - Celery를 사용."""
 
 from abc import ABC, abstractmethod
+from functools import lru_cache
 import redis
+from redis.exceptions import RedisError
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 from ..core.config import get_settings
@@ -10,6 +12,9 @@ from ..core.telemetry import inject_trace_context, get_trace_id, get_tracer
 
 # 활성 작업 추적 TTL (2시간 - 최대 작업 시간 + 여유분)
 ACTIVE_JOB_TTL = 7200
+AGENT_EVENT_CHANNEL_PREFIX = "events:agent:"
+AGENT_THREAD_KEY_PREFIX = "active_agent_thread:"
+AGENT_DISPATCH_KEY_PREFIX = "dispatched_agent_message:"
 
 
 class TaskQueueAdapter(ABC):
@@ -74,6 +79,18 @@ class TaskQueueAdapter(ABC):
             job_id: 작업 ID (성공 시)
             None: 중복으로 스킵됨
         """
+        pass
+
+    @abstractmethod
+    def enqueue_agent_job(
+        self,
+        *,
+        thread_id: str,
+        user_id: str,
+        user_message_id: str,
+        assistant_message_id: str,
+    ) -> str:
+        """Queue one persisted assistant message for Agent Worker execution."""
         pass
 
     @abstractmethod
@@ -293,6 +310,48 @@ class CeleryAdapter(TaskQueueAdapter):
             headers=headers,
         )
 
+    def enqueue_agent_job(
+        self,
+        *,
+        thread_id: str,
+        user_id: str,
+        user_message_id: str,
+        assistant_message_id: str,
+    ) -> str:
+        headers = {}
+        inject_trace_context(headers)
+        result = self.celery.send_task(
+            "app.tasks.agent_task.process_agent_message",
+            kwargs={
+                "thread_id": thread_id,
+                "user_id": user_id,
+                "user_message_id": user_message_id,
+                "assistant_message_id": assistant_message_id,
+            },
+            queue="agent",
+            task_id=assistant_message_id,
+            headers=headers,
+        )
+        try:
+            self.redis.setex(
+                f"{AGENT_DISPATCH_KEY_PREFIX}{assistant_message_id}",
+                ACTIVE_JOB_TTL,
+                result.id,
+            )
+        except RedisError as exc:
+            # The task may already be in the broker; the message lock makes recovery duplicates safe.
+            logger.warning(
+                "[TaskQueue] Agent dispatch marker failed: message_id={} error={}",
+                assistant_message_id,
+                exc,
+            )
+        logger.info(
+            "[TaskQueue] Agent job enqueued: thread_id={} message_id={}",
+            thread_id,
+            assistant_message_id,
+        )
+        return result.id
+
     def get_job_status(self, job_id: str) -> str:
         from celery.result import AsyncResult
 
@@ -300,6 +359,7 @@ class CeleryAdapter(TaskQueueAdapter):
         return result.status
 
 
+@lru_cache(maxsize=1)
 def get_task_queue() -> TaskQueueAdapter:
     """Celery Task Queue 어댑터를 반환."""
     import logging
