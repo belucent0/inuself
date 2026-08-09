@@ -15,15 +15,15 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://asr-valkey:6379/0")
 
 # ============================================================
 # 컨테이너 추론 백엔드 (refactor/inference)
-# - OCR_BASE_URL: dots.ocr llama-server (asr-ocr 컨테이너)
-#   accuracy/speed 분기 없이 단일 모델로 통일
+# - OCR_BASE_URL: Gemma 4 multimodal vLLM (ai-llm 컨테이너)
+#   chat/summary/OCR을 단일 모델로 통일
 # ============================================================
-OCR_BASE_URL = os.getenv("OCR_BASE_URL", "http://ai-ocr:8080")
-OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "dots.ocr")
+OCR_BASE_URL = os.getenv("OCR_BASE_URL", "http://ai-llm:8000")
+OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "gemma4-12b")
 OCR_REQUEST_TIMEOUT = float(os.getenv("OCR_REQUEST_TIMEOUT", "300"))
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ai-llm:8000")
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3-4b-instruct")
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemma4-12b")
 LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "300"))
 
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "http://ai-asr-vllm:8000")
