@@ -25,6 +25,9 @@ OCR_REQUEST_TIMEOUT = float(os.getenv("OCR_REQUEST_TIMEOUT", "300"))
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ai-llm:8000")
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemma4-12b")
 LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "300"))
+NPU_LLM_BASE_URL = os.getenv("NPU_LLM_BASE_URL", "")
+NPU_LLM_MODEL_NAME = os.getenv("NPU_LLM_MODEL_NAME", "gemma4-it:e2b")
+NPU_LLM_REQUEST_TIMEOUT = float(os.getenv("NPU_LLM_REQUEST_TIMEOUT", "60"))
 
 ASR_BASE_URL = os.getenv("ASR_BASE_URL", "http://ai-asr-vllm:8000")
 ASR_MODEL_NAME = os.getenv("ASR_MODEL_NAME", "whisper-large-v3-turbo")
@@ -59,6 +62,7 @@ def _import_tier_config():
     """tier_config.py를 경로 기반으로 직접 import."""
     search_paths = [
         "/app/infra/shared/tier_config.py",
+        os.path.join(os.path.dirname(__file__), "..", "shared", "tier_config.py"),
         os.path.join(os.path.dirname(__file__), "..", "infra", "shared", "tier_config.py"),
         os.path.join(os.path.dirname(__file__), "..", "..", "shared", "tier_config.py"),
     ]
