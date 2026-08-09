@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 TIER_MODEL_MAP = {
-    "tier-simple": os.getenv("TIER_SIMPLE_MODEL", "qwen3-4b-instruct"),
-    "tier-thinking": os.getenv("TIER_THINKING_MODEL", "qwen3-4b-instruct"),
-    "tier-recap": os.getenv("RECAP_SUMMARIZE_MODEL", "qwen3-4b-instruct"),
+    "tier-simple": os.getenv("TIER_SIMPLE_MODEL", "gemma4-12b"),
+    "tier-thinking": os.getenv("TIER_THINKING_MODEL", "gemma4-12b"),
+    "tier-recap": os.getenv("RECAP_SUMMARIZE_MODEL", "gemma4-12b"),
 }
 
 
@@ -32,7 +32,7 @@ def resolve_tier_to_model(model_name: str) -> str:
     """티어명을 실제 모델명으로 변환.
 
     Args:
-        model_name: 요청된 모델명 (예: "tier-simple", "qwen3-4b-instruct")
+        model_name: 요청된 모델명 (예: "tier-simple", "gemma4-12b")
 
     Returns:
         실제 모델명
@@ -53,7 +53,7 @@ def get_available_tiers() -> list[str]:
 # Tier-based Routing Policy (NPU/GPU 우선순위)
 # ============================================================
 # v1.2.0 현재: local-gpu 모드에서는 모든 LLM 요청이 vLLM(ai-llm 컨테이너,
-# qwen3-4b-instruct)으로 단일 라우팅되어 본 정책은 사용되지 않습니다.
+# gemma4-12b)으로 단일 라우팅되어 본 정책은 사용되지 않습니다.
 # NPU 도입(향후)이나 NPU/GPU 혼합 운영 시 활용하기 위해 정의를 보존합니다.
 #
 # - primary: 우선 사용할 디바이스 (npu 또는 gpu)

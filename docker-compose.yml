@@ -329,15 +329,9 @@ services:
     restart: unless-stopped
 
   # ─── 추론 컨테이너 (refactor/inference): WSL2 + AMD ROCm gfx1150 ───
-  # ai-llm: vLLM 0.20 + Qwen3-4B-Instruct-2507 BF16 (always-on, util=0.45).
-  #          gfx1150에서 측정 결과 6.8 tok/s — Gemma 4 E4B(5.0) 대비 +36%, 한국어
-  #          품질 동급/우위. text-only dense 4B라 multimodal vision encoder
-  #          OOM 위험 없음. 양자화(AWQ/MXFP4)는 INT4 GEMM native 부재로 도리어
-  #          슬로다운 (Qwen3-8B-AWQ 1.5 / gpt-oss-20b MXFP4 0.7 측정 확인) →
-  #          BF16 dense가 본 환경 sweet spot.
-  #          torch.compile 캐시는 vllm-compile-cache 볼륨에 디스크 보존 →
-  #          첫 빌드만 길고 다음 cold start부터 빠름. 첫 빌드 stuck 시
-  #          --enforce-eager로 회귀 검토.
+  # ai-llm: vLLM 0.26 + official Gemma 4 12B W4A16 CT.
+  #          Official BF16 assistant MTP k=1; text chat + vision OCR unified.
+  #          WSL 32GiB limit: fixed 4GiB KV cache instead of UMA utilization.
   # ai-ocr: llama.cpp HIP + dots.ocr 1.7B Q8 (always-on, ~3.8 GB VRAM)
   #          Override model via env: OCR_MODEL_REPO / OCR_MODEL_FILE / OCR_MMPROJ_FILE
   # ai-asr: transformers Whisper-large-v3-turbo FastAPI (lazy-load,
@@ -345,7 +339,10 @@ services:
   # ai-diarize: pyannote.audio community-1 FastAPI (lazy-load, 같은 패턴)
 
   ai-llm:
-    image: ai-llm:1.0.0
+    build:
+      context: ./infra/inference/llm
+      dockerfile: Dockerfile
+    image: ai-llm-gemma4:0.26.0
     container_name: ai-llm
     ports:
       - "18000:8000"   # OpenAI-compatible API
@@ -354,23 +351,25 @@ services:
     volumes:
       - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so:ro
       - hf-cache-fast:/root/.cache/huggingface
-      - vllm-compile-cache:/root/.cache/vllm  # torch.compile cache 디스크 보존 (cold start 가속)
     environment:
       - HSA_ENABLE_DXG_DETECTION=1
-    # PoC: Qwen3-VL-4B-Instruct로 교체 — text chat + vision OCR을 단일 vLLM 인스턴스로 통합.
-    # vLLM 0.20.1+에서 Qwen3-VL 정식 지원 (우리 base image vllm_0.16.0 태그지만 내부 0.20.1rc1).
-    # 메모리: model ~8.5GB (BF16) + KV ~7.5GB = ~16GB (util 0.30 한도 19.5GB 내, 안전 마진).
-    # util 0.30: dots.ocr·ai-ocr-qwen 폐기 후 회수된 8GB의 일부를 KV cache로 이전.
+      - VLLM_USE_V2_MODEL_RUNNER=0
+      - HF_TOKEN=${HF_TOKEN:-}
     command: >
-      vllm serve Qwen/Qwen3-VL-4B-Instruct
+      vllm serve google/gemma-4-12B-it-qat-w4a16-ct
       --max-model-len 16384
-      --gpu-memory-utilization 0.30
-      --max-num-seqs 3
+      --kv-cache-memory 4294967296
+      --max-num-batched-tokens 512
+      --max-num-seqs 1
       --enable-prefix-caching
+      --enforce-eager
+      --model-impl vllm
       --dtype bfloat16
-      --limit-mm-per-prompt '{"image":1,"video":0}'
-      --mm-processor-kwargs '{"min_pixels":50176,"max_pixels":1003520}'
-      --served-model-name qwen3-4b-instruct
+      --limit-mm-per-prompt '{"image":1,"video":0,"audio":0}'
+      --speculative-config.method mtp
+      --speculative-config.model google/gemma-4-12B-it-qat-q4_0-unquantized-assistant
+      --speculative-config.num_speculative_tokens 1
+      --served-model-name gemma4-12b
       --host 0.0.0.0 --port 8000
     cap_add: [SYS_PTRACE]
     security_opt: [seccomp=unconfined]
@@ -424,7 +423,7 @@ services:
 
   # ai-translate: 번역 전용 sLLM (PR-Translate.3).
   # EXAONE 4.0-1.2B (LG, 2025, 한국어 dual-training)으로 영→한 transcript 번역 처리.
-  # 기존 ai-llm(Qwen3-VL-4B)의 GPU 큐 경합을 분리하기 위함. 메모리: model ~3GB + KV ~1.5GB ≈ 4-5GB.
+  # ai-llm(Gemma 4 12B)의 GPU 큐 경합을 분리하기 위함. 메모리: model ~3GB + KV ~1.5GB ≈ 4-5GB.
   # backend/translation_runner.py가 AI_TRANSLATE_URL로 직접 호출 (ai-gateway 경유 안 함).
   ai-translate:
     image: ai-llm:1.0.0
@@ -440,7 +439,7 @@ services:
     environment:
       - HSA_ENABLE_DXG_DETECTION=1
     # EXAONE 4.0은 Llama 호환 architecture → vLLM 정식 지원.
-    # 1.2B bf16 ≈ 2.4GB weights + KV cache 합쳐 ~3GB. ai-llm(Qwen3-VL-4B) GPU
+    # 1.2B bf16 ≈ 2.4GB weights + KV cache 합쳐 ~3GB. ai-llm(Gemma 4 12B) GPU
     # 점유 고려해 utilization 0.06 (≈1.9GB)로 더 조여둠 — 32GB VRAM 한도에서
     # ai-llm OOM(exit 137) 발생 후 ai-translate 마진 축소. max-num-seqs=2:
     # 우리 CHUNK_CONCURRENCY=1이라 사실상 직렬, 동시 콘텐츠 대비 여유분만 둠.
@@ -465,7 +464,7 @@ services:
       retries: 3
       start_period: 300s
 
-  # ai-ocr (dots.ocr): vLLM Qwen3-VL 통합 후 OCR 라우팅에서 제외됨.
+  # ai-ocr (dots.ocr): ai-llm vision 통합 후 OCR 라우팅에서 제외됨.
   # 단순 prompt OCR(고속/저비용 케이스) 도입 시 재활용 후보로 profile=legacy 분리.
   # 평소 안 띄움. 사용: `docker compose --profile legacy up ai-ocr`
   ai-ocr:
@@ -496,8 +495,8 @@ services:
       retries: 3
       start_period: 180s
 
-  # ai-ocr-qwen은 vLLM Qwen3-VL 통합으로 더 이상 필요 없음 (이전 PR #144 도입,
-  # 본 PR에서 제거). 모든 OCR이 ai-llm(vLLM Qwen3-VL-4B)으로 라우팅.
+  # ai-ocr-qwen은 ai-llm vision 통합으로 더 이상 필요 없음 (이전 PR #144 도입,
+  # 본 PR에서 제거). 모든 OCR이 ai-llm(vLLM Gemma 4 12B)으로 라우팅.
 
   # ai-asr: legacy — whisper.cpp HIP build (Whisper Large-v3-turbo F16).
   # vLLM Whisper(ai-asr-vllm) 채택으로 legacy profile 강등. fallback / 비교 측정 시 활성화.
@@ -657,12 +656,12 @@ services:
       - CODEX_API_BASE=http://cli-proxy-api:8317/v1
       - CLIPROXY_API_KEY=${CLIPROXY_API_KEY:-}
       # 컨테이너 추론 백엔드 (refactor/inference)
-      # OCR을 vLLM Qwen3-VL로 통합 — chat/요약/OCR이 단일 모델 사용.
-      # ai-llm이 Qwen3-VL-4B-Instruct를 서빙하며 OpenAI vision API 호환.
+      # OCR을 vLLM Gemma 4로 통합 — chat/요약/OCR이 단일 모델 사용.
+      # ai-llm이 Gemma 4 12B를 서빙하며 OpenAI vision API 호환.
       - OCR_BASE_URL=http://ai-llm:8000
-      - OCR_MODEL_NAME=qwen3-4b-instruct
+      - OCR_MODEL_NAME=gemma4-12b
       - LLM_BASE_URL=http://ai-llm:8000
-      - LLM_MODEL_NAME=qwen3-4b-instruct
+      - LLM_MODEL_NAME=gemma4-12b
       - ASR_BASE_URL=http://ai-asr-vllm:8000
       - DIARIZE_BASE_URL=http://ai-diarize:8003
       - EMBEDDING_BASE_URL=http://ai-embedding:8000

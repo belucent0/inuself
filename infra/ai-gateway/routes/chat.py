@@ -1,7 +1,7 @@
 """LLM Chat Completion 라우트.
 
 POST /v1/chat/completions — LLM 채팅 (스트리밍/비스트리밍).
-local-gpu 모드는 asr-llm 컨테이너(vLLM)로 직결, serverless 모드는
+local-gpu 모드는 ai-llm 컨테이너(vLLM)로 직결, serverless 모드는
 RunPod로, codex/tier-thinking은 Codex(CLIProxyAPI)로 라우팅.
 """
 
@@ -69,7 +69,7 @@ async def chat_completions(request: Request):
     if model == "tier-thinking":
         return await _handle_tier_thinking(body)
 
-    # 로컬 모드: asr-llm 컨테이너(vLLM) 직결
+    # 로컬 모드: ai-llm 컨테이너(vLLM) 직결
     if DEPLOY_MODE == "local-gpu":
         return await _handle_local_llm_container(body, stream)
 
@@ -80,7 +80,7 @@ async def chat_completions(request: Request):
 
 
 async def _handle_local_llm_container(body: dict, stream: bool):
-    """asr-llm 컨테이너(vLLM) 직접 호출 — Provider Manager / Redis Stream 우회.
+    """ai-llm 컨테이너(vLLM) 직접 호출 — Provider Manager / Redis Stream 우회.
 
     refactor/inference: chat·summary 모두 단일 모델(LLM_MODEL_NAME)로 통일.
     Codex / tier-thinking은 별도 처리되어 여기 도달하지 않는다.
@@ -153,9 +153,9 @@ async def _handle_tier_thinking(body: dict):
         return JSONResponse(response.model_dump())
 
     except (openai.APIError, openai.APITimeoutError, openai.APIConnectionError) as e:
-        logger.warning(f"[Chat] Codex failed ({e}), falling back to asr-llm container")
-        # refactor/inference: Provider Manager 우회 — asr-llm 컨테이너로 직결.
-        # Qwen3-4B-Instruct는 thinking 정확도가 Codex보다 낮지만 fallback 안전망 역할.
+        logger.warning(f"[Chat] Codex failed ({e}), falling back to ai-llm container")
+        # refactor/inference: Provider Manager 우회 — ai-llm 컨테이너로 직결.
+        # 로컬 Gemma 4 12B는 Codex 실패 시 fallback 안전망 역할.
         return await _handle_local_llm_container(body, body.get("stream", False))
 
 
