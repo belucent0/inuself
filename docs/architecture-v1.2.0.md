@@ -15,7 +15,7 @@
 | v1.0.0 | 2026-02-21 | Worker-Backend 분리, 초기 종합 문서 |
 | v1.0.1 | 2026-02-21 | lemonade-server / LLMTier 상수 / model_copy 정리 (incremental) |
 | v1.1.0 | 2026-02-27 | Frontend 상세, Backend 레이어, AI Agent 전체, WPI, DB 스키마, API 레퍼런스, Valkey 구조 추가 |
-| **v1.2.0** | 2026-05-04 | **현행.** Provider Manager(Redis Stream + Host PM2 프로세스) · LiteLLM 프록시 · FLM NPU 통합 · 옛 추론 Stream(`stream:chat:requests` 등) 모두 폐기. ai-gateway가 추론 컨테이너(`ai-llm`/`ai-asr`/`ai-diarize`/`ai-ocr`/`ai-embedding`) httpx 직결 호출. WSL ROCm 컨테이너 운영으로 통일. backend/worker 코드의 `litellm` 명칭도 `ai_gateway`로 일소(PR #124, #127). |
+| **v1.2.0** | 2026-05-04 | **현행.** Provider Manager(Redis Stream + Host PM2 프로세스) · LiteLLM 프록시 · FLM NPU 통합 · 옛 추론 Stream(`stream:chat:requests` 등) 모두 폐기. ai-gateway가 추론 컨테이너(`ai-llm`/`ai-asr-vllm`/`ai-diarize`/`ai-embedding`)를 httpx로 직접 호출. WSL ROCm 컨테이너 운영으로 통일. backend/worker 코드의 `litellm` 명칭도 `ai_gateway`로 일소(PR #124, #127). |
 
 ---
 
@@ -69,9 +69,9 @@
 ┌─────────────────────────┐   ┌──────────────────────────────────────┐
 │  DATA                   │   │  INFERENCE CONTAINERS (GPU)          │
 │  PostgreSQL + pgvector  │   │  ai-llm       :8000 vLLM (Gemma 4)   │
-│  Valkey (Redis)         │   │  ai-asr       :8001 Whisper-large-v3 │
+│  Valkey (Redis)         │   │  ai-asr-vllm  :8000 Whisper-large-v3 │
 │  MinIO (S3) · SearXNG   │   │  ai-diarize   :8003 pyannote comm-1  │
-└─────────────────────────┘   │  ai-ocr       :8080 dots.ocr (gguf)  │
+└─────────────────────────┘   │  ai-translate :8000 EXAONE 1.2B      │
                               │  ai-embedding :8000 EmbeddingGemma   │
                               └──────────────────────────────────────┘
 ```
@@ -95,10 +95,10 @@ docker-compose.yml
 ├── ai-gateway     :4000       — FastAPI 추론 라우터 (httpx + AsyncOpenAI)
 ├── cli-proxy-api  :8317/:1455 — OAuth CLI Proxy (Codex 접근, serverless 폴백)
 │
-├── ai-llm         :8000       — vLLM Qwen3-4B-Instruct-2507 (BF16, ROCm)
-├── ai-asr         :8001       — Whisper-large-v3-turbo (transformers)
+├── ai-llm         :8000       — vLLM 0.26 Gemma 4 12B W4A16 CT + MTP k=1 (ROCm)
+├── ai-asr-vllm    :8000       — vLLM Whisper-large-v3-turbo
 ├── ai-diarize     :8003       — pyannote community-1 (ROCm)
-├── ai-ocr         :8080       — dots.ocr Q8 GGUF (llama.cpp HIP)
+├── ai-translate   :8000       — vLLM EXAONE 4.0 1.2B
 ├── ai-embedding   :8000(int)  — EmbeddingGemma 308M Q4 GGUF (llama.cpp)
 │
 ├── postgres       :5432       — PostgreSQL + pgvector
@@ -118,7 +118,7 @@ docker-compose.yml
 **서비스 의존성:**
 - `backend` → postgres(healthy), valkey(healthy), minio(healthy), ai-gateway(healthy)
 - `worker` → valkey(healthy), postgres(healthy), tempo(started)
-- `ai-gateway` → ai-llm/ai-asr/ai-diarize/ai-ocr/ai-embedding (httpx 호출 시점에만)
+- `ai-gateway` → ai-llm/ai-asr-vllm/ai-diarize/ai-embedding (httpx 호출 시점에만)
 - `langfuse` → postgres(healthy)
 
 ### 1.3 호스트 환경 (WSL2 + ROCm)
@@ -570,9 +570,9 @@ IntentParserNode의 TierRouter가 쿼리 복잡도에 따라 LLM Tier를 결정�
 
 | Tier | 모델 (v1.2.0) | 특징 |
 |------|--------------|------|
-| `tier-simple` | `qwen3-4b-instruct` (ai-llm vLLM) | 저지연, 일반 대화 |
-| `tier-thinking` | `qwen3-4b-instruct` (local) → Codex(serverless fallback) | 복잡한 추론, 분석 |
-| `tier-recap` | `qwen3-4b-instruct` (요약 전용 라우팅) | 문서 요약 |
+| `tier-simple` | `gemma4-12b` (ai-llm vLLM) | 일반 대화 |
+| `tier-thinking` | `gemma4-12b` (local) → Codex(serverless fallback) | 복잡한 추론, 분석 |
+| `tier-recap` | `gemma4-12b` (요약 전용 라우팅) | 문서 요약 |
 | `codex-medium` | CLIProxy API (OpenAI Codex) | WPI 보고서, 코드 생성 (serverless 모드) |
 
 ### 4.7 검색 재시도 플로우 (V8.4)
@@ -700,8 +700,8 @@ scan_result (
     │ ContentService.create()  → DB: file(QUEUED) + content
     ▼
 [Celery Worker: asr/ocr queue]
-    │ ASR Pipeline (오디오): WAV → ai-asr (Whisper-large-v3-turbo) → 전사 텍스트
-    │ OCR Pipeline (문서): PDF/Image → MarkItDown/Tesseract + ai-ocr (dots.ocr) → 텍스트
+    │ ASR Pipeline (오디오): WAV → ai-asr-vllm (Whisper-large-v3-turbo) → 전사 텍스트
+    │ OCR Pipeline (문서): PDF/Image → MarkItDown/Tesseract + ai-llm (Gemma 4 vision) → 텍스트
     │ LLM Pipeline: 전사/OCR 텍스트 → ai-gateway → ai-llm (Gemma 4) → 요약 (JSONB)
     ▼
 [Valkey Pub/Sub]
@@ -1234,10 +1234,10 @@ worker/
 ├── pipelines/             # ai-gateway 호출 파이프라인 (GPU 추론은 컨테이너에서)
 │   ├── asr/
 │   │   ├── __init__.py             # ASR 실행 진입점
-│   │   ├── ai_gateway_audio_client.py  # ai-gateway → ai-asr/ai-diarize
+│   │   ├── ai_gateway_audio_client.py  # ai-gateway → ai-asr-vllm/ai-diarize
 │   │   └── vad_utils.py            # Voice Activity Detection
 │   ├── ocr/
-│   │   └── __init__.py    # OCR 실행 진입점 (ai-gateway → ai-ocr)
+│   │   └── __init__.py    # OCR 실행 진입점 (ai-gateway → ai-llm vision)
 │   ├── llm/
 │   │   ├── __init__.py             # LLM 실행 진입점
 │   │   └── ai_gateway_client.py    # ai-gateway → ai-llm
@@ -1268,8 +1268,8 @@ Processor (Task ↔ Pipeline 브릿지)
     │ Valkey Pub/Sub 진행률 발행
     ▼
 Pipeline (ai-gateway 호출, 실제 추론은 ai-* 컨테이너 GPU에서)
-    │ pipelines/asr/ → ai-gateway → ai-asr (Whisper) / ai-diarize (pyannote)
-    │ pipelines/ocr/ → ai-gateway → ai-ocr (dots.ocr)
+    │ pipelines/asr/ → ai-gateway → ai-asr-vllm (Whisper) / ai-diarize (pyannote)
+    │ pipelines/ocr/ → ai-gateway → ai-llm (Gemma 4 vision)
     └ pipelines/llm/ → ai-gateway → ai-llm (vLLM Gemma 4)
 ```
 
@@ -1301,11 +1301,11 @@ ai-gateway (FastAPI :4000)
     │   - serverless 모드: Codex(CLIProxy) / RunPod 폴백
     ▼ httpx.AsyncClient
 ┌──────────────────┬──────────────────┬──────────────────┐
-ai-llm :8000       ai-asr :8001       ai-diarize :8003
-(vLLM Gemma 4)     (Whisper-large-v3) (pyannote comm-1)
+ai-llm :8000       ai-asr-vllm :8000  ai-diarize :8003
+(vLLM Gemma 4)     (vLLM Whisper)      (pyannote comm-1)
 
-ai-ocr :8080       ai-embedding :8000(internal)
-(dots.ocr GGUF)    (EmbeddingGemma 308M GGUF)
+ai-translate :8000 ai-embedding :8000(internal)
+(vLLM EXAONE)      (EmbeddingGemma 308M GGUF)
 ```
 
 > v1.1.0의 **LiteLLM 프록시 + Provider Manager(Redis Stream + Host PM2)**는 v1.2.0에서 제거.
@@ -1337,37 +1337,72 @@ infra/ai-gateway/
 
 | Tier | Local 모델 | Serverless 폴백 | 용도 |
 |------|-----------|-----------------|------|
-| `tier-simple` | `qwen3-4b-instruct` (ai-llm) | codex-low | 짧은 응답, 분류 |
-| `tier-standard` | `qwen3-4b-instruct` (ai-llm) | codex-medium | 일반 채팅, RAG |
-| `tier-thinking` | `qwen3-4b-instruct` (ai-llm) | codex-high | 추론, WPI 보고서 |
+| `tier-simple` | `gemma4-12b` (ai-llm) | codex-low | 짧은 응답, 분류 |
+| `tier-standard` | `gemma4-12b` (ai-llm) | codex-medium | 일반 채팅, RAG |
+| `tier-thinking` | `gemma4-12b` (ai-llm) | codex-high | 추론, WPI 보고서 |
 | `embedding` | `embeddinggemma-300m` (ai-embedding) | bge-small-en-v1.5 (RunPod) | 벡터화 |
-| `asr` | Whisper-large-v3-turbo (ai-asr) | — | 음성 전사 |
+| `asr` | Whisper-large-v3-turbo (ai-asr-vllm) | — | 음성 전사 |
 | `diarization` | pyannote community-1 (ai-diarize) | — | 화자 분리 |
-| `ocr` | dots.ocr Q8 (ai-ocr) | — | 한국어 OCR + 표 |
+| `ocr` | `gemma4-12b` vision (ai-llm) | — | 이미지 OCR + 표 |
 
 라우팅 정책: `DEPLOY_MODE=local-gpu`(기본) → 컨테이너 직결, `DEPLOY_MODE=serverless` → Codex/RunPod.
+
+> `ai-embedding`은 벡터 생성 전용이다. 별도 cross-encoder 리랭커 서비스는 없으며,
+> 웹 검색은 RRF·키워드 관련성·품질/본문 점수로, 문서 RAG는 키워드 검색과
+> pgvector 유사도를 RRF로 병합해 재정렬한다. 임베딩 호출이 실패하면 키워드 검색으로 fallback한다.
 
 ### 12.4 추론 컨테이너 사양
 
 | 컨테이너 | 이미지/베이스 | GPU 사용 | 모델 | 컨텍스트 |
 |---------|--------------|---------|------|---------|
-| `ai-llm` | `vllm/vllm-openai` (ROCm) | gfx1150 | Qwen3-4B-Instruct-2507 BF16 | 16384 |
-| `ai-asr` | `huggingface/transformers-pytorch-rocm` | gfx1150 | Whisper-large-v3-turbo | — |
+| `ai-llm` | `vllm/vllm-openai-rocm:v0.26.0` | gfx1150 | Gemma 4 12B W4A16 CT + MTP k=1 | 16384 |
+| `ai-asr-vllm` | `ai-llm:1.0.0` (vLLM ROCm) | gfx1150 | Whisper-large-v3-turbo | — |
 | `ai-diarize` | `pyannote-audio` (custom ROCm build) | gfx1150 | community-1 | — |
-| `ai-ocr` | `llama.cpp` (HIP build) | gfx1150 | dots.ocr Q8 GGUF | 8192 |
+| `ai-ocr` (legacy profile) | `llama.cpp` (HIP build) | gfx1150 | dots.ocr Q8 GGUF | 8192 |
 | `ai-embedding` | `llama.cpp` (HIP build) | gfx1150 | EmbeddingGemma 300M Q4 GGUF | 2048 |
 
 **공유 자원:**
 - Docker named volume `hf-cache-fast` — HuggingFace 모델 캐시 공유
-- Docker named volume `vllm-compile-cache` — vLLM torch.compile 캐시 디스크 보존
-- 모든 컨테이너에 `/dev/kfd`, `/dev/dri` 디바이스 마운트 (ROCm)
+- Docker named volume `vllm-compile-cache` — ASR/번역 vLLM torch.compile 캐시 보존
+- WSL 추론 컨테이너에 `/dev/dxg`와 `libdxcore.so` 마운트
 
-### 12.5 호출 예시 (chat completion)
+### 12.5 ai-llm 서빙 체크리스트
+
+- Hugging Face에서 target/assistant 모델 사용 조건에 동의하고 `.env`에 `HF_TOKEN`을 설정한다. 이미 캐시된 호스트에서도 clean deploy를 위해 유지한다.
+- WSL 메모리는 32 GiB로 제한한다. `ai-llm`은 모델+MTP 약 8.89 GiB와 고정 4 GiB KV cache를 사용하며, `gpu_memory_utilization`은 사용하지 않는다.
+- 운영 설정은 `max-model-len=16384`, `max-num-seqs=1`, image=1, video/audio=0이다. 멀티모달은 이미지 OCR만 활성화한다.
+- cold start는 약 4분, 첫 OCR은 ROCm Triton JIT 때문에 약 45~50초까지 걸릴 수 있다.
+- 로그의 `TRITON_ATTN`/Triton JIT는 vLLM 내부 ROCm 커널이다. 별도 NVIDIA Triton Inference Server는 PoC 후 채택하지 않았으며 운영 서비스에 없다.
+
+```bash
+# build
+docker compose build ai-llm ai-gateway
+
+# 32 GiB 공유 UMA에서 교체 중 순간 OOM 방지
+docker compose stop ai-llm ai-asr-vllm ai-translate ai-diarize ai-embedding
+docker compose up -d --no-deps ai-llm
+
+# ai-llm healthy 확인 후 나머지를 순차 복구
+docker compose start ai-asr-vllm ai-translate ai-diarize ai-embedding
+docker compose up -d --no-deps ai-gateway
+
+# health / OCR smoke
+curl -f http://localhost:18000/v1/models
+python infra/inference/bench/ocr_smoke.py /path/to/image.jpg
+```
+
+배포 후 `docker compose ps`와 `docker logs ai-llm`에서 모든 GPU 서비스의 health,
+OOM/restart, `SpecDecoding metrics`를 확인한다. 롤백은 이전 Git release의
+`docker-compose.yml`과 `infra/inference/llm/` 이미지 정의를 다시 빌드·기동한다.
+32 GiB에서 Gemma와 나머지 GPU 서비스의 동시 상주는 별도 soak 검증 전까지
+순차 기동을 원칙으로 한다.
+
+### 12.6 호출 예시 (chat completion)
 
 ```
 client → ai-gateway POST /v1/chat/completions {model: "tier-thinking", messages: [...]}
    │
-   ▼ services/routing.py: tier_thinking → model="qwen3-4b-instruct", base=ai-llm
+   ▼ services/routing.py: tier_thinking → model="gemma4-12b", base=ai-llm
    │
    ▼ httpx AsyncClient stream: POST http://ai-llm:8000/v1/chat/completions
    │
@@ -1413,8 +1448,8 @@ maxmemory-policy: volatile-lru    # TTL 있는 키부터 LRU 삭제
 ### 13.4 데이터 플로우 요약 (v1.2.0)
 
 ```
-Backend ── HTTP ──► ai-gateway ── HTTP ──► ai-llm / ai-asr / ai-ocr / ai-diarize / ai-embedding
-                                              (vLLM / transformers / llama.cpp / pyannote)
+Backend ── HTTP ──► ai-gateway ── HTTP ──► ai-llm / ai-asr-vllm / ai-diarize / ai-embedding
+                                              (vLLM / vLLM / pyannote / llama.cpp)
 
 Worker ── PUBLISH events:* ──► Valkey ──► SUBSCRIBE events:* ──► Backend SSE/WebSocket
 Backend ── SET cache:search ──► Valkey ──► GET cache:search
@@ -1523,10 +1558,10 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | Embeddings 엔드포인트 | `infra/ai-gateway/routes/embeddings.py` |
 | Media (ASR/OCR) 엔드포인트 | `infra/ai-gateway/routes/media.py` |
 | Tier ↔ 모델 매핑 | `infra/shared/tier_config.py` |
-| ai-llm (vLLM) | `infra/inference/llm/` (Dockerfile + entrypoint) |
-| ai-asr (Whisper) | `infra/inference/asr/` |
+| ai-llm (vLLM) | `infra/inference/llm/` (Dockerfile + WSL shims/MTP patch) |
+| ai-asr-vllm (Whisper) | `docker-compose.yml`의 vLLM 서비스 정의 |
 | ai-diarize (pyannote) | `infra/inference/diarize/` |
-| ai-ocr (dots.ocr) | `infra/inference/ocr-qwen/` |
+| ai-ocr (legacy) | `infra/inference/ocr-qwen/` |
 | ai-embedding (EmbeddingGemma) | `infra/inference/embedding/` |
 | Codex(CLIProxy) 폴백 | `infra/cliproxy/` |
 | Celery 앱 | `worker/celery_app.py` |

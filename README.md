@@ -29,10 +29,10 @@
                                        ▼           ▼          ▼
 ┌─────────────────────────┐   ┌────────────────────────────────────────┐
 │  DATA                   │   │  INFERENCE CONTAINERS (ROCm GPU)       │
-│  PostgreSQL + pgvector  │   │  ai-llm        : vLLM (Gemma 4 E4B)    │
-│  Valkey (Redis)         │   │  ai-asr        : Whisper-large-v3-turbo│
+│  PostgreSQL + pgvector  │   │  ai-llm        : vLLM (Gemma 4 12B)    │
+│  Valkey (Redis)         │   │  ai-asr-vllm   : Whisper-large-v3-turbo│
 │  MinIO (S3) · SearXNG   │   │  ai-diarize    : pyannote community-1  │
-└─────────────────────────┘   │  ai-ocr        : dots.ocr (llama.cpp)  │
+└─────────────────────────┘   │  OCR            : ai-llm image input   │
                               │  ai-embedding  : EmbeddingGemma 308M   │
                               └────────────────────────────────────────┘
 ```
@@ -44,7 +44,7 @@
 | 기능 | 설명 |
 |------|------|
 | **AI 대화 에이전트** | LangGraph — 9 노드 · 6 도구 · 5 모드 (일반 / 딥서치 / 문서 / YouTube / WPI) |
-| **배치 음성 전사** | 음성·영상 파일 업로드 → ai-asr (Whisper-large-v3-turbo, ROCm GPU) 고정밀 전사 + ai-diarize 화자 분리, 상담 녹취록 처리 지원 |
+| **배치 음성 전사** | 음성·영상 파일 업로드 → ai-asr-vllm (Whisper-large-v3-turbo, ROCm GPU) 고정밀 전사 + ai-diarize 화자 분리, 상담 녹취록 처리 지원 |
 | **화자 분리** | Pyannote.audio + AMD GPU (ROCm) 가속, 배치 고정밀 모드 |
 | **문서 OCR & 요약** | PDF/이미지 → LLM Vision 처리, Celery 비동기 파이프라인 |
 | **LLM 요약** | 전사 결과 · 문서 · 영상 콘텐츠를 LLM으로 구조화 요약 |
@@ -74,6 +74,7 @@
 ## 문서
 
 - 아키텍처 상세 → [`docs/architecture-v1.2.0.md`](docs/architecture-v1.2.0.md)
+- Gemma 4 서빙·벤치마크 → [`docs/benchmarks/gemma4-12b-vllm-mtp.md`](docs/benchmarks/gemma4-12b-vllm-mtp.md)
 - GPU/ROCm 설치 가이드 → [`docs/archived/README-legacy.md`](docs/archived/README-legacy.md)
 
 ---
