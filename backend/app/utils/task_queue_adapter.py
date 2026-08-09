@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from functools import lru_cache
 import redis
+from redis.exceptions import RedisError
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 from ..core.config import get_settings
@@ -13,6 +14,7 @@ from ..core.telemetry import inject_trace_context, get_trace_id, get_tracer
 ACTIVE_JOB_TTL = 7200
 AGENT_EVENT_CHANNEL_PREFIX = "events:agent:"
 AGENT_THREAD_KEY_PREFIX = "active_agent_thread:"
+AGENT_DISPATCH_KEY_PREFIX = "dispatched_agent_message:"
 
 
 class TaskQueueAdapter(ABC):
@@ -330,6 +332,19 @@ class CeleryAdapter(TaskQueueAdapter):
             task_id=assistant_message_id,
             headers=headers,
         )
+        try:
+            self.redis.setex(
+                f"{AGENT_DISPATCH_KEY_PREFIX}{assistant_message_id}",
+                ACTIVE_JOB_TTL,
+                result.id,
+            )
+        except RedisError as exc:
+            # The task may already be in the broker; the message lock makes recovery duplicates safe.
+            logger.warning(
+                "[TaskQueue] Agent dispatch marker failed: message_id={} error={}",
+                assistant_message_id,
+                exc,
+            )
         logger.info(
             "[TaskQueue] Agent job enqueued: thread_id={} message_id={}",
             thread_id,

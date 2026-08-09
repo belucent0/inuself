@@ -181,6 +181,23 @@ class ThreadRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_stale_queued_assistant_messages(
+        self, created_before: datetime, limit: int = 100
+    ) -> list[AiMessage]:
+        """Return old queued assistant messages that may have missed broker handoff."""
+        stmt = (
+            select(AiMessage)
+            .where(
+                AiMessage.role == "assistant",
+                AiMessage.status == "queued",
+                AiMessage.created_at < created_before,
+            )
+            .order_by(AiMessage.created_at)
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def update_message_status(
         self,
         message_id: UUID,

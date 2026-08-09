@@ -116,6 +116,11 @@ async def _commit_and_enqueue_agent(
     assistant_message_id: str,
 ) -> None:
     """Commit the turn, then hand it to the Agent Worker exactly once per thread."""
+    await svc.update_message_metadata(
+        assistant_message_id,
+        agent_user_id=str(user_id),
+        agent_user_message_id=user_message_id,
+    )
     redis = get_redis_client()
     reserved = await redis.set(
         f"{AGENT_THREAD_KEY_PREFIX}{thread_id}",
@@ -144,25 +149,22 @@ async def _commit_and_enqueue_agent(
 
         await asyncio.to_thread(enqueue)
     except Exception as exc:
-        await _clear_agent_thread_slot(thread_id, assistant_message_id)
         if committed:
-            await svc.update_message_status(
+            logger.exception(
+                "[Thread] Agent enqueue deferred to watchdog: thread_id={} message_id={}",
+                thread_id,
                 assistant_message_id,
-                status="failed",
-                content=f"Failed to enqueue Agent Worker: {exc}",
             )
-            await session.commit()
-        else:
-            await session.rollback()
+            return
+
+        await _clear_agent_thread_slot(thread_id, assistant_message_id)
+        await session.rollback()
         logger.exception(
-            "[Thread] Agent enqueue failed: thread_id={} message_id={}",
+            "[Thread] Agent commit failed: thread_id={} message_id={}",
             thread_id,
             assistant_message_id,
         )
-        raise HTTPException(
-            status_code=503,
-            detail="Agent Worker queue is unavailable",
-        ) from exc
+        raise HTTPException(status_code=503, detail="Failed to persist agent request") from exc
 
 
 def _sse_event(event_type: str, data: Any) -> str:
