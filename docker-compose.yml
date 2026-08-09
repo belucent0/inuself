@@ -423,7 +423,7 @@ services:
 
   # ai-translate: 번역 전용 sLLM (PR-Translate.3).
   # EXAONE 4.0-1.2B (LG, 2025, 한국어 dual-training)으로 영→한 transcript 번역 처리.
-  # 기존 ai-llm(Qwen3-VL-4B)의 GPU 큐 경합을 분리하기 위함. 메모리: model ~3GB + KV ~1.5GB ≈ 4-5GB.
+  # ai-llm(Gemma 4 12B)의 GPU 큐 경합을 분리하기 위함. 메모리: model ~3GB + KV ~1.5GB ≈ 4-5GB.
   # backend/translation_runner.py가 AI_TRANSLATE_URL로 직접 호출 (ai-gateway 경유 안 함).
   ai-translate:
     image: ai-llm:1.0.0
@@ -439,7 +439,7 @@ services:
     environment:
       - HSA_ENABLE_DXG_DETECTION=1
     # EXAONE 4.0은 Llama 호환 architecture → vLLM 정식 지원.
-    # 1.2B bf16 ≈ 2.4GB weights + KV cache 합쳐 ~3GB. ai-llm(Qwen3-VL-4B) GPU
+    # 1.2B bf16 ≈ 2.4GB weights + KV cache 합쳐 ~3GB. ai-llm(Gemma 4 12B) GPU
     # 점유 고려해 utilization 0.06 (≈1.9GB)로 더 조여둠 — 32GB VRAM 한도에서
     # ai-llm OOM(exit 137) 발생 후 ai-translate 마진 축소. max-num-seqs=2:
     # 우리 CHUNK_CONCURRENCY=1이라 사실상 직렬, 동시 콘텐츠 대비 여유분만 둠.
@@ -464,7 +464,7 @@ services:
       retries: 3
       start_period: 300s
 
-  # ai-ocr (dots.ocr): vLLM Qwen3-VL 통합 후 OCR 라우팅에서 제외됨.
+  # ai-ocr (dots.ocr): ai-llm vision 통합 후 OCR 라우팅에서 제외됨.
   # 단순 prompt OCR(고속/저비용 케이스) 도입 시 재활용 후보로 profile=legacy 분리.
   # 평소 안 띄움. 사용: `docker compose --profile legacy up ai-ocr`
   ai-ocr:
@@ -495,8 +495,8 @@ services:
       retries: 3
       start_period: 180s
 
-  # ai-ocr-qwen은 vLLM Qwen3-VL 통합으로 더 이상 필요 없음 (이전 PR #144 도입,
-  # 본 PR에서 제거). 모든 OCR이 ai-llm(vLLM Qwen3-VL-4B)으로 라우팅.
+  # ai-ocr-qwen은 ai-llm vision 통합으로 더 이상 필요 없음 (이전 PR #144 도입,
+  # 본 PR에서 제거). 모든 OCR이 ai-llm(vLLM Gemma 4 12B)으로 라우팅.
 
   # ai-asr: legacy — whisper.cpp HIP build (Whisper Large-v3-turbo F16).
   # vLLM Whisper(ai-asr-vllm) 채택으로 legacy profile 강등. fallback / 비교 측정 시 활성화.
