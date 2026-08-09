@@ -51,6 +51,23 @@ def _has_previous_assistant_context(state: GraphState) -> bool:
     return any(isinstance(m, AIMessage) and len(m.content) > 100 for m in msgs)
 
 
+def _recent_completed_history(
+    messages: list,
+    current_user_message_id: str | None,
+) -> list:
+    """Return completed history strictly before the queued user message."""
+    history = []
+    for message in messages:
+        if (
+            current_user_message_id
+            and str(message.message_id) == current_user_message_id
+        ):
+            break
+        if message.content and getattr(message, "status", "completed") == "completed":
+            history.append(message)
+    return history[-10:]
+
+
 # 상태 표기용 모드/티어 한글 표시명 매핑
 MODE_DISPLAY_MAP = {
     AIMode.SEARCH: "웹 검색",
@@ -368,12 +385,12 @@ async def run_ai_agent(
                 thread = await thread_svc.get_thread(thread_id)
                 if thread and thread.messages:
                     # completed 상태이고 content가 있는 메시지만 (queued/generating 제외)
-                    completed_messages = [
-                        m for m in thread.messages
-                        if m.content and getattr(m, "status", "completed") == "completed"
-                    ]
-                    # 최근 10개 메시지만 (5턴) - 너무 긴 히스토리는 성능 저하
-                    recent_messages = completed_messages[-10:]
+                    recent_messages = _recent_completed_history(
+                        thread.messages,
+                        str(metadata.get("user_message_id"))
+                        if isinstance(metadata, dict) and metadata.get("user_message_id")
+                        else None,
+                    )
                     messages = []
                     for msg in recent_messages:
                         if msg.role == "user":
@@ -608,12 +625,12 @@ async def stream_ai_agent(
                 thread = await thread_svc.get_thread(thread_id)
                 if thread and thread.messages:
                     # completed 상태이고 content가 있는 메시지만 (queued/generating 제외)
-                    completed_messages = [
-                        m for m in thread.messages
-                        if m.content and getattr(m, "status", "completed") == "completed"
-                    ]
-                    # 최근 10개 메시지만 (5턴)
-                    recent_messages = completed_messages[-10:]
+                    recent_messages = _recent_completed_history(
+                        thread.messages,
+                        str(metadata.get("user_message_id"))
+                        if isinstance(metadata, dict) and metadata.get("user_message_id")
+                        else None,
+                    )
                     messages = []
                     for msg in recent_messages:
                         if msg.role == "user":
