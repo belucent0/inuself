@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -54,3 +55,46 @@ async def test_committed_message_stays_queued_when_broker_is_unavailable(monkeyp
     assert session.rollbacks == 0
     assert redis.cleared is False
     assert metadata_updates[0][0] == "answer"
+
+
+@pytest.mark.asyncio
+async def test_regeneration_keeps_old_answer_until_replacement_completes(monkeypatch):
+    user_id = uuid4()
+    old_user = SimpleNamespace(message_id="question", role="user")
+    old_answer = SimpleNamespace(
+        message_id="old-answer",
+        role="assistant",
+        metadata={"replaces_message_ids": ["original-answer"]},
+    )
+    added_metadata = []
+
+    class Service:
+        async def get_thread(self, *_args, **_kwargs):
+            return SimpleNamespace(thread_id="thread")
+
+        async def get_messages(self, *_args, **_kwargs):
+            return [old_user, old_answer]
+
+        async def add_message(self, *_args, **kwargs):
+            added_metadata.append(kwargs["metadata"])
+            return SimpleNamespace(message_id="new-answer")
+
+    async def handoff(**_kwargs):
+        return None
+
+    monkeypatch.setattr(ai_chat_controller, "_commit_and_enqueue_agent", handoff)
+
+    response = await ai_chat_controller.regenerate_response(
+        thread_id="thread",
+        request=ai_chat_controller.RegenerateRequest(mode="simple"),
+        settings=SimpleNamespace(),
+        svc=Service(),
+        user_id=user_id,
+        session=SimpleNamespace(),
+    )
+
+    assert response.media_type == "text/event-stream"
+    assert added_metadata[0]["replaces_message_ids"] == [
+        "old-answer",
+        "original-answer",
+    ]

@@ -541,14 +541,19 @@ async def regenerate_response(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    last_user_query = await svc.remove_last_assistant_message(
-        thread_id,
-        user_id=user_id,
-    )
     messages = await svc.get_messages(thread_id, user_id=user_id)
-    last_user_message = messages[-1] if messages and messages[-1].role == "user" else None
-    if not last_user_query or not last_user_message:
+    last_assistant = messages[-1] if messages and messages[-1].role == "assistant" else None
+    last_user_message = next(
+        (message for message in reversed(messages[:-1]) if message.role == "user"),
+        None,
+    )
+    if not last_assistant or not last_user_message:
         raise HTTPException(status_code=400, detail="No assistant response to regenerate")
+    previous_replacements = last_assistant.metadata.get("replaces_message_ids", [])
+    replacement_ids = [
+        last_assistant.message_id,
+        *(previous_replacements if isinstance(previous_replacements, list) else []),
+    ]
 
     agent_metadata = _build_agent_metadata(
         settings=settings,
@@ -565,6 +570,7 @@ async def regenerate_response(
             "mode": request.mode,
             "context": agent_metadata,
             "regenerated": True,
+            "replaces_message_ids": replacement_ids,
         },
     )
     await _commit_and_enqueue_agent(

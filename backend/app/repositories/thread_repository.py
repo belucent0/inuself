@@ -181,6 +181,10 @@ class ThreadRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def delete_message(self, message: AiMessage) -> None:
+        await self.session.delete(message)
+        await self.session.flush()
+
     async def get_stale_queued_assistant_messages(
         self, created_before: datetime, limit: int = 100
     ) -> list[AiMessage]:

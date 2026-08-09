@@ -147,6 +147,28 @@ async def _save_completed(message_id: str, content: str, metadata: dict) -> None
         if not message:
             raise ValueError(f"Assistant message not found: {message_id}")
         await service.update_message_partial_content(message_id, partial_content="")
+
+        replacement_ids = metadata.get("replaces_message_ids", [])
+        for replaces_message_id in dict.fromkeys(
+            replacement_ids if isinstance(replacement_ids, list) else []
+        ):
+            try:
+                replacement_id = UUID(str(replaces_message_id))
+            except ValueError:
+                logger.warning(
+                    "[AgentWorker] Invalid replacement message id: {}",
+                    replaces_message_id,
+                )
+            else:
+                repo = ThreadRepository(session)
+                replacement = await repo.get_message(replacement_id)
+                if (
+                    replacement
+                    and str(replacement.id) != message_id
+                    and str(replacement.thread_id) == str(message.thread_id)
+                    and replacement.role == "assistant"
+                ):
+                    await repo.delete_message(replacement)
         await session.commit()
 
 

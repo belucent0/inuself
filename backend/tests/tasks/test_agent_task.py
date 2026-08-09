@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -60,3 +61,55 @@ async def test_thread_slot_is_released_before_done_event(monkeypatch):
 
     assert result["status"] == "completed"
     assert calls.index("clear_slot") < calls.index("done")
+
+
+@pytest.mark.asyncio
+async def test_completed_regeneration_deletes_replaced_answer(monkeypatch):
+    thread_id = uuid4()
+    old_message_id = uuid4()
+    new_message_id = uuid4()
+    deleted = []
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def commit(self):
+            return None
+
+    class Service:
+        async def update_message_status(self, *_args, **_kwargs):
+            return SimpleNamespace(thread_id=str(thread_id))
+
+        async def update_message_partial_content(self, *_args, **_kwargs):
+            return None
+
+    class Repository:
+        def __init__(self, _session):
+            pass
+
+        async def get_message(self, message_id):
+            assert message_id == old_message_id
+            return SimpleNamespace(
+                id=old_message_id,
+                thread_id=thread_id,
+                role="assistant",
+            )
+
+        async def delete_message(self, message):
+            deleted.append(message.id)
+
+    monkeypatch.setattr(agent_task, "async_session_factory", Session)
+    monkeypatch.setattr(agent_task, "get_thread_service", lambda _session: Service())
+    monkeypatch.setattr(agent_task, "ThreadRepository", Repository)
+
+    await agent_task._save_completed(
+        str(new_message_id),
+        "new answer",
+        {"replaces_message_ids": [str(old_message_id)]},
+    )
+
+    assert deleted == [old_message_id]
