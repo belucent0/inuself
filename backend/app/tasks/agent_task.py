@@ -138,6 +138,10 @@ async def _save_partial(message_id: str, content: str) -> None:
 async def _save_completed(message_id: str, content: str, metadata: dict) -> None:
     async with async_session_factory() as session:
         service = get_thread_service(session)
+        repo = ThreadRepository(session)
+        current = await repo.get_message(UUID(message_id))
+        if not current:
+            raise ValueError(f"Assistant message not found: {message_id}")
         message = await service.update_message_status(
             message_id,
             status="completed",
@@ -160,12 +164,11 @@ async def _save_completed(message_id: str, content: str, metadata: dict) -> None
                     replaces_message_id,
                 )
             else:
-                repo = ThreadRepository(session)
                 replacement = await repo.get_message(replacement_id)
                 if (
                     replacement
-                    and str(replacement.id) != message_id
-                    and str(replacement.thread_id) == str(message.thread_id)
+                    and replacement.id != current.id
+                    and replacement.thread_id == current.thread_id
                     and replacement.role == "assistant"
                 ):
                     await repo.delete_message(replacement)

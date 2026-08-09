@@ -82,7 +82,7 @@ async def test_completed_regeneration_deletes_replaced_answer(monkeypatch):
 
     class Service:
         async def update_message_status(self, *_args, **_kwargs):
-            return SimpleNamespace(thread_id=str(thread_id))
+            return SimpleNamespace()
 
         async def update_message_partial_content(self, *_args, **_kwargs):
             return None
@@ -92,6 +92,12 @@ async def test_completed_regeneration_deletes_replaced_answer(monkeypatch):
             pass
 
         async def get_message(self, message_id):
+            if message_id == new_message_id:
+                return SimpleNamespace(
+                    id=new_message_id,
+                    thread_id=thread_id,
+                    role="assistant",
+                )
             assert message_id == old_message_id
             return SimpleNamespace(
                 id=old_message_id,
