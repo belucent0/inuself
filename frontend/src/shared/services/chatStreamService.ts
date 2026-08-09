@@ -13,12 +13,13 @@ import { getAccessToken } from './authToken'
 // ============================================================
 
 export interface SSEChunk {
-  type: 'thread_id' | 'thinking' | 'source' | 'sources' | 'content' | 'token' | 'done' | 'error' | 'search_queries'
+  type: 'thread_id' | 'thinking' | 'thinking_step' | 'source' | 'sources' | 'content' | 'partial_restore' | 'token' | 'done' | 'error' | 'search_queries'
   data: unknown
 }
 
 export interface StreamingCallbacks {
   onToken: (token: string) => void
+  onContent?: (content: string) => void
   onThinkingStep: (step: ThinkingStep) => void
   onSource: (source: Source) => void
   onSources: (sources: Source[]) => void
@@ -73,7 +74,7 @@ export async function processSSEStream(
   let buffer = ''
   let fullContent = ''
   let sources: Source[] = []
-  let thinkingSteps: ThinkingStep[] = []
+  const thinkingSteps: ThinkingStep[] = []
   let threadId: string | undefined
 
   try {
@@ -102,16 +103,19 @@ export async function processSSEStream(
             break
 
           case 'thinking':
+          case 'thinking_step': {
             const thinkingStep = chunk.data as ThinkingStep
             thinkingSteps.push(thinkingStep)
             callbacks.onThinkingStep(thinkingStep)
             break
+          }
 
-          case 'source':
+          case 'source': {
             const source = chunk.data as Source
             sources.push(source)
             callbacks.onSource(source)
             break
+          }
 
           case 'sources':
             sources = Array.isArray(chunk.data) ? (chunk.data as Source[]) : []
@@ -122,20 +126,28 @@ export async function processSSEStream(
             callbacks.onSearchQueries(Array.isArray(chunk.data) ? (chunk.data as string[]) : [])
             break
 
-          case 'token':
+          case 'token': {
             const token = (chunk.data as string) || ''
             fullContent += token
             callbacks.onToken(token)
             break
+          }
 
           case 'content':
+          case 'partial_restore': {
             const contentData = chunk.data as { content?: string } | string
             fullContent = typeof contentData === 'object' && contentData?.content
               ? contentData.content
               : (contentData as string) || ''
+            callbacks.onContent?.(fullContent)
             break
+          }
 
-          case 'done':
+          case 'done': {
+            const doneData = chunk.data as { content?: string } | null
+            if (typeof doneData?.content === 'string') {
+              fullContent = doneData.content
+            }
             const finalMessage: Message = {
               role: 'assistant',
               content: fullContent,
@@ -148,6 +160,7 @@ export async function processSSEStream(
             }
             callbacks.onComplete(finalMessage)
             return { content: fullContent, sources, thinkingSteps, threadId }
+          }
 
           case 'error':
             throw new Error(chunk.data as string)
