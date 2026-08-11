@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from redis.exceptions import RedisError
 
 from app.tasks import agent_task
 
@@ -18,8 +19,46 @@ class _Redis:
     def lock(self, *_args, **_kwargs):
         return _Lock()
 
+    async def delete(self, *_args):
+        return None
+
     async def aclose(self):
         return None
+
+
+@pytest.mark.asyncio
+async def test_lock_acquire_error_is_retryable_and_closes_redis(monkeypatch):
+    calls = []
+
+    class FailingLock:
+        async def acquire(self, **_kwargs):
+            raise RedisError("unavailable")
+
+        async def release(self):
+            calls.append("release")
+
+    class FailingRedis:
+        def lock(self, *_args, **_kwargs):
+            return FailingLock()
+
+        async def aclose(self):
+            calls.append("close")
+
+    redis = FailingRedis()
+    monkeypatch.setattr(
+        agent_task, "get_settings", lambda: SimpleNamespace(redis_url="redis://test")
+    )
+    monkeypatch.setattr(agent_task.Redis, "from_url", lambda *_args, **_kwargs: redis)
+
+    with pytest.raises(agent_task.AgentMessageUnavailable):
+        await agent_task.run_agent_message(
+            thread_id="thread",
+            user_id="user",
+            user_message_id="user-message",
+            assistant_message_id="assistant-message",
+        )
+
+    assert calls == ["release", "close"]
 
 
 @pytest.mark.asyncio

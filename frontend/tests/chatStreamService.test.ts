@@ -7,6 +7,7 @@ import {
 } from '../src/shared/services/chatStreamService'
 import { httpClient } from '../src/shared/services/api/httpClient'
 import { tokenManager } from '../src/shared/services/tokenManager'
+import { regenerateSummaryBlock } from '../src/shared/services/endpoints/contents'
 
 const events = [
   { type: 'accepted', data: { thread_id: 'thread', message_id: 'answer', user_message_id: 'question' } },
@@ -336,5 +337,15 @@ assert.deepEqual(authRequests, [
   'GET /api/retry-auth',
 ])
 assert.deepEqual(authHeaders, [null, 'Bearer refreshed-access'])
+
+globalThis.fetch = async () => new Response(JSON.stringify({
+  success: false,
+  block_key: 'title',
+  message: 'generation failed',
+}), { status: 200, headers: { 'Content-Type': 'application/json' } })
+await assert.rejects(
+  regenerateSummaryBlock('content', 'title'),
+  /generation failed/
+)
 
 globalThis.fetch = originalFetch

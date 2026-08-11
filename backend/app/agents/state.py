@@ -138,6 +138,7 @@ class GraphState(TypedDict):
     citations: list[CitationInfo]  # Phase 4: Citation 추가
     error: str | None
     thread_id: str | None
+    user_id: str | None
     metadata: dict
 
     # V8.4: 검색 재시도 관련

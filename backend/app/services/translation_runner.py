@@ -220,9 +220,9 @@ async def translate_transcription(file_id: UUID, target_lang: str = "ko") -> dic
                 "event_subtype": "translation_finalized",
                 "target_lang": target_lang,
                 "success": success,
-                "translated_chunks": success_count,
-                "total_chunks": total_chunks,
-                "failed_chunks": failed_count,
+                "chunks_done": success_count,
+                "chunks_total": total_chunks,
+                "chunks_failed": failed_count,
             },
         )
     except Exception as exc:

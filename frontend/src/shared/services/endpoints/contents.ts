@@ -99,9 +99,11 @@ export async function regenerateSummaryBlock(
   id: string,
   blockKey: string,
 ): Promise<{ success: boolean; block_key: string; message: string }> {
-  return httpClient.post<{ success: boolean; block_key: string; message: string }>(
+  const result = await httpClient.post<{ success: boolean; block_key: string; message: string }>(
     `/contents/${id}/summary/blocks/${blockKey}/regenerate`
   )
+  if (!result.success) throw new Error(result.message || 'Summary block regeneration failed')
+  return result
 }
 
 /**
@@ -111,10 +113,9 @@ export async function translateContent(
   id: string,
   targetLang: string = 'ko',
 ): Promise<{
-  success: boolean
-  translated_chunks: number
-  total_chunks: number
-  failed_chunks: number
+  status: 'accepted'
+  target_lang: string
+  message: string
 }> {
   const params = new URLSearchParams({ target_lang: targetLang })
   return httpClient.post(`/contents/${id}/translate?${params.toString()}`)

@@ -38,9 +38,15 @@ COPY amdsmi_fake.py /usr/local/lib/python3.12/dist-packages/amdsmi/__init__.py
 COPY patch_gemma4_mtp.py /tmp/patch_gemma4_mtp.py
 RUN python /tmp/patch_gemma4_mtp.py
 
-# Sanity check at build time — image must still load torch.
+# Required by vLLM's OpenAI-compatible audio transcription endpoint.
+RUN pip install --no-cache-dir \
+    'soundfile==0.14.0' \
+    'av==18.0.0'
+
+# Sanity check at build time — chat and audio runtimes must both import.
 RUN python -c "import vllm; print('vllm', vllm.__version__)" \
- && python -c "import transformers; print('transformers', transformers.__version__)"
+ && python -c "import transformers; print('transformers', transformers.__version__)" \
+ && python -c "import soundfile, av; print('audio decoders ok')"
 
 # Initialize DXG before vLLM probes it in each Python subprocess. Copy this
 # last so Docker build-time Python commands do not require a GPU.

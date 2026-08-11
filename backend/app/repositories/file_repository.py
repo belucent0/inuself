@@ -268,7 +268,11 @@ class FileRepository:
         await self.session.execute(stmt)
         await self.session.flush()
 
-    async def try_acquire_summarizing_lock(self, file_id: UUID) -> bool:
+    async def try_acquire_summarizing_lock(
+        self,
+        file_id: UUID,
+        allowed_statuses: Sequence[models.FileStatus] | None = None,
+    ) -> bool:
         """SUMMARY_QUEUED/SUMMARY_FAILED/COMPLETED → SUMMARIZING 원자 전이로 lock 획득.
 
         True 반환 시 호출자가 단독 BlockGenerator 실행 권한 보유.
@@ -277,19 +281,39 @@ class FileRepository:
         race 차단: 사용자가 재요약 버튼을 빠르게 두 번 눌러도 첫 호출만 1을 받음.
         """
         now = datetime.now(timezone.utc)
+        statuses = (
+            allowed_statuses
+            if allowed_statuses is not None
+            else (
+                models.FileStatus.SUMMARY_QUEUED,
+                models.FileStatus.SUMMARY_FAILED,
+                models.FileStatus.COMPLETED,
+            )
+        )
         stmt = (
             update(models.Content)
             .where(
                 models.Content.file_id == file_id,
-                models.Content.status.in_(
-                    [
-                        models.FileStatus.SUMMARY_QUEUED,
-                        models.FileStatus.SUMMARY_FAILED,
-                        models.FileStatus.COMPLETED,
-                    ]
-                ),
+                models.Content.status.in_(statuses),
             )
             .values(status=models.FileStatus.SUMMARIZING, updated_at=now)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return result.rowcount == 1
+
+    async def restore_summarizing_status(
+        self, file_id: UUID, previous_status: models.FileStatus
+    ) -> bool:
+        """부분 재생성 lock을 해제하되 다른 상태 전이는 덮어쓰지 않는다."""
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(models.Content)
+            .where(
+                models.Content.file_id == file_id,
+                models.Content.status == models.FileStatus.SUMMARIZING,
+            )
+            .values(status=previous_status, updated_at=now)
         )
         result = await self.session.execute(stmt)
         await self.session.flush()
