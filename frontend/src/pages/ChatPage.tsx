@@ -18,6 +18,7 @@ import { ChatArea } from '@/features/chat/components/ChatArea'
 import { ContentBanner } from '@/features/chat/components/ContentBanner'
 import { toast } from 'sonner'
 import { getAccessToken } from '@/shared/services/authToken'
+import { sendMessageStream } from '@/shared/services/chatStreamService'
 
 // v1.0.0: 메시지 상태 타입
 type MessageStatus = 'queued' | 'analyzing' | 'searching' | 'thinking' | 'generating' | 'completed' | 'failed'
@@ -306,6 +307,7 @@ export function ChatPage() {
     if (!threadId || streaming.isStreaming) return
 
     const effectiveMode = msgMode || mode
+    let acceptedMessageId: string | undefined
 
     try {
       // 1. 사용자 메시지를 optimistic update로 store에 추가
@@ -321,43 +323,53 @@ export function ChatPage() {
         messages: [...state.messages, tempUserMessage],
       }))
 
-      // 2. POST /api/threads/{threadId}/messages (auth 헤더 포함)
-      const accessToken = getAccessToken()
-      const response = await fetch(`${httpClient.getBaseUrl()}/threads/${threadId}/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({
+      // 2. POST 응답에서 바로 SSE를 소비한다. GET stream은 재접속 경로로 유지한다.
+      const store = useChatStore.getState()
+      const abortController = store._startStreaming()
+      await sendMessageStream(
+        threadId,
+        {
           query: content,
           mode: effectiveMode,
           model,
           context: contentContextEnabled && threadContentId
             ? { content_id: threadContentId }
             : undefined,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error('메시지 전송 실패')
-      }
-
-      const { message_id } = await response.json()
-
-      // 3. connectedMessageIdRef 리셋하여 SSE 재연결 허용
-      connectedMessageIdRef.current = null
-
-      // 4. messageId 파라미터 설정하여 SSE 연결 트리거
-      setSearchParams((prev) => {
-        prev.set('messageId', message_id)
-        return prev
-      })
+        },
+        {
+          onAccepted: ({ message_id }) => {
+            acceptedMessageId = message_id
+            connectedMessageIdRef.current = message_id
+            setSearchParams((prev) => {
+              prev.set('messageId', message_id)
+              return prev
+            })
+          },
+          onToken: store.appendStreamingContent,
+          onContent: store.setStreamingContent,
+          onThinkingStep: store.addThinkingStep,
+          onSource: store._addSource,
+          onSources: store.setSources,
+          onSearchQueries: store._setSearchQueries,
+          onComplete: (message) => {
+            store.finishStreaming(message.content, message.metadata, acceptedMessageId)
+            setMessageStatus('completed')
+            setSearchParams((prev) => {
+              prev.delete('messageId')
+              return prev
+            })
+          },
+          onError: () => {},
+        },
+        abortController.signal
+      )
     } catch (err) {
       console.error('[ChatPage v1.0.0] Failed to send message:', err)
       toast.error('메시지 전송에 실패했습니다')
-      // 에러 시 optimistic update 롤백 (추가한 사용자 메시지 제거)
-      useChatStore.setState({ messages })
+      const current = useChatStore.getState()
+      current.cancelStreaming()
+      // 서버가 접수하기 전 실패한 경우에만 optimistic update를 되돌린다.
+      if (!acceptedMessageId) useChatStore.setState({ messages })
     }
   }
 
