@@ -19,7 +19,11 @@ from ..core.logging import logger
 from ..db.session import async_session_factory
 from ..repositories.thread_repository import ThreadRepository
 from ..services.thread_service import get_thread_service
-from ..utils.task_queue_adapter import AGENT_EVENT_CHANNEL_PREFIX, AGENT_THREAD_KEY_PREFIX
+from ..utils.task_queue_adapter import (
+    AGENT_DISPATCH_KEY_PREFIX,
+    AGENT_EVENT_CHANNEL_PREFIX,
+    AGENT_THREAD_KEY_PREFIX,
+)
 
 
 PARTIAL_SAVE_INTERVAL_SECONDS = 5.0
@@ -30,6 +34,10 @@ _worker_loop: asyncio.AbstractEventLoop | None = None
 
 class AgentMessageBusy(RuntimeError):
     """Raised when another delivery is already processing this message."""
+
+
+class AgentMessageUnavailable(RuntimeError):
+    """Raised when infrastructure failed before agent execution started."""
 
 
 def _run_async(coro):
@@ -213,19 +221,24 @@ async def run_agent_message(
     """Execute one persisted assistant message independently of the SSE client."""
     settings = get_settings()
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
-    lock = redis.lock(
-        f"lock:agent:message:{assistant_message_id}",
-        timeout=MESSAGE_LOCK_SECONDS,
-        blocking=False,
-    )
-    if not await lock.acquire(blocking=False):
-        await redis.aclose()
-        raise AgentMessageBusy(assistant_message_id)
-
-    lock_lost = asyncio.Event()
-    heartbeat = asyncio.create_task(_refresh_lock(lock, lock_lost))
+    lock = None
+    heartbeat = None
 
     try:
+        lock = redis.lock(
+            f"lock:agent:message:{assistant_message_id}",
+            timeout=MESSAGE_LOCK_SECONDS,
+            blocking=False,
+        )
+        if not await lock.acquire(blocking=False):
+            raise AgentMessageBusy(assistant_message_id)
+
+        # Delivery is now protected by the message lock. Removing the handoff
+        # marker lets the watchdog recover a worker lost before status advances.
+        await redis.delete(f"{AGENT_DISPATCH_KEY_PREFIX}{assistant_message_id}")
+        lock_lost = asyncio.Event()
+        heartbeat = asyncio.create_task(_refresh_lock(lock, lock_lost))
+
         loaded = await _load_run(
             thread_id=thread_id,
             user_id=user_id,
@@ -361,6 +374,10 @@ async def run_agent_message(
 
         raise RuntimeError("Agent stream ended without a done event")
 
+    except AgentMessageBusy:
+        raise
+    except RedisError as exc:
+        raise AgentMessageUnavailable(assistant_message_id) from exc
     except Exception as exc:
         logger.exception(
             "[AgentWorker] Run failed: message_id={} error={}",
@@ -377,12 +394,15 @@ async def run_agent_message(
         await _publish(redis, assistant_message_id, "error", str(exc))
         raise
     finally:
-        heartbeat.cancel()
-        with suppress(asyncio.CancelledError):
-            await heartbeat
-        with suppress(LockError, RedisError):
-            await lock.release()
-        await redis.aclose()
+        if heartbeat is not None:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+        if lock is not None:
+            with suppress(LockError, RedisError):
+                await lock.release()
+        with suppress(RedisError):
+            await redis.aclose()
 
 
 @celery_app.task(
@@ -407,5 +427,5 @@ def process_agent_message(
                 assistant_message_id=assistant_message_id,
             )
         )
-    except AgentMessageBusy as exc:
+    except (AgentMessageBusy, AgentMessageUnavailable) as exc:
         raise self.retry(exc=exc, countdown=5, max_retries=120)
