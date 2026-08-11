@@ -51,6 +51,71 @@ export interface StreamResult {
   threadId?: string
 }
 
+interface RelayErrorData {
+  code?: string
+  message?: string
+  retryable?: boolean
+}
+
+class RetryableStreamError extends Error {}
+class TerminalStreamError extends Error {}
+
+const RECONNECT_DELAYS_MS = [0, 1000, 2000, 5000]
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+function invokeCallback(callback: () => void): void {
+  try {
+    callback()
+  } catch (error) {
+    throw new TerminalStreamError(asError(error).message)
+  }
+}
+
+function parseStreamError(data: unknown): Error {
+  if (data && typeof data === 'object') {
+    const relayError = data as RelayErrorData
+    if (relayError.code === 'relay_unavailable' && relayError.retryable === true) {
+      return new RetryableStreamError(relayError.message || 'Streaming relay unavailable')
+    }
+  }
+  return new TerminalStreamError(typeof data === 'string' ? data : 'Agent stream failed')
+}
+
+function isRetryableConnectionError(error: unknown): boolean {
+  if (error instanceof RetryableStreamError || error instanceof TypeError) return true
+  const status = (error as { status?: unknown } | null)?.status
+  return typeof status === 'number' && status >= 500
+}
+
+function abortError(): DOMException {
+  return new DOMException('Aborted', 'AbortError')
+}
+
+async function waitForReconnect(baseDelayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw abortError()
+  if (baseDelayMs === 0) return
+
+  const delayMs = Math.round(baseDelayMs * (0.8 + Math.random() * 0.4))
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(abortError())
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, delayMs)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 // ============================================================
 // SSE Parser
 // ============================================================
@@ -101,7 +166,16 @@ export async function processSSEStream(
         throw new DOMException('Aborted', 'AbortError')
       }
 
-      const { done, value } = await reader.read()
+      let result: ReadableStreamReadResult<Uint8Array>
+      try {
+        result = await reader.read()
+      } catch (error) {
+        if (isAbortError(error) || abortSignal?.aborted) throw abortError()
+        throw new RetryableStreamError(asError(error).message)
+      }
+      if (abortSignal?.aborted) throw abortError()
+
+      const { done, value } = result
       if (done) break
 
       buffer += decoder.decode(value, { stream: true })
@@ -113,45 +187,57 @@ export async function processSSEStream(
         if (!chunk) continue
 
         switch (chunk.type) {
-          case 'accepted':
-            accepted = chunk.data as AcceptedMessage
-            callbacks.onAccepted?.(accepted)
+          case 'accepted': {
+            const acceptedMessage = chunk.data as AcceptedMessage
+            accepted = acceptedMessage
+            const onAccepted = callbacks.onAccepted
+            if (onAccepted) {
+              invokeCallback(() => onAccepted(acceptedMessage))
+            }
             break
+          }
 
-          case 'thread_id':
-            threadId = chunk.data as string
-            callbacks.onThreadId?.(threadId)
+          case 'thread_id': {
+            const streamedThreadId = chunk.data as string
+            threadId = streamedThreadId
+            const onThreadId = callbacks.onThreadId
+            if (onThreadId) {
+              invokeCallback(() => onThreadId(streamedThreadId))
+            }
             break
+          }
 
           case 'thinking':
           case 'thinking_step':
           case 'query_analysis': {
             const thinkingStep = chunk.data as ThinkingStep
             thinkingSteps.push(thinkingStep)
-            callbacks.onThinkingStep(thinkingStep)
+            invokeCallback(() => callbacks.onThinkingStep(thinkingStep))
             break
           }
 
           case 'source': {
             const source = chunk.data as Source
             sources.push(source)
-            callbacks.onSource(source)
+            invokeCallback(() => callbacks.onSource(source))
             break
           }
 
           case 'sources':
             sources = Array.isArray(chunk.data) ? (chunk.data as Source[]) : []
-            callbacks.onSources(sources)
+            invokeCallback(() => callbacks.onSources(sources))
             break
 
           case 'search_queries':
-            callbacks.onSearchQueries(Array.isArray(chunk.data) ? (chunk.data as string[]) : [])
+            invokeCallback(() => callbacks.onSearchQueries(Array.isArray(chunk.data)
+              ? (chunk.data as string[])
+              : []))
             break
 
           case 'token': {
             const token = (chunk.data as string) || ''
             fullContent += token
-            callbacks.onToken(token)
+            invokeCallback(() => callbacks.onToken(token))
             break
           }
 
@@ -161,7 +247,10 @@ export async function processSSEStream(
             fullContent = typeof contentData === 'object' && contentData?.content
               ? contentData.content
               : (contentData as string) || ''
-            callbacks.onContent?.(fullContent)
+            const onContent = callbacks.onContent
+            if (onContent) {
+              invokeCallback(() => onContent(fullContent))
+            }
             break
           }
 
@@ -185,26 +274,31 @@ export async function processSSEStream(
                 ...doneData?.metadata,
               },
             }
-            callbacks.onComplete(finalMessage)
+            invokeCallback(() => callbacks.onComplete(finalMessage))
             return { content: fullContent, sources, thinkingSteps, accepted, threadId }
           }
 
           case 'error':
-            throw new Error(chunk.data as string)
+            throw parseStreamError(chunk.data)
         }
       }
     }
 
-    throw new Error('SSE stream ended before done')
+    throw new RetryableStreamError('SSE stream ended before done')
 
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    if (isAbortError(err)) {
       // 취소된 경우 에러 콜백 호출하지 않음
       throw err
     }
     callbacks.onError(err as Error)
     throw err
   } finally {
+    try {
+      await reader.cancel()
+    } catch {
+      // 이미 종료되었거나 네트워크에서 해제된 스트림
+    }
     reader.releaseLock()
   }
 }
@@ -220,8 +314,64 @@ async function postAgentStream(
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
-  const stream = await httpClient.postStream(endpoint, body, { signal: abortSignal })
-  await processSSEStream(new Response(stream), mode, callbacks, abortSignal)
+  let accepted: AcceptedMessage | undefined
+  const quietCallbacks: StreamingCallbacks = {
+    ...callbacks,
+    onAccepted: (message) => {
+      accepted = message
+      callbacks.onAccepted?.(message)
+    },
+    onError: () => {},
+  }
+
+  try {
+    const stream = await httpClient.postStream(endpoint, body, { signal: abortSignal })
+    await processSSEStream(new Response(stream), mode, quietCallbacks, abortSignal)
+    return
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    if (!accepted || !isRetryableConnectionError(error)) {
+      callbacks.onError(asError(error))
+      throw error
+    }
+  }
+
+  const acceptedMessage = accepted
+  if (!acceptedMessage) throw new TerminalStreamError('Accepted message is missing')
+
+  let lastError: Error = new RetryableStreamError('SSE connection lost')
+  for (const delayMs of RECONNECT_DELAYS_MS) {
+    await waitForReconnect(delayMs, abortSignal)
+    try {
+      const stream = await httpClient.getStream(
+        `/threads/${acceptedMessage.thread_id}/messages/${acceptedMessage.message_id}/stream`,
+        { signal: abortSignal }
+      )
+      await processSSEStream(
+        new Response(stream),
+        mode,
+        {
+          ...quietCallbacks,
+          onComplete: (message) => callbacks.onComplete({
+            ...message,
+            message_id: acceptedMessage.message_id,
+          }),
+        },
+        abortSignal
+      )
+      return
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      if (!isRetryableConnectionError(error)) {
+        callbacks.onError(asError(error))
+        throw error
+      }
+      lastError = asError(error)
+    }
+  }
+
+  callbacks.onError(lastError)
+  throw lastError
 }
 
 export async function createThreadStream(

@@ -55,6 +55,7 @@ export function useContentChat(
   const [isInitializing, setIsInitializing] = useState(true)
   const [hasExistingThread, setHasExistingThread] = useState(false)
   const threadIdRef = useRef<string | null>(null)
+  const activeStreamRef = useRef<AbortController | null>(null)
   // 복원 직후 source_options 변경을 메타데이터 저장에서 skip하기 위한 플래그
   const skipNextMetadataSaveRef = useRef(false)
 
@@ -70,6 +71,11 @@ export function useContentChat(
 
     async function loadExistingThread() {
       try {
+        threadIdRef.current = null
+        setHasExistingThread(false)
+        setMessages([])
+        setIsLoading(false)
+        setStreamingMetadata({ currentMessage: '', thinkingSteps: [], sources: [] })
         setIsInitializing(true)
         const response = await getThreads({ content_id: contentId, limit: 1 })
         if (cancelled || response.threads.length === 0) return
@@ -112,6 +118,13 @@ export function useContentChat(
     }
     // contentId가 바뀔 때만 재실행 (onRestoreOptions ref 불안정 제외)
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentId])
+
+  useEffect(() => {
+    return () => {
+      activeStreamRef.current?.abort()
+      activeStreamRef.current = null
+    }
   }, [contentId])
 
   // source_options 변경 시 thread metadata 저장
@@ -190,6 +203,9 @@ export function useContentChat(
         thinkingSteps: [],
         sources: [],
       })
+      activeStreamRef.current?.abort()
+      const abortController = new AbortController()
+      activeStreamRef.current = abortController
 
       try {
         const msgContext: Record<string, unknown> = { content_id: contentId }
@@ -208,19 +224,26 @@ export function useContentChat(
             createStreamCallbacks(({ thread_id }) => {
               threadIdRef.current = thread_id
               setHasExistingThread(true)
-            })
+            }),
+            abortController.signal
           )
         } else {
           await sendMessageStream(
             threadIdRef.current,
             request,
-            createStreamCallbacks()
+            createStreamCallbacks(),
+            abortController.signal
           )
         }
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
         const error = err as Error
         setIsLoading(false)
         toast.error('메시지 전송 실패', { description: error.message })
+      } finally {
+        if (activeStreamRef.current === abortController) {
+          activeStreamRef.current = null
+        }
       }
     },
     [contentId, createStreamCallbacks, sourceOptions]
@@ -241,18 +264,27 @@ export function useContentChat(
         thinkingSteps: [],
         sources: [],
       })
+      activeStreamRef.current?.abort()
+      const abortController = new AbortController()
+      activeStreamRef.current = abortController
 
       try {
         await requestRegenerateStream(
           threadIdRef.current,
           effectiveMode,
           model,
-          createStreamCallbacks()
+          createStreamCallbacks(),
+          abortController.signal
         )
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
         const error = err as Error
         setIsLoading(false)
         toast.error('재생성 실패', { description: error.message })
+      } finally {
+        if (activeStreamRef.current === abortController) {
+          activeStreamRef.current = null
+        }
       }
     },
     [createStreamCallbacks, messages, sourceOptions]
@@ -260,8 +292,12 @@ export function useContentChat(
 
   // 새 대화 시작: threadIdRef 초기화 + 메시지 클리어
   const startNewThread = useCallback(() => {
+    activeStreamRef.current?.abort()
+    activeStreamRef.current = null
     threadIdRef.current = null
     setMessages([])
+    setIsLoading(false)
+    setStreamingMetadata({ currentMessage: '', thinkingSteps: [], sources: [] })
     setHasExistingThread(false)
   }, [])
 

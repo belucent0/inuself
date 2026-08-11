@@ -43,6 +43,52 @@ async def test_agent_stream_starts_with_accepted_message_ids(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_stream_preserves_accepted_ids_when_relay_is_unavailable(
+    monkeypatch,
+):
+    accepted = {
+        "thread_id": "thread",
+        "message_id": "answer",
+        "user_message_id": "question",
+    }
+
+    class PubSub:
+        async def subscribe(self, *_args):
+            raise ConnectionError("redis unavailable")
+
+        async def unsubscribe(self, *_args):
+            return None
+
+        async def aclose(self):
+            return None
+
+    class Redis:
+        def pubsub(self):
+            return PubSub()
+
+    monkeypatch.setattr(ai_chat_controller, "get_redis_client", lambda: Redis())
+    response = ai_chat_controller._agent_stream_response("answer", accepted)
+
+    accepted_event = json.loads(
+        (await anext(response.body_iterator)).removeprefix("data: ")
+    )
+    error_event = json.loads(
+        (await anext(response.body_iterator)).removeprefix("data: ")
+    )
+    await response.body_iterator.aclose()
+
+    assert accepted_event == {"type": "accepted", "data": accepted}
+    assert error_event == {
+        "type": "error",
+        "data": {
+            "code": "relay_unavailable",
+            "message": "Streaming relay is temporarily unavailable",
+            "retryable": True,
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_reconnect_releases_lookup_transaction_before_streaming():
     class Service:
         async def get_thread(self, *_args, **_kwargs):

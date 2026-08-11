@@ -183,12 +183,15 @@ async def _relay_agent_events(message_id: str, accepted: dict | None = None):
         async with async_session_factory() as session:
             return await get_thread_service(session).get_message(message_id)
 
-    redis = get_redis_client()
-    pubsub = redis.pubsub()
+    pubsub = None
+    accepted_sent = False
     last_partial = ""
     try:
+        redis = get_redis_client()
+        pubsub = redis.pubsub()
         await pubsub.subscribe(f"{AGENT_EVENT_CHANNEL_PREFIX}{message_id}")
         if accepted:
+            accepted_sent = True
             yield _sse_event("accepted", accepted)
         current = await db_get_message()
         if not current:
@@ -243,14 +246,24 @@ async def _relay_agent_events(message_id: str, accepted: dict | None = None):
             yield ": ping\n\n"
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("[Thread] SSE relay failed: message_id={}", message_id)
-        yield _sse_event("error", str(exc))
+        if accepted and not accepted_sent:
+            yield _sse_event("accepted", accepted)
+        yield _sse_event(
+            "error",
+            {
+                "code": "relay_unavailable",
+                "message": "Streaming relay is temporarily unavailable",
+                "retryable": True,
+            },
+        )
     finally:
-        with suppress(Exception):
-            await pubsub.unsubscribe(f"{AGENT_EVENT_CHANNEL_PREFIX}{message_id}")
-        with suppress(Exception):
-            await pubsub.aclose()
+        if pubsub is not None:
+            with suppress(Exception):
+                await pubsub.unsubscribe(f"{AGENT_EVENT_CHANNEL_PREFIX}{message_id}")
+            with suppress(Exception):
+                await pubsub.aclose()
 
 
 def _agent_stream_response(message_id: str, accepted: dict | None = None):
