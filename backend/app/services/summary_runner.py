@@ -7,9 +7,13 @@ stream_consumer(자동 트리거), content_service(manual retry)에서 동일 �
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager, suppress
 from typing import Callable
 
+from redis.exceptions import LockError, RedisError
+
 from ..core.logging import logger
+from ..core.redis import get_redis_client
 from ..db.session import AsyncSessionLocal
 from ..repositories.content_repository import ContentRepository
 from ..repositories.file_repository import FileRepository
@@ -19,7 +23,30 @@ from .summary_renderer import extract_title, render_markdown
 from .summary_templates import BlockStatus
 
 
+@asynccontextmanager
+async def _summary_write_lock(file_id):
+    lock = get_redis_client().lock(
+        f"lock:summary:write:{file_id}", timeout=40 * 60, blocking=False
+    )
+    if not await lock.acquire(blocking=False):
+        raise ValueError("Another summarization is already in progress")
+    try:
+        yield
+    finally:
+        with suppress(LockError, RedisError):
+            await lock.release()
+
+
 async def summarize_with_block_generator(
+    file_id, text, progress_emit: Callable | None = None,
+):
+    async with _summary_write_lock(file_id):
+        return await _summarize_with_block_generator_unlocked(
+            file_id, text, progress_emit
+        )
+
+
+async def _summarize_with_block_generator_unlocked(
     file_id, text, progress_emit: Callable | None = None,
 ):
     """BlockGenerator로 요약 실행 후 (title, summary_md, all_required_success) 반환.
@@ -120,6 +147,13 @@ async def summarize_with_block_generator(
 
 
 async def regenerate_block(
+    file_id, block_key: str, text: str,
+):
+    async with _summary_write_lock(file_id):
+        return await _regenerate_block_unlocked(file_id, block_key, text)
+
+
+async def _regenerate_block_unlocked(
     file_id, block_key: str, text: str,
 ):
     """단일 block(또는 같은 group_extracts 내 형제 block들)을 재생성한다.

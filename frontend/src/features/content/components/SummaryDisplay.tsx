@@ -101,7 +101,6 @@ function RegenerableBlockCard({
     },
     onSuccess: (data) => {
       toast.success(data.message || `'${blockLabel}' 재생성 완료`)
-      queryClient.invalidateQueries({ queryKey: contentKeys.detail(contentId) })
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : '재생성 실패'
@@ -109,6 +108,7 @@ function RegenerableBlockCard({
     },
     onSettled: () => {
       onRegenerating(null)
+      queryClient.invalidateQueries({ queryKey: contentKeys.detail(contentId) })
     },
   })
 

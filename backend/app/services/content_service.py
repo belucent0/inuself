@@ -607,9 +607,9 @@ class ContentService:
         """단일 block(또는 group_extracts 형제 block)만 재생성한다.
 
         PR-C: 사용자가 SummaryDisplay의 block hover [↻] 클릭 시 호출. 전체
-        재요약과 달리 content.status는 변경하지 않고 sections.blocks[k]만
-        pending → success로 갱신. 다른 block은 SUCCESS 그대로 유지되어 LLM
-        호출 없이 통과.
+        재요약과 같은 DB lock을 획득한 뒤 sections.blocks[k]만 pending →
+        success로 갱신하고 기존 content.status를 복원한다. 다른 block은
+        SUCCESS 그대로 유지되어 LLM 호출 없이 통과.
 
         Args:
             content_id: Content.file_id (= File.id)
@@ -619,7 +619,7 @@ class ContentService:
         Returns:
             {"success": bool, "block_key": str, "message": str}
         """
-        from ..db.models import ContentType
+        from ..db.models import ContentType, FileStatus
         from ..repositories.document_repository import DocumentRepository
         from ..repositories.file_repository import FileRepository
         from ..repositories.transcription_repository import TranscriptionRepository
@@ -654,55 +654,80 @@ class ContentService:
         if not text_to_summarize:
             raise ValueError("No text available for block regeneration")
 
-        await file_repo.add_llm_log(
-            file_id=content_id,
-            log={
-                "event": "block_regenerate_requested",
-                "block_key": block_key,
-            },
-            message=f"Block regenerate requested: {block_key}",
+        previous_status = file_content.status
+        if previous_status not in (FileStatus.COMPLETED, FileStatus.SUMMARY_FAILED):
+            raise ValueError(
+                "Cannot regenerate summary block unless summarization is stable"
+            )
+        acquired = await file_repo.try_acquire_summarizing_lock(
+            content_id, allowed_statuses=(previous_status,)
         )
+        if not acquired:
+            raise ValueError(
+                "Cannot regenerate summary block: another summarization is in progress"
+            )
         await self.session.commit()
 
-        # BlockGenerator로 부분 재생성
-        title, summary_md, success = await regenerate_block(
-            content_id, block_key, text_to_summarize,
-        )
+        try:
+            await file_repo.add_llm_log(
+                file_id=content_id,
+                log={
+                    "event": "block_regenerate_requested",
+                    "block_key": block_key,
+                },
+                message=f"Block regenerate requested: {block_key}",
+            )
+            await self.session.commit()
 
-        # 결과 저장 — title/summary_md 갱신 (status는 그대로 유지)
-        if success:
-            if title:
-                await file_repo.update_title(content_id, title)
-            if summary_md:
-                await file_repo.update_summary_markdown(content_id, summary_md)
-        await file_repo.add_llm_log(
-            file_id=content_id,
-            log={
-                "event": "block_regenerate_completed" if success else "block_regenerate_failed",
-                "block_key": block_key,
+            # BlockGenerator로 부분 재생성
+            title, summary_md, success = await regenerate_block(
+                content_id, block_key, text_to_summarize,
+            )
+
+            if success:
+                if title:
+                    await file_repo.update_title(content_id, title)
+                if summary_md:
+                    await file_repo.update_summary_markdown(content_id, summary_md)
+            await file_repo.add_llm_log(
+                file_id=content_id,
+                log={
+                    "event": "block_regenerate_completed" if success else "block_regenerate_failed",
+                    "block_key": block_key,
+                    "success": success,
+                },
+                message=(
+                    f"Block '{block_key}' regenerate completed"
+                    if success
+                    else f"Block '{block_key}' regenerate failed"
+                ),
+            )
+            await self.session.commit()
+
+            logger.info(
+                "Block regenerate: file_id=%s, block_key=%s, success=%s",
+                content_id, block_key, success,
+            )
+            return {
                 "success": success,
-            },
-            message=(
-                f"Block '{block_key}' regenerate completed"
-                if success
-                else f"Block '{block_key}' regenerate failed"
-            ),
-        )
-        await self.session.commit()
-
-        logger.info(
-            "Block regenerate: file_id=%s, block_key=%s, success=%s",
-            content_id, block_key, success,
-        )
-        return {
-            "success": success,
-            "block_key": block_key,
-            "message": (
-                f"'{block_key}' 재생성 완료"
-                if success
-                else f"'{block_key}' 재생성 실패"
-            ),
-        }
+                "block_key": block_key,
+                "message": (
+                    f"'{block_key}' 재생성 완료"
+                    if success
+                    else f"'{block_key}' 재생성 실패"
+                ),
+            }
+        finally:
+            await self.session.rollback()
+            restored = await file_repo.restore_summarizing_status(
+                content_id, previous_status
+            )
+            if not restored:
+                logger.warning(
+                    "Block regenerate status changed before restore: file_id=%s",
+                    content_id,
+                )
+            await self.session.commit()
 
     async def translate_transcription_content(
         self,
