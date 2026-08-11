@@ -1,6 +1,6 @@
-# GPU Worker 패키지
+# Batch Worker 패키지
 
-Backend API 서버와 분리된 독립적인 GPU 워커 패키지입니다.
+Backend API 서버와 분리된 ASR/OCR/요약/YouTube Celery 워커 패키지입니다. LangGraph 대화 실행은 이 패키지가 아니라 Backend 이미지의 별도 `agent-worker` 서비스가 담당합니다.
 
 ## 아키텍처
 
@@ -77,14 +77,14 @@ LLM_MODEL_NAME=gemma-4-E4B-it
 
 ```bash
 # 프로젝트 루트에서
-docker compose up -d worker
+docker compose up -d worker agent-worker
 
 # 로그 확인
 docker compose logs -f worker
 ```
 
 `docker-compose.yml`의 `worker` 서비스는 `asr-worker-unified` 컨테이너로
-ASR/LLM/OCR/YouTube 큐를 모두 처리합니다.
+ASR/LLM/OCR/YouTube 큐를 처리하고, `agent-worker`는 `agent` 큐에서 LangGraph를 실행합니다.
 
 ### 직접 Celery 실행 (개발/디버그)
 
@@ -93,17 +93,20 @@ ASR/LLM/OCR/YouTube 큐를 모두 처리합니다.
 cd C:\timblo\torch-test
 
 # 단일 워커가 모든 큐 처리
-celery -A worker.celery_app worker --pool=solo --queues=asr,llm,ocr,youtube --hostname=worker-unified@%h
+celery -A worker.celery_app worker --pool=solo --queues=celery,asr,asr_tasks,llm_summary,ocr_tasks,search --hostname=worker-unified@%h
 ```
 
 ## 큐 구성
 
 | 큐 | 워커 | 설명 |
 |----|------|------|
-| `asr` | worker-asr | ASR + 화자분리 처리 |
-| `llm` | worker-llm | LLM 요약 처리 |
-| `ocr` | worker-ocr | OCR/PDF 처리 |
-| `youtube` | worker-asr | YouTube 다운로드 (ASR 워커에서 처리) |
+| `agent` | `agent-worker` | LangGraph 대화 실행, 기본 동시성 1 |
+| `asr`, `asr_tasks` | `worker` | ASR + 화자분리 처리 |
+| `llm_summary` | `worker` | LLM 요약 처리 |
+| `ocr_tasks` | `worker` | OCR/PDF 처리 |
+| `search` | `worker` | 검색 관련 배치 작업 |
+
+Agent Worker 동시성은 `AGENT_WORKER_CONCURRENCY`로 조절합니다. 상태와 5초 partial snapshot은 PostgreSQL에 저장하고, 실시간 이벤트는 `events:agent:{message_id}` Pub/Sub으로 Backend에 전달합니다.
 
 ## 점진적 마이그레이션
 
