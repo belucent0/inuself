@@ -1,9 +1,73 @@
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from app.controllers import ai_chat_controller
+
+
+@pytest.mark.asyncio
+async def test_agent_stream_starts_with_accepted_message_ids(monkeypatch):
+    accepted = {
+        "thread_id": "thread",
+        "message_id": "answer",
+        "user_message_id": "question",
+    }
+    class PubSub:
+        async def subscribe(self, *_args):
+            return None
+
+        async def unsubscribe(self, *_args):
+            return None
+
+        async def aclose(self):
+            return None
+
+    class Redis:
+        def pubsub(self):
+            return PubSub()
+
+    monkeypatch.setattr(ai_chat_controller, "get_redis_client", lambda: Redis())
+    response = ai_chat_controller._agent_stream_response("answer", accepted)
+
+    first_event = await anext(response.body_iterator)
+    await response.body_iterator.aclose()
+
+    assert response.media_type == "text/event-stream"
+    assert json.loads(first_event.removeprefix("data: ")) == {
+        "type": "accepted",
+        "data": accepted,
+    }
+    assert ai_chat_controller.AddMessageRequest(query="hello").stream is False
+
+
+@pytest.mark.asyncio
+async def test_reconnect_releases_lookup_transaction_before_streaming():
+    class Service:
+        async def get_thread(self, *_args, **_kwargs):
+            return SimpleNamespace(thread_id="thread")
+
+        async def get_messages(self, *_args, **_kwargs):
+            return [SimpleNamespace(message_id="answer", role="assistant")]
+
+    class Session:
+        rollbacks = 0
+
+        async def rollback(self):
+            self.rollbacks += 1
+
+    session = Session()
+    response = await ai_chat_controller.stream_message_v2(
+        thread_id="thread",
+        message_id="answer",
+        svc=Service(),
+        user_id=uuid4(),
+        session=session,
+    )
+
+    assert response.media_type == "text/event-stream"
+    assert session.rollbacks == 1
 
 
 @pytest.mark.asyncio

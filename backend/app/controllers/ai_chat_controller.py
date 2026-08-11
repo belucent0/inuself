@@ -176,7 +176,7 @@ def _sse_event(event_type: str, data: Any) -> str:
     return f"data: {payload}\n\n"
 
 
-async def _relay_agent_events(message_id: str):
+async def _relay_agent_events(message_id: str, accepted: dict | None = None):
     """Relay live Pub/Sub events with PostgreSQL snapshot/final recovery."""
 
     async def db_get_message():
@@ -188,6 +188,8 @@ async def _relay_agent_events(message_id: str):
     last_partial = ""
     try:
         await pubsub.subscribe(f"{AGENT_EVENT_CHANNEL_PREFIX}{message_id}")
+        if accepted:
+            yield _sse_event("accepted", accepted)
         current = await db_get_message()
         if not current:
             yield _sse_event("error", "Assistant message not found")
@@ -249,6 +251,18 @@ async def _relay_agent_events(message_id: str):
             await pubsub.unsubscribe(f"{AGENT_EVENT_CHANNEL_PREFIX}{message_id}")
         with suppress(Exception):
             await pubsub.aclose()
+
+
+def _agent_stream_response(message_id: str, accepted: dict | None = None):
+    return StreamingResponse(
+        _relay_agent_events(message_id, accepted),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # TODO: 실제 인증 구현 시 교체
@@ -582,13 +596,12 @@ async def regenerate_response(
         assistant_message_id=assistant_message.message_id,
     )
 
-    return StreamingResponse(
-        _relay_agent_events(assistant_message.message_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
+    return _agent_stream_response(
+        assistant_message.message_id,
+        {
+            "thread_id": thread_id,
+            "message_id": assistant_message.message_id,
+            "user_message_id": last_user_message.message_id,
         },
     )
 
@@ -603,6 +616,7 @@ class CreateThreadRequest(BaseModel):
         default=None,
         description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
     )
+    stream: bool = Field(default=False, description="SSE 스트리밍 응답 여부")
 
 
 class CreateThreadResponse(BaseModel):
@@ -623,6 +637,7 @@ class AddMessageRequest(BaseModel):
         default=None,
         description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
     )
+    stream: bool = Field(default=False, description="SSE 스트리밍 응답 여부")
 
 
 class AddMessageResponse(BaseModel):
@@ -714,11 +729,14 @@ async def create_thread(
             assistant_message_id=ai_message.message_id,
         )
 
-        return CreateThreadResponse(
+        response = CreateThreadResponse(
             thread_id=thread.thread_id,
             message_id=ai_message.message_id,
             user_message_id=user_message.message_id,
         )
+        if request.stream:
+            return _agent_stream_response(ai_message.message_id, response.model_dump())
+        return response
 
     except HTTPException:
         raise
@@ -803,11 +821,14 @@ async def add_message(
             assistant_message_id=ai_message.message_id,
         )
 
-        return AddMessageResponse(
+        response = AddMessageResponse(
             thread_id=thread_id,
             message_id=ai_message.message_id,
             user_message_id=user_message.message_id,
         )
+        if request.stream:
+            return _agent_stream_response(ai_message.message_id, response.model_dump())
+        return response
 
     except HTTPException:
         raise
@@ -822,6 +843,7 @@ async def stream_message_v2(
     message_id: str,
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
 ):
     """Relay Agent Worker Pub/Sub events and repair missed events from PostgreSQL."""
     thread = await svc.get_thread(thread_id, user_id=user_id)
@@ -833,12 +855,5 @@ async def stream_message_v2(
     if not message or message.role != "assistant":
         raise HTTPException(status_code=404, detail="Assistant message not found")
 
-    return StreamingResponse(
-        _relay_agent_events(message_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    await session.rollback()
+    return _agent_stream_response(message_id)

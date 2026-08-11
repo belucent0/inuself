@@ -6,15 +6,28 @@
  */
 
 import type { Message, Source, ThinkingStep } from '@/shared/types'
-import { getAccessToken } from './authToken'
+import { httpClient } from './api/httpClient'
 
 // ============================================================
 // Types
 // ============================================================
 
 export interface SSEChunk {
-  type: 'thread_id' | 'thinking' | 'thinking_step' | 'source' | 'sources' | 'content' | 'partial_restore' | 'token' | 'done' | 'error' | 'search_queries'
+  type: 'accepted' | 'thread_id' | 'thinking' | 'thinking_step' | 'query_analysis' | 'source' | 'sources' | 'content' | 'partial_restore' | 'token' | 'done' | 'error' | 'search_queries'
   data: unknown
+}
+
+export interface AcceptedMessage {
+  thread_id: string
+  message_id: string
+  user_message_id: string
+}
+
+export interface AgentMessageRequest {
+  query: string
+  mode: string
+  model?: string
+  context?: Record<string, unknown>
 }
 
 export interface StreamingCallbacks {
@@ -26,6 +39,7 @@ export interface StreamingCallbacks {
   onSearchQueries: (queries: string[]) => void
   onComplete: (message: Message) => void
   onError: (error: Error) => void
+  onAccepted?: (message: AcceptedMessage) => void
   onThreadId?: (threadId: string) => void
 }
 
@@ -33,6 +47,7 @@ export interface StreamResult {
   content: string
   sources: Source[]
   thinkingSteps: ThinkingStep[]
+  accepted?: AcceptedMessage
   threadId?: string
 }
 
@@ -75,13 +90,14 @@ export async function processSSEStream(
   let fullContent = ''
   let sources: Source[] = []
   const thinkingSteps: ThinkingStep[] = []
+  let accepted: AcceptedMessage | undefined
   let threadId: string | undefined
 
   try {
     while (true) {
       // 취소 요청 확인
       if (abortSignal?.aborted) {
-        reader.cancel()
+        await reader.cancel()
         throw new DOMException('Aborted', 'AbortError')
       }
 
@@ -97,13 +113,19 @@ export async function processSSEStream(
         if (!chunk) continue
 
         switch (chunk.type) {
+          case 'accepted':
+            accepted = chunk.data as AcceptedMessage
+            callbacks.onAccepted?.(accepted)
+            break
+
           case 'thread_id':
             threadId = chunk.data as string
             callbacks.onThreadId?.(threadId)
             break
 
           case 'thinking':
-          case 'thinking_step': {
+          case 'thinking_step':
+          case 'query_analysis': {
             const thinkingStep = chunk.data as ThinkingStep
             thinkingSteps.push(thinkingStep)
             callbacks.onThinkingStep(thinkingStep)
@@ -144,11 +166,15 @@ export async function processSSEStream(
           }
 
           case 'done': {
-            const doneData = chunk.data as { content?: string } | null
+            const doneData = chunk.data as {
+              content?: string
+              metadata?: Message['metadata']
+            } | null
             if (typeof doneData?.content === 'string') {
               fullContent = doneData.content
             }
             const finalMessage: Message = {
+              message_id: accepted?.message_id,
               role: 'assistant',
               content: fullContent,
               timestamp: Date.now() / 1000,
@@ -156,10 +182,11 @@ export async function processSSEStream(
                 sources,
                 thinking_steps: thinkingSteps,
                 mode: mode,
+                ...doneData?.metadata,
               },
             }
             callbacks.onComplete(finalMessage)
-            return { content: fullContent, sources, thinkingSteps, threadId }
+            return { content: fullContent, sources, thinkingSteps, accepted, threadId }
           }
 
           case 'error':
@@ -168,19 +195,7 @@ export async function processSSEStream(
       }
     }
 
-    // Stream ended without 'done' event
-    const finalMessage: Message = {
-      role: 'assistant',
-      content: fullContent,
-      timestamp: Date.now() / 1000,
-      metadata: {
-        sources,
-        thinking_steps: thinkingSteps,
-        mode: mode,
-      },
-    }
-    callbacks.onComplete(finalMessage)
-    return { content: fullContent, sources, thinkingSteps, threadId }
+    throw new Error('SSE stream ended before done')
 
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
@@ -189,28 +204,48 @@ export async function processSSEStream(
     }
     callbacks.onError(err as Error)
     throw err
+  } finally {
+    reader.releaseLock()
   }
-}
-
-// ============================================================
-// Helper Functions
-// ============================================================
-
-/**
- * 인증 헤더를 포함한 기본 헤더를 생성합니다.
- */
-function createAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const accessToken = getAccessToken()
-  if (accessToken) {
-    headers['Authorization'] = `Bearer ${accessToken}`
-  }
-  return headers
 }
 
 // ============================================================
 // API Functions
 // ============================================================
+
+async function postAgentStream(
+  endpoint: string,
+  body: Record<string, unknown>,
+  mode: string,
+  callbacks: StreamingCallbacks,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  const stream = await httpClient.postStream(endpoint, body, { signal: abortSignal })
+  await processSSEStream(new Response(stream), mode, callbacks, abortSignal)
+}
+
+export async function createThreadStream(
+  request: AgentMessageRequest,
+  callbacks: StreamingCallbacks,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  await postAgentStream('/threads', { ...request, stream: true }, request.mode, callbacks, abortSignal)
+}
+
+export async function sendMessageStream(
+  threadId: string,
+  request: AgentMessageRequest,
+  callbacks: StreamingCallbacks,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  await postAgentStream(
+    `/threads/${threadId}/messages`,
+    { ...request, stream: true },
+    request.mode,
+    callbacks,
+    abortSignal
+  )
+}
 
 export async function regenerateStream(
   threadId: string,
@@ -219,16 +254,11 @@ export async function regenerateStream(
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
-  const response = await fetch(`/api/threads/${threadId}/regenerate`, {
-    method: 'POST',
-    headers: createAuthHeaders(),
-    body: JSON.stringify({ mode, model }),
-    signal: abortSignal,
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to regenerate: ${response.statusText}`)
-  }
-
-  await processSSEStream(response, mode, callbacks, abortSignal)
+  await postAgentStream(
+    `/threads/${threadId}/regenerate`,
+    { mode, model },
+    mode,
+    callbacks,
+    abortSignal
+  )
 }
