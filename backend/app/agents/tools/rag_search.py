@@ -27,6 +27,7 @@ async def search_internal_content(
     query: str,
     *,
     settings: Any,
+    user_id: UUID | str | None,
     limit: int = 5,
     content_ids: list[int] | None = None,
     search_mode: str = "hybrid",  # "keyword", "vector", "hybrid"
@@ -55,6 +56,9 @@ async def search_internal_content(
     query = query.strip()
     if not query:
         raise RAGSearchError("검색어가 비어있습니다")
+    if not user_id:
+        raise RAGSearchError("user_id is required for internal content search")
+    owner_id = UUID(str(user_id))
 
     logger.info(f"[RAG] Hybrid search: query={query[:50]}, mode={search_mode}")
 
@@ -66,7 +70,11 @@ async def search_internal_content(
 
             # 1. 키워드 검색
             keyword_results = await _keyword_search(
-                session, query, limit=limit * 2, content_ids=content_ids
+                session,
+                query,
+                user_id=owner_id,
+                limit=limit * 2,
+                content_ids=content_ids,
             )
 
             # 2. 벡터 검색 (hybrid/vector 모드만)
@@ -82,6 +90,7 @@ async def search_internal_content(
                             query_embedding=query_embedding,
                             limit=limit * 2,
                             content_ids=content_ids,
+                            user_id=owner_id,
                         )
                     else:
                         logger.warning(
@@ -141,6 +150,7 @@ async def search_internal_content(
 async def _keyword_search(
     session: AsyncSession,
     query: str,
+    user_id: UUID | str,
     limit: int,
     content_ids: list[int] | None,
 ) -> list[tuple[File, float]]:
@@ -166,6 +176,7 @@ async def _keyword_search(
         .where(
             Content.status == FileStatus.COMPLETED,
             Content.summary_md.isnot(None),
+            Content.user_id == user_id,
         )
     )
 
@@ -287,6 +298,7 @@ def _extract_relevant_snippet(text: str, keywords: list[str], max_length: int = 
 async def get_content_context(
     content_ids: list[int],
     *,
+    user_id: UUID | str | None,
     include_transcription: bool = False,
 ) -> list[dict]:
     """특정 콘텐츠의 상세 컨텍스트 조회.
@@ -298,15 +310,17 @@ async def get_content_context(
     Returns:
         콘텐츠 컨텍스트 목록
     """
-    if not content_ids:
+    if not content_ids or not user_id:
         return []
+    owner_id = UUID(str(user_id))
 
     try:
         async with AsyncSessionLocal() as session:
             stmt = (
                 select(File)
                 .options(selectinload(File.content).selectinload(Content.transcription_result))
-                .where(File.id.in_(content_ids))
+                .join(Content, Content.file_id == File.id)
+                .where(File.id.in_(content_ids), Content.user_id == owner_id)
             )
             result = await session.execute(stmt)
             files = result.scalars().all()

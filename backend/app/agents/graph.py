@@ -417,6 +417,7 @@ async def run_ai_agent(
             content_context = await load_content_context(
                 ctx_ids,
                 source_options=metadata.get("source_options"),
+                user_id=user_id,
             )
 
     # 초기 상태 구성
@@ -436,6 +437,7 @@ async def run_ai_agent(
         "sources": [],
         "error": None,
         "thread_id": thread_id,
+        "user_id": user_id,
         "metadata": metadata or {},
         # V8.4: 검색 재시도 관련
         "search_retry_count": 0,
@@ -657,6 +659,7 @@ async def stream_ai_agent(
             content_context = await load_content_context(
                 ctx_ids,
                 source_options=metadata.get("source_options"),
+                user_id=user_id,
             )
 
     # 초기 상태 구성
@@ -676,6 +679,7 @@ async def stream_ai_agent(
         "sources": [],
         "error": None,
         "thread_id": thread_id,
+        "user_id": user_id,
         "metadata": metadata or {},
         # V8.4: 검색 재시도 관련
         "search_retry_count": 0,

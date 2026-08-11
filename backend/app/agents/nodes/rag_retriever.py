@@ -37,6 +37,7 @@ class RAGRetrieverNode:
         query = state["query"]
         mode = state["mode"]
         metadata = state.get("metadata", {})
+        user_id = state.get("user_id")
         thinking_steps = list(state.get("thinking_steps", []))
         existing_results = list(state.get("search_results", []))
 
@@ -62,6 +63,7 @@ class RAGRetrieverNode:
             results = await search_internal_content(
                 query,
                 settings=self.settings,
+                user_id=user_id,
                 limit=5,
                 content_ids=content_ids_for_search,
             )
