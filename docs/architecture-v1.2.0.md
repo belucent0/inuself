@@ -1358,7 +1358,7 @@ FastFlowLM 프로세스의 시작/재시작은 Docker Compose 범위 밖입니�
 | 컨테이너 | 이미지/베이스 | GPU 사용 | 모델 | 컨텍스트 |
 |---------|--------------|---------|------|---------|
 | `ai-llm` | `vllm/vllm-openai-rocm:v0.26.0` | gfx1150 | Gemma 4 12B W4A16 CT + MTP k=1 | 16384 |
-| `ai-asr-vllm` | `ai-llm:1.0.0` (vLLM ROCm) | gfx1150 | Whisper-large-v3-turbo | — |
+| `ai-asr-vllm` | `ai-llm-gemma4:0.26.0` (vLLM ROCm 공용 이미지) | gfx1150 | Whisper-large-v3-turbo | — |
 | `ai-diarize` | `pyannote-audio` (custom ROCm build) | gfx1150 | community-1 | — |
 | `ai-ocr` (legacy profile) | `llama.cpp` (HIP build) | gfx1150 | dots.ocr Q8 GGUF | 8192 |
 | `ai-embedding` | `llama.cpp` (HIP build) | gfx1150 | EmbeddingGemma 300M Q4 GGUF | 2048 |
@@ -1382,11 +1382,14 @@ docker compose build ai-llm ai-gateway
 
 # 32 GiB 공유 UMA에서 교체 중 순간 OOM 방지
 docker compose stop ai-llm ai-asr-vllm ai-translate ai-diarize ai-embedding
-docker compose up -d --no-deps ai-llm
+docker compose up -d --no-deps --wait --wait-timeout 900 ai-llm
 
-# ai-llm healthy 확인 후 나머지를 순차 복구
-docker compose start ai-asr-vllm ai-translate ai-diarize ai-embedding
-docker compose up -d --no-deps ai-gateway
+# ai-llm healthy 확인 후 나머지를 순차 생성·복구
+docker compose up -d --no-deps --wait --wait-timeout 900 ai-asr-vllm
+docker compose up -d --no-deps --wait --wait-timeout 900 ai-translate
+docker compose up -d --no-deps --wait --wait-timeout 900 ai-diarize
+docker compose up -d --no-deps --wait --wait-timeout 900 ai-embedding
+docker compose up -d --no-deps --wait --wait-timeout 120 ai-gateway
 
 # health / OCR smoke
 curl -f http://localhost:18000/v1/models

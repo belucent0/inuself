@@ -179,7 +179,7 @@ PoC PR #146 이후 production 경로 전환. 핵심 변경: **worker 코드 무�
 - [x] ai-gateway `ASR_BASE_URL` → `http://ai-asr-vllm:8000`
 - [x] ai-gateway `_handle_asr`: `/transcribe` → `/v1/audio/transcriptions` (OpenAI 호환) + verbose_json → worker 호환 포맷 변환
 - [x] **language 옵셔널 분기 추가**: 빈 값/`auto`/`none` 수신 시 vLLM에 전달하지 않고 자동 감지 위임 → 영한 혼합/영어 단일 콘텐츠 환각 해결
-- [ ] `vllm[audio]` 의존성을 `ai-llm` 이미지에 baked-in (별도 PR — 현재는 ai-asr-vllm이 자체 의존성 보유)
+- [x] ASR 런타임 의존성(`soundfile`, `av`)을 공용 `ai-llm` 이미지에 baked-in
 
 ### 6.1 production 전환 후 검증 (2026-05-14)
 

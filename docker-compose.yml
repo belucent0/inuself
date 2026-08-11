@@ -172,6 +172,8 @@ services:
       - ./backend/app:/app/app:ro
       - ./backend/alembic:/app/alembic:ro
     depends_on:
+      backend:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       valkey:
@@ -208,7 +210,15 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-pk-lf-torch-dev}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-sk-lf-torch-dev}
     healthcheck:
-      disable: true
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A app.agent_celery:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5 | grep -q pong",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   # Vite 기반 프론트엔드 (React + Vite)
   frontend:
@@ -443,10 +453,12 @@ services:
   # 메모리: model ~3GB + KV/audio buffer ~2GB ≈ 5GB
   # 벤치 결과 및 마이그레이션 history: docs/benchmarks/asr-vllm-vs-whispercpp.md
   ai-asr-vllm:
-    image: ai-llm:1.0.0
+    # Reuse the image built by ai-llm so clean deployments do not depend on a
+    # stale host-local tag.
+    image: ai-llm-gemma4:0.26.0
     container_name: ai-asr-vllm
     ports:
-      - "18002:8000"
+      - "127.0.0.1:18002:8000"
     devices:
       - /dev/dxg
     volumes:
@@ -480,10 +492,10 @@ services:
   # ai-llm(Gemma 4 12B)의 GPU 큐 경합을 분리하기 위함. 메모리: model ~3GB + KV ~1.5GB ≈ 4-5GB.
   # backend/translation_runner.py가 AI_TRANSLATE_URL로 직접 호출 (ai-gateway 경유 안 함).
   ai-translate:
-    image: ai-llm:1.0.0
+    image: ai-llm-gemma4:0.26.0
     container_name: ai-translate
     ports:
-      - "18006:8000"
+      - "127.0.0.1:18006:8000"
     devices:
       - /dev/dxg
     volumes:
