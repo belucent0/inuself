@@ -285,6 +285,7 @@ export function ChatPage() {
         eventSourceRef.current.close()
         eventSourceRef.current = null
       }
+      useChatStore.getState().cancelStreaming()
     }
   }, [])
 
@@ -364,6 +365,7 @@ export function ChatPage() {
         abortController.signal
       )
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
       console.error('[ChatPage v1.0.0] Failed to send message:', err)
       toast.error('메시지 전송에 실패했습니다')
       const current = useChatStore.getState()

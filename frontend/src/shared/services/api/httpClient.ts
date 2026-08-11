@@ -23,7 +23,7 @@ export interface ApiError extends Error {
  * 기본 API URL을 가져옵니다
  */
 export function getBaseUrl(): string {
-  return import.meta.env.VITE_API_BASE_URL || '/api'
+  return import.meta.env?.VITE_API_BASE_URL || '/api'
 }
 
 function resolveUrl(endpoint: string): string {
@@ -162,26 +162,29 @@ export async function del<T>(
   return request<T>('DELETE', endpoint, data, config)
 }
 
-/**
- * SSE 스트리밍 요청
- */
-export async function postStream(
+async function requestStream(
+  method: 'GET' | 'POST',
   endpoint: string,
   data?: unknown,
   config?: RequestConfig,
   retried = false
 ): Promise<ReadableStream<Uint8Array>> {
   const response = await fetch(resolveUrl(endpoint), {
-    method: 'POST',
+    method,
     headers: createHeaders(config),
     body: data ? JSON.stringify(data) : undefined,
     signal: config?.signal,
   })
 
   if (response.status === 401 && !retried && !config?.skipAuth && config?.retryOnAuthFailure !== false) {
+    try {
+      await response.body?.cancel()
+    } catch {
+      // 이미 종료된 오류 응답
+    }
     const refreshed = await tokenManager.refreshNow()
     if (refreshed) {
-      return postStream(endpoint, data, config, true)
+      return requestStream(method, endpoint, data, config, true)
     }
   }
 
@@ -208,6 +211,27 @@ export async function postStream(
 }
 
 /**
+ * SSE GET 스트리밍 요청
+ */
+export async function getStream(
+  endpoint: string,
+  config?: RequestConfig
+): Promise<ReadableStream<Uint8Array>> {
+  return requestStream('GET', endpoint, undefined, config)
+}
+
+/**
+ * SSE POST 스트리밍 요청
+ */
+export async function postStream(
+  endpoint: string,
+  data?: unknown,
+  config?: RequestConfig
+): Promise<ReadableStream<Uint8Array>> {
+  return requestStream('POST', endpoint, data, config)
+}
+
+/**
  * HTTP Client 객체
  */
 export const httpClient = {
@@ -215,6 +239,7 @@ export const httpClient = {
   post,
   patch,
   delete: del,
+  getStream,
   postStream,
   getBaseUrl,
 }
