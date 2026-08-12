@@ -4,7 +4,7 @@
  * - 모바일: 풀스크린 3탭 (요약 | 소스 | 채팅)
  */
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ContentDetail } from '../types'
 import { ContentHeader } from './ContentHeader'
 import { SummaryDisplay } from './SummaryDisplay'
@@ -56,6 +56,21 @@ export function ContentDetailLayout({
   const [asrRetryOpen, setAsrRetryOpen] = useState(false)
   const [isRetrying, setIsRetrying] = useState(false)
 
+  // 재처리 후 backend background task가 status 전이 반영할 시간 확보 (SSE 미연결 환경 fallback).
+  // 즉시 refetch는 backend status 변경 전이라 의미 없어 생략.
+  const refetchTimersRef = useRef<number[]>([])
+  useEffect(
+    () => () => {
+      refetchTimersRef.current.forEach(clearTimeout)
+      refetchTimersRef.current = []
+    },
+    []
+  )
+  const refetchWithDelay = () => {
+    refetchTimersRef.current.push(window.setTimeout(refetch, 300))
+    refetchTimersRef.current.push(window.setTimeout(refetch, 2000))
+  }
+
   const handleRetryClick = async (type: 'asr' | 'ocr' | 'summary') => {
     if (type === 'asr') {
       setAsrRetryOpen(true)
@@ -67,7 +82,7 @@ export function ContentDetailLayout({
         try {
           await onRetry('summary')
           toast.success('요약 재처리가 시작되었습니다')
-          refetch()
+          refetchWithDelay()
         } catch {
           toast.error('요약 재처리 요청에 실패했습니다')
         } finally {
@@ -82,7 +97,7 @@ export function ContentDetailLayout({
     try {
       await onRetry('ocr', { ocrMode, accuracyMode })
       setOcrRetryOpen(false)
-      refetch()
+      refetchWithDelay()
     } finally {
       setIsRetrying(false)
     }
@@ -97,7 +112,7 @@ export function ContentDetailLayout({
         maxSpeakers: options.maxSpeakers,
       })
       setAsrRetryOpen(false)
-      refetch()
+      refetchWithDelay()
     } finally {
       setIsRetrying(false)
     }
@@ -181,6 +196,8 @@ export function ContentDetailLayout({
                   segments={content.transcription!.segments}
                   speakers={content.transcription!.speakers}
                   mediaRef={mediaRef}
+                  contentId={content.id}
+                  serverTranslationProgress={content.transcription!.translation_progress}
                 />
               )}
               {hasDocument && content.document && (
@@ -227,6 +244,8 @@ export function ContentDetailLayout({
                 segments={content.transcription!.segments}
                 speakers={content.transcription!.speakers}
                 mediaRef={mediaRef}
+                contentId={content.id}
+                serverTranslationProgress={content.transcription!.translation_progress}
               />
             )}
             {hasDocument && content.document && (

@@ -39,16 +39,50 @@ export interface ContentSummary {
   }
 }
 
+export type SummaryBlockStatus = 'pending' | 'in_progress' | 'success' | 'failed' | 'skipped'
+
+export interface SummaryBlock {
+  key: string
+  label: string
+  type: 'text' | 'list' | 'long_text' | string
+  status: SummaryBlockStatus
+  content: string | string[] | null
+  attempts: number
+  last_error?: string | null
+  depends_on?: string[]
+  completed_at?: string | null
+}
+
+export interface SummarySections {
+  template_id: string
+  started_at: string
+  updated_at: string
+  round: number
+  blocks: SummaryBlock[]
+}
+
 export interface ContentDetail extends ContentSummary {
   file_url?: string
   media_url?: string
   summary?: string
   summary_html?: string
   summary_md?: string
+  summary_sections?: SummarySections | null
   transcription?: TranscriptionData
   document?: DocumentData
   ocr_logs?: string[]
   llm_logs?: string[]
+}
+
+export interface TranslationProgress {
+  active: boolean
+  target_lang: string
+  chunks_done: number
+  chunks_failed: number
+  chunks_total: number
+  started_at?: string
+  updated_at?: string
+  success?: boolean
 }
 
 export interface TranscriptionData {
@@ -58,6 +92,8 @@ export interface TranscriptionData {
   diarization_metadata?: {
     segment_embeddings?: number[][]
   }
+  /** PR-Translate 새로고침 복원용 BG 진행 상태 */
+  translation_progress?: TranslationProgress
 }
 
 export interface TranscriptionSegment {
@@ -66,6 +102,8 @@ export interface TranscriptionSegment {
   start: number
   end: number
   speaker?: string
+  /** PR-Translate.1: 청크 번역 완료 시 채워짐. 미번역 segment는 undefined. */
+  translation_ko?: string
 }
 
 export interface DocumentData {
@@ -73,6 +111,18 @@ export interface DocumentData {
   text_content?: string
   ocr_text?: string
   html_content?: string
+}
+
+export function getSpeakerCount(
+  content: Pick<ContentSummary, 'speakers' | 'transcription'>
+): number {
+  return content.transcription?.speakers?.length ?? content.speakers?.length ?? 0
+}
+
+export function getDurationSeconds(
+  content: Pick<ContentSummary, 'duration_seconds' | 'transcription'>
+): number | undefined {
+  return content.transcription?.duration_seconds ?? content.duration_seconds
 }
 
 // 상태 레이블 매핑

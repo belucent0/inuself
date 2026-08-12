@@ -2,11 +2,11 @@
 
 vLLM's `vllm/platforms/rocm.py` does explicit
     from amdsmi import (
-        AmdSmiException,
+        AmdSmiException, AmdSmiMemoryType,
         amdsmi_get_gpu_asic_info,
         amdsmi_get_gpu_device_uuid,
         amdsmi_get_processor_handles,
-        amdsmi_init, amdsmi_shut_down,
+        amdsmi_get_gpu_memory_total, amdsmi_init, amdsmi_shut_down,
         amdsmi_topo_get_link_type, amdsmi_topo_get_numa_node_number,
     )
 and uses these for GPU probing/identification only (not for actual inference).
@@ -16,6 +16,8 @@ every symbol vLLM imports, all returning successful no-op values, so vLLM's
 RocmPlatform path activates. torch.cuda (via librocdxg → /dev/dxg) handles
 real GPU access.
 """
+
+from enum import IntEnum
 
 
 class AmdSmiException(Exception):
@@ -32,6 +34,10 @@ class AmdSmiException(Exception):
 
 # Older alias some code paths use
 AmdSmiLibraryException = AmdSmiException
+
+
+class AmdSmiMemoryType(IntEnum):
+    VRAM = 0
 
 
 class _FakeHandle:
@@ -77,6 +83,13 @@ def amdsmi_get_gpu_asic_info(handle: object) -> dict[str, object]:
 def amdsmi_get_gpu_device_uuid(handle: object) -> str:
     _ = handle
     return "00000000-0000-0000-0000-000000000000"
+
+
+def amdsmi_get_gpu_memory_total(handle: object, memory_type: AmdSmiMemoryType) -> int:
+    _ = handle
+    _ = memory_type
+    # WSL is capped at 32 GiB; do not expose the larger host UMA aperture to vLLM.
+    return 32 * 1024**3
 
 
 def amdsmi_topo_get_link_type(handle_a: object, handle_b: object) -> dict[str, object]:

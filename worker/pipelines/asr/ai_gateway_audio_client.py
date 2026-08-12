@@ -181,7 +181,7 @@ except ImportError:
 def call_ai_gateway_transcription(
     audio_file_path: Path,
     accuracy_mode: str = "speed",
-    language: str = "ko",
+    language: str = "auto",
     timeout: float = 1800.0,
     resource_timeout: float = 120.0,
     lock_id: str | None = None,  # V7.5: Worker에서 획득한 GPU 잠금 ID

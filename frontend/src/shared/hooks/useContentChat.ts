@@ -8,8 +8,13 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
-import { httpClient } from '@/shared/services'
-import { getAccessToken } from '@/shared/services/authToken'
+import {
+  createThreadStream,
+  regenerateStream as requestRegenerateStream,
+  sendMessageStream,
+  type AcceptedMessage,
+  type StreamingCallbacks,
+} from '@/shared/services/chatStreamService'
 import { getThreads, updateThreadMetadata } from '@/shared/services/endpoints/threads'
 import type { SearchSource, ThinkingStep, AIMode } from '@/features/chat/types'
 
@@ -28,17 +33,6 @@ interface StreamingMetadata {
   currentMessage: string
   thinkingSteps: ThinkingStep[]
   sources: SearchSource[]
-}
-
-interface SSEChunk {
-  type: string
-  data: unknown
-}
-
-interface QueuedMessageResponse {
-  thread_id: string
-  message_id: string
-  user_message_id: string
 }
 
 export interface ContentSourceOptions {
@@ -61,6 +55,7 @@ export function useContentChat(
   const [isInitializing, setIsInitializing] = useState(true)
   const [hasExistingThread, setHasExistingThread] = useState(false)
   const threadIdRef = useRef<string | null>(null)
+  const activeStreamRef = useRef<AbortController | null>(null)
   // 복원 직후 source_options 변경을 메타데이터 저장에서 skip하기 위한 플래그
   const skipNextMetadataSaveRef = useRef(false)
 
@@ -76,6 +71,11 @@ export function useContentChat(
 
     async function loadExistingThread() {
       try {
+        threadIdRef.current = null
+        setHasExistingThread(false)
+        setMessages([])
+        setIsLoading(false)
+        setStreamingMetadata({ currentMessage: '', thinkingSteps: [], sources: [] })
         setIsInitializing(true)
         const response = await getThreads({ content_id: contentId, limit: 1 })
         if (cancelled || response.threads.length === 0) return
@@ -120,6 +120,13 @@ export function useContentChat(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contentId])
 
+  useEffect(() => {
+    return () => {
+      activeStreamRef.current?.abort()
+      activeStreamRef.current = null
+    }
+  }, [contentId])
+
   // source_options 변경 시 thread metadata 저장
   useEffect(() => {
     if (!threadIdRef.current || !sourceOptions) return
@@ -137,202 +144,44 @@ export function useContentChat(
     )
   }, [sourceOptions])
 
-  const parseSSEChunk = (line: string): SSEChunk | null => {
-    if (!line.startsWith('data: ')) return null
-    const dataStr = line.slice(6).trim()
-    if (dataStr === '[DONE]') return { type: 'done', data: null }
-    try {
-      return JSON.parse(dataStr) as SSEChunk
-    } catch {
-      return null
-    }
-  }
-
-  // ReadableStream 기반 SSE 처리 (regenerate 엔드포인트용)
-  const processSSEStream = useCallback(
-    async (stream: ReadableStream<Uint8Array>, mode: string) => {
-      const reader = stream.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let fullContent = ''
-      let sources: SearchSource[] = []
-      let thinkingSteps: ThinkingStep[] = []
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          const chunk = parseSSEChunk(line)
-          if (!chunk) continue
-
-          switch (chunk.type) {
-            case 'thinking':
-              thinkingSteps.push(chunk.data as ThinkingStep)
-              setStreamingMetadata((prev) => ({
-                ...prev,
-                thinkingSteps: [...thinkingSteps],
-              }))
-              break
-            case 'source':
-              sources.push(chunk.data as SearchSource)
-              setStreamingMetadata((prev) => ({
-                ...prev,
-                sources: [...sources],
-              }))
-              break
-            case 'sources':
-              sources = Array.isArray(chunk.data)
-                ? (chunk.data as SearchSource[])
-                : []
-              setStreamingMetadata((prev) => ({
-                ...prev,
-                sources: [...sources],
-              }))
-              break
-            case 'token': {
-              const token = (chunk.data as string) || ''
-              fullContent += token
-              setStreamingMetadata((prev) => ({
-                ...prev,
-                currentMessage: fullContent,
-              }))
-              break
-            }
-            case 'content': {
-              const contentData = chunk.data as
-                | { content?: string }
-                | string
-              fullContent =
-                typeof contentData === 'object' && contentData?.content
-                  ? contentData.content
-                  : (contentData as string) || ''
-              setStreamingMetadata((prev) => ({
-                ...prev,
-                currentMessage: fullContent,
-              }))
-              break
-            }
-            case 'done': {
-              const assistantMessage: ContentMessage = {
-                role: 'assistant',
-                content: fullContent,
-                timestamp: Date.now() / 1000,
-                metadata: { sources, thinking_steps: thinkingSteps, mode: mode as AIMode },
-              }
-              setMessages((prev) => [...prev, assistantMessage])
-              setIsLoading(false)
-              setStreamingMetadata({
-                currentMessage: '',
-                thinkingSteps: [],
-                sources: [],
-              })
-              return
-            }
-            case 'error':
-              throw new Error(chunk.data as string)
-          }
-        }
-      }
-    },
-    []
-  )
-
-  // EventSource 기반 SSE 처리 (v1.0.0 queued flow용)
-  const connectEventSource = useCallback(
-    (threadId: string, messageId: string, mode: string): Promise<void> => {
-      return new Promise((resolve, reject) => {
-        const accessToken = getAccessToken()
-        const streamUrl = `${httpClient.getBaseUrl()}/threads/${threadId}/messages/${messageId}/stream${
-          accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : ''
-        }`
-
-        const eventSource = new EventSource(streamUrl)
-        let fullContent = ''
-        let sources: SearchSource[] = []
-        let thinkingSteps: ThinkingStep[] = []
-
-        eventSource.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data)
-            const eventType = data.type
-            const eventData = data.data
-
-            switch (eventType) {
-              case 'thinking_step':
-              case 'query_analysis':
-                thinkingSteps = [...thinkingSteps, eventData as ThinkingStep]
-                setStreamingMetadata((prev) => ({
-                  ...prev,
-                  thinkingSteps,
-                }))
-                break
-
-              case 'sources':
-                sources = eventData || []
-                setStreamingMetadata((prev) => ({
-                  ...prev,
-                  sources,
-                }))
-                break
-
-              case 'token':
-                fullContent += eventData || ''
-                setStreamingMetadata((prev) => ({
-                  ...prev,
-                  currentMessage: fullContent,
-                }))
-                break
-
-              case 'content':
-                fullContent = eventData || ''
-                setStreamingMetadata((prev) => ({
-                  ...prev,
-                  currentMessage: fullContent,
-                }))
-                break
-
-              case 'done': {
-                const finalContent = eventData?.content || fullContent
-                const assistantMessage: ContentMessage = {
-                  role: 'assistant',
-                  content: finalContent,
-                  timestamp: Date.now() / 1000,
-                  metadata: { sources, thinking_steps: thinkingSteps, mode: mode as AIMode },
-                }
-                setMessages((prev) => [...prev, assistantMessage])
-                setIsLoading(false)
-                setStreamingMetadata({
-                  currentMessage: '',
-                  thinkingSteps: [],
-                  sources: [],
-                })
-                eventSource.close()
-                resolve()
-                break
-              }
-
-              case 'error':
-                eventSource.close()
-                reject(new Error(eventData))
-                break
-            }
-          } catch (err) {
-            eventSource.close()
-            reject(err)
-          }
-        }
-
-        eventSource.onerror = () => {
-          eventSource.close()
-          reject(new Error('SSE connection error'))
-        }
-      })
-    },
+  const createStreamCallbacks = useCallback(
+    (
+      onAccepted?: (message: AcceptedMessage) => void
+    ): StreamingCallbacks => ({
+      onAccepted,
+      onToken: (token) => setStreamingMetadata((prev) => ({
+        ...prev,
+        currentMessage: prev.currentMessage + token,
+      })),
+      onContent: (content) => setStreamingMetadata((prev) => ({
+        ...prev,
+        currentMessage: content,
+      })),
+      onThinkingStep: (step) => setStreamingMetadata((prev) => ({
+        ...prev,
+        thinkingSteps: [...prev.thinkingSteps, step],
+      })),
+      onSource: (source) => setStreamingMetadata((prev) => ({
+        ...prev,
+        sources: [...prev.sources, source],
+      })),
+      onSources: (sources) => setStreamingMetadata((prev) => ({
+        ...prev,
+        sources,
+      })),
+      onSearchQueries: () => {},
+      onComplete: (message) => {
+        setMessages((prev) => [...prev, {
+          role: 'assistant',
+          content: message.content,
+          timestamp: message.timestamp,
+          metadata: message.metadata as ContentMessage['metadata'],
+        }])
+        setIsLoading(false)
+        setStreamingMetadata({ currentMessage: '', thinkingSteps: [], sources: [] })
+      },
+      onError: () => {},
+    }),
     []
   )
 
@@ -354,11 +203,11 @@ export function useContentChat(
         thinkingSteps: [],
         sources: [],
       })
+      activeStreamRef.current?.abort()
+      const abortController = new AbortController()
+      activeStreamRef.current = abortController
 
       try {
-        let threadId: string
-        let messageId: string
-
         const msgContext: Record<string, unknown> = { content_id: contentId }
         if (sourceOptions) {
           msgContext.source_options = sourceOptions
@@ -368,41 +217,36 @@ export function useContentChat(
           msgContext.search_scope = sourceOptions.include_all_docs ? 'all' : 'selected'
         }
 
+        const request = { query: content, mode: effectiveMode, context: msgContext, model }
         if (!threadIdRef.current) {
-          // 새 스레드 생성
-          const resp = await httpClient.post<QueuedMessageResponse>('/threads', {
-            query: content,
-            mode: effectiveMode,
-            context: msgContext,
-            model,
-          })
-          threadId = resp.thread_id
-          messageId = resp.message_id
-          threadIdRef.current = threadId
-          setHasExistingThread(true)
-        } else {
-          // 기존 스레드에 메시지 추가
-          threadId = threadIdRef.current
-          const resp = await httpClient.post<QueuedMessageResponse>(
-            `/threads/${threadId}/messages`,
-            {
-              query: content,
-              mode: effectiveMode,
-              context: msgContext,
-              model,
-            }
+          await createThreadStream(
+            request,
+            createStreamCallbacks(({ thread_id }) => {
+              threadIdRef.current = thread_id
+              setHasExistingThread(true)
+            }),
+            abortController.signal
           )
-          messageId = resp.message_id
+        } else {
+          await sendMessageStream(
+            threadIdRef.current,
+            request,
+            createStreamCallbacks(),
+            abortController.signal
+          )
         }
-
-        await connectEventSource(threadId, messageId, effectiveMode)
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
         const error = err as Error
         setIsLoading(false)
         toast.error('메시지 전송 실패', { description: error.message })
+      } finally {
+        if (activeStreamRef.current === abortController) {
+          activeStreamRef.current = null
+        }
       }
     },
-    [contentId, connectEventSource, sourceOptions]
+    [contentId, createStreamCallbacks, sourceOptions]
   )
 
   const regenerate = useCallback(
@@ -420,26 +264,40 @@ export function useContentChat(
         thinkingSteps: [],
         sources: [],
       })
+      activeStreamRef.current?.abort()
+      const abortController = new AbortController()
+      activeStreamRef.current = abortController
 
       try {
-        const stream = await httpClient.postStream(
-          `/threads/${threadIdRef.current}/regenerate`,
-          { mode: effectiveMode, model }
+        await requestRegenerateStream(
+          threadIdRef.current,
+          effectiveMode,
+          model,
+          createStreamCallbacks(),
+          abortController.signal
         )
-        await processSSEStream(stream, effectiveMode)
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
         const error = err as Error
         setIsLoading(false)
         toast.error('재생성 실패', { description: error.message })
+      } finally {
+        if (activeStreamRef.current === abortController) {
+          activeStreamRef.current = null
+        }
       }
     },
-    [messages, processSSEStream, sourceOptions]
+    [createStreamCallbacks, messages, sourceOptions]
   )
 
   // 새 대화 시작: threadIdRef 초기화 + 메시지 클리어
   const startNewThread = useCallback(() => {
+    activeStreamRef.current?.abort()
+    activeStreamRef.current = null
     threadIdRef.current = null
     setMessages([])
+    setIsLoading(false)
+    setStreamingMetadata({ currentMessage: '', thinkingSteps: [], sources: [] })
     setHasExistingThread(false)
   }, [])
 

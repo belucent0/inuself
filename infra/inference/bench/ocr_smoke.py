@@ -1,4 +1,4 @@
-"""Gemma 4 multimodal OCR smoke test via vLLM OpenAI-compatible API.
+"""Multimodal OCR smoke test via ai-llm Gemma 4.
 
 Usage:
     python ocr_smoke.py /path/to/image.jpg [prompt]
@@ -28,7 +28,7 @@ def main() -> None:
     image_path = Path(sys.argv[1])
     prompt = sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_PROMPT
     base_url = "http://localhost:18000/v1/chat/completions"
-    model = "gemma-4-E4B-it"
+    model = "gemma4-12b"
 
     img_bytes = image_path.read_bytes()
     b64 = base64.b64encode(img_bytes).decode()

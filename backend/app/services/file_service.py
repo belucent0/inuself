@@ -143,6 +143,7 @@ class FileService:
             "content_type": file_obj.content_type,
             "status": content.status or FileStatus.QUEUED,  # None이면 기본값
             "summary_md": content.summary_md,
+            "summary_sections": content.summary_sections,
             "title": content.title,
             "created_at": file_obj.created_at,
             "updated_at": content.updated_at,
@@ -185,6 +186,7 @@ class FileService:
             "content_type": file_obj.content_type,
             "status": content.status,  # Content의 status 사용
             "summary_md": content.summary_md,
+            "summary_sections": content.summary_sections,
             "title": content.title,
             "created_at": content.created_at,
             "updated_at": content.updated_at,

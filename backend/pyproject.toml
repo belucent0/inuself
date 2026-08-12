@@ -2,7 +2,7 @@
 name = "torch-asr-backend"
 version = "0.1.0"
 description = "FastAPI backend for ASR + speaker diarization pipeline"
-readme = "README.md"
+readme = {text = "Torch ASR Backend", content-type = "text/markdown"}
 requires-python = ">=3.12,<3.14"
 
 dependencies = [

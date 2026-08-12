@@ -1,40 +1,32 @@
 # AI 통합 플랫폼
 
-> 음성 인식 · 문서 처리 · AI 대화 에이전트를 하나의 플랫폼에서 — AMD ROCm GPU 가속
+> 음성 인식 · 문서 처리 · AI 대화 에이전트를 하나의 플랫폼에서 — AMD ROCm GPU + Ryzen AI NPU(선택)
 
 ---
 
 ## 시스템 아키텍처
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  CLIENT                                                             │
-│  Browser (Vite + React + TypeScript)                                │
-└────────────────────────┬────────────────────────────────────────────┘
-                         │ HTTPS
-═════════════════════════╪════════════════════════════════════════════
-  Docker Environment     │
-┌────────────────────────▼────────────────────────────────────────────┐
-│  APPLICATION                                                        │
-│  Backend (FastAPI) — Controllers → Services → Repositories          │
-│  LangGraph AI Agent — 9 Nodes · 6 Tools · 5 Modes                   │
-└──────────┬──────────────────────────────────┬───────────────────────┘
-           │ Celery                            │ OpenAI SDK (httpx)
-┌──────────▼──────────┐           ┌────────────▼──────────────────────┐
-│  WORKER             │           │  AI GATEWAY                       │
-│  Celery Workers     │──── HTTP ─▶  ai-gateway (FastAPI)             │
-│  파일 전처리        │           │  routing · tier 매핑 · serverless │
-│  (FFmpeg/PDF 변환)  │           └────┬───────────┬──────────┬───────┘
-└─────────────────────┘                │ httpx     │ httpx    │ httpx
-                                       ▼           ▼          ▼
-┌─────────────────────────┐   ┌────────────────────────────────────────┐
-│  DATA                   │   │  INFERENCE CONTAINERS (ROCm GPU)       │
-│  PostgreSQL + pgvector  │   │  ai-llm        : vLLM (Gemma 4 E4B)    │
-│  Valkey (Redis)         │   │  ai-asr        : Whisper-large-v3-turbo│
-│  MinIO (S3) · SearXNG   │   │  ai-diarize    : pyannote community-1  │
-└─────────────────────────┘   │  ai-ocr        : dots.ocr (llama.cpp)  │
-                              │  ai-embedding  : EmbeddingGemma 308M   │
-                              └────────────────────────────────────────┘
+Browser ── POST(stream=true) ──► Backend (FastAPI BFF)
+   ▲                                  │ persist + Celery enqueue
+   │ SSE                              ▼
+   └──────── Pub/Sub relay ─────── Valkey
+                                      │
+                         ┌────────────┴────────────┐
+                         ▼                         ▼
+                Agent Worker Pool            Batch Worker
+                (LangGraph)                  (ASR/OCR/요약)
+                         │                         │
+                         └──────────┬──────────────┘
+                                    ▼
+                              AI Gateway
+                         tier routing / fallback
+                           ┌────────┴────────┐
+                           ▼                 ▼
+                 FastFlowLM (NPU, 선택)   ai-* (ROCm GPU)
+
+PostgreSQL: 대화 상태·5초 partial snapshot·최종 응답
+Valkey: Celery broker·실시간 Pub/Sub·락/캐시 (응답 토큰 영속 저장소 아님)
 ```
 
 ---
@@ -43,15 +35,15 @@
 
 | 기능 | 설명 |
 |------|------|
-| **AI 대화 에이전트** | LangGraph — 9 노드 · 6 도구 · 5 모드 (일반 / 딥서치 / 문서 / YouTube / WPI) |
-| **배치 음성 전사** | 음성·영상 파일 업로드 → ai-asr (Whisper-large-v3-turbo, ROCm GPU) 고정밀 전사 + ai-diarize 화자 분리, 상담 녹취록 처리 지원 |
+| **AI 대화 에이전트** | 전용 Celery Agent Worker에서 LangGraph 실행. Backend는 요청 접수·DB 영속화·SSE relay 담당 |
+| **배치 음성 전사** | 음성·영상 파일 업로드 → ai-asr-vllm (Whisper-large-v3-turbo, ROCm GPU) 고정밀 전사 + ai-diarize 화자 분리, 상담 녹취록 처리 지원 |
 | **화자 분리** | Pyannote.audio + AMD GPU (ROCm) 가속, 배치 고정밀 모드 |
 | **문서 OCR & 요약** | PDF/이미지 → LLM Vision 처리, Celery 비동기 파이프라인 |
 | **LLM 요약** | 전사 결과 · 문서 · 영상 콘텐츠를 LLM으로 구조화 요약 |
 | **WPI 심리검사** | 5유형 × 5차원 성격 분석, AI 에이전트 활용, 검사 결과에 개인 맞춤형 마음읽기 해설 제공 |
 | **YouTube 영상 처리** | 다운로드 → 전사 → 구조화 요약 |
 | **웹 검색 통합** | SearXNG 기반 딥서치, 멀티턴 검색 재시도 |
-| **AI 추론 게이트웨이** | ai-gateway (FastAPI + httpx) — 로컬 추론 컨테이너(vLLM · llama.cpp · transformers) 직결 호출, tier 기반 모델 매핑, serverless 폴백(Codex/RunPod) |
+| **AI 추론 게이트웨이** | ai-gateway (FastAPI + httpx) — `tier-simple`은 선택적으로 FastFlowLM NPU, 실패 시 GPU 폴백. 그 외 로컬 추론 컨테이너 및 serverless 폴백 |
 | **옵저버빌리티** | Grafana + Prometheus + Loki + Tempo + Langfuse |
 
 ---
@@ -61,10 +53,11 @@
 | 영역 | 기술 |
 |------|------|
 | Frontend | Vite + React 19 + TypeScript + Tailwind CSS + shadcn/ui |
-| Backend | FastAPI + SQLAlchemy + Celery |
+| Backend | FastAPI + SQLAlchemy |
 | AI Agent | LangGraph + LangChain |
+| Async Worker | Celery (Agent Worker + Batch Worker) |
 | Database | PostgreSQL + pgvector · Valkey (Redis) · MinIO |
-| Inference | ai-gateway (FastAPI) · vLLM · llama.cpp · transformers · pyannote |
+| Inference | ai-gateway (FastAPI) · FastFlowLM · vLLM · llama.cpp · transformers · pyannote |
 | Infra | Docker Compose · Nginx |
 | Observability | Grafana + Prometheus + Loki + Tempo + Langfuse |
 | CI/CD | GitHub Actions (품질 게이트 4종 + 자동 태깅) |
@@ -74,6 +67,8 @@
 ## 문서
 
 - 아키텍처 상세 → [`docs/architecture-v1.2.0.md`](docs/architecture-v1.2.0.md)
+- AI 채팅 요청·SSE 복구 흐름 → [`docs/workflow-ai-chat.md`](docs/workflow-ai-chat.md)
+- Gemma 4 서빙·벤치마크 → [`docs/benchmarks/gemma4-12b-vllm-mtp.md`](docs/benchmarks/gemma4-12b-vllm-mtp.md)
 - GPU/ROCm 설치 가이드 → [`docs/archived/README-legacy.md`](docs/archived/README-legacy.md)
 
 ---

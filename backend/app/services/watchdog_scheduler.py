@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from ..core.logging import logger
+from .agent_job_recovery import recover_stale_agent_jobs
 from .state_watchdog import run_watchdog_scan
 from .state_reconciler import run_reconciler
 
@@ -68,6 +69,15 @@ class WatchdogScheduler:
 
         try:
             # Watchdog 스캔
+            try:
+                recovered = await recover_stale_agent_jobs()
+                if recovered:
+                    logger.warning(
+                        f"[WatchdogScheduler] Requeued {recovered} stale agent job(s)"
+                    )
+            except Exception as exc:
+                logger.error(f"[WatchdogScheduler] Agent recovery failed: {exc}")
+
             findings = await run_watchdog_scan()
 
             if not findings:

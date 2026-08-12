@@ -92,9 +92,40 @@ export async function retryProcessing(
   return httpClient.post<{ message: string }>(`/contents/${id}/retry?${params.toString()}`)
 }
 
+/**
+ * 단일 summary block 재생성 (PR-C 부분 재생성)
+ */
+export async function regenerateSummaryBlock(
+  id: string,
+  blockKey: string,
+): Promise<{ success: boolean; block_key: string; message: string }> {
+  const result = await httpClient.post<{ success: boolean; block_key: string; message: string }>(
+    `/contents/${id}/summary/blocks/${blockKey}/regenerate`
+  )
+  if (!result.success) throw new Error(result.message || 'Summary block regeneration failed')
+  return result
+}
+
+/**
+ * Transcript 청크 단위 한국어 번역 (PR-Translate.1)
+ */
+export async function translateContent(
+  id: string,
+  targetLang: string = 'ko',
+): Promise<{
+  status: 'accepted'
+  target_lang: string
+  message: string
+}> {
+  const params = new URLSearchParams({ target_lang: targetLang })
+  return httpClient.post(`/contents/${id}/translate?${params.toString()}`)
+}
+
 export const contentsApi = {
   getContents,
   getContent,
   deleteContents,
   retryProcessing,
+  regenerateSummaryBlock,
+  translateContent,
 }

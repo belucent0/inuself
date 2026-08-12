@@ -27,12 +27,11 @@ from ..utils.task_queue_adapter import get_task_queue
 from ..utils.progress_tracker import PipelineProgress
 from .transcription_postprocess import (
     segments_to_text_with_metadata,
-    split_long_segments,
-    merge_consecutive_speaker_segments,
     rebuild_speaker_stats,
     rebuild_transcription_text,
 )
 from .section_executor import SectionGraphExecutor, PhaseExecutionError
+from .summary_runner import summarize_with_block_generator
 
 # Stream 이름 (worker/utils/result_publisher.py와 동일해야 함)
 RESULT_STREAM = "stream:worker:results"
@@ -290,42 +289,25 @@ class StreamConsumer:
             result_data = download_json(result_s3_key)
             transcription_data = result_data.get("transcription", {})
 
-            # Worker Raw Segment 후처리 (트랜잭션 밖에서 실행)
-            original_segments = transcription_data.get("segments", [])
+            # Worker가 ASR + diarization을 결합한 segment를 그대로 사용한다.
+            # (이전엔 split_long_segments(max=30)로 30초마다 강제 분할했으나
+            #  FLM 모드가 폐지되어 dead code였고, whisper 결과를 무효화하는
+            #  회귀 원인이었음. worker 결과를 신뢰한다.)
+            segments = transcription_data.get("segments", [])
 
-            if original_segments:
-                logger.info(
-                    f"Applying post-processing for file_id={file_id} (segments: {len(original_segments)})"
+            if segments:
+                transcription_data["text"] = rebuild_transcription_text(segments)
+                speaker_stats = rebuild_speaker_stats(segments)
+                num_speakers = len(speaker_stats)
+                speaker_labels = sorted(speaker_stats.keys())
+
+                transcription_data.setdefault("diarization_metadata", {}).update(
+                    {"num_speakers": num_speakers, "speaker_labels": speaker_labels}
                 )
-
-                split_segments = split_long_segments(
-                    original_segments, max_duration=30.0
-                )
-                processed_segments = merge_consecutive_speaker_segments(
-                    split_segments, max_duration=30.0
-                )
-
-                transcription_data["segments"] = processed_segments
-                transcription_data["text"] = rebuild_transcription_text(
-                    processed_segments
-                )
-
-                new_speaker_stats = rebuild_speaker_stats(processed_segments)
-
-                if "diarization_metadata" not in transcription_data:
-                    transcription_data["diarization_metadata"] = {}
-                transcription_data["diarization_metadata"].update(
-                    {
-                        "num_speakers": len(new_speaker_stats),
-                        "speaker_labels": sorted(new_speaker_stats.keys()),
-                    }
-                )
-
-                num_speakers = len(new_speaker_stats)
-                speaker_labels = sorted(new_speaker_stats.keys())
 
                 logger.info(
-                    f"Post-processing completed: {len(original_segments)} -> {len(processed_segments)} segments"
+                    f"Transcription accepted: {len(segments)} segments, "
+                    f"{num_speakers} speakers"
                 )
 
             # 트랜잭션 1: Transcription 저장 및 상태 업데이트 (DB 작업만)
@@ -401,12 +383,14 @@ class StreamConsumer:
 
                 # LLM 요약 실행 (트랜잭션 밖에서 - 30초+ 소요)
                 try:
-                    executor = SectionGraphExecutor(
-                        on_progress=progress.llm_progress,
+                    title, summary_md, success = await summarize_with_block_generator(
+                        file_id, text_to_summarize, progress.llm_progress,
                     )
-                    title, summary_md = await executor.execute(text_to_summarize)
 
-                    # 트랜잭션 3: 결과 저장
+                    final_status = (
+                        FileStatus.COMPLETED if success else FileStatus.SUMMARY_FAILED
+                    )
+
                     async with AsyncSessionLocal() as session:
                         file_repo = FileRepository(session)
 
@@ -415,30 +399,39 @@ class StreamConsumer:
                         if summary_md:
                             await file_repo.update_summary_markdown(file_id, summary_md)
 
-                        await file_repo.update_file_status(
-                            file_id, FileStatus.COMPLETED
-                        )
+                        await file_repo.update_file_status(file_id, final_status)
                         await file_repo.add_llm_log(
                             file_id,
                             log={
-                                "event": "llm_completed",
+                                "event": "llm_completed" if success else "llm_partial_failure",
                                 "title_length": len(title),
                                 "summary_length": len(summary_md),
+                                "success": success,
                             },
-                            message="LLM summarization completed (direct execution)",
+                            message=(
+                                "LLM summarization completed"
+                                if success
+                                else "LLM summarization partial failure (cap reached)"
+                            ),
                         )
                         await session.commit()
 
-                    logger.info(
-                        f"LLM completed (direct): file_id={file_id}, title={title[:50]}..."
-                    )
-                    progress.llm_completed(
-                        **({"title": title} if title else {}),
-                    )
+                    if success:
+                        logger.info(
+                            f"LLM completed: file_id={file_id}, title={title[:50]}..."
+                        )
+                        progress.llm_completed(
+                            **({"title": title} if title else {}),
+                        )
+                    else:
+                        logger.warning(
+                            f"LLM partial failure: file_id={file_id} (cap reached)"
+                        )
+                        progress.llm_failed("일부 섹션 생성 실패 (재요약 가능)")
 
-                except (PhaseExecutionError, Exception) as exc:
+                except Exception as exc:
                     logger.error(
-                        f"LLM summarization failed: file_id={file_id}, error={exc}"
+                        f"LLM summarization error: file_id={file_id}, error={exc}"
                     )
                     async with AsyncSessionLocal() as session:
                         file_repo = FileRepository(session)
@@ -680,12 +673,14 @@ class StreamConsumer:
 
                 # LLM 요약 실행 (트랜잭션 밖에서 - 30초+ 소요)
                 try:
-                    executor = SectionGraphExecutor(
-                        on_progress=progress.llm_progress,
+                    title, summary_md, success = await summarize_with_block_generator(
+                        file_id, ocr_text, progress.llm_progress,
                     )
-                    title, summary_md = await executor.execute(ocr_text)
 
-                    # 트랜잭션 3: 결과 저장
+                    final_status = (
+                        FileStatus.COMPLETED if success else FileStatus.SUMMARY_FAILED
+                    )
+
                     async with AsyncSessionLocal() as session:
                         file_repo = FileRepository(session)
 
@@ -694,30 +689,39 @@ class StreamConsumer:
                         if summary_md:
                             await file_repo.update_summary_markdown(file_id, summary_md)
 
-                        await file_repo.update_file_status(
-                            file_id, FileStatus.COMPLETED
-                        )
+                        await file_repo.update_file_status(file_id, final_status)
                         await file_repo.add_llm_log(
                             file_id,
                             log={
-                                "event": "llm_completed",
+                                "event": "llm_completed" if success else "llm_partial_failure",
                                 "title_length": len(title),
                                 "summary_length": len(summary_md),
+                                "success": success,
                             },
-                            message="LLM summarization completed (direct execution, OCR)",
+                            message=(
+                                "LLM summarization completed (OCR)"
+                                if success
+                                else "LLM summarization partial failure (OCR, cap reached)"
+                            ),
                         )
                         await session.commit()
 
-                    logger.info(
-                        f"LLM completed (direct/OCR): file_id={file_id}, title={title[:50]}..."
-                    )
-                    progress.llm_completed(
-                        **({"title": title} if title else {}),
-                    )
+                    if success:
+                        logger.info(
+                            f"LLM completed (OCR): file_id={file_id}, title={title[:50]}..."
+                        )
+                        progress.llm_completed(
+                            **({"title": title} if title else {}),
+                        )
+                    else:
+                        logger.warning(
+                            f"LLM partial failure (OCR): file_id={file_id}"
+                        )
+                        progress.llm_failed("일부 섹션 생성 실패 (재요약 가능)")
 
-                except (PhaseExecutionError, Exception) as exc:
+                except Exception as exc:
                     logger.error(
-                        f"LLM summarization failed (OCR): file_id={file_id}, error={exc}"
+                        f"LLM summarization error (OCR): file_id={file_id}, error={exc}"
                     )
                     async with AsyncSessionLocal() as session:
                         file_repo = FileRepository(session)

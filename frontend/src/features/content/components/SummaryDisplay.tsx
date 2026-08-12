@@ -1,22 +1,328 @@
 /**
  * 요약 표시 컴포넌트
  * - 상태별 분기: 대기/처리중/실패/완료
- * - MarkdownContent 재사용하여 summary 렌더링
+ * - SUMMARIZING + summary_sections 시 block 단위 점진 렌더링
+ * - COMPLETED + summary_sections 시 block 단위 카드 + hover [↻] 부분 재생성
+ * - sections 없을 때만 summary_md 마크다운 렌더링
  */
 
-import type { ContentDetail } from '../types'
+import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import type { ContentDetail, SummaryBlock, SummarySections } from '../types'
 import { MarkdownContent } from '@/features/chat/components/MarkdownContent'
 import { Button } from '@/shared/components/ui/button'
+import { Badge } from '@/shared/components/ui/badge'
+import { contentsApi } from '@/shared/services/endpoints/contents'
+import { contentKeys } from '@/shared/hooks/useContents'
 import {
   Loader2,
   AlertCircle,
   Clock,
   RotateCcw,
+  CheckCircle2,
 } from 'lucide-react'
 
 interface SummaryDisplayProps {
   content: ContentDetail
   onRetryClick?: (type: 'asr' | 'ocr' | 'summary') => void
+}
+
+function countSuccessBlocks(sections: SummarySections | null | undefined): number {
+  if (!sections?.blocks) return 0
+  return sections.blocks.filter((b) => b.status === 'success').length
+}
+
+function findBlock(sections: SummarySections, key: string): SummaryBlock | undefined {
+  return sections.blocks.find((b) => b.key === key)
+}
+
+function getSectionBlocks(sections: SummarySections): SummaryBlock[] {
+  return sections.blocks
+    .filter((b) => b.key.startsWith('section_'))
+    .sort((a, b) => {
+      const ai = Number(a.key.replace('section_', '')) || 0
+      const bi = Number(b.key.replace('section_', '')) || 0
+      return ai - bi
+    })
+}
+
+/**
+ * 본문 success 섹션의 첫 문장을 핵심 요약 bullet로 추출.
+ * backend summary_renderer._build_core_summary와 동일 로직.
+ */
+const CORE_SUMMARY_MAX_ITEMS = 5
+function buildCoreSummary(sectionBlocks: SummaryBlock[]): string[] {
+  const lines: string[] = []
+  for (const block of sectionBlocks.slice(0, CORE_SUMMARY_MAX_ITEMS)) {
+    if (block.status !== 'success') continue
+    const content = (typeof block.content === 'string' ? block.content : '').trim()
+    if (!content) continue
+    let first = content
+    for (const sep of ['.', '!', '?']) {
+      const cut = content.indexOf(sep)
+      if (cut >= 0) {
+        first = content.slice(0, cut + 1)
+        break
+      }
+    }
+    first = first.trim()
+    if (first) lines.push(first)
+  }
+  return lines
+}
+
+/**
+ * Hover 시 [↻] 버튼 노출 카드 — block 단위 부분 재생성 트리거.
+ * COMPLETED 상태에서만 활성. SUMMARIZING 중에는 disabled.
+ */
+function RegenerableBlockCard({
+  contentId,
+  block,
+  blockLabel,
+  isInteractive,
+  onRegenerating,
+  children,
+}: {
+  contentId: string
+  block: { key: string; status: string }
+  blockLabel: string
+  isInteractive: boolean
+  onRegenerating: (key: string | null) => void
+  children: React.ReactNode
+}) {
+  const [hovered, setHovered] = useState(false)
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: () => contentsApi.regenerateSummaryBlock(contentId, block.key),
+    onMutate: () => {
+      onRegenerating(block.key)
+      toast.info(`'${blockLabel}' 재생성 중...`)
+    },
+    onSuccess: (data) => {
+      toast.success(data.message || `'${blockLabel}' 재생성 완료`)
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : '재생성 실패'
+      toast.error(`'${blockLabel}' 재생성 실패: ${msg}`)
+    },
+    onSettled: () => {
+      onRegenerating(null)
+      queryClient.invalidateQueries({ queryKey: contentKeys.detail(contentId) })
+    },
+  })
+
+  const isPending = mutation.isPending
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {children}
+      {isInteractive && (hovered || isPending) && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="absolute top-1 right-1 h-7 w-7 bg-background/80 backdrop-blur shadow-sm"
+          onClick={() => mutation.mutate()}
+          disabled={isPending}
+          title={`'${blockLabel}' 재생성`}
+        >
+          {isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RotateCcw className="h-3.5 w-3.5" />
+          )}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * block 단위 렌더링: SUMMARIZING/COMPLETED 모두 사용. 완료된 block만 표시.
+ * COMPLETED + isInteractive=true 시 각 block hover [↻] → 부분 재생성.
+ */
+function ProgressiveSummary({
+  contentId,
+  sections,
+  isInteractive,
+}: {
+  contentId: string
+  sections: SummarySections
+  isInteractive: boolean
+}) {
+  const [regeneratingKey, setRegeneratingKey] = useState<string | null>(null)
+  const title = findBlock(sections, 'title')
+  const keywords = findBlock(sections, 'keywords')
+  const headings = findBlock(sections, 'headings')
+  const sectionBlocks = getSectionBlocks(sections)
+
+  const total = sections.blocks.length || 1
+  const success = countSuccessBlocks(sections)
+  const failed = sections.blocks.filter((b) => b.status === 'failed').length
+  const pct = Math.round((success / total) * 100)
+
+  const sectionLabels = headings?.status === 'success' && Array.isArray(headings.content)
+    ? (headings.content as string[])
+    : []
+
+  // 진행 중 카드 (SUMMARIZING 또는 부분 재생성 중)
+  const showProgressCard = !isInteractive || regeneratingKey !== null
+
+  return (
+    <div className="space-y-5">
+      {showProgressCard && (
+        <div className="rounded-lg border bg-card p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            <span className="text-sm font-medium">
+              {regeneratingKey ? `'${regeneratingKey}' 재생성 중` : '요약 생성 중'}
+            </span>
+            <Badge variant="outline" className="text-xs ml-auto">
+              {success}/{total} 완료
+              {failed > 0 && <span className="text-destructive ml-1">· 재시도 {failed}</span>}
+            </Badge>
+          </div>
+          <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          {!isInteractive && (
+            <p className="text-xs text-muted-foreground mt-2">
+              섹션이 완료되는 대로 아래에 점진적으로 표시됩니다
+            </p>
+          )}
+        </div>
+      )}
+
+      {title?.status === 'success' && typeof title.content === 'string' && (
+        <RegenerableBlockCard
+          contentId={contentId}
+          block={{ key: 'title', status: title.status }}
+          blockLabel="제목"
+          isInteractive={isInteractive}
+          onRegenerating={setRegeneratingKey}
+        >
+          <h2 className="text-xl font-semibold pr-9">{title.content}</h2>
+        </RegenerableBlockCard>
+      )}
+
+      {keywords?.status === 'success' && Array.isArray(keywords.content) && (
+        <RegenerableBlockCard
+          contentId={contentId}
+          block={{ key: 'keywords', status: keywords.status }}
+          blockLabel="키워드"
+          isInteractive={isInteractive}
+          onRegenerating={setRegeneratingKey}
+        >
+          <div className="pr-9">
+            <h3 className="text-lg font-semibold mb-2">키워드</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {(keywords.content as string[]).map((kw, i) => (
+                <Badge key={i} variant="secondary" className="text-sm">
+                  {kw}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        </RegenerableBlockCard>
+      )}
+
+      {sectionLabels.length > 0 && (
+        <RegenerableBlockCard
+          contentId={contentId}
+          block={{ key: 'headings', status: headings?.status || 'success' }}
+          blockLabel="목차"
+          isInteractive={isInteractive}
+          onRegenerating={setRegeneratingKey}
+        >
+          <div className="pr-9">
+            <h3 className="text-lg font-semibold mb-2">목차</h3>
+            <ul className="text-base space-y-1 ml-1">
+              {sectionLabels.map((label, i) => {
+                const block = sectionBlocks.find(
+                  (b) => b.key === `section_${i}` || b.label === label
+                )
+                const isDone = block?.status === 'success'
+                const isFailed = block?.status === 'failed'
+                return (
+                  <li key={i} className="flex items-center gap-2">
+                    {isDone ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                    ) : isFailed ? (
+                      <RotateCcw className="h-3.5 w-3.5 text-muted-foreground animate-pulse shrink-0" />
+                    ) : (
+                      <Loader2 className="h-3.5 w-3.5 text-muted-foreground animate-spin shrink-0" />
+                    )}
+                    <span
+                      className={
+                        isDone
+                          ? 'text-foreground'
+                          : 'text-muted-foreground'
+                      }
+                    >
+                      {label}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        </RegenerableBlockCard>
+      )}
+
+      {(() => {
+        const successSections = sectionBlocks.filter(
+          (b) => b.status === 'success' && typeof b.content === 'string'
+        )
+        const coreSummary = buildCoreSummary(successSections)
+        if (coreSummary.length === 0) return null
+        return (
+          <div>
+            <h3 className="text-lg font-semibold mb-2">핵심 요약</h3>
+            <ul className="space-y-1.5 ml-1">
+              {coreSummary.map((line, i) => (
+                <li key={i} className="text-base leading-relaxed flex gap-2">
+                  <span className="text-muted-foreground select-none">·</span>
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )
+      })()}
+
+      {sectionBlocks.some((b) => b.status === 'success') && (
+        <div className="space-y-4">
+          <h3 className="text-lg font-semibold">상세 내용</h3>
+          {sectionBlocks
+            .filter((b) => b.status === 'success' && typeof b.content === 'string')
+            .map((b) => (
+              <RegenerableBlockCard
+                key={b.key}
+                contentId={contentId}
+                block={{ key: b.key, status: b.status }}
+                blockLabel={b.label}
+                isInteractive={isInteractive}
+                onRegenerating={setRegeneratingKey}
+              >
+                <div className="rounded-md border bg-card/50 p-3 pr-10">
+                  <h4 className="text-base font-semibold mb-2">{b.label}</h4>
+                  <p className="text-base leading-relaxed whitespace-pre-line">
+                    {b.content as string}
+                  </p>
+                </div>
+              </RegenerableBlockCard>
+            ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function SummaryStatusCard({
@@ -97,6 +403,20 @@ export function SummaryDisplay({
   onRetryClick,
 }: SummaryDisplayProps) {
   const summaryText = content.summary_md || content.summary_html || content.summary
+  const sections = content.summary_sections
+
+  // SUMMARIZING + 점진 렌더링 (성공 block ≥ 1)
+  if (content.status === 'SUMMARIZING' && sections && countSuccessBlocks(sections) > 0) {
+    return (
+      <div className="max-w-3xl">
+        <ProgressiveSummary
+          contentId={content.id}
+          sections={sections}
+          isInteractive={false}
+        />
+      </div>
+    )
+  }
 
   if (content.status !== 'COMPLETED') {
     return (
@@ -104,6 +424,20 @@ export function SummaryDisplay({
     )
   }
 
+  // COMPLETED: sections가 있으면 block 단위 카드 + hover [↻] 부분 재생성
+  if (sections && countSuccessBlocks(sections) > 0) {
+    return (
+      <div className="max-w-3xl">
+        <ProgressiveSummary
+          contentId={content.id}
+          sections={sections}
+          isInteractive={true}
+        />
+      </div>
+    )
+  }
+
+  // sections 없으면 fallback: 기존 markdown 렌더링
   return (
     <div className="space-y-6 max-w-3xl">
       {summaryText ? (

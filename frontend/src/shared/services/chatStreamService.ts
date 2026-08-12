@@ -6,25 +6,40 @@
  */
 
 import type { Message, Source, ThinkingStep } from '@/shared/types'
-import { getAccessToken } from './authToken'
+import { httpClient } from './api/httpClient'
 
 // ============================================================
 // Types
 // ============================================================
 
 export interface SSEChunk {
-  type: 'thread_id' | 'thinking' | 'source' | 'sources' | 'content' | 'token' | 'done' | 'error' | 'search_queries'
+  type: 'accepted' | 'thread_id' | 'thinking' | 'thinking_step' | 'query_analysis' | 'source' | 'sources' | 'content' | 'partial_restore' | 'token' | 'done' | 'error' | 'search_queries'
   data: unknown
+}
+
+export interface AcceptedMessage {
+  thread_id: string
+  message_id: string
+  user_message_id: string
+}
+
+export interface AgentMessageRequest {
+  query: string
+  mode: string
+  model?: string
+  context?: Record<string, unknown>
 }
 
 export interface StreamingCallbacks {
   onToken: (token: string) => void
+  onContent?: (content: string) => void
   onThinkingStep: (step: ThinkingStep) => void
   onSource: (source: Source) => void
   onSources: (sources: Source[]) => void
   onSearchQueries: (queries: string[]) => void
   onComplete: (message: Message) => void
   onError: (error: Error) => void
+  onAccepted?: (message: AcceptedMessage) => void
   onThreadId?: (threadId: string) => void
 }
 
@@ -32,7 +47,73 @@ export interface StreamResult {
   content: string
   sources: Source[]
   thinkingSteps: ThinkingStep[]
+  accepted?: AcceptedMessage
   threadId?: string
+}
+
+interface RelayErrorData {
+  code?: string
+  message?: string
+  retryable?: boolean
+}
+
+class RetryableStreamError extends Error {}
+class TerminalStreamError extends Error {}
+
+const RECONNECT_DELAYS_MS = [0, 1000, 2000, 5000]
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+function invokeCallback(callback: () => void): void {
+  try {
+    callback()
+  } catch (error) {
+    throw new TerminalStreamError(asError(error).message)
+  }
+}
+
+function parseStreamError(data: unknown): Error {
+  if (data && typeof data === 'object') {
+    const relayError = data as RelayErrorData
+    if (relayError.code === 'relay_unavailable' && relayError.retryable === true) {
+      return new RetryableStreamError(relayError.message || 'Streaming relay unavailable')
+    }
+  }
+  return new TerminalStreamError(typeof data === 'string' ? data : 'Agent stream failed')
+}
+
+function isRetryableConnectionError(error: unknown): boolean {
+  if (error instanceof RetryableStreamError || error instanceof TypeError) return true
+  const status = (error as { status?: unknown } | null)?.status
+  return typeof status === 'number' && status >= 500
+}
+
+function abortError(): DOMException {
+  return new DOMException('Aborted', 'AbortError')
+}
+
+async function waitForReconnect(baseDelayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw abortError()
+  if (baseDelayMs === 0) return
+
+  const delayMs = Math.round(baseDelayMs * (0.8 + Math.random() * 0.4))
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(abortError())
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, delayMs)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 // ============================================================
@@ -73,18 +154,28 @@ export async function processSSEStream(
   let buffer = ''
   let fullContent = ''
   let sources: Source[] = []
-  let thinkingSteps: ThinkingStep[] = []
+  const thinkingSteps: ThinkingStep[] = []
+  let accepted: AcceptedMessage | undefined
   let threadId: string | undefined
 
   try {
     while (true) {
       // 취소 요청 확인
       if (abortSignal?.aborted) {
-        reader.cancel()
+        await reader.cancel()
         throw new DOMException('Aborted', 'AbortError')
       }
 
-      const { done, value } = await reader.read()
+      let result: ReadableStreamReadResult<Uint8Array>
+      try {
+        result = await reader.read()
+      } catch (error) {
+        if (isAbortError(error) || abortSignal?.aborted) throw abortError()
+        throw new RetryableStreamError(asError(error).message)
+      }
+      if (abortSignal?.aborted) throw abortError()
+
+      const { done, value } = result
       if (done) break
 
       buffer += decoder.decode(value, { stream: true })
@@ -96,47 +187,83 @@ export async function processSSEStream(
         if (!chunk) continue
 
         switch (chunk.type) {
-          case 'thread_id':
-            threadId = chunk.data as string
-            callbacks.onThreadId?.(threadId)
+          case 'accepted': {
+            const acceptedMessage = chunk.data as AcceptedMessage
+            accepted = acceptedMessage
+            const onAccepted = callbacks.onAccepted
+            if (onAccepted) {
+              invokeCallback(() => onAccepted(acceptedMessage))
+            }
             break
+          }
+
+          case 'thread_id': {
+            const streamedThreadId = chunk.data as string
+            threadId = streamedThreadId
+            const onThreadId = callbacks.onThreadId
+            if (onThreadId) {
+              invokeCallback(() => onThreadId(streamedThreadId))
+            }
+            break
+          }
 
           case 'thinking':
+          case 'thinking_step':
+          case 'query_analysis': {
             const thinkingStep = chunk.data as ThinkingStep
             thinkingSteps.push(thinkingStep)
-            callbacks.onThinkingStep(thinkingStep)
+            invokeCallback(() => callbacks.onThinkingStep(thinkingStep))
             break
+          }
 
-          case 'source':
+          case 'source': {
             const source = chunk.data as Source
             sources.push(source)
-            callbacks.onSource(source)
+            invokeCallback(() => callbacks.onSource(source))
             break
+          }
 
           case 'sources':
             sources = Array.isArray(chunk.data) ? (chunk.data as Source[]) : []
-            callbacks.onSources(sources)
+            invokeCallback(() => callbacks.onSources(sources))
             break
 
           case 'search_queries':
-            callbacks.onSearchQueries(Array.isArray(chunk.data) ? (chunk.data as string[]) : [])
+            invokeCallback(() => callbacks.onSearchQueries(Array.isArray(chunk.data)
+              ? (chunk.data as string[])
+              : []))
             break
 
-          case 'token':
+          case 'token': {
             const token = (chunk.data as string) || ''
             fullContent += token
-            callbacks.onToken(token)
+            invokeCallback(() => callbacks.onToken(token))
             break
+          }
 
           case 'content':
+          case 'partial_restore': {
             const contentData = chunk.data as { content?: string } | string
             fullContent = typeof contentData === 'object' && contentData?.content
               ? contentData.content
               : (contentData as string) || ''
+            const onContent = callbacks.onContent
+            if (onContent) {
+              invokeCallback(() => onContent(fullContent))
+            }
             break
+          }
 
-          case 'done':
+          case 'done': {
+            const doneData = chunk.data as {
+              content?: string
+              metadata?: Message['metadata']
+            } | null
+            if (typeof doneData?.content === 'string') {
+              fullContent = doneData.content
+            }
             const finalMessage: Message = {
+              message_id: accepted?.message_id,
               role: 'assistant',
               content: fullContent,
               timestamp: Date.now() / 1000,
@@ -144,60 +271,131 @@ export async function processSSEStream(
                 sources,
                 thinking_steps: thinkingSteps,
                 mode: mode,
+                ...doneData?.metadata,
               },
             }
-            callbacks.onComplete(finalMessage)
-            return { content: fullContent, sources, thinkingSteps, threadId }
+            invokeCallback(() => callbacks.onComplete(finalMessage))
+            return { content: fullContent, sources, thinkingSteps, accepted, threadId }
+          }
 
           case 'error':
-            throw new Error(chunk.data as string)
+            throw parseStreamError(chunk.data)
         }
       }
     }
 
-    // Stream ended without 'done' event
-    const finalMessage: Message = {
-      role: 'assistant',
-      content: fullContent,
-      timestamp: Date.now() / 1000,
-      metadata: {
-        sources,
-        thinking_steps: thinkingSteps,
-        mode: mode,
-      },
-    }
-    callbacks.onComplete(finalMessage)
-    return { content: fullContent, sources, thinkingSteps, threadId }
+    throw new RetryableStreamError('SSE stream ended before done')
 
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    if (isAbortError(err)) {
       // 취소된 경우 에러 콜백 호출하지 않음
       throw err
     }
     callbacks.onError(err as Error)
     throw err
+  } finally {
+    try {
+      await reader.cancel()
+    } catch {
+      // 이미 종료되었거나 네트워크에서 해제된 스트림
+    }
+    reader.releaseLock()
   }
-}
-
-// ============================================================
-// Helper Functions
-// ============================================================
-
-/**
- * 인증 헤더를 포함한 기본 헤더를 생성합니다.
- */
-function createAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const accessToken = getAccessToken()
-  if (accessToken) {
-    headers['Authorization'] = `Bearer ${accessToken}`
-  }
-  return headers
 }
 
 // ============================================================
 // API Functions
 // ============================================================
+
+async function postAgentStream(
+  endpoint: string,
+  body: Record<string, unknown>,
+  mode: string,
+  callbacks: StreamingCallbacks,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  let accepted: AcceptedMessage | undefined
+  const quietCallbacks: StreamingCallbacks = {
+    ...callbacks,
+    onAccepted: (message) => {
+      accepted = message
+      callbacks.onAccepted?.(message)
+    },
+    onError: () => {},
+  }
+
+  try {
+    const stream = await httpClient.postStream(endpoint, body, { signal: abortSignal })
+    await processSSEStream(new Response(stream), mode, quietCallbacks, abortSignal)
+    return
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    if (!accepted || !isRetryableConnectionError(error)) {
+      callbacks.onError(asError(error))
+      throw error
+    }
+  }
+
+  const acceptedMessage = accepted
+  if (!acceptedMessage) throw new TerminalStreamError('Accepted message is missing')
+
+  let lastError: Error = new RetryableStreamError('SSE connection lost')
+  for (const delayMs of RECONNECT_DELAYS_MS) {
+    await waitForReconnect(delayMs, abortSignal)
+    try {
+      const stream = await httpClient.getStream(
+        `/threads/${acceptedMessage.thread_id}/messages/${acceptedMessage.message_id}/stream`,
+        { signal: abortSignal }
+      )
+      await processSSEStream(
+        new Response(stream),
+        mode,
+        {
+          ...quietCallbacks,
+          onComplete: (message) => callbacks.onComplete({
+            ...message,
+            message_id: acceptedMessage.message_id,
+          }),
+        },
+        abortSignal
+      )
+      return
+    } catch (error) {
+      if (isAbortError(error)) throw error
+      if (!isRetryableConnectionError(error)) {
+        callbacks.onError(asError(error))
+        throw error
+      }
+      lastError = asError(error)
+    }
+  }
+
+  callbacks.onError(lastError)
+  throw lastError
+}
+
+export async function createThreadStream(
+  request: AgentMessageRequest,
+  callbacks: StreamingCallbacks,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  await postAgentStream('/threads', { ...request, stream: true }, request.mode, callbacks, abortSignal)
+}
+
+export async function sendMessageStream(
+  threadId: string,
+  request: AgentMessageRequest,
+  callbacks: StreamingCallbacks,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  await postAgentStream(
+    `/threads/${threadId}/messages`,
+    { ...request, stream: true },
+    request.mode,
+    callbacks,
+    abortSignal
+  )
+}
 
 export async function regenerateStream(
   threadId: string,
@@ -206,16 +404,11 @@ export async function regenerateStream(
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
-  const response = await fetch(`/api/threads/${threadId}/regenerate`, {
-    method: 'POST',
-    headers: createAuthHeaders(),
-    body: JSON.stringify({ mode, model }),
-    signal: abortSignal,
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to regenerate: ${response.statusText}`)
-  }
-
-  await processSSEStream(response, mode, callbacks, abortSignal)
+  await postAgentStream(
+    `/threads/${threadId}/regenerate`,
+    { mode, model },
+    mode,
+    callbacks,
+    abortSignal
+  )
 }

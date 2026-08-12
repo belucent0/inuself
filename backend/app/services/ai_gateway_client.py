@@ -22,6 +22,7 @@ from openai import (
 from openai.types.chat import ChatCompletionMessageParam
 
 from ..core.config import Settings
+from .circuit_breaker import CircuitBreakerOpenError, vllm_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ def get_openai_client(base_url: str, api_key: str) -> OpenAI:
     return OpenAI(
         base_url=f"{base_url.rstrip('/')}/v1",
         api_key=api_key,
-        timeout=120.0,
+        timeout=300.0,
     )
 
 
@@ -46,7 +47,7 @@ def get_async_openai_client(base_url: str, api_key: str) -> AsyncOpenAI:
     return AsyncOpenAI(
         base_url=f"{base_url.rstrip('/')}/v1",
         api_key=api_key,
-        timeout=120.0,
+        timeout=300.0,
     )
 
 
@@ -100,7 +101,7 @@ def request_ai_gateway_completion(
 
     # 재시도 로직 (모델 로딩 대기)
     effective_request_timeout = (
-        request_timeout_seconds if request_timeout_seconds is not None else 120.0
+        request_timeout_seconds if request_timeout_seconds is not None else 300.0
     )
     effective_max_retry_time = max_retry_time if max_retry_time is not None else 180
     effective_retry_interval = retry_interval if retry_interval is not None else 3
@@ -229,23 +230,35 @@ async def request_ai_gateway_completion_async(
     request_timeout_seconds: float | None = None,
     max_retry_time: int | None = None,
     retry_interval: int | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
 ) -> str:
     """AI Gateway를 통한 비동기 Chat Completion 요청.
 
     AsyncOpenAI SDK를 사용하여 AI Gateway와 통신합니다.
     이벤트 루프를 블로킹하지 않으므로 FastAPI와 함께 사용하기에 적합합니다.
+
+    base_url/api_key를 명시 지정하면 AI Gateway 대신 해당 endpoint를 직접
+    호출한다 (PR-Translate.3: ai-translate 컨테이너 직접 호출용).
     """
-    client = get_async_openai_client(
-        settings.ai_gateway_url, settings.ai_gateway_api_key
+    # circuit breaker 차단 중이면 즉시 fail (partial retry loop의 라운드 진입 직전 검사)
+    vllm_breaker.assert_closed()
+
+    effective_base_url = base_url or settings.ai_gateway_url
+    effective_api_key = (
+        api_key if api_key is not None else settings.ai_gateway_api_key
     )
+    client = get_async_openai_client(effective_base_url, effective_api_key)
 
     model_name = model or settings.ai_gateway_model
 
-    logger.info("[AI Gateway/Async] Request: model=%s", model_name)
+    logger.info(
+        "[AI Gateway/Async] Request: model=%s, base=%s", model_name, effective_base_url
+    )
 
     # 재시도 로직 (모델 로딩 대기)
     effective_request_timeout = (
-        request_timeout_seconds if request_timeout_seconds is not None else 120.0
+        request_timeout_seconds if request_timeout_seconds is not None else 300.0
     )
     effective_max_retry_time = max_retry_time if max_retry_time is not None else 180
     effective_retry_interval = retry_interval if retry_interval is not None else 3
@@ -315,6 +328,7 @@ async def request_ai_gateway_completion_async(
                     len(content),
                     finish_reason,
                 )
+                vllm_breaker.record_success()
                 return content.strip()
 
         except APIStatusError as exc:
@@ -333,11 +347,15 @@ async def request_ai_gateway_completion_async(
                     elapsed += effective_retry_interval
                     continue
 
+            # 5xx (서버 오류)는 vLLM 다운 신호로 보고 회로 카운트
+            if 500 <= exc.status_code < 600:
+                vllm_breaker.record_failure()
             error_msg = f"AI Gateway HTTP error ({exc.status_code}): {exc.message}"
             logger.error(error_msg)
             raise AIGatewayClientError(error_msg) from exc
 
         except APITimeoutError as exc:
+            vllm_breaker.record_failure()
             error_msg = f"AI Gateway timeout: {exc}"
             logger.error(error_msg)
             raise AIGatewayClientError(error_msg) from exc
@@ -352,9 +370,14 @@ async def request_ai_gateway_completion_async(
                 await asyncio.sleep(effective_retry_interval)
                 elapsed += effective_retry_interval
                 continue
+            vllm_breaker.record_failure()
             error_msg = f"AI Gateway connection error (retry timeout): {exc}"
             logger.error(error_msg)
             raise AIGatewayClientError(error_msg) from exc
+
+        except CircuitBreakerOpenError:
+            # 회로가 호출 도중 추가 열림 등은 호출자에게 그대로 노출
+            raise
 
         except Exception as exc:
             error_msg = f"AI Gateway request failed: {exc}"

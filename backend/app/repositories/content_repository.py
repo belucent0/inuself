@@ -244,6 +244,8 @@ class ContentRepository:
         limit: int = 20,
         similarity_threshold: float = 0.3,
         content_ids: list[UUID] | None = None,
+        *,
+        user_id: UUID | str,
     ) -> list[tuple[models.Content, float]]:
         """벡터 유사도 기반 콘텐츠 검색.
 
@@ -262,6 +264,7 @@ class ContentRepository:
         # pgvector의 <=> 연산자는 cosine_distance를 반환
         # embedding을 문자열로 변환 (PostgreSQL array 형식)
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+        owner_id = UUID(str(user_id))
 
         stmt = text("""
             SELECT
@@ -269,6 +272,7 @@ class ContentRepository:
                 1 - (content.embedding <=> :query_embedding::vector) AS similarity
             FROM content
             WHERE content.status = 'COMPLETED'
+              AND content.user_id = :user_id
               AND content.embedding IS NOT NULL
               AND (1 - (content.embedding <=> :query_embedding::vector)) >= :threshold
               {content_filter}
@@ -282,6 +286,7 @@ class ContentRepository:
             "query_embedding": embedding_str,
             "threshold": similarity_threshold,
             "limit": limit,
+            "user_id": owner_id,
         }
         if content_ids:
             params["content_ids"] = [str(cid) for cid in content_ids]

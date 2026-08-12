@@ -12,6 +12,11 @@ on:
         required: false
         default: ""
 
+# vLLM(ai-llm) 공유 자원이라 LLM-eval 워크플로를 같은 group으로 직렬화.
+concurrency:
+  group: vllm-shared
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -32,7 +37,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install httpx pytest pytest-asyncio pydantic
+          python -m pip install httpx pytest pytest-asyncio pytest-timeout pydantic
 
       - name: Health check
         env:
