@@ -172,13 +172,18 @@ async def _call_local_llm(
 async def _handle_codex(body: dict) -> JSONResponse:
     """Codex 모델 요청 처리 (CLIProxyAPI 경유)."""
     provider = get_codex_provider(body["model"])
-    return await _call_openai_compatible(body, provider)
+    try:
+        return await _call_openai_compatible(body, provider)
+    except (openai.APIError, openai.APITimeoutError, openai.APIConnectionError) as e:
+        logger.warning(f"[Chat] Codex failed ({e}), falling back to ai-llm container")
+        return await _handle_local_llm_container(body, body.get("stream", False))
 
 
 async def _handle_tier_thinking(body: dict):
     """tier-thinking: Codex primary, 로컬 GPU/NPU fallback."""
     # Codex 시도
     codex = get_codex_provider("codex-medium")
+    extra_body = {"reasoning_effort": codex.reasoning_effort} if codex.reasoning_effort else {}
     try:
         client = _get_openai_client(codex.api_base, CODEX_API_KEY)
         stream = body.get("stream", False)
@@ -190,6 +195,7 @@ async def _handle_tier_thinking(body: dict):
                 stream=True,
                 max_tokens=body.get("max_tokens", 4096),
                 temperature=body.get("temperature", 0.7),
+                extra_body=extra_body,
             )
 
             async def _codex_stream():
@@ -205,6 +211,7 @@ async def _handle_tier_thinking(body: dict):
             stream=False,
             max_tokens=body.get("max_tokens", 4096),
             temperature=body.get("temperature", 0.7),
+            extra_body=extra_body,
         )
         return JSONResponse(response.model_dump())
 
@@ -219,6 +226,8 @@ async def _call_openai_compatible(body: dict, provider) -> JSONResponse:
     """openai SDK로 OpenAI-compatible 엔드포인트 호출."""
     api_key = CODEX_API_KEY if provider.name == "codex" else RUNPOD_API_KEY
     client = _get_openai_client(provider.api_base, api_key)
+    reasoning_effort = getattr(provider, "reasoning_effort", None)
+    extra_body = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
 
     response = await client.chat.completions.create(
         model=provider.model,
@@ -226,6 +235,7 @@ async def _call_openai_compatible(body: dict, provider) -> JSONResponse:
         stream=False,
         max_tokens=body.get("max_tokens", 4096),
         temperature=body.get("temperature", 0.7),
+        extra_body=extra_body,
     )
     return JSONResponse(response.model_dump())
 

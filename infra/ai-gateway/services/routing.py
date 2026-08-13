@@ -11,6 +11,7 @@ from typing import Optional
 
 from config import (
     CODEX_API_BASE,
+    CODEX_MODEL,
     RUNPOD_ASR_BASE_URL,
     RUNPOD_EMBED_BASE_URL,
     RUNPOD_LLM_BASE_URL,
@@ -20,6 +21,14 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+# codex-high/medium/low는 서로 다른 모델이 아니라 동일 모델의 reasoning effort.
+# CODEX_MODEL(env)이 실제 모델명의 Single Source of Truth.
+CODEX_REASONING_EFFORT_MAP = {
+    "codex-high": "high",
+    "codex-medium": "medium",
+    "codex-low": "low",
+}
+
 
 @dataclass
 class ProviderResult:
@@ -27,6 +36,7 @@ class ProviderResult:
     model: str
     name: str
     device_group: str
+    reasoning_effort: Optional[str] = None
 
 
 async def select_provider(
@@ -42,7 +52,7 @@ async def select_provider(
         return ProviderResult(RUNPOD_EMBED_BASE_URL, "bge-small-en-v1.5", "runpod-embed", "serverless")
 
     if tier == "tier-thinking":
-        return ProviderResult(CODEX_API_BASE, "gpt-5-codex(medium)", "codex", "serverless")
+        return ProviderResult(CODEX_API_BASE, CODEX_MODEL, "codex", "serverless", "medium")
 
     model = resolve_tier_to_model(tier or "tier-simple")
     return ProviderResult(RUNPOD_LLM_BASE_URL, model, "runpod-llm", "serverless")
@@ -52,11 +62,7 @@ def get_codex_provider(model_name: str = "codex-medium") -> ProviderResult:
     """Codex (CLIProxyAPI) Provider 반환.
 
     tier-thinking primary, codex-high/medium/low 직접 요청 시 사용.
+    모델 자체는 CODEX_MODEL(env) 고정값이고, high/medium/low는 reasoning effort로 매핑된다.
     """
-    model_map = {
-        "codex-high": "gpt-5-codex(high)",
-        "codex-medium": "gpt-5-codex(medium)",
-        "codex-low": "gpt-5-codex(low)",
-    }
-    model = model_map.get(model_name, "gpt-5-codex(medium)")
-    return ProviderResult(CODEX_API_BASE, model, "codex", "codex")
+    effort = CODEX_REASONING_EFFORT_MAP.get(model_name, "medium")
+    return ProviderResult(CODEX_API_BASE, CODEX_MODEL, "codex", "codex", effort)

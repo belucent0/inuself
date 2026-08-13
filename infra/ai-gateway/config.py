@@ -54,6 +54,9 @@ RUNPOD_EMBED_BASE_URL = os.getenv("RUNPOD_EMBED_BASE_URL", "")
 # ============================================================
 CODEX_API_BASE = os.getenv("CODEX_API_BASE", "http://cli-proxy-api:8317/v1")
 CODEX_API_KEY = os.getenv("CLIPROXY_API_KEY", "")
+# ChatGPT 구독 OAuth 계정은 계정 유형상 이 모델 하나만 허용됨(2026-08 확인).
+# 새 모델이 나오면 코드 수정 없이 env var만 바꾸면 되도록 분리.
+CODEX_MODEL = os.getenv("CODEX_MODEL", "gpt-5.3-codex-spark")
 
 # ============================================================
 # Tier Config (infra/shared/tier_config.py)
