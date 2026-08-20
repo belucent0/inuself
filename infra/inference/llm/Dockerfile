@@ -34,13 +34,20 @@ RUN ldconfig
 # (3) Fake amdsmi Python module so vLLM platform detection succeeds.
 COPY amdsmi_fake.py /usr/local/lib/python3.12/dist-packages/amdsmi/__init__.py
 
-# Backport the Gemma 4 12B target-width MTP embedding fix from vLLM main.
+# Backport the Gemma 4 target-width MTP embedding fix from vLLM main.
 COPY patch_gemma4_mtp.py /tmp/patch_gemma4_mtp.py
 RUN python /tmp/patch_gemma4_mtp.py
 
+# vLLM Whisper decodes uploaded audio with soundfile first and PyAV as the
+# fallback for container formats such as MP4/M4A/WebM.
+RUN pip install --no-cache-dir \
+        'soundfile>=0.13' \
+        'av>=14'
+
 # Sanity check at build time — image must still load torch.
 RUN python -c "import vllm; print('vllm', vllm.__version__)" \
- && python -c "import transformers; print('transformers', transformers.__version__)"
+ && python -c "import transformers; print('transformers', transformers.__version__)" \
+ && python -c "import soundfile, av; print('audio decoders ok')"
 
 # Initialize DXG before vLLM probes it in each Python subprocess. Copy this
 # last so Docker build-time Python commands do not require a GPU.

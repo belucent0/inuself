@@ -80,16 +80,6 @@ class Settings(BaseSettings):
     )
     ai_gateway_allowed_models: str = Field("", validation_alias="AI_GATEWAY_ALLOWED_MODELS")
 
-    # AI Translate 전용 컨테이너 (PR-Translate.3, EXAONE 4.0-1.2B)
-    # ai-llm(Qwen3-VL-4B)와 분리하여 GPU 큐 경합 회피.
-    ai_translate_url: str = Field(
-        "http://ai-translate:8000",
-        validation_alias="AI_TRANSLATE_URL",
-    )
-    ai_translate_model: str = Field(
-        "exaone-translate", validation_alias="AI_TRANSLATE_MODEL"
-    )
-
     # AI Agent 검색 품질 튜닝 파라미터
     agent_search_web_limit: int = Field(
         15,

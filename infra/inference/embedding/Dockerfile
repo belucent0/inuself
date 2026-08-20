@@ -1,15 +1,4 @@
-# Qwen3-VL-8B-Instruct (Q4_K_M GGUF) on llama.cpp HIP — accuracy-tier OCR
-#
-# Tier-2 (accuracy) OCR for the asr-ocr service. Built on llama.cpp's HIP
-# backend (-DGGML_HIP=ON, gfx1150) following the same pattern proven by
-# infra/inference/vibevoicecpp/Dockerfile.
-#
-# - Model: unsloth/Qwen3-VL-8B-Instruct-GGUF (Q4_K_M ~5 GB)
-# - Vision proj: mmproj-F16.gguf (~1 GB)
-# - Server: llama-server with --mmproj for OpenAI-compatible /v1/chat/completions
-#
-# Why llama.cpp not vLLM: vLLM does not yet ship a Qwen3-VL kernel; the
-# llama.cpp/ggml team merged Qwen3-VL multimodal support in early 2026.
+# EmbeddingGemma GGUF on llama.cpp HIP for gfx1150.
 
 FROM rocm/vllm-dev:rocm7.2.1_navi_ubuntu24.04_py3.12_pytorch_2.9_vllm_0.16.0
 
@@ -49,7 +38,7 @@ RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /opt/llama.cpp
  && cp build/bin/llama-cli /usr/local/bin/llama-cli \
  && ldconfig
 
-# Auto-download model from HF cache + exec llama-server.
+# Auto-download the embedding model from HF cache + exec llama-server.
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

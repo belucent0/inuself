@@ -9,7 +9,7 @@
 > 본 문서의 추론 라우팅용 Stream 키들(`stream:media:requests`, `stream:chat:requests`,
 > `stream:recap:requests`, `gpu:responses`)은 **Provider Manager + LiteLLM 프록시
 > 구조를 위한 것으로 v1.2.0에서 폐기되었습니다.** 현재 backend/worker는 ai-gateway가
-> 추론 컨테이너(`ai-llm`/`ai-asr`/`ai-ocr`/`ai-embedding`/`ai-diarize`)를 httpx로
+> 추론 컨테이너(`ai-llm`/`ai-asr-vllm`/`ai-embedding`/`ai-diarize`)를 httpx로
 > 직접 호출하며, 워커 작업 큐는 **Celery (Redis broker)** 만 사용합니다.
 >
 > Pub/Sub `events:*` 채널과 `volatile-lru` 메모리 정책은 그대로 유효합니다.

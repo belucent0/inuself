@@ -270,8 +270,8 @@ async def _handle_diarization(body: dict) -> JSONResponse:
 async def _handle_ocr(body: dict) -> JSONResponse:
     """OCR (이미지 텍스트 추출) 요청 처리.
 
-    refactor/inference 이후: dots.ocr 단일 컨테이너(asr-ocr:8080)로 통일.
-    accuracy_mode는 더 이상 분기하지 않으므로 폐기 (요청 본문에 와도 무시).
+    local-gpu에서는 ai-llm의 Gemma 4 vision으로 처리한다.
+    accuracy_mode는 이미지 전처리 품질 힌트이며 모델 분기에는 사용하지 않는다.
     """
     messages = body.get("messages", [])
 
@@ -284,7 +284,7 @@ async def _handle_ocr(body: dict) -> JSONResponse:
     if DEPLOY_MODE == "serverless":
         return await _handle_ocr_serverless(body)
 
-    # 로컬 컨테이너 모드: asr-ocr (dots.ocr llama-server) 직접 호출
+    # 로컬 컨테이너 모드: ai-llm Gemma 4 vision 직접 호출
     payload = {
         "model": OCR_MODEL_NAME,
         "messages": messages,

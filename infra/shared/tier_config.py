@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 TIER_MODEL_MAP = {
-    "tier-simple": os.getenv("TIER_SIMPLE_MODEL", "gemma4-12b"),
-    "tier-thinking": os.getenv("TIER_THINKING_MODEL", "gemma4-12b"),
-    "tier-recap": os.getenv("RECAP_SUMMARIZE_MODEL", "gemma4-12b"),
+    "tier-simple": os.getenv("TIER_SIMPLE_MODEL", "gemma4-a4b"),
+    "tier-thinking": os.getenv("TIER_THINKING_MODEL", "gemma4-a4b"),
+    "tier-recap": os.getenv("RECAP_SUMMARIZE_MODEL", "gemma4-a4b"),
 }
 
 
@@ -32,7 +32,7 @@ def resolve_tier_to_model(model_name: str) -> str:
     """티어명을 실제 모델명으로 변환.
 
     Args:
-        model_name: 요청된 모델명 (예: "tier-simple", "gemma4-12b")
+        model_name: 요청된 모델명 (예: "tier-simple", "gemma4-a4b")
 
     Returns:
         실제 모델명
@@ -47,55 +47,3 @@ def resolve_tier_to_model(model_name: str) -> str:
 def get_available_tiers() -> list[str]:
     """사용 가능한 티어 목록 반환."""
     return list(TIER_MODEL_MAP.keys())
-
-
-# ============================================================
-# Tier-based Routing Policy (NPU/GPU 우선순위)
-# ============================================================
-# v1.2.0 현재: local-gpu 모드에서는 모든 LLM 요청이 vLLM(ai-llm 컨테이너,
-# gemma4-12b)으로 단일 라우팅되어 본 정책은 사용되지 않습니다.
-# NPU 도입(향후)이나 NPU/GPU 혼합 운영 시 활용하기 위해 정의를 보존합니다.
-#
-# - primary: 우선 사용할 디바이스 (npu 또는 gpu)
-# - fallback: primary busy 시 사용할 대체 디바이스
-# - queue_on_busy: 둘 다 busy일 때 대기 여부 (True면 최대 30초 대기)
-# ============================================================
-
-TIER_ROUTING_POLICY = {
-    "tier-simple": {
-        "primary": "npu",
-        "fallback": "gpu",
-        "queue_on_busy": True,
-    },
-    "tier-thinking": {
-        "primary": "npu",
-        "fallback": "gpu",
-        "queue_on_busy": True,
-    },
-    "tier-recap": {
-        "primary": "gpu",
-        "fallback": "gpu",
-        "queue_on_busy": True,
-    },
-}
-
-# 기본 정책 (tier 정보 없을 때)
-DEFAULT_ROUTING_POLICY = {
-    "primary": "npu",
-    "fallback": "gpu",
-    "queue_on_busy": True,
-}
-
-
-def get_routing_policy(tier: str | None) -> dict:
-    """티어에 해당하는 라우팅 정책 반환.
-
-    Args:
-        tier: 티어명 (예: "tier-simple", "tier-thinking")
-
-    Returns:
-        라우팅 정책 딕셔너리 (primary, fallback, queue_on_busy)
-    """
-    if tier and tier in TIER_ROUTING_POLICY:
-        return TIER_ROUTING_POLICY[tier]
-    return DEFAULT_ROUTING_POLICY

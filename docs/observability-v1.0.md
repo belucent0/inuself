@@ -52,9 +52,11 @@
 **Promtail 수집 대상:**
 - Docker 컨테이너 로그 자동 발견 (Docker Service Discovery)
   - 애플리케이션: `asr-backend`, `asr-frontend`, `asr-worker-unified`, `asr-nginx`, `asr-cli-proxy-api`
-  - AI Gateway / 추론: `ai-gateway`, `ai-llm`, `ai-asr`, `ai-diarize`, `ai-ocr`, `ai-embedding`
+  - AI Gateway / 추론: `ai-gateway`, `ai-llm`, `ai-asr-vllm`, `ai-diarize`, `ai-embedding`
   - 데이터: `asr-postgres`, `asr-valkey`, `asr-minio`, `asr-searxng`
   - 옵저빌리티: `asr-prometheus`, `asr-grafana`, `asr-loki`, `asr-promtail`, `asr-tempo`, `asr-flower`, `asr-langfuse`
+
+Windows FastFlowLM NPU는 Docker/Promtail 대상이 아니므로 예약 작업 상태와 `/api/ps`를 별도로 확인합니다.
 
 ### 2. 분산 추적 (Jaeger + Tempo)
 
@@ -114,7 +116,7 @@
 | Backend | `backend/app/core/logging.py` | Loguru patcher |
 | Worker | `worker/logging_config.py` | Loguru patcher |
 | AI Gateway | `infra/ai-gateway/main.py` (`middleware/telemetry.py`) | OpenTelemetry + Loguru |
-| 추론 컨테이너 | `infra/inference/{llm,asr,diarize,ocr,embedding}/server.py` | 컨테이너 stdout (Promtail 수집) |
+| 추론 컨테이너 | `docker-compose.yml`, `infra/inference/{llm,diarize,embedding}/` | 컨테이너 stdout (Promtail 수집) |
 
 ---
 
@@ -154,7 +156,7 @@ URL: http://localhost:3002
 URL: http://localhost:16686
 ```
 
-1. Service 선택: `asr-backend`, `asr-worker-unified`, `ai-gateway`, `ai-llm`, `ai-asr`, `ai-diarize`, `ai-ocr`, `ai-embedding`
+1. Service 선택: `asr-backend`, `asr-worker-unified`, `ai-gateway`, `ai-llm`, `ai-asr-vllm`, `ai-diarize`, `ai-embedding`
 2. Find Traces 클릭
 3. 특정 trace 클릭 → 전체 span 타임라인 확인
 

@@ -1,7 +1,7 @@
 """ASR + 화자분리 메인 파이프라인.
 
 v1.2.0: Worker → ai-gateway (httpx) → ai-asr · ai-diarize 컨테이너 직결.
-- 병렬 처리: ASR + 화자분리 동시 실행
+- 공유 iGPU 직렬 처리: ASR 완료 후 화자분리 실행
 - 모든 AI 추론은 ai-* 컨테이너에서 수행, Worker는 호출·후처리만 담당.
 """
 import subprocess
@@ -68,7 +68,7 @@ def run_asr_diarization_pipeline(
     Returns:
         PipelineResult
     """
-    # Architecture V6: GPU/ROCm 설정 불필요 - AI Gateway가 자동 라우팅
+    # GPU/ROCm 설정은 추론 컨테이너가 소유하며 Worker는 AI Gateway만 호출한다.
     audio_file_path = Path(audio_file_path)
     logs = []
     
@@ -112,7 +112,7 @@ def run_asr_diarization_pipeline(
     })
 
     try:
-        # V7.0: ASR + 화자분리 병렬 처리 (Redis Stream으로 Docker Desktop 크래시 해결)
+        # 공유 iGPU에서 ASR 후 화자분리를 직렬 처리
         if processing_mode == "case4":
             return _run_case4_parallel_processing(
                 audio_duration=audio_duration,
@@ -144,17 +144,17 @@ def _run_case4_parallel_processing(
     on_progress: Callable[[float, str], None] | None = None,
 ) -> PipelineResult:
     """
-    V7.0: ASR + 화자분리 병렬 처리.
+    공유 iGPU에서 ASR 후 화자분리를 직렬 처리합니다.
 
     Architecture V7.0: Worker → Redis Stream → Provider Manager (Host)
-    - 병렬 처리로 처리 시간 단축
+    - 공유 iGPU 경합을 피하도록 ASR 후 화자분리 실행
     - Redis Stream으로 Docker Desktop 크래시 해결 (host.docker.internal HTTP 제거)
     - Provider Manager가 GPU 서버에 localhost로 직접 접근
     """
     print(f"\n{'='*60}")
-    print(f"[Pipeline] Parallel Processing (Architecture V7.0)")
+    print(f"[Pipeline] Serialized GPU Processing")
     print(f"[Pipeline] accuracy_mode={accuracy_mode}")
-    print(f"[Pipeline] Running: ASR + Diarization simultaneously")
+    print(f"[Pipeline] Running: ASR, then Diarization")
     print(f"{'='*60}")
 
     case_start = time.time()
@@ -173,7 +173,7 @@ def _run_case4_parallel_processing(
     diarization_params = {}
 
     # ============================================================
-    # 병렬 실행: ASR + Diarization 동시 실행
+    # ASR + Diarization은 한 GPU lock 안에서 순차 실행
     # OpenTelemetry context를 명시적으로 복원하여 스레드에 전파
     # V7.5: Worker측에서 GPU 잠금 획득 후 ASR+Diarization 공유
     # ============================================================
@@ -228,12 +228,13 @@ def _run_case4_parallel_processing(
         finally:
             otel_context.detach(token)
 
-    print(f"\n[Parallel] Starting ASR and Diarization simultaneously...")
+    print(f"\n[Pipeline] Starting ASR, then Diarization...")
     if on_progress:
         on_progress(28, "음성 인식 + 화자분리 처리 중")
 
     try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        # Shared iGPU contention made concurrent ASR + pyannote ~20x slower.
+        with ThreadPoolExecutor(max_workers=1) as executor:
             # 두 작업을 동시에 시작 (OpenTelemetry context가 각 스레드에서 복원됨)
             asr_future = executor.submit(run_asr)
             diarization_future = executor.submit(run_diarization)
@@ -284,7 +285,7 @@ def _run_case4_parallel_processing(
     # ASR 엔진 결정 (Provider 기반)
     asr_engine = asr_provider.value
 
-    print(f"\n[Pipeline] Parallel processing completed in {execution_time:.2f}s")
+    print(f"\n[Pipeline] Serialized GPU processing completed in {execution_time:.2f}s")
     print(f"  - ASR ({asr_engine}): {model_load_time + transcribe_time:.2f}s")
     print(f"  - Diarization: {diarization_load_time + diarization_time:.2f}s")
 
@@ -421,9 +422,9 @@ def _run_case4_parallel_processing(
         "asr_time": model_load_time + transcribe_time,
         "accuracy_mode": accuracy_mode,
         "asr_engine": asr_provider.value,
-        "architecture": "v7.0_parallel",
+        "architecture": "v7.1_serialized_gpu",
         "merge_logic": "v1.1_asr_based",  # V1.1: ASR 기준 + 화자분리 범위 필터링
-        "processing_mode": "parallel",
+        "processing_mode": "serialized_gpu",
         "speaker_stats": speaker_stats,
         "diarization_params": diarization_params,
         "diarization_fallback": diarization_fallback_used,
@@ -438,4 +439,3 @@ def _run_case4_parallel_processing(
         duration_seconds=audio_duration,
         logs=logs,
     )
-

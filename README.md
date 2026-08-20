@@ -29,7 +29,7 @@
                                        ▼           ▼          ▼
 ┌─────────────────────────┐   ┌────────────────────────────────────────┐
 │  DATA                   │   │  INFERENCE CONTAINERS (ROCm GPU)       │
-│  PostgreSQL + pgvector  │   │  ai-llm        : vLLM (Gemma 4 12B)    │
+│  PostgreSQL + pgvector  │   │  ai-llm        : vLLM (Gemma 4 A4B)    │
 │  Valkey (Redis)         │   │  ai-asr-vllm   : Whisper-large-v3-turbo│
 │  MinIO (S3) · SearXNG   │   │  ai-diarize    : pyannote community-1  │
 └─────────────────────────┘   │  OCR            : ai-llm image input   │
@@ -51,7 +51,7 @@
 | **WPI 심리검사** | 5유형 × 5차원 성격 분석, AI 에이전트 활용, 검사 결과에 개인 맞춤형 마음읽기 해설 제공 |
 | **YouTube 영상 처리** | 다운로드 → 전사 → 구조화 요약 |
 | **웹 검색 통합** | SearXNG 기반 딥서치, 멀티턴 검색 재시도 |
-| **AI 추론 게이트웨이** | ai-gateway (FastAPI + httpx) — 로컬 추론 컨테이너(vLLM · llama.cpp · transformers) 직결 호출, tier 기반 모델 매핑, serverless 폴백(Codex/RunPod) |
+| **AI 추론 게이트웨이** | ai-gateway (FastAPI + httpx) — 로컬 추론 컨테이너(vLLM · llama.cpp · pyannote) 직결 호출, tier 기반 모델 매핑, serverless 폴백(Codex/RunPod) |
 | **옵저버빌리티** | Grafana + Prometheus + Loki + Tempo + Langfuse |
 
 ---
@@ -64,7 +64,7 @@
 | Backend | FastAPI + SQLAlchemy + Celery |
 | AI Agent | LangGraph + LangChain |
 | Database | PostgreSQL + pgvector · Valkey (Redis) · MinIO |
-| Inference | ai-gateway (FastAPI) · vLLM · llama.cpp · transformers · pyannote |
+| Inference | ai-gateway (FastAPI) · vLLM · llama.cpp · pyannote |
 | Infra | Docker Compose · Nginx |
 | Observability | Grafana + Prometheus + Loki + Tempo + Langfuse |
 | CI/CD | GitHub Actions (품질 게이트 4종 + 자동 태깅) |
@@ -74,8 +74,8 @@
 ## 문서
 
 - 아키텍처 상세 → [`docs/architecture-v1.2.0.md`](docs/architecture-v1.2.0.md)
-- Gemma 4 서빙·벤치마크 → [`docs/benchmarks/gemma4-12b-vllm-mtp.md`](docs/benchmarks/gemma4-12b-vllm-mtp.md)
-- GPU/ROCm 설치 가이드 → [`docs/archived/README-legacy.md`](docs/archived/README-legacy.md)
+- Gemma 4 서빙·벤치마크 → [`docs/benchmarks/gemma4-a4b-vllm-tuning-draft.md`](docs/benchmarks/gemma4-a4b-vllm-tuning-draft.md)
+- GPU/ROCm 배포 체크리스트 → [`docs/architecture-v1.2.0.md`](docs/architecture-v1.2.0.md#125-ai-llm-서빙-체크리스트)
 
 ---
 

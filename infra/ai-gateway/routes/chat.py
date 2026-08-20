@@ -19,6 +19,8 @@ from config import (
     RUNPOD_API_KEY,
     LLM_BASE_URL,
     LLM_MODEL_NAME,
+    NPU_LLM_BASE_URL,
+    NPU_LLM_MODEL_NAME,
 )
 from services.routing import select_provider, get_codex_provider
 
@@ -69,7 +71,7 @@ async def chat_completions(request: Request):
     if model == "tier-thinking":
         return await _handle_tier_thinking(body)
 
-    # 로컬 모드: asr-llm 컨테이너(vLLM) 직결
+    # 로컬 모드: simple은 NPU, 나머지는 GPU
     if DEPLOY_MODE == "local-gpu":
         return await _handle_local_llm_container(body, stream)
 
@@ -80,49 +82,74 @@ async def chat_completions(request: Request):
 
 
 async def _handle_local_llm_container(body: dict, stream: bool):
-    """asr-llm 컨테이너(vLLM) 직접 호출 — Provider Manager / Redis Stream 우회.
-
-    refactor/inference: chat·summary 모두 단일 모델(LLM_MODEL_NAME)로 통일.
-    Codex / tier-thinking은 별도 처리되어 여기 도달하지 않는다.
-    """
+    """로컬 LLM 직접 호출. tier-simple은 NPU, 실패 시 GPU로 fallback."""
     requested_model = body.get("model", "")
-    client = _get_openai_client(f"{LLM_BASE_URL}/v1", "none")
+    base_url, model_name = _local_llm_target(requested_model)
+
+    try:
+        return await _call_local_llm(body, stream, base_url, model_name)
+    except openai.APIError as e:
+        if base_url == LLM_BASE_URL:
+            raise
+        logger.warning(f"[Chat] NPU failed ({e}), falling back to GPU")
+        return await _call_local_llm(body, stream, LLM_BASE_URL, LLM_MODEL_NAME)
+
+
+def _local_llm_target(requested_model: str) -> tuple[str, str]:
+    if requested_model == "tier-simple" and NPU_LLM_BASE_URL:
+        return NPU_LLM_BASE_URL, NPU_LLM_MODEL_NAME
+    return LLM_BASE_URL, LLM_MODEL_NAME
+
+
+async def _call_local_llm(
+    body: dict,
+    stream: bool,
+    base_url: str,
+    model_name: str,
+):
+    requested_model = body.get("model", "")
+    client = _get_openai_client(f"{base_url.rstrip('/')}/v1", "none")
 
     common_kwargs = {
-        "model": LLM_MODEL_NAME,  # vLLM serve 시 --served-model-name 와 일치해야 함
+        "model": model_name,
         "messages": body.get("messages", []),
         "max_tokens": body.get("max_tokens", 4096),
         "temperature": body.get("temperature", 0.7),
     }
 
     if stream:
-        async def _vllm_stream():
-            response = await client.chat.completions.create(stream=True, **common_kwargs)
+        response = await client.chat.completions.create(stream=True, **common_kwargs)
+
+        async def _local_stream():
             async for chunk in response:
-                # vLLM이 돌려준 model 필드를 클라이언트 요청 그대로 보존
                 d = chunk.model_dump()
-                d["model"] = requested_model or LLM_MODEL_NAME
+                d["model"] = requested_model or model_name
                 yield f"data: {json.dumps(d)}\n\n"
             yield "data: [DONE]\n\n"
 
-        return StreamingResponse(_vllm_stream(), media_type="text/event-stream")
+        return StreamingResponse(_local_stream(), media_type="text/event-stream")
 
     response = await client.chat.completions.create(stream=False, **common_kwargs)
     payload = response.model_dump()
-    payload["model"] = requested_model or LLM_MODEL_NAME
+    payload["model"] = requested_model or model_name
     return JSONResponse(payload)
 
 
 async def _handle_codex(body: dict) -> JSONResponse:
     """Codex 모델 요청 처리 (CLIProxyAPI 경유)."""
     provider = get_codex_provider(body["model"])
-    return await _call_openai_compatible(body, provider)
+    try:
+        return await _call_openai_compatible(body, provider)
+    except (openai.APIError, openai.APITimeoutError, openai.APIConnectionError) as e:
+        logger.warning(f"[Chat] Codex failed ({e}), falling back to asr-llm container")
+        return await _handle_local_llm_container(body, body.get("stream", False))
 
 
 async def _handle_tier_thinking(body: dict):
     """tier-thinking: Codex primary, 로컬 GPU/NPU fallback."""
     # Codex 시도
     codex = get_codex_provider("codex-medium")
+    extra_body = {"reasoning_effort": codex.reasoning_effort} if codex.reasoning_effort else {}
     try:
         client = _get_openai_client(codex.api_base, CODEX_API_KEY)
         stream = body.get("stream", False)
@@ -134,6 +161,7 @@ async def _handle_tier_thinking(body: dict):
                 stream=True,
                 max_tokens=body.get("max_tokens", 4096),
                 temperature=body.get("temperature", 0.7),
+                extra_body=extra_body,
             )
 
             async def _codex_stream():
@@ -149,13 +177,14 @@ async def _handle_tier_thinking(body: dict):
             stream=False,
             max_tokens=body.get("max_tokens", 4096),
             temperature=body.get("temperature", 0.7),
+            extra_body=extra_body,
         )
         return JSONResponse(response.model_dump())
 
     except (openai.APIError, openai.APITimeoutError, openai.APIConnectionError) as e:
         logger.warning(f"[Chat] Codex failed ({e}), falling back to asr-llm container")
         # refactor/inference: Provider Manager 우회 — asr-llm 컨테이너로 직결.
-        # Qwen3-4B-Instruct는 thinking 정확도가 Codex보다 낮지만 fallback 안전망 역할.
+        # Codex 실패 시 로컬 Gemma 4를 fallback으로 사용한다.
         return await _handle_local_llm_container(body, body.get("stream", False))
 
 
@@ -163,6 +192,8 @@ async def _call_openai_compatible(body: dict, provider) -> JSONResponse:
     """openai SDK로 OpenAI-compatible 엔드포인트 호출."""
     api_key = CODEX_API_KEY if provider.name == "codex" else RUNPOD_API_KEY
     client = _get_openai_client(provider.api_base, api_key)
+    reasoning_effort = getattr(provider, "reasoning_effort", None)
+    extra_body = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
 
     response = await client.chat.completions.create(
         model=provider.model,
@@ -170,6 +201,7 @@ async def _call_openai_compatible(body: dict, provider) -> JSONResponse:
         stream=False,
         max_tokens=body.get("max_tokens", 4096),
         temperature=body.get("temperature", 0.7),
+        extra_body=extra_body,
     )
     return JSONResponse(response.model_dump())
 
