@@ -85,6 +85,10 @@ class Settings(BaseSettings):
         15,
         validation_alias="AGENT_SEARCH_WEB_LIMIT",
     )
+    searxng_url: str = Field(
+        "http://searxng:8080",
+        validation_alias="SEARXNG_URL",
+    )
     agent_hybrid_web_limit: int = Field(
         10,
         validation_alias="AGENT_HYBRID_WEB_LIMIT",

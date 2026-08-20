@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import socket
 import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, BinaryIO
+from urllib.parse import urlparse
 
+import urllib3
 from minio import Minio
 from minio.error import S3Error
 
@@ -18,19 +21,28 @@ from .logging import logger
 def get_s3_client() -> Minio | None:
     """S3 클라이언트 반환 (MinIO SDK)."""
     settings = get_settings()
-    try:
-        # endpoint에서 http:// 또는 https:// 제거
-        endpoint = settings.s3_endpoint.replace("http://", "").replace("https://", "")
-        secure = settings.s3_endpoint.startswith("https://")
+    if not settings.s3_endpoint or not settings.s3_access_key or not settings.s3_secret_key:
+        logger.info("[Storage] S3 credentials are not configured; using local storage")
+        return None
 
-        return Minio(
-            endpoint,
-            access_key=settings.s3_access_key,
-            secret_key=settings.s3_secret_key,
-            secure=secure,
-        )
+    try:
+        return _build_s3_client(settings)
     except Exception:
         return None
+
+
+def _build_s3_client(settings, *, http_client: Any | None = None) -> Minio:
+    # endpoint에서 http:// 또는 https:// 제거
+    endpoint = settings.s3_endpoint.replace("http://", "").replace("https://", "")
+    secure = settings.s3_endpoint.startswith("https://")
+
+    return Minio(
+        endpoint,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        secure=secure,
+        http_client=http_client,
+    )
 
 
 def _get_local_storage_path(key: str) -> Path:
@@ -323,6 +335,12 @@ def download_json(key: str) -> dict[str, Any]:
     client = get_s3_client()
     if client:
         try:
+            http_client = urllib3.PoolManager(
+                timeout=urllib3.Timeout(connect=1.0, read=5.0),
+                retries=False,
+            )
+            client = _build_s3_client(settings, http_client=http_client)
+
             # 버킷 존재 확인
             if not client.bucket_exists(settings.s3_bucket):
                 raise S3Error("Bucket does not exist", None, None, None, None, None)
@@ -333,6 +351,8 @@ def download_json(key: str) -> dict[str, Any]:
             response.release_conn()
             return json.loads(content)
         except S3Error as e:
+            logger.warning(f"S3 download failed, trying local: {e}")
+        except Exception as e:
             logger.warning(f"S3 download failed, trying local: {e}")
 
     # 로컬 파일 시스템 폴백
@@ -393,6 +413,18 @@ def check_storage_health() -> tuple[bool, str]:
     if client is None:
         local_path = settings.upload_dir / "storage"
         return False, f"S3 클라이언트 생성 실패. 로컬 스토리지 사용: {local_path}"
+    if not _is_s3_endpoint_reachable(settings.s3_endpoint):
+        local_path = settings.upload_dir / "storage"
+        return False, (
+            f"S3 endpoint unreachable: endpoint={settings.s3_endpoint}. "
+            f"로컬 스토리지 사용 경로: {local_path}"
+        )
+
+    health_http_client = urllib3.PoolManager(
+        timeout=urllib3.Timeout(connect=1.0, read=2.0),
+        retries=False,
+    )
+    client = _build_s3_client(settings, http_client=health_http_client)
     
     ok, message = _try_head_bucket(client, settings)
     if ok:
@@ -403,6 +435,20 @@ def check_storage_health() -> tuple[bool, str]:
         f"S3 연결 실패 ({message}). bucket={settings.s3_bucket}. "
         f"로컬 스토리지 사용 경로: {local_path}"
     )
+
+
+def _is_s3_endpoint_reachable(endpoint: str, *, timeout: float = 1.0) -> bool:
+    parsed = urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if not host:
+        return False
+
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def _try_head_bucket(client: Minio, settings) -> tuple[bool, str]:
@@ -416,12 +462,9 @@ def _try_head_bucket(client: Minio, settings) -> tuple[bool, str]:
         else:
             # 버킷이 없으면 생성 시도
             try:
-                logger.info(
-                    "버킷이 없습니다. 생성 시도 중: bucket=%s",
-                    settings.s3_bucket,
-                )
+                logger.info("버킷이 없습니다. 생성 시도 중: bucket={}", settings.s3_bucket)
                 client.make_bucket(settings.s3_bucket)
-                logger.info("버킷 생성 성공: bucket=%s", settings.s3_bucket)
+                logger.info("버킷 생성 성공: bucket={}", settings.s3_bucket)
                 return True, (
                     f"S3 연결 성공 (버킷 자동 생성됨): endpoint={settings.s3_endpoint}, "
                     f"bucket={settings.s3_bucket}, prefix={settings.s3_prefix}"
@@ -429,13 +472,13 @@ def _try_head_bucket(client: Minio, settings) -> tuple[bool, str]:
             except S3Error as create_exc:
                 if "InvalidAccessKeyId" in str(create_exc) or "AccessDenied" in str(create_exc):
                     logger.warning(
-                        "버킷 생성 실패 - 자격증명 오류 (bucket=%s): %s",
+                        "버킷 생성 실패 - 자격증명 오류 (bucket={}): {}",
                         settings.s3_bucket,
                         create_exc,
                     )
                     return False, f"자격증명 오류로 버킷 생성 실패: {create_exc}. MinIO 설정을 확인하세요"
                 logger.warning(
-                    "버킷 생성 실패 (bucket=%s): %s",
+                    "버킷 생성 실패 (bucket={}): {}",
                     settings.s3_bucket,
                     create_exc,
                 )
@@ -446,21 +489,17 @@ def _try_head_bucket(client: Minio, settings) -> tuple[bool, str]:
         # 자격증명 오류인 경우 (MinIO 재시작 등으로 인한 초기화)
         if "InvalidAccessKeyId" in error_msg or "AccessDenied" in error_msg:
             logger.warning(
-                "S3 자격증명 오류 (bucket=%s): %s. MinIO가 재시작되어 초기화되었을 수 있습니다.",
+                "S3 자격증명 오류 (bucket={}): {}. MinIO가 재시작되어 초기화되었을 수 있습니다.",
                 settings.s3_bucket,
                 error_msg,
             )
             return False, f"자격증명 오류: {error_msg}. MinIO 설정을 확인하세요 (기본값: torchdev/torchdev-secret)"
         else:
-            logger.warning(
-                "S3 연결 실패 (bucket=%s): %s",
-                settings.s3_bucket,
-                exc,
-            )
+            logger.warning("S3 연결 실패 (bucket={}): {}", settings.s3_bucket, exc)
             return False, str(exc)
     except Exception as exc:
         logger.warning(
-            "S3 연결 실패 - 예상치 못한 오류 (bucket=%s): %s",
+            "S3 연결 실패 - 예상치 못한 오류 (bucket={}): {}",
             settings.s3_bucket,
             exc,
         )

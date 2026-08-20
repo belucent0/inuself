@@ -26,6 +26,8 @@ export interface ContentSummary {
   status: ContentStatus
   created_at: string
   updated_at: string
+  summary_md?: string | null
+  transcription_content?: Record<string, unknown> | null
   speakers: string[]
   duration_seconds: number
   /** SSE 전용 ephemeral 필드 (API 응답에는 없음) */

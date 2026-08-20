@@ -287,7 +287,7 @@ class StreamConsumer:
             speaker_labels = message.get("speaker_labels", [])
 
             # S3에서 결과 다운로드 (트랜잭션 밖에서 실행)
-            result_data = download_json(result_s3_key)
+            result_data = await asyncio.to_thread(download_json, result_s3_key)
             transcription_data = result_data.get("transcription", {})
 
             # Worker Raw Segment 후처리 (트랜잭션 밖에서 실행)
@@ -526,7 +526,7 @@ class StreamConsumer:
             elif event == "completed":
                 result_s3_key = message.get("result_s3_key")
 
-                result_data = download_json(result_s3_key)
+                result_data = await asyncio.to_thread(download_json, result_s3_key)
                 raw_response = result_data.get("raw_response", "")
                 skipped = result_data.get("skipped", False)
 
@@ -614,7 +614,7 @@ class StreamConsumer:
             text_length = message.get("text_length", 0)
 
             # S3에서 결과 다운로드 (트랜잭션 밖에서 실행)
-            result_data = download_json(result_s3_key)
+            result_data = await asyncio.to_thread(download_json, result_s3_key)
             ocr_text = result_data.get("ocr_text", "")
             ocr_metadata = result_data.get("ocr_metadata", {})
             html_content = result_data.get("html_content")

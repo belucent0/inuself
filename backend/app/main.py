@@ -215,10 +215,10 @@ def create_app() -> FastAPI:
 
     storage_ok, storage_message = check_storage_health()
     if storage_ok:
-        logger.info("[Storage] %s", storage_message)
+        logger.info("[Storage] {}", storage_message)
         logger.info(f"[Storage] ✓ {storage_message}")
     else:
-        logger.warning("[Storage] %s", storage_message)
+        logger.warning("[Storage] {}", storage_message)
         logger.warning(f"[Storage] ✗ {storage_message}")
 
     app.include_router(content_controller.router, prefix=settings.api_prefix)
@@ -278,6 +278,12 @@ def create_app() -> FastAPI:
 
     app.include_router(media_controller.router)
     logger.info("[FastAPI] Media proxy routes registered at /api/media")
+
+    # 영상 인사이트 글 라우터 추가
+    from .controllers import insight_controller
+
+    app.include_router(insight_controller.router, prefix=settings.api_prefix)
+    logger.info("[FastAPI] Insight post routes registered at /api/insight-posts")
 
     @app.get("/health", tags=["system"])
     async def healthcheck():

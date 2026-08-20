@@ -101,6 +101,9 @@ class File(Base):
     content: Mapped["Content | None"] = relationship(
         "Content", back_populates="file", uselist=False, cascade="all, delete-orphan"
     )
+    insight_posts: Mapped[list["InsightPost"]] = relationship(
+        "InsightPost", back_populates="source_file", cascade="all, delete-orphan"
+    )
 
 
 class Content(Base):
@@ -194,6 +197,115 @@ class Content(Base):
     events: Mapped[list["UserEvent"]] = relationship(
         "UserEvent", back_populates="content"
     )
+
+
+class InsightPost(Base):
+    """영상/오디오 콘텐츠를 바탕으로 생성한 인사이트 블로그 글."""
+
+    __tablename__ = "insight_post"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_file_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("file.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    subtitle: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    body_md: Mapped[str] = mapped_column(Text, nullable=False)
+    post_type: Mapped[str] = mapped_column(String(64), default="insight", nullable=False)
+    tone: Mapped[str] = mapped_column(String(64), default="analytical", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="insight_posts")
+    source_file: Mapped["File"] = relationship("File", back_populates="insight_posts")
+    evidences: Mapped[list["InsightEvidence"]] = relationship(
+        "InsightEvidence",
+        back_populates="post",
+        cascade="all, delete-orphan",
+        order_by="InsightEvidence.created_at",
+    )
+    annotations: Mapped[list["InsightAnnotation"]] = relationship(
+        "InsightAnnotation",
+        back_populates="post",
+        cascade="all, delete-orphan",
+        order_by="InsightAnnotation.created_at",
+    )
+
+
+class InsightEvidence(Base):
+    """인사이트 글 문단을 뒷받침하는 영상/웹/문서 근거."""
+
+    __tablename__ = "insight_evidence"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
+    )
+    post_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("insight_post.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quote_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timestamp_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reliability_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    post: Mapped["InsightPost"] = relationship("InsightPost", back_populates="evidences")
+
+
+class InsightAnnotation(Base):
+    """본문 anchor text와 근거 자료를 연결하는 주석."""
+
+    __tablename__ = "insight_annotation"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=generate_uuid7
+    )
+    post_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("insight_post.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    anchor_text: Mapped[str] = mapped_column(String(512), nullable=False)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    post: Mapped["InsightPost"] = relationship("InsightPost", back_populates="annotations")
 
 
 class Transcription(Base):
@@ -362,6 +474,14 @@ class User(Base):
     # 사용자 행동 이벤트 관계 (1:N)
     events: Mapped[list["UserEvent"]] = relationship(
         "UserEvent", back_populates="user", cascade="all, delete-orphan"
+    )
+
+    # 영상 기반 인사이트 글 관계 (1:N)
+    insight_posts: Mapped[list["InsightPost"]] = relationship(
+        "InsightPost",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="InsightPost.created_at.desc()",
     )
 
 

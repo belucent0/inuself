@@ -33,8 +33,11 @@ class WebSearchError(RuntimeError):
     """웹 검색 실패 예외."""
 
 
-def _get_searxng_url() -> str:
+def _get_searxng_url(settings: Any | None = None) -> str:
     """SearXNG URL 반환."""
+    configured = getattr(settings, "searxng_url", None) if settings else None
+    if configured:
+        return configured
     return os.getenv("SEARXNG_URL", "http://searxng:8080")
 
 
@@ -110,7 +113,7 @@ async def search_web(
             logger.warning(f"[WebSearch] Cache read failed: {e}")
 
     # SearXNG 검색 수행
-    base_url = _get_searxng_url()
+    base_url = _get_searxng_url(settings)
     params = {
         "q": query,
         "format": "json",

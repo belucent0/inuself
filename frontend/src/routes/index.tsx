@@ -10,6 +10,8 @@ import {
   ChatPage,
   ContentsPage,
   ContentDetailPage,
+  InsightPostsPage,
+  InsightPostEditorPage,
   UploadPage,
   MonitoringPage,
   RoadmapPage,
@@ -54,6 +56,14 @@ const router = createBrowserRouter([
       {
         path: 'contents/:id',
         element: <ContentDetailPage />,
+      },
+      {
+        path: 'insights',
+        element: <InsightPostsPage />,
+      },
+      {
+        path: 'insights/:id',
+        element: <InsightPostEditorPage />,
       },
       {
         path: 'upload',

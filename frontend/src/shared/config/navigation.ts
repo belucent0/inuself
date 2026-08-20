@@ -2,7 +2,7 @@
  * Navigation 설정
  */
 
-import { FileText, Eye, MessageSquare, ClipboardList, History, PlayCircle, type LucideIcon } from 'lucide-react'
+import { FileText, Eye, MessageSquare, ClipboardList, History, Lightbulb, PlayCircle, type LucideIcon } from 'lucide-react'
 
 export interface NavSubItem {
   href: string
@@ -23,6 +23,7 @@ export const navigationItems: NavItem[] = [
   { href: '/', label: 'AI 채팅', icon: MessageSquare, title: 'AI 채팅' },
   { href: '/threads', label: '대화 기록', icon: History, title: '대화 기록' },
   { href: '/contents', label: '콘텐츠', icon: FileText, title: '콘텐츠' },
+  { href: '/insights', label: '영상 인사이트', icon: Lightbulb, title: '영상 인사이트' },
   {
     href: '/scan',
     label: '심리검사',
@@ -54,6 +55,10 @@ export function getPageTitle(pathname: string | null): string {
   // /contents/[id] 같은 동적 라우트 처리
   if (pathname.startsWith('/contents/')) {
     return '콘텐츠 상세'
+  }
+
+  if (pathname.startsWith('/insights/')) {
+    return '영상 인사이트'
   }
 
   // /scan/* 같은 동적 라우트 처리
