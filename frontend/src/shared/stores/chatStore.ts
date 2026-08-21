@@ -172,12 +172,15 @@ export const useChatStore = create<ChatStore>()(
         if (lastAssistantIdx === -1) return
 
         const newMessages = messages.slice(0, lastAssistantIdx)
+        const removedAssistant = messages[lastAssistantIdx]
+        let accepted = false
         set({ messages: newMessages }, false, 'removeLastAssistant')
 
         const abortController = _startStreaming()
 
         try {
           await regenerateStream(threadId, mode, model, {
+            onAccepted: () => { accepted = true },
             onToken: _appendToken,
             onContent: setStreamingContent,
             onThinkingStep: _addThinkingStep,
@@ -190,6 +193,7 @@ export const useChatStore = create<ChatStore>()(
             },
           }, abortController.signal)
         } catch (err) {
+          if (!accepted) set({ messages: [...newMessages, removedAssistant] }, false, 'restoreLastAssistant')
           if (err instanceof DOMException && err.name === 'AbortError') {
             return
           }

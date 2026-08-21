@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 import {
   processSSEStream,
+  resumeMessageStream,
   sendMessageStream,
   type StreamingCallbacks,
 } from '../src/shared/services/chatStreamService'
@@ -70,6 +71,15 @@ await assert.rejects(
   /ended before done/
 )
 assert.equal(streamError, 'SSE stream ended before done')
+
+await assert.rejects(
+  processSSEStream(
+    new Response(`data: ${JSON.stringify({ type: 'error', data: { message: 'safe error', error_id: 'err_1' } })}\n\n`),
+    'simple',
+    { onToken: () => {}, onThinkingStep: () => {}, onSource: () => {}, onSources: () => {}, onSearchQueries: () => {}, onComplete: () => {}, onError: () => {} }
+  ),
+  /safe error/
+)
 
 const storageValues = new Map<string, string>([
   ['auth_refresh_token', 'refresh-token'],
@@ -302,6 +312,32 @@ await assert.rejects(
 assert.equal(exhaustedFetches, 5)
 assert.equal(exhaustedErrors, 1)
 globalThis.setTimeout = originalSetTimeout
+
+storageValues.set('auth_access_token', 'resume-access')
+const resumeRequests: string[] = []
+const resumeHeaders: Array<string | null> = []
+let resumeAttempts = 0
+globalThis.setTimeout = ((handler: TimerHandler, _timeout?: number, ...args: unknown[]) => {
+  queueMicrotask(() => { if (typeof handler === 'function') handler(...args) })
+  return 0
+}) as typeof setTimeout
+globalThis.fetch = async (input, init) => {
+  resumeAttempts += 1
+  resumeRequests.push(String(input))
+  resumeHeaders.push(new Headers(init?.headers).get('Authorization'))
+  if (resumeAttempts === 1) throw new TypeError('network lost')
+  return new Response(`data: ${JSON.stringify({ type: 'partial_restore', data: 'restored' })}\n\n` + `data: ${JSON.stringify({ type: 'done', data: { content: 'final' } })}\n\n`)
+}
+let resumedMessageId = ''
+await resumeMessageStream('thread', 'message', 'simple', {
+  ...reconnectCallbacks,
+  onComplete: (message) => { resumedMessageId = message.message_id || '' },
+})
+globalThis.setTimeout = originalSetTimeout
+assert.deepEqual(resumeRequests, ['/api/threads/thread/messages/message/stream', '/api/threads/thread/messages/message/stream'])
+assert.deepEqual(resumeHeaders, ['Bearer resume-access', 'Bearer resume-access'])
+assert.equal(resumedMessageId, 'message')
+storageValues.delete('auth_access_token')
 
 const authRequests: string[] = []
 const authHeaders: Array<string | null> = []

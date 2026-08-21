@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import jwt
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError
 from sqlalchemy import select
@@ -320,15 +320,13 @@ async def validate_access_token(access_token: str) -> dict[str, Any]:
 
 async def get_current_access_payload(
     credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer),
-    access_token: str | None = Query(None),
 ) -> dict[str, Any]:
-    token = credentials.credentials if credentials else access_token
-    if not token:
+    if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="인증 토큰이 필요합니다.",
         )
-    return await validate_access_token(token)
+    return await validate_access_token(credentials.credentials)
 
 
 async def get_current_user(
