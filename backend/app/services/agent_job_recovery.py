@@ -2,6 +2,10 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from contextlib import suppress
+from uuid import UUID
+
+from redis.exceptions import LockError, RedisError
 
 from ..core.logging import logger
 from ..core.redis import get_redis_client
@@ -10,7 +14,9 @@ from ..repositories.thread_repository import ThreadRepository
 from ..utils.task_queue_adapter import (
     ACTIVE_JOB_TTL,
     AGENT_DISPATCH_KEY_PREFIX,
-    AGENT_THREAD_KEY_PREFIX,
+    AGENT_FAILURE_CONTENT,
+    AGENT_MESSAGE_LOCK_PREFIX,
+    AGENT_MESSAGE_LOCK_SECONDS,
     get_task_queue,
 )
 
@@ -20,8 +26,56 @@ RECOVERY_LOCK_SECONDS = 60
 RECOVERY_LOCK_PREFIX = "lock:recover:agent:"
 
 
+async def finalize_stale_active_agent_messages() -> int:
+    """Fail abandoned active rows only while holding the worker's message lock."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=ACTIVE_JOB_TTL)
+    async with async_session_factory() as session:
+        messages = await ThreadRepository(
+            session
+        ).get_stale_active_assistant_messages(cutoff)
+
+    redis = get_redis_client()
+    finalized = 0
+    for message in messages:
+        message_id = str(message.id)
+        lock = None
+        acquired = False
+        try:
+            lock = redis.lock(
+                f"{AGENT_MESSAGE_LOCK_PREFIX}{message_id}",
+                timeout=AGENT_MESSAGE_LOCK_SECONDS,
+                blocking=False,
+            )
+            acquired = await lock.acquire(blocking=False)
+            if not acquired:
+                continue
+            async with async_session_factory() as session:
+                updated = await ThreadRepository(
+                    session
+                ).fail_stale_active_assistant_message(
+                    UUID(message_id), cutoff, AGENT_FAILURE_CONTENT
+                )
+                await session.commit()
+            finalized += int(updated)
+        except RedisError:
+            logger.exception(
+                "[AgentRecovery] Stale finalizer lock unavailable: message_id={}",
+                message_id,
+            )
+        except Exception:
+            logger.exception(
+                "[AgentRecovery] Stale finalizer failed: message_id={}", message_id
+            )
+        finally:
+            if lock is not None and acquired:
+                with suppress(LockError, RedisError):
+                    await lock.release()
+    return finalized
+
+
 async def recover_stale_agent_jobs() -> int:
     """Requeue stale messages that have no successful broker-dispatch marker."""
+    await finalize_stale_active_agent_messages()
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=STALE_AGENT_JOB_SECONDS)
     async with async_session_factory() as session:
         messages = await ThreadRepository(session).get_stale_queued_assistant_messages(
@@ -51,17 +105,6 @@ async def recover_stale_agent_jobs() -> int:
         try:
             if await redis.exists(f"{AGENT_DISPATCH_KEY_PREFIX}{message_id}"):
                 continue
-
-            slot_key = f"{AGENT_THREAD_KEY_PREFIX}{thread_id}"
-            active_message_id = await redis.get(slot_key)
-            if active_message_id not in {None, message_id}:
-                continue
-            if active_message_id is None:
-                reserved = await redis.set(
-                    slot_key, message_id, nx=True, ex=ACTIVE_JOB_TTL
-                )
-                if not reserved:
-                    continue
 
             def enqueue() -> None:
                 get_task_queue().enqueue_agent_job(

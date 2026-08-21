@@ -62,7 +62,7 @@ async def test_lock_acquire_error_is_retryable_and_closes_redis(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_thread_slot_is_released_before_done_event(monkeypatch):
+async def test_done_event_is_published_after_conditional_completion(monkeypatch):
     calls: list[str] = []
     redis = _Redis()
 
@@ -75,9 +75,6 @@ async def test_thread_slot_is_released_before_done_event(monkeypatch):
     async def publish(_redis, _message_id, event_type, _data):
         calls.append(event_type)
 
-    async def clear_slot(_redis, _thread_id, _message_id):
-        calls.append("clear_slot")
-
     async def stream(**_kwargs):
         yield {"type": "token", "data": "answer"}
         yield {"type": "done", "data": None}
@@ -88,7 +85,6 @@ async def test_thread_slot_is_released_before_done_event(monkeypatch):
     monkeypatch.setattr(agent_task, "_save_status", noop)
     monkeypatch.setattr(agent_task, "_save_completed", noop)
     monkeypatch.setattr(agent_task, "_publish", publish)
-    monkeypatch.setattr(agent_task, "_clear_thread_slot", clear_slot)
     monkeypatch.setattr(agent_task, "stream_ai_agent", stream)
 
     result = await agent_task.run_agent_message(
@@ -99,7 +95,7 @@ async def test_thread_slot_is_released_before_done_event(monkeypatch):
     )
 
     assert result["status"] == "completed"
-    assert calls.index("clear_slot") < calls.index("done")
+    assert calls[-1] == "done"
 
 
 @pytest.mark.asyncio
@@ -117,13 +113,6 @@ async def test_completed_regeneration_deletes_replaced_answer(monkeypatch):
             return None
 
         async def commit(self):
-            return None
-
-    class Service:
-        async def update_message_status(self, *_args, **_kwargs):
-            return SimpleNamespace()
-
-        async def update_message_partial_content(self, *_args, **_kwargs):
             return None
 
     class Repository:
@@ -144,11 +133,13 @@ async def test_completed_regeneration_deletes_replaced_answer(monkeypatch):
                 role="assistant",
             )
 
+        async def update_active_assistant_message(self, *_args, **_kwargs):
+            return True
+
         async def delete_message(self, message):
             deleted.append(message.id)
 
     monkeypatch.setattr(agent_task, "async_session_factory", Session)
-    monkeypatch.setattr(agent_task, "get_thread_service", lambda _session: Service())
     monkeypatch.setattr(agent_task, "ThreadRepository", Repository)
 
     await agent_task._save_completed(
@@ -158,3 +149,125 @@ async def test_completed_regeneration_deletes_replaced_answer(monkeypatch):
     )
 
     assert deleted == [old_message_id]
+
+
+@pytest.mark.asyncio
+async def test_conditional_status_write_does_not_resurrect_terminal_message(monkeypatch):
+    message_id = uuid4()
+
+    class Session:
+        committed = False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def commit(self):
+            self.committed = True
+
+    class Repository:
+        def __init__(self, _session):
+            pass
+
+        async def update_active_assistant_message(self, *_args, **_kwargs):
+            return False
+
+    monkeypatch.setattr(agent_task, "async_session_factory", Session)
+    monkeypatch.setattr(agent_task, "ThreadRepository", Repository)
+
+    with pytest.raises(agent_task.AgentMessageTerminal):
+        await agent_task._save_status(str(message_id), "generating")
+
+
+@pytest.mark.asyncio
+async def test_lost_lock_never_marks_replacement_run_failed(monkeypatch):
+    saved_statuses: list[str] = []
+
+    async def load_run(**_kwargs):
+        return "question", "simple", {}, {}
+
+    async def save_status(_message_id, status, **_kwargs):
+        saved_statuses.append(status)
+
+    async def lose_lock(_lock, lost):
+        lost.set()
+
+    async def publish(*_args, **_kwargs):
+        return None
+
+    async def stream(**_kwargs):
+        await agent_task.asyncio.sleep(0)
+        yield {"type": "token", "data": "stale"}
+
+    monkeypatch.setattr(
+        agent_task, "get_settings", lambda: SimpleNamespace(redis_url="redis://test")
+    )
+    monkeypatch.setattr(agent_task.Redis, "from_url", lambda *_args, **_kwargs: _Redis())
+    monkeypatch.setattr(agent_task, "_load_run", load_run)
+    monkeypatch.setattr(agent_task, "_save_status", save_status)
+    monkeypatch.setattr(agent_task, "_publish", publish)
+    monkeypatch.setattr(agent_task, "_refresh_lock", lose_lock)
+    monkeypatch.setattr(agent_task, "stream_ai_agent", stream)
+
+    with pytest.raises(agent_task.AgentMessageLockLost):
+        await agent_task.run_agent_message(
+            thread_id="thread",
+            user_id="user",
+            user_message_id="user-message",
+            assistant_message_id="assistant-message",
+        )
+
+    assert saved_statuses == ["analyzing"]
+
+
+def test_duplicate_delivery_gets_one_retry_after_lock_ttl(monkeypatch):
+    retry_calls = []
+
+    def busy(coro):
+        coro.close()
+        raise agent_task.AgentMessageBusy("assistant-message")
+
+    def retry(**kwargs):
+        retry_calls.append(kwargs)
+        raise RuntimeError("retry scheduled")
+
+    monkeypatch.setattr(agent_task, "_run_async", busy)
+    monkeypatch.setattr(agent_task.process_agent_message, "retry", retry)
+    monkeypatch.setattr(
+        agent_task.process_agent_message.request, "retries", 7, raising=False
+    )
+
+    with pytest.raises(RuntimeError, match="retry scheduled"):
+        agent_task.process_agent_message.run(
+            thread_id="thread",
+            user_id="user",
+            user_message_id="user-message",
+            assistant_message_id="assistant-message",
+        )
+
+    assert retry_calls[0]["countdown"] == agent_task.MESSAGE_LOCK_SECONDS + 1
+    assert retry_calls[0]["max_retries"] == 8
+    assert retry_calls[0]["kwargs"]["_lock_retry_count"] == 1
+
+
+def test_lock_retry_is_bounded_independently_of_infra_retries(monkeypatch):
+    def busy(coro):
+        coro.close()
+        raise agent_task.AgentMessageBusy("assistant-message")
+
+    monkeypatch.setattr(agent_task, "_run_async", busy)
+
+    result = agent_task.process_agent_message.run(
+        thread_id="thread",
+        user_id="user",
+        user_message_id="user-message",
+        assistant_message_id="assistant-message",
+        _lock_retry_count=1,
+    )
+
+    assert result == {
+        "status": "lock_unresolved",
+        "message_id": "assistant-message",
+    }

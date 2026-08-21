@@ -42,6 +42,7 @@ class Message:
     def __init__(
         self,
         message_id: str | None = None,
+        thread_id: str | None = None,
         role: str = "",
         content: str = "",
         timestamp: float | None = None,
@@ -50,6 +51,7 @@ class Message:
         partial_content: str | None = None,
     ):
         self.message_id = message_id
+        self.thread_id = thread_id
         self.role = role
         self.content = content
         self.timestamp = timestamp or datetime.now(timezone.utc).timestamp()
@@ -61,6 +63,7 @@ class Message:
         """딕셔너리로 변환."""
         return {
             "message_id": self.message_id,
+            "thread_id": self.thread_id,
             "role": self.role,
             "content": self.content,
             "timestamp": self.timestamp,
@@ -74,6 +77,7 @@ class Message:
         """딕셔너리에서 생성."""
         return cls(
             message_id=data.get("message_id"),
+            thread_id=data.get("thread_id"),
             role=data["role"],
             content=data["content"],
             timestamp=data.get("timestamp"),
@@ -87,6 +91,7 @@ class Message:
         """DB 모델에서 생성."""
         return cls(
             message_id=str(model.id),
+            thread_id=str(model.thread_id),
             role=model.role,
             content=model.content,
             timestamp=model.created_at.timestamp(),
@@ -752,6 +757,14 @@ class ThreadService:
             return None
 
         return Message.from_db_model(db_message)
+
+    async def get_last_message(
+        self, thread_id: str | UUID, role: str | None = None
+    ) -> Message | None:
+        if not self.repo:
+            raise RuntimeError("Database session not available")
+        db_message = await self.repo.get_last_message(UUID(str(thread_id)), role=role)
+        return Message.from_db_model(db_message) if db_message else None
 
     async def get_generating_messages(
         self, thread_id: str | UUID
