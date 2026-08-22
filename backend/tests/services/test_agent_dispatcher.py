@@ -7,7 +7,6 @@ from redis.exceptions import RedisError
 from app.controllers import ai_chat_controller
 from app.services import agent_dispatcher
 from app.utils.task_queue_adapter import (
-    ACTIVE_JOB_TTL,
     AGENT_DISPATCH_KEY_PREFIX,
     CeleryAdapter,
 )
@@ -107,7 +106,7 @@ async def test_successful_publish_extends_dispatch_claim(monkeypatch):
     assert calls[-1][1][-1] == agent_dispatcher.ACTIVE_JOB_TTL
 
 
-def test_agent_enqueue_records_worker_visible_dispatch_marker():
+def test_agent_enqueue_does_not_write_dispatch_marker():
     marker = []
     adapter = CeleryAdapter.__new__(CeleryAdapter)
     adapter.celery = SimpleNamespace(
@@ -125,9 +124,56 @@ def test_agent_enqueue_records_worker_visible_dispatch_marker():
     )
 
     assert result == "task-id"
-    assert marker == [
-        (f"{AGENT_DISPATCH_KEY_PREFIX}answer", ACTIVE_JOB_TTL, "task-id")
-    ]
+    assert marker == []
+
+
+@pytest.mark.asyncio
+async def test_fast_worker_delete_is_not_revived_by_adapter_marker(monkeypatch):
+    marker_key = f"{AGENT_DISPATCH_KEY_PREFIX}answer"
+    values = {}
+    publish_count = 0
+
+    class AsyncRedis:
+        async def set(self, key, value, *, nx=False, ex=None):
+            if nx and key in values:
+                return False
+            values[key] = value
+            return True
+
+        async def eval(self, _script, _keys, key, claim_id, _ttl):
+            return int(values.get(key) == claim_id)
+
+    class SyncRedis:
+        def setex(self, key, _ttl, value):
+            values[key] = value
+
+    class Celery:
+        def send_task(self, *_args, **_kwargs):
+            nonlocal publish_count
+            publish_count += 1
+            # The worker acquires its message lock and removes the dispatch claim
+            # before the producer's send_task call returns.
+            values.pop(marker_key, None)
+            return SimpleNamespace(id="answer")
+
+    adapter = CeleryAdapter.__new__(CeleryAdapter)
+    adapter.celery = Celery()
+    adapter.redis = SyncRedis()
+    monkeypatch.setattr(agent_dispatcher, "get_redis_client", AsyncRedis)
+    monkeypatch.setattr(agent_dispatcher, "get_task_queue", lambda: adapter)
+
+    job = {
+        "thread_id": "thread",
+        "user_id": "user",
+        "user_message_id": "question",
+    }
+    assert await agent_dispatcher.dispatch_agent_job("answer", job) is True
+    assert marker_key not in values
+
+    # A queued row left by an early worker crash is immediately dispatchable again.
+    assert await agent_dispatcher.dispatch_agent_job("answer", job) is True
+    assert marker_key not in values
+    assert publish_count == 2
 
 
 @pytest.mark.asyncio

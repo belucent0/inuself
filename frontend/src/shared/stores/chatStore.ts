@@ -174,14 +174,12 @@ export const useChatStore = create<ChatStore>()(
 
         const newMessages = messages.slice(0, lastAssistantIdx)
         const removedAssistant = messages[lastAssistantIdx]
-        let accepted = false
         set({ messages: newMessages }, false, 'removeLastAssistant')
 
         const abortController = _startStreaming()
 
         try {
           await regenerateStream(threadId, mode, reasoning, allowRemote, {
-            onAccepted: () => { accepted = true },
             onToken: _appendToken,
             onContent: setStreamingContent,
             onThinkingStep: _addThinkingStep,
@@ -190,17 +188,24 @@ export const useChatStore = create<ChatStore>()(
             onSearchQueries: _setSearchQueries,
             onComplete: _finishStreaming,
             onError: (err) => {
-              set({ error: err, isLoading: false }, false, 'regenerateError')
+              if (get().threadId === threadId) {
+                set({ error: err, isLoading: false }, false, 'regenerateError')
+              }
             },
           }, abortController.signal)
         } catch (err) {
-          if (!accepted && get().threadId === threadId) {
-            set({ messages: [...newMessages, removedAssistant] }, false, 'restoreLastAssistant')
+          const isCurrentThread = get().threadId === threadId
+          const isAbort = err instanceof DOMException && err.name === 'AbortError'
+          if (isCurrentThread) {
+            set({
+              messages: [...newMessages, removedAssistant],
+              streaming: { ...initialStreamingState },
+              isLoading: false,
+              error: isAbort ? null : err as Error,
+              abortController: null,
+            }, false, 'restoreLastAssistant')
           }
-          if (err instanceof DOMException && err.name === 'AbortError') {
-            return
-          }
-          set({ error: err as Error, isLoading: false }, false, 'regenerateError')
+          if (isAbort) return
         }
       },
 

@@ -265,7 +265,7 @@ export function useContentChat(
       const effectiveMode = sourceOptions?.include_web_search ? 'hybrid' : 'rag'
 
       const removedAssistant = messages[messages.length - 1]
-      let accepted = false
+      const regenerationThreadId = threadIdRef.current
       setMessages((prev) => prev.slice(0, -1))
       setIsLoading(true)
       setStreamingMetadata({
@@ -279,19 +279,28 @@ export function useContentChat(
 
       try {
         await requestRegenerateStream(
-          threadIdRef.current,
+          regenerationThreadId,
           effectiveMode,
           reasoning,
           allowRemote,
-          createStreamCallbacks(() => { accepted = true }),
+          createStreamCallbacks(),
           abortController.signal
         )
       } catch (err) {
-        if (!accepted) setMessages((prev) => [...prev, removedAssistant])
+        const isCurrentRegeneration = (
+          threadIdRef.current === regenerationThreadId &&
+          activeStreamRef.current === abortController
+        )
+        if (isCurrentRegeneration) {
+          setMessages((prev) => [...prev, removedAssistant])
+          setIsLoading(false)
+          setStreamingMetadata({ currentMessage: '', thinkingSteps: [], sources: [] })
+        }
         if (err instanceof DOMException && err.name === 'AbortError') return
         const error = err as Error
-        setIsLoading(false)
-        toast.error('재생성 실패', { description: error.message })
+        if (isCurrentRegeneration) {
+          toast.error('재생성 실패', { description: error.message })
+        }
       } finally {
         if (activeStreamRef.current === abortController) {
           activeStreamRef.current = null

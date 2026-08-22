@@ -9,7 +9,9 @@ import {
   type StreamingCallbacks,
 } from '../src/shared/services/chatStreamService'
 import { regenerateSummaryBlock } from '../src/shared/services/endpoints/contents'
+import { httpClient } from '../src/shared/services/api/httpClient'
 import { useChatStore } from '../src/shared/stores/chatStore'
+import { enterAcceptedHomeThread } from '../src/pages/homeThreadTransition'
 
 const events = [
   { type: 'accepted', data: { thread_id: 'thread', message_id: 'answer', user_message_id: 'question' } },
@@ -114,6 +116,62 @@ const reconnectCallbacks: StreamingCallbacks = {
 }
 
 const originalFetch = globalThis.fetch
+const homeRequests: string[] = []
+globalThis.fetch = async (input, init) => {
+  homeRequests.push(`${init?.method || 'GET'} ${String(input)}`)
+  if (init?.method === 'POST') {
+    return Response.json({
+      thread_id: 'home-thread',
+      message_id: 'home-assistant',
+      user_message_id: 'home-user',
+    })
+  }
+  return new Response(
+    `data: ${JSON.stringify({ type: 'done', data: { content: 'home answer' } })}\n\n`
+  )
+}
+const homeAccepted = await httpClient.post<{
+  thread_id: string
+  message_id: string
+  user_message_id: string
+}>('/threads', { query: 'home question', mode: 'simple' })
+let homeNavigation = ''
+enterAcceptedHomeThread(homeAccepted, 'home question', 'simple', (to) => {
+  homeNavigation = to
+})
+useChatStore.getState().startStreamingMode()
+await resumeMessageStream(
+  homeAccepted.thread_id,
+  homeAccepted.message_id,
+  'simple',
+  {
+    ...reconnectCallbacks,
+    onComplete: (message) => {
+      useChatStore.getState().finishStreaming(
+        message.content,
+        message.metadata,
+        homeAccepted.message_id
+      )
+    },
+  }
+)
+assert.deepEqual(homeRequests, [
+  'POST /api/threads',
+  'GET /api/threads/home-thread/messages/home-assistant/stream',
+])
+assert.equal(homeNavigation, '/chat/home-thread?messageId=home-assistant')
+assert.deepEqual(
+  useChatStore.getState().messages.map(({ message_id, role, content }) => ({
+    message_id,
+    role,
+    content,
+  })),
+  [
+    { message_id: 'home-user', role: 'user', content: 'home question' },
+    { message_id: 'home-assistant', role: 'assistant', content: 'home answer' },
+  ]
+)
+
 const reconnectRequests: string[] = []
 let sendBody: unknown
 const reconnectCredentials: Array<RequestCredentials | undefined> = []
@@ -394,6 +452,53 @@ await regenerateStream('thread-1', 'rag', 'high', true, {
 assert.deepEqual(regenerateBody, { mode: 'rag', reasoning: 'high', allow_remote: true })
 assert.equal(regenerateCredentials, 'same-origin')
 assert.equal(regenerateAuthorization, null)
+
+const failedRegenerationMessages = [
+  {
+    message_id: 'regen-user',
+    role: 'user' as const,
+    content: 'question before regeneration',
+    timestamp: 1,
+  },
+  {
+    message_id: 'regen-old-assistant',
+    role: 'assistant' as const,
+    content: 'answer before regeneration',
+    timestamp: 2,
+  },
+]
+useChatStore.getState().switchThread('regen-error-thread', failedRegenerationMessages)
+let failedRegenerationRequests = 0
+globalThis.fetch = async () => {
+  failedRegenerationRequests += 1
+  return new Response(
+    `data: ${JSON.stringify({
+      type: 'accepted',
+      data: {
+        thread_id: 'regen-error-thread',
+        message_id: 'regen-new-assistant',
+        user_message_id: 'regen-user',
+      },
+    })}\n\n` +
+    `data: ${JSON.stringify({
+      type: 'error',
+      data: { message: 'regeneration relay failed', error_id: 'regen-error' },
+    })}\n\n`
+  )
+}
+await useChatStore.getState().regenerate('simple', 'none', false)
+assert.equal(failedRegenerationRequests, 1)
+assert.deepEqual(useChatStore.getState().messages, failedRegenerationMessages)
+assert.deepEqual(useChatStore.getState().streaming, {
+  isStreaming: false,
+  currentMessage: '',
+  thinkingSteps: [],
+  sources: [],
+  searchQueries: [],
+})
+assert.equal(useChatStore.getState().isLoading, false)
+assert.equal(useChatStore.getState().abortController, null)
+assert.equal(useChatStore.getState().error?.message, 'regeneration relay failed')
 
 globalThis.fetch = async () => new Response(JSON.stringify({
   success: false,
