@@ -1,9 +1,7 @@
 name: Langfuse Eval Gate
 
-# PR 머지 전 실제 서버에서 멀티턴 채팅 품질을 검증합니다.
+# PR 머지 전 배포된 HTTPS 서버에서 멀티턴 채팅 품질을 검증합니다.
 # self-hosted runner (WSL)에서 실행
-# WSL2에서 localhost:8000 SSE 스트리밍이 중단되는 문제를 우회하기 위해
-# Windows 호스트 IP를 직접 사용합니다.
 # 소요 시간: ~60초 (3-turn 대화)
 
 on:
