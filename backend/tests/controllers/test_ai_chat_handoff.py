@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.controllers import ai_chat_controller
 
@@ -94,8 +95,10 @@ async def test_reconnect_releases_lookup_transaction_before_streaming():
         async def get_thread(self, *_args, **_kwargs):
             return SimpleNamespace(thread_id="thread")
 
-        async def get_messages(self, *_args, **_kwargs):
-            return [SimpleNamespace(message_id="answer", role="assistant")]
+        async def get_message(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                message_id="answer", thread_id="thread", role="assistant"
+            )
 
     class Session:
         rollbacks = 0
@@ -135,21 +138,10 @@ async def test_committed_message_stays_queued_when_broker_is_unavailable(monkeyp
             metadata_updates.append((message_id, metadata))
             return SimpleNamespace(message_id=message_id)
 
-    class Redis:
-        cleared = False
-
-        async def set(self, *_args, **_kwargs):
-            return True
-
-        async def eval(self, *_args, **_kwargs):
-            self.cleared = True
-
     async def dispatch_agent_job(*_args, **_kwargs):
         raise ConnectionError("broker down")
 
     session = Session()
-    redis = Redis()
-    monkeypatch.setattr(ai_chat_controller, "get_redis_client", lambda: redis)
     monkeypatch.setattr(ai_chat_controller, "dispatch_agent_job", dispatch_agent_job)
 
     await ai_chat_controller._commit_and_enqueue_agent(
@@ -163,8 +155,8 @@ async def test_committed_message_stays_queued_when_broker_is_unavailable(monkeyp
 
     assert session.commits == 1
     assert session.rollbacks == 0
-    assert redis.cleared is False
     assert metadata_updates[0][0] == "answer"
+    assert ai_chat_controller.AGENT_JOB_METADATA_KEY in metadata_updates[0][1]
 
 
 @pytest.mark.asyncio
@@ -174,6 +166,7 @@ async def test_regeneration_keeps_old_answer_until_replacement_completes(monkeyp
     old_answer = SimpleNamespace(
         message_id="old-answer",
         role="assistant",
+        status="completed",
         metadata={"replaces_message_ids": ["original-answer"]},
     )
     added_metadata = []
@@ -182,8 +175,8 @@ async def test_regeneration_keeps_old_answer_until_replacement_completes(monkeyp
         async def get_thread(self, *_args, **_kwargs):
             return SimpleNamespace(thread_id="thread")
 
-        async def get_messages(self, *_args, **_kwargs):
-            return [old_user, old_answer]
+        async def get_last_message(self, *_args, role=None, **_kwargs):
+            return old_user if role == "user" else old_answer
 
         async def add_message(self, *_args, **kwargs):
             added_metadata.append(kwargs["metadata"])
@@ -207,3 +200,222 @@ async def test_regeneration_keeps_old_answer_until_replacement_completes(monkeyp
         "old-answer",
         "original-answer",
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_lookup_rejects_assistant_from_another_thread():
+    class Service:
+        async def get_thread(self, *_args, **_kwargs):
+            return SimpleNamespace(thread_id="thread")
+
+        async def get_message(self, *_args, **_kwargs):
+            return SimpleNamespace(thread_id="other-thread", role="assistant")
+
+    with pytest.raises(ai_chat_controller.HTTPException) as raised:
+        await ai_chat_controller.stream_message_v2(
+            thread_id="thread",
+            message_id="answer",
+            svc=Service(),
+            user_id=uuid4(),
+            session=SimpleNamespace(),
+        )
+
+    assert raised.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_stream_lookup_rejects_malformed_message_id_as_not_found():
+    class Service:
+        async def get_thread(self, *_args, **_kwargs):
+            return SimpleNamespace(thread_id="thread")
+
+        async def get_message(self, *_args, **_kwargs):
+            raise ValueError("bad UUID")
+
+    with pytest.raises(ai_chat_controller.HTTPException) as raised:
+        await ai_chat_controller.stream_message_v2(
+            thread_id="thread",
+            message_id="not-a-uuid",
+            svc=Service(),
+            user_id=uuid4(),
+            session=SimpleNamespace(),
+        )
+
+    assert raised.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_regenerate_rejects_active_latest_assistant_before_mutation():
+    added = False
+
+    class Service:
+        async def get_thread(self, *_args, **_kwargs):
+            return SimpleNamespace(thread_id="thread")
+
+        async def get_last_message(self, *_args, role=None, **_kwargs):
+            if role == "user":
+                return SimpleNamespace(message_id="question", role="user")
+            return SimpleNamespace(
+                message_id="answer",
+                role="assistant",
+                status="thinking",
+                metadata={},
+            )
+
+        async def add_message(self, *_args, **_kwargs):
+            nonlocal added
+            added = True
+
+    with pytest.raises(ai_chat_controller.HTTPException) as raised:
+        await ai_chat_controller.regenerate_response(
+            thread_id="thread",
+            request=ai_chat_controller.RegenerateRequest(),
+            svc=Service(),
+            user_id=uuid4(),
+            session=SimpleNamespace(),
+        )
+
+    assert raised.value.status_code == 409
+    assert added is False
+
+
+@pytest.mark.asyncio
+async def test_named_active_assistant_integrity_error_maps_to_409():
+    class Session:
+        rolled_back = False
+
+        async def rollback(self):
+            self.rolled_back = True
+
+    original = SimpleNamespace(
+        diag=SimpleNamespace(
+            constraint_name="uq_ai_message_active_assistant_per_thread"
+        )
+    )
+    session = Session()
+
+    with pytest.raises(ai_chat_controller.HTTPException) as raised:
+        await ai_chat_controller._raise_database_error(
+            session,
+            IntegrityError("insert", {}, original),
+            "answer",
+        )
+
+    assert raised.value.status_code == 409
+    assert session.rolled_back is True
+
+
+@pytest.mark.asyncio
+async def test_other_integrity_error_stays_generic_500():
+    class Session:
+        async def rollback(self):
+            return None
+
+    original = SimpleNamespace(
+        diag=SimpleNamespace(constraint_name="some_other_constraint")
+    )
+    with pytest.raises(ai_chat_controller.HTTPException) as raised:
+        await ai_chat_controller._raise_database_error(
+            Session(), IntegrityError("insert", {}, original), "answer"
+        )
+
+    assert raised.value.status_code == 500
+    assert "some_other_constraint" not in raised.value.detail
+
+
+@pytest.mark.asyncio
+async def test_legacy_failed_content_is_not_relayed(monkeypatch):
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Service:
+        async def get_message(self, *_args):
+            return SimpleNamespace(
+                status="failed",
+                content="raw internal database error",
+                partial_content=None,
+            )
+
+    class PubSub:
+        async def subscribe(self, *_args):
+            return None
+
+        async def unsubscribe(self, *_args):
+            return None
+
+        async def aclose(self):
+            return None
+
+    class Redis:
+        def pubsub(self):
+            return PubSub()
+
+    monkeypatch.setattr(ai_chat_controller, "async_session_factory", Session)
+    monkeypatch.setattr(ai_chat_controller, "get_thread_service", lambda _session: Service())
+    monkeypatch.setattr(ai_chat_controller, "get_redis_client", lambda: Redis())
+
+    event = json.loads(
+        (await anext(ai_chat_controller._relay_agent_events("answer"))).removeprefix(
+            "data: "
+        )
+    )
+
+    assert event["type"] == "error"
+    assert event["data"] == ai_chat_controller.AGENT_FAILURE_CONTENT
+
+
+@pytest.mark.asyncio
+async def test_live_worker_error_payload_is_sanitized(monkeypatch):
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Service:
+        async def get_message(self, *_args):
+            return SimpleNamespace(
+                status="generating",
+                content="",
+                partial_content=None,
+            )
+
+    class PubSub:
+        async def subscribe(self, *_args):
+            return None
+
+        async def get_message(self, **_kwargs):
+            return {
+                "data": json.dumps(
+                    {"type": "error", "data": "SECRET database exception"}
+                )
+            }
+
+        async def unsubscribe(self, *_args):
+            return None
+
+        async def aclose(self):
+            return None
+
+    class Redis:
+        def pubsub(self):
+            return PubSub()
+
+    monkeypatch.setattr(ai_chat_controller, "async_session_factory", Session)
+    monkeypatch.setattr(
+        ai_chat_controller, "get_thread_service", lambda _session: Service()
+    )
+    monkeypatch.setattr(ai_chat_controller, "get_redis_client", lambda: Redis())
+
+    events = ai_chat_controller._relay_agent_events("answer")
+    await anext(events)  # current status
+    error_event = await anext(events)
+    await events.aclose()
+
+    assert ai_chat_controller.AGENT_FAILURE_CONTENT in error_event
+    assert "SECRET" not in error_event

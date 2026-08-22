@@ -48,6 +48,9 @@ class _Session:
     async def __aexit__(self, *_args):
         return None
 
+    async def rollback(self):
+        return None
+
 
 class _Graph:
     async def ainvoke(self, state, config=None):

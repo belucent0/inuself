@@ -7,11 +7,20 @@ Redis 캐시는 ThreadService에서 처리.
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..db.models import AiThread, AiMessage
+
+
+ACTIVE_ASSISTANT_STATUSES = (
+    "queued",
+    "analyzing",
+    "searching",
+    "thinking",
+    "generating",
+)
 
 
 class ThreadRepository:
@@ -185,6 +194,51 @@ class ThreadRepository:
         await self.session.delete(message)
         await self.session.flush()
 
+    async def get_stale_active_assistant_messages(
+        self, created_before: datetime, limit: int = 100
+    ) -> list[AiMessage]:
+        stmt = (
+            select(AiMessage)
+            .where(
+                AiMessage.role == "assistant",
+                AiMessage.status.in_(ACTIVE_ASSISTANT_STATUSES),
+                AiMessage.created_at < created_before,
+            )
+            .order_by(AiMessage.created_at, AiMessage.id)
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def update_active_assistant_message(
+        self, message_id: UUID, **values
+    ) -> bool:
+        result = await self.session.execute(
+            update(AiMessage)
+            .where(
+                AiMessage.id == message_id,
+                AiMessage.role == "assistant",
+                AiMessage.status.in_(ACTIVE_ASSISTANT_STATUSES),
+            )
+            .values(**values)
+        )
+        return result.rowcount == 1
+
+    async def fail_stale_active_assistant_message(
+        self, message_id: UUID, created_before: datetime, content: str
+    ) -> bool:
+        result = await self.session.execute(
+            update(AiMessage)
+            .where(
+                AiMessage.id == message_id,
+                AiMessage.role == "assistant",
+                AiMessage.status.in_(ACTIVE_ASSISTANT_STATUSES),
+                AiMessage.created_at < created_before,
+            )
+            .values(status="failed", content=content, partial_content=None)
+        )
+        return result.rowcount == 1
+
     async def update_message_status(
         self,
         message_id: UUID,
@@ -328,14 +382,18 @@ class ThreadRepository:
         result = await self.session.execute(stmt)
         return result.scalar() or 0
 
-    async def get_last_message(self, thread_id: UUID) -> AiMessage | None:
+    async def get_last_message(
+        self, thread_id: UUID, role: str | None = None
+    ) -> AiMessage | None:
         """스레드의 마지막 메시지."""
         stmt = (
             select(AiMessage)
             .where(AiMessage.thread_id == thread_id)
-            .order_by(desc(AiMessage.created_at))
+            .order_by(desc(AiMessage.created_at), desc(AiMessage.id))
             .limit(1)
         )
+        if role is not None:
+            stmt = stmt.where(AiMessage.role == role)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 

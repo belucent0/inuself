@@ -13,8 +13,10 @@ from ..core.telemetry import inject_trace_context, get_trace_id, get_tracer
 # 활성 작업 추적 TTL (2시간 - 최대 작업 시간 + 여유분)
 ACTIVE_JOB_TTL = 7200
 AGENT_EVENT_CHANNEL_PREFIX = "events:agent:"
-AGENT_THREAD_KEY_PREFIX = "active_agent_thread:"
 AGENT_DISPATCH_KEY_PREFIX = "dispatched_agent_message:"
+AGENT_MESSAGE_LOCK_PREFIX = "lock:agent:message:"
+AGENT_MESSAGE_LOCK_SECONDS = 90
+AGENT_FAILURE_CONTENT = "This response could not be completed. Please try again."
 
 
 class TaskQueueAdapter(ABC):

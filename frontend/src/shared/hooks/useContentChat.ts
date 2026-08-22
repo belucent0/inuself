@@ -264,6 +264,8 @@ export function useContentChat(
       // sourceOptions에서 mode 자동 결정
       const effectiveMode = sourceOptions?.include_web_search ? 'hybrid' : 'rag'
 
+      const removedAssistant = messages[messages.length - 1]
+      let accepted = false
       setMessages((prev) => prev.slice(0, -1))
       setIsLoading(true)
       setStreamingMetadata({
@@ -281,10 +283,11 @@ export function useContentChat(
           effectiveMode,
           reasoning,
           allowRemote,
-          createStreamCallbacks(),
+          createStreamCallbacks(() => { accepted = true }),
           abortController.signal
         )
       } catch (err) {
+        if (!accepted) setMessages((prev) => [...prev, removedAssistant])
         if (err instanceof DOMException && err.name === 'AbortError') return
         const error = err as Error
         setIsLoading(false)

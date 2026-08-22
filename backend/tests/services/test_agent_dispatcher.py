@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from redis.exceptions import RedisError
 
 from app.controllers import ai_chat_controller
 from app.services import agent_dispatcher
@@ -15,10 +16,6 @@ from app.utils.task_queue_adapter import (
 @pytest.mark.asyncio
 async def test_publish_ambiguity_keeps_committed_message_queued(monkeypatch):
     calls: list[str] = []
-
-    class Redis:
-        async def set(self, *_args, **_kwargs):
-            return True
 
     class Session:
         async def commit(self):
@@ -36,12 +33,7 @@ async def test_publish_ambiguity_keeps_committed_message_queued(monkeypatch):
         calls.append("publish")
         raise OSError("broker confirmation lost")
 
-    async def clear_slot(*_args, **_kwargs):
-        calls.append("clear")
-
-    monkeypatch.setattr(ai_chat_controller, "get_redis_client", lambda: Redis())
     monkeypatch.setattr(ai_chat_controller, "dispatch_agent_job", ambiguous_publish)
-    monkeypatch.setattr(ai_chat_controller, "_clear_agent_thread_slot", clear_slot)
 
     await ai_chat_controller._commit_and_enqueue_agent(
         session=Session(),
@@ -171,7 +163,101 @@ async def test_reconcile_scans_beyond_first_hundred_marker_held_jobs(monkeypatch
     async def dispatch(message_id, _job):
         return message_id == "message-100"
 
+    async def finalize():
+        return 0
+
     monkeypatch.setattr(agent_dispatcher, "async_session_factory", Session)
     monkeypatch.setattr(agent_dispatcher, "dispatch_agent_job", dispatch)
+    monkeypatch.setattr(
+        agent_dispatcher, "finalize_stale_active_agent_messages", finalize
+    )
 
     assert await agent_dispatcher.reconcile_agent_jobs_once() == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_finalizer_uses_worker_lock_and_conditional_update(monkeypatch):
+    message_id = uuid4()
+    calls = []
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def commit(self):
+            calls.append("commit")
+
+    class Repository:
+        def __init__(self, _session):
+            pass
+
+        async def get_stale_active_assistant_messages(self, _cutoff):
+            return [SimpleNamespace(id=message_id)]
+
+        async def fail_stale_active_assistant_message(
+            self, received_id, _cutoff, content
+        ):
+            calls.append(("update", received_id, content))
+            return True
+
+    class Lock:
+        async def acquire(self, *, blocking):
+            calls.append(("acquire", blocking))
+            return True
+
+        async def release(self):
+            calls.append("release")
+
+    class Redis:
+        def lock(self, key, **kwargs):
+            calls.append(("lock", key, kwargs))
+            return Lock()
+
+    monkeypatch.setattr(agent_dispatcher, "async_session_factory", Session)
+    monkeypatch.setattr(agent_dispatcher, "ThreadRepository", Repository)
+    monkeypatch.setattr(agent_dispatcher, "get_redis_client", lambda: Redis())
+
+    finalized = await agent_dispatcher.finalize_stale_active_agent_messages()
+
+    assert finalized == 1
+    assert calls[0][1].endswith(str(message_id))
+    assert calls[1] == ("acquire", False)
+    assert calls[-2:] == ["commit", "release"]
+
+
+@pytest.mark.asyncio
+async def test_stale_finalizer_fails_closed_when_redis_is_unavailable(monkeypatch):
+    message_id = uuid4()
+    updated = False
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Repository:
+        def __init__(self, _session):
+            pass
+
+        async def get_stale_active_assistant_messages(self, _cutoff):
+            return [SimpleNamespace(id=message_id)]
+
+        async def fail_stale_active_assistant_message(self, *_args):
+            nonlocal updated
+            updated = True
+
+    class Redis:
+        def lock(self, *_args, **_kwargs):
+            raise RedisError("unavailable")
+
+    monkeypatch.setattr(agent_dispatcher, "async_session_factory", Session)
+    monkeypatch.setattr(agent_dispatcher, "ThreadRepository", Repository)
+    monkeypatch.setattr(agent_dispatcher, "get_redis_client", lambda: Redis())
+
+    assert await agent_dispatcher.finalize_stale_active_agent_messages() == 0
+    assert updated is False
