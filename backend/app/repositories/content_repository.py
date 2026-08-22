@@ -241,6 +241,7 @@ class ContentRepository:
     async def vector_search_contents(
         self,
         query_embedding: list[float],
+        user_id: UUID,
         limit: int = 20,
         similarity_threshold: float = 0.3,
         content_ids: list[UUID] | None = None,
@@ -249,6 +250,7 @@ class ContentRepository:
 
         Args:
             query_embedding: 쿼리 임베딩 (768차원)
+            user_id: 검색을 요청한 콘텐츠 소유자
             limit: 최대 결과 수
             similarity_threshold: 최소 유사도 (0~1)
             content_ids: 특정 콘텐츠 ID로 제한
@@ -269,6 +271,7 @@ class ContentRepository:
                 1 - (content.embedding <=> :query_embedding::vector) AS similarity
             FROM content
             WHERE content.status = 'COMPLETED'
+              AND content.user_id = :user_id
               AND content.embedding IS NOT NULL
               AND (1 - (content.embedding <=> :query_embedding::vector)) >= :threshold
               {content_filter}
@@ -280,6 +283,7 @@ class ContentRepository:
 
         params = {
             "query_embedding": embedding_str,
+            "user_id": user_id,
             "threshold": similarity_threshold,
             "limit": limit,
         }

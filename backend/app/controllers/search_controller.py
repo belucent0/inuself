@@ -18,7 +18,7 @@ from redis.asyncio import Redis
 from ..core.ai_gateway import get_async_openai_client
 from ..core.config import get_settings
 from ..core.logging import logger
-from ..core.llm_tier import LLMTier
+from ..core.reasoning import routing_profile
 from ..prompts.search import SEARCH_SYSTEM_PROMPT, SEARCH_USER_TEMPLATE
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -34,11 +34,6 @@ SEARXNG_TIMEOUT = 30.0
 # Valkey 캐싱
 SEARCH_CACHE_PREFIX = "search:cache:"
 SEARCH_CACHE_TTL = 3600  # 1시간
-
-
-def get_ai_gateway_model(reasoning_mode: bool = False) -> str:
-    """사용할 tier — reasoning이면 thinking, 아니면 simple."""
-    return LLMTier.THINKING if reasoning_mode else LLMTier.SIMPLE
 
 
 async def get_redis_client() -> Redis:
@@ -173,20 +168,21 @@ async def stream_llm_summary(query: str, search_results: list[dict], reasoning_m
     ]
 
     client = get_async_openai_client(long_running=True)
-    model = get_ai_gateway_model(reasoning_mode)
+    reasoning = "high" if reasoning_mode else "medium"
 
     # 추론 모드는 <think> 과정이 길어서 더 많은 토큰 필요
     max_tokens = 8192 if reasoning_mode else 2048
 
-    logger.info("[Search] LLM streaming request: model=%s (reasoning=%s, max_tokens=%d)", model, reasoning_mode, max_tokens)
+    logger.info("[Search] LLM streaming request: reasoning=%s (max_tokens=%d)", reasoning, max_tokens)
 
     try:
         stream = await client.chat.completions.create(
-            model=model,
+            model="auto",
             messages=messages,
             temperature=0.3,
             max_tokens=max_tokens,
             stream=True,
+            extra_body={"routing": routing_profile("chat", reasoning)},
         )
     except Exception as e:
         logger.error("[Search] LLM stream creation failed: %s", e)

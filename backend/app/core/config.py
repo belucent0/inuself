@@ -74,12 +74,6 @@ class Settings(BaseSettings):
         validation_alias="AI_GATEWAY_URL",
     )
     ai_gateway_api_key: str = Field("", validation_alias="AI_GATEWAY_API_KEY")
-    ai_gateway_model: str = Field("tier-simple", validation_alias="AI_GATEWAY_MODEL")
-    ai_gateway_model_summarize: str = Field(
-        "tier-recap", validation_alias="AI_GATEWAY_MODEL_SUMMARIZE"
-    )
-    ai_gateway_allowed_models: str = Field("", validation_alias="AI_GATEWAY_ALLOWED_MODELS")
-
     # AI Agent 검색 품질 튜닝 파라미터
     agent_search_web_limit: int = Field(
         15,

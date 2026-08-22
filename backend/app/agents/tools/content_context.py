@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from loguru import logger
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select
@@ -22,6 +23,7 @@ _TOTAL_CHAR_LIMIT = 12000
 
 async def load_content_context(
     content_ids: list,
+    user_id: UUID,
     source_options: dict[str, Any] | None = None,
 ) -> str:
     """콘텐츠 ID 목록으로부터 AI 주입용 컨텍스트 문자열을 생성합니다.
@@ -49,10 +51,11 @@ async def load_content_context(
         async with AsyncSessionLocal() as session:
             stmt = (
                 select(File)
+                .join(Content, Content.file_id == File.id)
                 .options(
                     selectinload(File.content).selectinload(Content.transcription_result)
                 )
-                .where(File.id.in_(content_ids))
+                .where(File.id.in_(content_ids), Content.user_id == user_id)
             )
             result = await session.execute(stmt)
             files = result.scalars().all()

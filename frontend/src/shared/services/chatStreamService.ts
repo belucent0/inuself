@@ -6,6 +6,7 @@
  */
 
 import type { Message, Source, ThinkingStep } from '@/shared/types'
+import type { ReasoningPreference } from '@/shared/types'
 import { getAccessToken } from './authToken'
 
 // ============================================================
@@ -215,14 +216,15 @@ function createAuthHeaders(): Record<string, string> {
 export async function regenerateStream(
   threadId: string,
   mode: string,
-  model: string | undefined,
+  reasoning: ReasoningPreference,
+  allowRemote: boolean,
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
   const response = await fetch(`/api/threads/${threadId}/regenerate`, {
     method: 'POST',
     headers: createAuthHeaders(),
-    body: JSON.stringify({ mode, model }),
+    body: JSON.stringify({ mode, reasoning, allow_remote: allowRemote }),
     signal: abortSignal,
   })
 

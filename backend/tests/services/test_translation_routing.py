@@ -7,7 +7,7 @@ from app.services import translation_runner as runner
 
 
 @pytest.mark.asyncio
-async def test_translation_chunk_uses_gateway_simple_tier(monkeypatch):
+async def test_translation_chunk_uses_local_chat_profile(monkeypatch):
     captured = {}
 
     async def fake_completion(**kwargs):
@@ -42,7 +42,12 @@ async def test_translation_chunk_uses_gateway_simple_tier(monkeypatch):
         transcription_data={"segments": segments},
     )
 
-    assert captured["model"] == "tier-simple"
+    assert captured["model"] == "auto"
+    assert captured["routing"] == {
+        "workload": "chat",
+        "reasoning": "none",
+        "execution_scope": "local_only",
+    }
     assert "base_url" not in captured
     assert state.status == "success"
     assert segments[0]["translation_ko"] == "hello-ko"

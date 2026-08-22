@@ -1,6 +1,6 @@
 """BlockGenerator partial retry 통합 테스트.
 
-실제 vLLM 호출 없이 mock으로 라운드 진행/실패 회복/circuit breaker 동작을 검증한다.
+실제 LLM 호출 없이 mock으로 라운드 진행과 실패 회복을 검증한다.
 """
 
 from __future__ import annotations
@@ -68,6 +68,16 @@ async def test_happy_path_all_blocks_success():
     assert state.blocks["section_1"].status == BlockStatus.SUCCESS
     assert state.all_required_success(gen.template)
     assert all(call["max_tokens"] == SUMMARY_MAX_TOKENS for call in calls)
+    assert all(call["model"] == "auto" for call in calls)
+    assert all(
+        call["routing"]
+        == {
+            "workload": "summary",
+            "reasoning": "low",
+            "execution_scope": "local_only",
+        }
+        for call in calls
+    )
     assert all("TAIL" not in call["messages"][1]["content"] for call in calls)
 
 

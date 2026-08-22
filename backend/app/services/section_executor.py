@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import time
 
 from ..core.config import Settings, get_settings
+from ..core.reasoning import routing_profile
 from ..core.logging import logger
 from .section_state import create_initial_state, SectionGenerationState
 from .section_graph import get_section_graph
@@ -154,7 +155,7 @@ class SectionGraphExecutor:
         return title, summary_md
 
     async def _execute_phase_1(self, text: str) -> PhaseResult:
-        """Phase 1: 메타데이터 추출 (tier-simple).
+        """Phase 1: 메타데이터 추출 (summary/low).
 
         Args:
             text: 원본 텍스트
@@ -174,10 +175,11 @@ class SectionGraphExecutor:
                     {"role": "user", "content": prompt},
                 ]
 
-                # Phase 1도 tier-recap 사용 (법률/전문 용어 처리 향상)
+                # 전문 용어를 포함한 요약 작업으로 라우팅
                 response = await request_ai_gateway_completion_async(
                     settings=self.settings,
-                    model=self.settings.ai_gateway_model_summarize,
+                    model="auto",
+                    routing=routing_profile("summary", "low"),
                     messages=messages,
                 )
 

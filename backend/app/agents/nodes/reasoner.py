@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage
 from ..state import GraphState, AIMode, ThinkingStep
 from ..tools.llm_client import async_llm_completion, async_llm_completion_stream
 from ..tools.datetime_tool import get_current_datetime
+from ...core.reasoning import routing_profile
 
 
 # Reasoning 시스템 프롬프트 베이스 (날짜는 _get_reasoning_system_prompt()에서 동적 주입)
@@ -100,12 +101,17 @@ class ReasonerNode:
             })
 
         try:
-            # LLM 호출 (추론은 더 많은 토큰 필요) - 동적 모델 라우팅
-            selected_model = state.get("selected_model")
+            selected_reasoning = state.get("selected_reasoning", "high")
+            metadata = state.get("metadata", {})
             response = await async_llm_completion(
                 settings=self.settings,
                 messages=messages,
-                model=selected_model,
+                model="auto",
+                routing=routing_profile(
+                    "chat",
+                    selected_reasoning,
+                    bool(metadata.get("allow_remote", False)),
+                ),
                 temperature=0.3,  # 일관성을 위해 낮은 온도
                 max_tokens=4096,  # 긴 추론을 위해 더 많은 토큰
             )
@@ -187,13 +193,18 @@ class ReasonerNode:
                 "content": f"질문: {query}\n\n위 질문에 대해 단계별로 분석하고 추론해주세요."
             })
 
-        # 스트리밍 응답 생성 - 동적 모델 라우팅
-        selected_model = state.get("selected_model")
+        selected_reasoning = state.get("selected_reasoning", "high")
+        metadata = state.get("metadata", {})
         response_chunks = []
         async for chunk in async_llm_completion_stream(
             settings=self.settings,
             messages=messages,
-            model=selected_model,
+            model="auto",
+            routing=routing_profile(
+                "chat",
+                selected_reasoning,
+                bool(metadata.get("allow_remote", False)),
+            ),
             temperature=0.3,
             max_tokens=4096,
         ):

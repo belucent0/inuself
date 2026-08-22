@@ -3,6 +3,8 @@
 import time
 import uuid
 
+from fastapi.responses import JSONResponse
+
 
 def build_openai_response(
     content: str | dict,
@@ -35,3 +37,17 @@ def build_openai_response(
         ],
         "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
+
+
+def openai_error(
+    message: str,
+    error_type: str,
+    status_code: int,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    """Return the gateway's common OpenAI-compatible error envelope."""
+    return JSONResponse(
+        {"error": {"message": message, "type": error_type}},
+        status_code=status_code,
+        headers=headers,
+    )

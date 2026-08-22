@@ -172,8 +172,8 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 │ 1. 모드 감지 (search/rag/reasoning/simple)                  │
 │    - 패턴 매칭 또는 LLM 분류                                 │
 │                                                              │
-│ 2. Tier 라우팅 (tier-simple/tier-complex/tier-multimodal)  │
-│    - 쿼리 복잡도 분석                                        │
+│ 2. Reasoning 해석 (auto/none/low/medium/high)              │
+│    - 요청 선호도, mode, context 길이 순으로 결정             │
 │                                                              │
 │ 3. Query Transformation (V8.3)                               │
 │    ┌──────────────────────────────────────────────┐         │
@@ -208,7 +208,7 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 │ 4. 상태 업데이트                                             │
 │    return {                                                  │
 │        "mode": AIMode.SEARCH,                                │
-│        "selected_model": "tier-simple",                      │
+│        "selected_reasoning": "medium",                       │
 │        "search_queries": [재작성된 쿼리들],                  │
 │        "query_analysis": {...}                               │
 │    }                                                         │
@@ -276,7 +276,10 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 │ 3. LLM 호출                                                  │
 │    response = await async_llm_completion_stream(             │
 │        messages=[...],                                       │
-│        model=state["selected_model"]  # tier-simple 등       │
+│        model="auto",                                        │
+│        routing={"workload": "chat",                        │
+│                 "reasoning": state["selected_reasoning"],    │
+│                 "execution_scope": "local_only"}            │
 │    )                                                         │
 │                                                              │
 │ 4. 상태 업데이트                                             │
@@ -450,11 +453,11 @@ TTL: 7일
 
 ```
 ✅ 비즈니스 로직 (Intent 분석, 검색, RAG, 추론, 생성)
-✅ LLM 호출 (llm_client.py → LiteLLM → OpenAI/Anthropic)
+✅ LLM 호출 (llm_client.py → ai-gateway → NPU/GPU/optional Codex)
 ✅ 스레드 히스토리 관리 (Redis)
 ✅ 웹 검색 (SearXNG)
 ✅ Query Transformation (V8.3 플러그인)
-✅ Tier 라우팅 (모델 선택)
+✅ Reasoning 해석과 RoutingProfile 전달
 ✅ 텔레메트리 (OpenTelemetry, Langfuse)
 ```
 

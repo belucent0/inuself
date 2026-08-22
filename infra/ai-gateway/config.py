@@ -1,7 +1,6 @@
 """AI Gateway 설정 — 환경변수 및 상수 정의."""
 
 import os
-import importlib.util
 
 # ============================================================
 # 배포 모드
@@ -56,30 +55,6 @@ CODEX_API_KEY = os.getenv("CLIPROXY_API_KEY", "")
 # ChatGPT 구독 OAuth 계정은 계정 유형상 이 모델 하나만 허용됨(2026-08 확인).
 # 새 모델이 나오면 코드 수정 없이 env var만 바꾸면 되도록 분리.
 CODEX_MODEL = os.getenv("CODEX_MODEL", "gpt-5.3-codex-spark")
-
-# ============================================================
-# Tier Config (infra/shared/tier_config.py)
-# ============================================================
-def _import_tier_config():
-    """tier_config.py를 경로 기반으로 직접 import."""
-    search_paths = [
-        "/app/infra/shared/tier_config.py",
-        os.path.join(os.path.dirname(__file__), "..", "shared", "tier_config.py"),
-        os.path.join(os.path.dirname(__file__), "..", "infra", "shared", "tier_config.py"),
-        os.path.join(os.path.dirname(__file__), "..", "..", "shared", "tier_config.py"),
-    ]
-    for path in search_paths:
-        abs_path = os.path.abspath(path)
-        if os.path.exists(abs_path):
-            spec = importlib.util.spec_from_file_location("tier_config", abs_path)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return mod
-    raise ImportError(f"tier_config.py not found in: {search_paths}")
-
-_tier_config = _import_tier_config()
-TIER_MODEL_MAP = _tier_config.TIER_MODEL_MAP
-resolve_tier_to_model = _tier_config.resolve_tier_to_model
 
 # ============================================================
 # API 인증

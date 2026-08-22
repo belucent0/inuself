@@ -27,8 +27,9 @@ async def search_internal_content(
     query: str,
     *,
     settings: Any,
+    user_id: UUID,
     limit: int = 5,
-    content_ids: list[int] | None = None,
+    content_ids: list[UUID] | None = None,
     search_mode: str = "hybrid",  # "keyword", "vector", "hybrid"
     keyword_weight: float = 0.6,
     vector_weight: float = 0.4,
@@ -66,7 +67,11 @@ async def search_internal_content(
 
             # 1. 키워드 검색
             keyword_results = await _keyword_search(
-                session, query, limit=limit * 2, content_ids=content_ids
+                session,
+                query,
+                user_id=user_id,
+                limit=limit * 2,
+                content_ids=content_ids,
             )
 
             # 2. 벡터 검색 (hybrid/vector 모드만)
@@ -80,6 +85,7 @@ async def search_internal_content(
                     if query_embedding:
                         vector_results = await repo.vector_search_contents(
                             query_embedding=query_embedding,
+                            user_id=user_id,
                             limit=limit * 2,
                             content_ids=content_ids,
                         )
@@ -141,8 +147,9 @@ async def search_internal_content(
 async def _keyword_search(
     session: AsyncSession,
     query: str,
+    user_id: UUID,
     limit: int,
-    content_ids: list[int] | None,
+    content_ids: list[UUID] | None,
 ) -> list[tuple[File, float]]:
     """키워드 검색 (기존 ILIKE 로직).
 
@@ -164,6 +171,7 @@ async def _keyword_search(
         .join(Content, Content.file_id == File.id)
         .options(selectinload(File.content))
         .where(
+            Content.user_id == user_id,
             Content.status == FileStatus.COMPLETED,
             Content.summary_md.isnot(None),
         )
@@ -285,8 +293,9 @@ def _extract_relevant_snippet(text: str, keywords: list[str], max_length: int = 
 
 
 async def get_content_context(
-    content_ids: list[int],
+    content_ids: list[UUID],
     *,
+    user_id: UUID,
     include_transcription: bool = False,
 ) -> list[dict]:
     """특정 콘텐츠의 상세 컨텍스트 조회.
@@ -305,8 +314,9 @@ async def get_content_context(
         async with AsyncSessionLocal() as session:
             stmt = (
                 select(File)
+                .join(Content, Content.file_id == File.id)
                 .options(selectinload(File.content).selectinload(Content.transcription_result))
-                .where(File.id.in_(content_ids))
+                .where(File.id.in_(content_ids), Content.user_id == user_id)
             )
             result = await session.execute(stmt)
             files = result.scalars().all()

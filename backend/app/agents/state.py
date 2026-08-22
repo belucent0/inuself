@@ -11,6 +11,8 @@ from typing import Annotated, TypedDict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
+from ..core.reasoning import ResolvedReasoning
+
 
 class AIMode(str, Enum):
     """AI 모드 종류."""
@@ -98,7 +100,7 @@ class GraphState(TypedDict):
         messages: 대화 히스토리 (LangGraph add_messages 리듀서 사용)
         query: 현재 사용자 쿼리
         mode: AI 모드 (simple, search, rag, reasoning, hybrid)
-        selected_model: 동적 라우팅으로 선택된 LLM 모델명
+        selected_reasoning: 라우팅에 사용할 추론 수준
         intent_confidence: 의도 분석 신뢰도 (0.0 ~ 1.0)
         requires_clarification: 추가 질문 필요 여부
         clarification_question: 추가 질문 내용
@@ -125,7 +127,7 @@ class GraphState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     query: str
     mode: AIMode
-    selected_model: str | None
+    selected_reasoning: ResolvedReasoning
     intent_confidence: float
     requires_clarification: bool
     clarification_question: str | None
@@ -138,6 +140,7 @@ class GraphState(TypedDict):
     citations: list[CitationInfo]  # Phase 4: Citation 추가
     error: str | None
     thread_id: str | None
+    user_id: str | None
     metadata: dict
 
     # V8.4: 검색 재시도 관련

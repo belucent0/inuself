@@ -12,6 +12,7 @@ import { httpClient } from '@/shared/services'
 import { getAccessToken } from '@/shared/services/authToken'
 import { getThreads, updateThreadMetadata } from '@/shared/services/endpoints/threads'
 import type { SearchSource, ThinkingStep, AIMode } from '@/features/chat/types'
+import type { ReasoningPreference } from '@/shared/types'
 
 interface ContentMessage {
   role: 'user' | 'assistant'
@@ -337,7 +338,7 @@ export function useContentChat(
   )
 
   const sendMessage = useCallback(
-    async (content: string, _mode?: string, model?: string) => {
+    async (content: string, _mode: string, reasoning: ReasoningPreference, allowRemote: boolean) => {
       // sourceOptions에서 mode 자동 결정 (ChatArea의 mode 파라미터 무시)
       const effectiveMode = sourceOptions?.include_web_search ? 'hybrid' : 'rag'
 
@@ -373,8 +374,9 @@ export function useContentChat(
           const resp = await httpClient.post<QueuedMessageResponse>('/threads', {
             query: content,
             mode: effectiveMode,
+            reasoning,
+            allow_remote: allowRemote,
             context: msgContext,
-            model,
           })
           threadId = resp.thread_id
           messageId = resp.message_id
@@ -388,8 +390,9 @@ export function useContentChat(
             {
               query: content,
               mode: effectiveMode,
+              reasoning,
+              allow_remote: allowRemote,
               context: msgContext,
-              model,
             }
           )
           messageId = resp.message_id
@@ -406,7 +409,7 @@ export function useContentChat(
   )
 
   const regenerate = useCallback(
-    async (_mode?: string, model?: string) => {
+    async (_mode: string, reasoning: ReasoningPreference, allowRemote: boolean) => {
       if (!threadIdRef.current || messages.length === 0) return
       if (messages[messages.length - 1].role !== 'assistant') return
 
@@ -424,7 +427,7 @@ export function useContentChat(
       try {
         const stream = await httpClient.postStream(
           `/threads/${threadIdRef.current}/regenerate`,
-          { mode: effectiveMode, model }
+          { mode: effectiveMode, reasoning, allow_remote: allowRemote }
         )
         await processSSEStream(stream, effectiveMode)
       } catch (err) {

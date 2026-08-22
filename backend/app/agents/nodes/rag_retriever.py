@@ -7,6 +7,7 @@ from __future__ import annotations
 from loguru import logger
 import time
 from typing import Any
+from uuid import UUID
 
 from ..state import GraphState, AIMode, ThinkingStep, SearchResult
 from ..tools.rag_search import search_internal_content, RAGSearchError
@@ -59,9 +60,11 @@ class RAGRetrieverNode:
         content_ids_for_search = None if search_scope == "all" else content_ids
 
         try:
+            user_id = UUID(str(state.get("user_id")))
             results = await search_internal_content(
                 query,
                 settings=self.settings,
+                user_id=user_id,
                 limit=5,
                 content_ids=content_ids_for_search,
             )

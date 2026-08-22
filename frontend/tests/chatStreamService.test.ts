@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { processSSEStream } from '../src/shared/services/chatStreamService'
+import { processSSEStream, regenerateStream } from '../src/shared/services/chatStreamService'
 
 const events = [
   { type: 'token', data: 'missed' },
@@ -28,3 +28,35 @@ const result = await processSSEStream(response, 'simple', {
 assert.equal(displayedContent, 'restored!')
 assert.equal(completedContent, 'authoritative')
 assert.equal(result.content, 'authoritative')
+
+const originalFetch = globalThis.fetch
+const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+let regenerateBody: unknown
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: { getItem: () => null },
+})
+globalThis.fetch = (async (_input, init) => {
+  regenerateBody = JSON.parse(String(init?.body))
+  return new Response('data: {"type":"done","data":null}\n\n')
+}) as typeof fetch
+
+try {
+  await regenerateStream('thread-1', 'rag', 'high', true, {
+    onToken: () => {},
+    onThinkingStep: () => {},
+    onSource: () => {},
+    onSources: () => {},
+    onSearchQueries: () => {},
+    onComplete: () => {},
+    onError: (error) => { throw error },
+  })
+  assert.deepEqual(regenerateBody, { mode: 'rag', reasoning: 'high', allow_remote: true })
+} finally {
+  globalThis.fetch = originalFetch
+  if (localStorageDescriptor) {
+    Object.defineProperty(globalThis, 'localStorage', localStorageDescriptor)
+  } else {
+    delete (globalThis as { localStorage?: Storage }).localStorage
+  }
+}

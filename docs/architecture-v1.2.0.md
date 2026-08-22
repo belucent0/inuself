@@ -2,9 +2,9 @@
 
 > **Timblo AI Platform — 종합 아키텍처 문서 (Source of Truth)**
 >
-> 작성일: 2026-05-04 | 버전: v1.2.0 | 대상 코드베이스: `develop` 브랜치
+> 작성일: 2026-05-04 | 최종 갱신: 2026-08-22 | 버전: v1.2.0 | 대상 코드베이스: `develop` 브랜치
 >
-> 이 문서가 현재 운영 architecture를 기술하는 단일 SoT입니다. 옛 버전(v1.0.x / v1.1.0)은 `docs/archived/`로 이동되었으며, LiteLLM Proxy / Provider Manager / PM2 / Redis Stream 추론 라우팅은 폐기되었습니다. 현재 NPU 경로는 ai-gateway가 Windows FastFlowLM을 직접 호출합니다.
+> 이 문서가 현재 운영 architecture를 기술하는 단일 SoT입니다. 옛 버전(v1.0.x / v1.1.0)은 `docs/archived/`로 이동되었으며, LiteLLM Proxy / Provider Manager / PM2 / Redis Stream 추론 라우팅은 폐기되었습니다. 현재 ai-gateway가 `RoutingProfile`과 Provider health/capacity를 기준으로 Windows FastFlowLM NPU, 로컬 vLLM GPU, optional Codex를 선택합니다.
 
 ---
 
@@ -13,7 +13,7 @@
 | 버전 | 날짜 | 주요 변경 |
 |------|------|-----------|
 | v1.0.0 | 2026-02-21 | Worker-Backend 분리, 초기 종합 문서 |
-| v1.0.1 | 2026-02-21 | lemonade-server / LLMTier 상수 / model_copy 정리 (incremental) |
+| v1.0.1 | 2026-02-21 | lemonade-server / 과거 모델 라우팅 상수 / model_copy 정리 (incremental) |
 | v1.1.0 | 2026-02-27 | Frontend 상세, Backend 레이어, AI Agent 전체, WPI, DB 스키마, API 레퍼런스, Valkey 구조 추가 |
 | **v1.2.0** | 2026-05-04 | **현행.** Provider Manager(Redis Stream + Host PM2 프로세스) · LiteLLM 프록시 · 옛 추론 Stream(`stream:chat:requests` 등) 폐기. ai-gateway가 로컬 추론 컨테이너와 Windows FastFlowLM NPU를 httpx로 직접 호출. backend/worker 코드의 `litellm` 명칭도 `ai_gateway`로 일소(PR #124, #127). |
 
@@ -55,14 +55,14 @@
 ┌────────────────────────▼────────────────────────────────────────────┐
 │  APPLICATION                                                        │
 │  Backend (FastAPI) — Controllers → Services → Repositories          │
-│  LangGraph AI Agent — 9 Nodes · 6 Tools · 5 Modes                   │
+│  LangGraph AI Agent — 9 Nodes · 5 Tools · 5 Modes                   │
 └──────────┬──────────────────────────────────┬───────────────────────┘
            │ Celery                            │ OpenAI SDK (httpx)
 ┌──────────▼──────────┐           ┌────────────▼──────────────────────┐
 │  WORKER             │           │  AI GATEWAY                       │
 │  Celery Workers     │──── HTTP ─▶  ai-gateway (FastAPI)             │
-│  파일 전처리        │           │  routing.py · tier 매핑           │
-│  (FFmpeg/PDF 변환)  │           │  serverless 폴백(Codex/RunPod)    │
+│  파일 전처리        │           │  profile · health · capacity      │
+│  (FFmpeg/PDF 변환)  │           │  조건부 폴백(Codex/RunPod)        │
 └─────────────────────┘           └────┬────┬────┬────┬────┬─────────┘
                                        │httpx│httpx│httpx│httpx│httpx
                                        ▼    ▼    ▼    ▼    ▼
@@ -500,7 +500,7 @@ class AIMode(str, Enum):
 
 | # | 노드 | 파일 | 역할 |
 |---|------|------|------|
-| 1 | `intent_parser` | `nodes/intent_parser.py` | 쿼리 의도 분석, 모드/Tier 결정, QueryAnalysis 생성 |
+| 1 | `intent_parser` | `nodes/intent_parser.py` | 쿼리 의도 분석, 모드/reasoning 결정, QueryAnalysis 생성 |
 | 2 | `searcher` | `nodes/searcher.py` | Multi-Query 웹 검색, RRF 리랭킹(K=60), 품질 평가 |
 | 3 | `rag_retriever` | `nodes/rag_retriever.py` | 내부 문서 벡터 검색, content_id 필터링 |
 | 4 | `reasoner` | `nodes/reasoner.py` | Chain-of-Thought 추론 (단계별 논리 분석) |
@@ -510,16 +510,15 @@ class AIMode(str, Enum):
 | 8 | `query_rewriter` | `nodes/query_rewriter.py` | 쿼리 재작성 (broaden/narrow/synonym 전략, 최대 3회) |
 | 9 | `fallback_handler` | `nodes/fallback_handler.py` | 검색 실패 시 대안 (내장 지식 또는 RAG 전환) |
 
-### 4.4 6개 도구 상세
+### 4.4 5개 도구 상세
 
 | # | 도구 | 파일 | 핵심 함수 |
 |---|------|------|-----------|
 | 1 | LLM 클라이언트 | `tools/llm_client.py` | `async_llm_completion()`, `async_llm_completion_stream()` |
 | 2 | 웹 검색 | `tools/web_search.py` | `search_web()`, `fetch_url_content()` |
 | 3 | RAG 검색 | `tools/rag_search.py` | `search_internal_content()`, `get_content_context()` |
-| 4 | Tier 라우터 | `tools/model_router.py` | `TierRouter.route()` — 임베딩 기반 모델 선택 |
-| 5 | 날짜 도구 | `tools/datetime_tool.py` | `get_current_datetime()` — 현재 날짜 주입 |
-| 6 | 콘텐츠 컨텍스트 | `tools/content_context.py` | 콘텐츠 상세 채팅용 컨텍스트 로드 |
+| 4 | 날짜 도구 | `tools/datetime_tool.py` | `get_current_datetime()` — 현재 날짜 주입 |
+| 5 | 콘텐츠 컨텍스트 | `tools/content_context.py` | 콘텐츠 상세 채팅용 컨텍스트 로드 |
 
 ### 4.5 GraphState 스키마
 
@@ -530,7 +529,7 @@ class GraphState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     query: str
     mode: AIMode
-    selected_model: str | None
+    selected_reasoning: ResolvedReasoning
     intent_confidence: float
     requires_clarification: bool
     clarification_question: str | None
@@ -563,16 +562,18 @@ class GraphState(TypedDict):
     retry_reason: str
 ```
 
-### 4.6 Tier 라우팅
+### 4.6 Reasoning 해석과 라우팅
 
-IntentParserNode의 TierRouter가 쿼리 복잡도에 따라 LLM Tier를 결정합니다.
+IntentParserNode는 요청의 `reasoning` 선호도를 실제 `selected_reasoning`으로 한 번 해석합니다. 우선순위는 명시된 값, reasoning 모드(`high`), 3000자 초과 컨텍스트(`medium`), search/rag/hybrid 모드(`medium`), 기본값(`none`) 순서입니다. Generator와 Reasoner는 이를 `RoutingProfile(workload="chat", reasoning=..., execution_scope=...)`로 Gateway에 전달합니다.
 
-| Tier | 모델 (v1.2.0) | 특징 |
-|------|--------------|------|
-| `tier-simple` | NPU Gemma 4 E4B → GPU Gemma 4 A4B fallback | 일반 대화, 번역 |
-| `tier-thinking` | Codex → `gemma4-a4b` local fallback | 복잡한 추론, 분석 |
-| `tier-recap` | `gemma4-a4b` (요약 전용 라우팅) | 문서 요약 |
-| `codex-medium` | CLIProxy API (OpenAI Codex) | WPI 보고서, 코드 생성 (serverless 모드) |
+| Reasoning | UI 표시 | 정상 local-gpu Provider | 원격 후보 |
+|------|------|------|------|
+| `none`, `low` | 일반 | NPU(`none`) 또는 GPU | 없음 |
+| `medium` | 일반 | GPU | 없음 |
+| `high` | 심층 | GPU | `remote_allowed`일 때만 Codex overflow/fallback |
+| `auto` | 자동 | Backend에서 위 규칙으로 해석 | 해석 결과와 `allow_remote`에 따름 |
+
+WPI 운영 경로의 `codex-high/medium/low`만 명시 모델로 허용되며 UI에는 모델 선택을 노출하지 않습니다.
 
 ### 4.7 검색 재시도 플로우 (V8.4)
 
@@ -1294,8 +1295,8 @@ Backend / Worker / Frontend
     │ HTTP POST /v1/ocr  (커스텀 엔드포인트)
     ▼
 ai-gateway (FastAPI :4000)
-    │ infra/ai-gateway/services/routing.py
-    │   - tier_config.py로 tier→model 매핑
+    │ infra/ai-gateway/services/provider_pool.py
+    │   - routing_policy.json 능력/health/circuit/capacity 적용
     │   - DEPLOY_MODE=local-gpu | serverless 분기
     │   - serverless 모드: Codex(CLIProxy) / RunPod 폴백
     ▼ httpx.AsyncClient
@@ -1308,7 +1309,7 @@ ai-embedding :8000(internal)
 ```
 
 > v1.1.0의 **LiteLLM 프록시 + Provider Manager(Redis Stream + Host PM2)**는 v1.2.0에서 제거.
-> ai-gateway가 단일 프로세스로 라우팅·모델 매핑·serverless 폴백을 직접 수행.
+> ai-gateway가 단일 프로세스로 능력 필터·health/circuit·capacity admission·serverless 폴백을 직접 수행.
 
 ### 12.2 ai-gateway 모듈 구조
 
@@ -1321,7 +1322,8 @@ infra/ai-gateway/
 │   ├── embeddings.py        — /v1/embeddings
 │   └── media.py             — /v1/audio/transcriptions, /v1/ocr 등
 ├── services/
-│   └── routing.py           — tier 매핑 + serverless 폴백 (slim, ~60 lines)
+│   ├── provider_pool.py     — 정책 검증 + health/circuit + atomic capacity
+│   └── routing.py           — RunPod/Codex serverless target
 ├── core/
 │   └── redis.py             — Valkey 동시성 세마포어 (옵션)
 ├── middleware/
@@ -1330,23 +1332,26 @@ infra/ai-gateway/
     └── response.py          — OpenAI 응답 정규화
 ```
 
-### 12.3 모델 라우팅 (tier 기반)
+### 12.3 RoutingProfile과 capacity 라우팅
 
-`infra/shared/tier_config.py`의 `TIER_MODEL_MAP`이 tier 이름을 실제 모델로 매핑.
+`infra/shared/routing_policy.json`이 Provider URL/model 환경변수, workload/reasoning 능력, scope, health probe, inflight 상한을 정의합니다. Gateway 단일 프로세스의 `ProviderPool`이 이 정책의 유일한 상태 소유자입니다.
 
-| Tier | Primary | Fallback | 용도 |
+| Provider | Capacity | Capability | Fallback 조건 |
+|------|------:|------|------|
+| `npu-chat` | 1 | `chat/none`, local | full/unhealthy/첫 출력 전 장애 시 GPU |
+| `gpu-llm` | 4 | `chat·summary/none..high`, local | `high + remote_allowed`에서만 Codex |
+| `codex` | 2 | `chat/high`, remote | explicit Codex 실패 시 GPU high/local 1회 |
+
+Media/embedding 분기는 RoutingProfile보다 먼저 실행되며 이번 전환에서 변경되지 않았습니다.
+
+| Task | Primary | Fallback | 용도 |
 |------|---------|----------|------|
-| `tier-simple` | NPU Gemma 4 E4B | `gemma4-a4b` | 짧은 응답, 분류, 번역 |
-| `tier-standard` | `gemma4-a4b` (ai-llm) | codex-medium | 일반 채팅, RAG |
-| `tier-thinking` | Codex medium | `gemma4-a4b` (ai-llm) | 추론, WPI 보고서 |
 | `embedding` | `embeddinggemma-300m` (ai-embedding) | bge-small-en-v1.5 (RunPod) | 벡터화 |
 | `asr` | Whisper-large-v3-turbo (ai-asr-vllm) | — | 음성 전사 |
 | `diarization` | pyannote community-1 (ai-diarize) | — | 화자 분리 |
 | `ocr` | `gemma4-a4b` vision (ai-llm) | — | 이미지 OCR + 표 |
 
-라우팅 정책: `DEPLOY_MODE=local-gpu`(기본)에서 `tier-simple`은 NPU Gemma 4 E4B를
-우선 호출하고 연결/API 실패 시 GPU Gemma 4 A4B로 fallback한다. 나머지 텍스트 tier와
-OCR은 GPU Gemma 4 A4B를 사용한다. 현재 라우팅은 부하 기반이 아니라 요청 tier 기반이다.
+`model=auto` 요청은 route 순서와 capability를 적용한 뒤 첫 healthy slot을 원자적으로 획득합니다. full 상태면 다른 적격 Provider로 overflow하고, 전 후보가 full이면 Condition에서 최대 30초 기다립니다. health probe와 inference circuit는 분리되며 첫 chunk 이후에는 다른 Provider로 fallback하지 않습니다. 상세 계약은 [`routing-v2.md`](routing-v2.md)를 따릅니다.
 
 > `ai-embedding`은 벡터 생성 전용이다. 별도 cross-encoder 리랭커 서비스는 없으며,
 > 웹 검색은 RRF·키워드 관련성·품질/본문 점수로, 문서 RAG는 키워드 검색과
@@ -1390,7 +1395,7 @@ COMPOSE_FILES="-f docker-compose.yml -f docker-compose.rocr-wsl-pollfix.yml"
 docker compose $COMPOSE_FILES build ai-embedding ai-gateway backend worker
 
 # 32 GiB 공유 UMA에서 교체 중 순간 OOM 방지
-docker compose $COMPOSE_FILES stop ai-gateway backend worker
+docker compose $COMPOSE_FILES stop ai-gateway backend worker agent-worker
 docker compose $COMPOSE_FILES stop ai-llm ai-asr-vllm ai-diarize ai-embedding
 docker compose $COMPOSE_FILES up -d --no-deps --no-build ai-llm
 
@@ -1402,7 +1407,7 @@ curl -f http://localhost:18000/v1/models
 python -X utf8 infra/inference/bench/ocr_smoke.py /path/to/image.jpg
 
 # OCR 검증 통과 후 요청 생산자를 마지막에 재개한다.
-docker compose $COMPOSE_FILES up -d --no-deps ai-gateway backend worker
+docker compose $COMPOSE_FILES up -d --no-deps ai-gateway backend worker agent-worker
 ```
 
 배포 후 `docker compose ps`와 `docker logs ai-llm`에서 모든 추론 서비스의 health,
@@ -1416,16 +1421,18 @@ LLM-first 순서로 기동한다.
 ### 12.6 호출 예시 (chat completion)
 
 ```
-client → ai-gateway POST /v1/chat/completions {model: "tier-thinking", messages: [...]}
+client → ai-gateway POST /v1/chat/completions
+         {model: "auto", routing: {workload: "chat", reasoning: "high",
+                                    execution_scope: "local_only"}, messages: [...]}
    │
-   ▼ routes/chat.py: Codex medium primary
-   │                  └─ API 실패 시 model="gemma4-a4b", base=ai-llm
+   ▼ routes/chat.py → ProviderPool: local GPU primary
+   │                  └─ remote_allowed + overflow/첫 출력 전 장애에만 Codex
    ▼ SSE 스트림 → ai-gateway가 chunk 단위 relay
    │
 client ← ai-gateway SSE 스트림
 ```
 
-> serverless 폴백은 `_handle_serverless()` 함수에서 Codex(`CLIProxy`)로 redirect.
+> serverless 모드의 `auto` primary는 RunPod이며, `high + remote_allowed`이고 첫 출력 전 실패할 때만 Codex로 fallback합니다.
 
 ---
 
@@ -1539,7 +1546,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | LangGraph 그래프 | `backend/app/agents/graph.py` |
 | GraphState | `backend/app/agents/state.py` |
 | WPI 서비스 | `backend/app/services/wpi_service.py` |
-| ai-gateway 클라이언트 | `backend/app/services/litellm_client.py` (히스토리 명칭, ai-gateway HTTP 호출) |
+| ai-gateway 클라이언트 | `backend/app/services/ai_gateway_client.py` |
 | Valkey Stream 소비 | `backend/app/services/stream_consumer.py` (Pub/Sub 이벤트용) |
 
 ### 15.3 AI Agent 핵심 파일
@@ -1558,7 +1565,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | LLM 도구 | `backend/app/agents/tools/llm_client.py` |
 | 웹 검색 도구 | `backend/app/agents/tools/web_search.py` |
 | RAG 검색 도구 | `backend/app/agents/tools/rag_search.py` |
-| Tier 라우터 도구 | `backend/app/agents/tools/model_router.py` |
+| Reasoning 해석 | `backend/app/core/reasoning.py` |
 
 ### 15.4 인프라 핵심 파일 (v1.2.0)
 
@@ -1567,11 +1574,12 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | Docker 서비스 정의 | `docker-compose.yml` |
 | ai-gateway FastAPI 앱 | `infra/ai-gateway/main.py` |
 | ai-gateway 설정 | `infra/ai-gateway/config.py` |
-| 라우팅·tier 매핑 | `infra/ai-gateway/services/routing.py` |
+| Provider 상태·capacity | `infra/ai-gateway/services/provider_pool.py` |
+| Serverless target | `infra/ai-gateway/services/routing.py` |
 | Chat 엔드포인트 | `infra/ai-gateway/routes/chat.py` |
 | Embeddings 엔드포인트 | `infra/ai-gateway/routes/embeddings.py` |
 | Media (ASR/OCR) 엔드포인트 | `infra/ai-gateway/routes/media.py` |
-| Tier ↔ 모델 매핑 | `infra/shared/tier_config.py` |
+| Routing policy | `infra/shared/routing_policy.json` |
 | ai-llm (vLLM) | `infra/inference/llm/` (Dockerfile + WSL shims/MTP patch) |
 | ai-asr-vllm (Whisper) | `docker-compose.yml`의 vLLM 서비스 정의 |
 | ai-diarize (pyannote) | `infra/inference/diarize/` |
@@ -1604,7 +1612,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | 파일 | 비고 |
 |------|------|
 | `docs/archived/architecture-v1.1.0.md` | 2026-02-27 작성, v1.2.0으로 대체 (Provider Manager + LiteLLM 시기) |
-| `docs/archived/architecture-v1.0.1.md` | 2026-02-21 작성, v1.0.0 incremental 갱신 (lemonade-server / LLMTier / model_copy 정리) |
+| `docs/archived/architecture-v1.0.1.md` | 2026-02-21 작성, v1.0.0 incremental 갱신 (lemonade-server / 과거 모델 라우팅 / model_copy 정리) |
 | `docs/archived/architecture-v1.0.0.md` | 2026-02-21 작성, v1.1.0으로 대체 |
 | `docs/archived/architecture-v8.5.md` | 이전 V8 계열 아키텍처 |
 | `docs/archived/architecture-v8.2.md` | V8.2 (LangGraph 도입) |
@@ -1615,13 +1623,13 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 | 용어 | 설명 |
 |------|------|
-| FastFlowLM | Windows NPU LLM 서버 — `tier-simple` 우선 경로, 실패 시 GPU fallback |
+| FastFlowLM | Windows NPU LLM 서버 — `chat/none` 우선 경로, full/unhealthy/첫 출력 전 실패 시 GPU fallback |
 | ai-gateway | 추론 라우터 컨테이너 — LiteLLM/Provider Manager의 후속 (v1.2.0~) |
 | RRF | Reciprocal Rank Fusion — 다중 검색 결과 리랭킹 알고리즘 |
 | pgvector | PostgreSQL 벡터 확장 — 임베딩 유사도 검색 |
 | VAD | Voice Activity Detection — 음성 감지 (침묵 제거) |
 | Diarization | 화자 분리 — 누가 말했는지 구분 |
-| Tier | LLM 성능 티어 — simple(빠름) / thinking(정확) |
+| RoutingProfile | `workload + reasoning + execution_scope`로 구성된 LLM 라우팅 계약 |
 | GraphState | LangGraph 상태 객체 — 노드 간 데이터 공유 |
 | SSE | Server-Sent Events — 서버→클라이언트 단방향 실시간 스트림 |
 | Watchdog | 비정상 파일 상태 감지 및 자동 복구 스케줄러 |

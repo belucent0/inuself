@@ -2,21 +2,14 @@
 
 OpenAI SDK를 사용하여 AI Gateway를 통해 추론 컨테이너로 라우팅됩니다.
 """
-import os
-
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ..core.ai_gateway import get_async_openai_client
 from ..core.logging import logger
-from ..core.llm_tier import LLMTier
+from ..core.reasoning import routing_profile
 
 router = APIRouter(prefix="/api", tags=["chat"])
-
-
-def get_ai_gateway_model() -> str:
-    """현재 채팅에 쓸 tier/모델명 — 환경변수 우선, 기본은 simple tier."""
-    return os.getenv("AI_GATEWAY_MODEL", LLMTier.SIMPLE)
 
 
 @router.post("/chat")
@@ -48,19 +41,21 @@ async def chat_completions(request: Request):
                 "content": content
             })
         
-        ai_gateway_model = get_ai_gateway_model()
         client = get_async_openai_client()
 
         trace_id = request.headers.get("X-Trace-Id", "no-trace-id")
-        logger.info(f"[Chat] Request to AI Gateway: model={ai_gateway_model}, messages_count={len(openai_messages)}, trace_id={trace_id}")
+        logger.info(f"[Chat] Request to AI Gateway: model=auto, messages_count={len(openai_messages)}, trace_id={trace_id}")
 
         async def generate():
             try:
                 response = await client.chat.completions.create(
-                    model=ai_gateway_model,
+                    model="auto",
                     messages=openai_messages,
                     stream=True,
-                    extra_body={"metadata": {"trace_id": trace_id}}
+                    extra_body={
+                        "routing": routing_profile("chat", "none"),
+                        "metadata": {"trace_id": trace_id},
+                    }
                 )
 
                 async for chunk in response:
