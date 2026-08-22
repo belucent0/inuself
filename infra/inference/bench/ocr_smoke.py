@@ -28,7 +28,7 @@ def main() -> None:
     image_path = Path(sys.argv[1])
     prompt = sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_PROMPT
     base_url = "http://localhost:18000/v1/chat/completions"
-    model = "gemma4-12b"
+    model = "gemma4-a4b"
 
     img_bytes = image_path.read_bytes()
     b64 = base64.b64encode(img_bytes).decode()

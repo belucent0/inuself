@@ -40,7 +40,7 @@ flowchart TD
     %% 추론 컨테이너 (ai-* prefix, 모두 ROCm)
     subgraph Inference_Containers [Inference Containers - GPU ROCm gfx1150]
         direction TB
-        AI_LLM[ai-llm vLLM Gemma 4 12B]
+        AI_LLM[ai-llm vLLM Gemma 4 26B A4B]
         AI_ASR[ai-asr-vllm Whisper-large-v3-turbo]
         AI_DIARIZE[ai-diarize pyannote community-1]
         AI_EMBED[ai-embedding EmbeddingGemma 308M]
@@ -89,7 +89,7 @@ flowchart TD
 - **AI Gateway (FastAPI + httpx)**: `RoutingProfile(workload, reasoning, execution_scope)`과 Provider health/circuit/capacity를 기준으로 NPU/GPU/Codex를 선택. `DEPLOY_MODE=serverless`에서는 RunPod/Codex를 사용. 이전의 LiteLLM Proxy + Provider Manager(Host PM2)는 폐기.
 
 ### 2. Worker Layer (Celery)
-- **Agent Worker**: `agent` 큐를 소비해 LangGraph를 실행하고, PostgreSQL에 상태/partial/final을 저장하면서 `events:agent:{message_id}`로 실시간 이벤트 발행. 기본 동시성은 1이며 `AGENT_WORKER_CONCURRENCY`로 조절.
+- **Agent Worker**: `agent` 큐를 소비해 LangGraph를 실행하고, PostgreSQL에 상태/partial/final을 저장하면서 `events:agent:{message_id}`로 실시간 이벤트 발행. 기본 동시성은 4이며 `AGENT_WORKER_CONCURRENCY`로 조절.
 - **OCR Worker**: PDF/이미지 전처리 후 ai-gateway → ai-llm(Gemma 4 vision) 호출.
 - **ASR Worker**: 오디오 파일 변환(FFmpeg) 후 ai-gateway → ai-asr-vllm(Whisper-large-v3-turbo) → 후처리 + 화자분리(ai-diarize pyannote).
 - **LLM Worker**: 요약·구조화 작업, ai-gateway → ai-llm(vLLM Gemma 4) 호출.
@@ -99,11 +99,11 @@ flowchart TD
 
 | 컨테이너 | 모델 | 백엔드 |
 |---------|------|--------|
-| `ai-llm` | Gemma 4 12B | vLLM |
+| `ai-llm` | Gemma 4 26B A4B AWQ INT4 | vLLM |
 | `ai-asr-vllm` | Whisper-large-v3-turbo | vLLM |
 | `ai-diarize` | pyannote community-1 | pyannote-audio (ROCm) |
 | `ai-embedding` | EmbeddingGemma 308M Q4 GGUF | llama.cpp HIP |
-| Windows Host(선택) | `gemma4-it:e2b` | FastFlowLM (Ryzen AI NPU) |
+| Windows Host(선택) | `gemma4-it:e4b` | FastFlowLM (Ryzen AI NPU) |
 
 ### 4. Data Layer
 - **PostgreSQL + pgvector**: 사용자/콘텐츠/대화 영속화 + 벡터 임베딩 인덱스.
@@ -115,6 +115,6 @@ flowchart TD
 - **Codex (CLIProxyAPI)**: `DEPLOY_MODE=serverless` 또는 명시적 fallback 시 OAuth CLI Proxy 경유.
 
 ### 6. 채팅 스트리밍과 복구
-- `POST /api/threads`와 `POST /api/threads/{thread_id}/messages`에 `stream: true`를 보내면 첫 SSE 이벤트로 `accepted`를 받은 뒤 같은 연결에서 토큰을 수신.
-- `accepted` 이후 연결만 끊기면 Frontend가 동일 `message_id`의 GET SSE에 0/1/2/5초(±20% jitter) 간격으로 최대 4회 재연결.
-- Pub/Sub 누락은 PostgreSQL의 5초 partial snapshot과 최종 응답 조회로 복구. `accepted` 이전 POST는 중복 생성 위험 때문에 자동 재시도하지 않음.
+- `POST /api/threads`와 `POST /api/threads/{thread_id}/messages`가 작업 ID JSON을 반환하면 Frontend가 동일 `message_id`의 GET SSE를 즉시 연결.
+- GET SSE가 끊기면 0/1/2/5초(±20% jitter) 간격으로 최대 4회 재연결.
+- Pub/Sub 누락은 PostgreSQL의 5초 partial snapshot과 최종 응답 조회로 복구. 작업 생성 POST는 자동 재시도하지 않음.

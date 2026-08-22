@@ -309,9 +309,45 @@ export async function processSSEStream(
 // API Functions
 // ============================================================
 
+async function relayAgentStream(
+  accepted: AcceptedMessage,
+  mode: string,
+  callbacks: StreamingCallbacks,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  let lastError: Error = new RetryableStreamError('SSE connection lost')
+  for (const delayMs of RECONNECT_DELAYS_MS) {
+    await waitForReconnect(delayMs, abortSignal)
+    try {
+      const stream = await httpClient.getStream(
+        `/threads/${accepted.thread_id}/messages/${accepted.message_id}/stream`,
+        { signal: abortSignal }
+      )
+      await processSSEStream(
+        new Response(stream),
+        mode,
+        {
+          ...callbacks,
+          onError: () => {},
+          onComplete: (message) => callbacks.onComplete({
+            ...message,
+            message_id: accepted.message_id,
+          }),
+        },
+        abortSignal
+      )
+      return
+    } catch (error) {
+      if (isAbortError(error) || !isRetryableConnectionError(error)) throw error
+      lastError = asError(error)
+    }
+  }
+  throw lastError
+}
+
 async function postAgentStream(
   endpoint: string,
-  body: Record<string, unknown>,
+  body: unknown,
   mode: string,
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
@@ -340,40 +376,29 @@ async function postAgentStream(
 
   const acceptedMessage = accepted
   if (!acceptedMessage) throw new TerminalStreamError('Accepted message is missing')
-
-  let lastError: Error = new RetryableStreamError('SSE connection lost')
-  for (const delayMs of RECONNECT_DELAYS_MS) {
-    await waitForReconnect(delayMs, abortSignal)
-    try {
-      const stream = await httpClient.getStream(
-        `/threads/${acceptedMessage.thread_id}/messages/${acceptedMessage.message_id}/stream`,
-        { signal: abortSignal }
-      )
-      await processSSEStream(
-        new Response(stream),
-        mode,
-        {
-          ...quietCallbacks,
-          onComplete: (message) => callbacks.onComplete({
-            ...message,
-            message_id: acceptedMessage.message_id,
-          }),
-        },
-        abortSignal
-      )
-      return
-    } catch (error) {
-      if (isAbortError(error)) throw error
-      if (!isRetryableConnectionError(error)) {
-        callbacks.onError(asError(error))
-        throw error
-      }
-      lastError = asError(error)
-    }
+  try {
+    await relayAgentStream(acceptedMessage, mode, quietCallbacks, abortSignal)
+  } catch (error) {
+    if (!isAbortError(error)) callbacks.onError(asError(error))
+    throw error
   }
+}
 
-  callbacks.onError(lastError)
-  throw lastError
+async function postAgentJob(
+  endpoint: string,
+  body: unknown,
+  mode: string,
+  callbacks: StreamingCallbacks,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  try {
+    const accepted = await httpClient.post<AcceptedMessage>(endpoint, body, { signal: abortSignal })
+    if (callbacks.onAccepted) invokeCallback(() => callbacks.onAccepted?.(accepted))
+    await relayAgentStream(accepted, mode, callbacks, abortSignal)
+  } catch (error) {
+    if (!isAbortError(error)) callbacks.onError(asError(error))
+    throw error
+  }
 }
 
 export async function createThreadStream(
@@ -381,7 +406,7 @@ export async function createThreadStream(
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
-  await postAgentStream('/threads', { ...request, stream: true }, request.mode, callbacks, abortSignal)
+  await postAgentJob('/threads', request, request.mode, callbacks, abortSignal)
 }
 
 export async function sendMessageStream(
@@ -390,9 +415,9 @@ export async function sendMessageStream(
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
-  await postAgentStream(
+  await postAgentJob(
     `/threads/${threadId}/messages`,
-    { ...request, stream: true },
+    request,
     request.mode,
     callbacks,
     abortSignal

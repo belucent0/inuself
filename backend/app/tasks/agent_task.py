@@ -249,7 +249,7 @@ async def run_agent_message(
             raise AgentMessageBusy(assistant_message_id)
 
         # Delivery is now protected by the message lock. Removing the handoff
-        # marker lets the watchdog recover a worker lost before status advances.
+        # marker lets the dispatch reconciler recover a worker lost before status advances.
         await redis.delete(f"{AGENT_DISPATCH_KEY_PREFIX}{assistant_message_id}")
         lock_lost = asyncio.Event()
         heartbeat = asyncio.create_task(_refresh_lock(lock, lock_lost))

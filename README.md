@@ -70,7 +70,7 @@ Valkey: Celery broker·실시간 Pub/Sub·락/캐시 (응답 토큰 영속 저�
 - AI 채팅 요청·SSE 복구 흐름 → [`docs/workflow-ai-chat.md`](docs/workflow-ai-chat.md)
 - LLM RoutingProfile 운영 계약 → [`docs/routing-v2.md`](docs/routing-v2.md)
 - NPU/GPU/Codex capacity 실증 → [`docs/benchmarks/routing-npu-gpu-overflow.md`](docs/benchmarks/routing-npu-gpu-overflow.md)
-- Gemma 4 서빙·벤치마크 → [`docs/benchmarks/gemma4-12b-vllm-mtp.md`](docs/benchmarks/gemma4-12b-vllm-mtp.md)
+- 과거 Gemma 4 12B 벤치마크 → [`docs/benchmarks/gemma4-12b-vllm-mtp.md`](docs/benchmarks/gemma4-12b-vllm-mtp.md)
 - GPU/ROCm 설치 가이드 → [`docs/archived/README-legacy.md`](docs/archived/README-legacy.md)
 
 ---

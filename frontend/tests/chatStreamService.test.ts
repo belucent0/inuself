@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 
 import {
+  createThreadStream,
   processSSEStream,
   regenerateStream,
   sendMessageStream,
   type StreamingCallbacks,
 } from '../src/shared/services/chatStreamService'
-import { httpClient } from '../src/shared/services/api/httpClient'
 import { regenerateSummaryBlock } from '../src/shared/services/endpoints/contents'
 
 const events = [
@@ -105,10 +105,7 @@ globalThis.fetch = async (input, init) => {
   reconnectAuthorization.push(new Headers(init?.headers).get('Authorization'))
   if (init?.method === 'POST') {
     sendBody = JSON.parse(String(init?.body))
-    return new Response(
-      `data: ${JSON.stringify({ type: 'accepted', data: { thread_id: 'thread', message_id: 'answer', user_message_id: 'question' } })}\n\n` +
-      `data: ${JSON.stringify({ type: 'error', data: { code: 'relay_unavailable', message: 'retry', retryable: true } })}\n\n`
-    )
+    return Response.json({ thread_id: 'thread', message_id: 'answer', user_message_id: 'question' })
   }
   return new Response(
     `data: ${JSON.stringify({ type: 'partial_restore', data: 'recovered' })}\n\n` +
@@ -131,7 +128,6 @@ assert.deepEqual(sendBody, {
   mode: 'simple',
   reasoning: 'none',
   allow_remote: false,
-  stream: true,
 })
 assert.deepEqual(reconnectCredentials, ['same-origin', 'same-origin'])
 assert.deepEqual(reconnectAuthorization, [null, null])
@@ -141,14 +137,40 @@ assert.equal(callbackState.errors, 0)
 assert.equal(callbackState.content, 'final')
 assert.equal(callbackState.messageId, 'answer')
 
+let createBody: unknown
+const createRequests: string[] = []
+globalThis.fetch = async (input, init) => {
+  createRequests.push(`${init?.method || 'GET'} ${String(input)}`)
+  if (init?.method === 'POST') {
+    createBody = JSON.parse(String(init?.body))
+    return Response.json({ thread_id: 'created', message_id: 'answer', user_message_id: 'question' })
+  }
+  return new Response(`data: ${JSON.stringify({ type: 'done', data: { content: 'created' } })}\n\n`)
+}
+await createThreadStream(
+  { query: 'new', mode: 'simple', reasoning: 'low', allow_remote: false },
+  reconnectCallbacks
+)
+assert.deepEqual(createBody, {
+  query: 'new',
+  mode: 'simple',
+  reasoning: 'low',
+  allow_remote: false,
+})
+assert.deepEqual(createRequests, [
+  'POST /api/threads',
+  'GET /api/threads/created/messages/answer/stream',
+])
+
 let eofFetches = 0
 let eofCompleted = 0
 globalThis.fetch = async (_input, init) => {
   eofFetches += 1
   if (init?.method === 'POST') {
-    return new Response(
-      `data: ${JSON.stringify({ type: 'accepted', data: { thread_id: 'thread', message_id: 'eof', user_message_id: 'question' } })}\n\n`
-    )
+    return Response.json({ thread_id: 'thread', message_id: 'eof', user_message_id: 'question' })
+  }
+  if (eofFetches === 2) {
+    return new Response(`data: ${JSON.stringify({ type: 'token', data: 'partial' })}\n\n`)
   }
   return new Response(
     `data: ${JSON.stringify({ type: 'done', data: { content: 'recovered after eof' } })}\n\n`
@@ -163,15 +185,17 @@ await sendMessageStream(
     onComplete: () => { eofCompleted += 1 },
   }
 )
-assert.equal(eofFetches, 2)
+assert.equal(eofFetches, 3)
 assert.equal(eofCompleted, 1)
 
 let terminalErrorCallbacks = 0
 let terminalFetches = 0
-globalThis.fetch = async () => {
+globalThis.fetch = async (_input, init) => {
   terminalFetches += 1
+  if (init?.method === 'POST') {
+    return Response.json({ thread_id: 'thread', message_id: 'failed', user_message_id: 'question' })
+  }
   return new Response(
-    `data: ${JSON.stringify({ type: 'accepted', data: { thread_id: 'thread', message_id: 'failed', user_message_id: 'question' } })}\n\n` +
     `data: ${JSON.stringify({ type: 'error', data: 'worker failed' })}\n\n`
   )
 }
@@ -187,14 +211,16 @@ await assert.rejects(
   ),
   /worker failed/
 )
-assert.equal(terminalFetches, 1)
+assert.equal(terminalFetches, 2)
 assert.equal(terminalErrorCallbacks, 1)
 
 let callbackErrorFetches = 0
-globalThis.fetch = async () => {
+globalThis.fetch = async (_input, init) => {
   callbackErrorFetches += 1
+  if (init?.method === 'POST') {
+    return Response.json({ thread_id: 'thread', message_id: 'callback-error', user_message_id: 'question' })
+  }
   return new Response(
-    `data: ${JSON.stringify({ type: 'accepted', data: { thread_id: 'thread', message_id: 'callback-error', user_message_id: 'question' } })}\n\n` +
     `data: ${JSON.stringify({ type: 'done', data: { content: 'done' } })}\n\n`
   )
 }
@@ -210,15 +236,13 @@ await assert.rejects(
   ),
   /UI callback failed/
 )
-assert.equal(callbackErrorFetches, 1)
+assert.equal(callbackErrorFetches, 2)
 
 let unacceptedFetches = 0
 let unacceptedErrors = 0
 globalThis.fetch = async () => {
   unacceptedFetches += 1
-  return new Response(
-    `data: ${JSON.stringify({ type: 'token', data: 'not accepted' })}\n\n`
-  )
+  return new Response('', { status: 500, statusText: 'Unavailable' })
 }
 
 await assert.rejects(
@@ -230,7 +254,7 @@ await assert.rejects(
       onError: () => { unacceptedErrors += 1 },
     }
   ),
-  /ended before done/
+  /500/
 )
 assert.equal(unacceptedFetches, 1)
 assert.equal(unacceptedErrors, 1)
@@ -241,10 +265,7 @@ let abortErrors = 0
 globalThis.fetch = async (_input, init) => {
   abortFetches += 1
   if (init?.method === 'POST') {
-    return new Response(
-      `data: ${JSON.stringify({ type: 'accepted', data: { thread_id: 'thread', message_id: 'abort', user_message_id: 'question' } })}\n\n` +
-      `data: ${JSON.stringify({ type: 'error', data: { code: 'relay_unavailable', message: 'retry', retryable: true } })}\n\n`
-    )
+    return Response.json({ thread_id: 'thread', message_id: 'abort', user_message_id: 'question' })
   }
   setTimeout(() => abortController.abort(), 10)
   return new Response('', { status: 503, statusText: 'Unavailable' })
@@ -280,10 +301,7 @@ let exhaustedErrors = 0
 globalThis.fetch = async (_input, init) => {
   exhaustedFetches += 1
   if (init?.method === 'POST') {
-    return new Response(
-      `data: ${JSON.stringify({ type: 'accepted', data: { thread_id: 'thread', message_id: 'exhausted', user_message_id: 'question' } })}\n\n` +
-      `data: ${JSON.stringify({ type: 'error', data: { code: 'relay_unavailable', message: 'retry', retryable: true } })}\n\n`
-    )
+    return Response.json({ thread_id: 'thread', message_id: 'exhausted', user_message_id: 'question' })
   }
   return new Response('', { status: 503, statusText: 'Unavailable' })
 }

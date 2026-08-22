@@ -322,7 +322,7 @@ export function ChatPage() {
         messages: [...state.messages, tempUserMessage],
       }))
 
-      // 2. POST 응답에서 바로 SSE를 소비한다. GET stream은 재접속 경로로 유지한다.
+      // 2. POST로 작업 ID를 받은 뒤 GET SSE로 Worker 응답을 받는다.
       const store = useChatStore.getState()
       const abortController = store._startStreaming()
       await sendMessageStream(

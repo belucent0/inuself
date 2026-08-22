@@ -12,11 +12,14 @@ from ..core.logging import logger
 from ..core.redis import get_redis_client
 from ..db.models import AiMessage
 from ..db.session import async_session_factory
-from ..utils.task_queue_adapter import ACTIVE_JOB_TTL, get_task_queue
+from ..utils.task_queue_adapter import (
+    ACTIVE_JOB_TTL,
+    AGENT_DISPATCH_KEY_PREFIX,
+    get_task_queue,
+)
 
 
 AGENT_JOB_METADATA_KEY = "_agent_job"
-AGENT_DISPATCH_KEY_PREFIX = "agent_dispatch:"
 AGENT_DISPATCH_CLAIM_SECONDS = 60
 AGENT_RECONCILE_INTERVAL_SECONDS = 5
 
@@ -68,8 +71,8 @@ async def reconcile_agent_jobs_once() -> int:
                 AiMessage.metadata_.has_key(AGENT_JOB_METADATA_KEY),  # type: ignore[attr-defined]
             )
             .order_by(AiMessage.created_at)
-            .limit(100)
         )
+        # Scan the full queued set so marker-held rows cannot starve later lost jobs.
         messages = list(result.scalars().all())
 
     dispatched = 0

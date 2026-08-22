@@ -1,9 +1,15 @@
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from app.controllers import ai_chat_controller
 from app.services import agent_dispatcher
+from app.utils.task_queue_adapter import (
+    ACTIVE_JOB_TTL,
+    AGENT_DISPATCH_KEY_PREFIX,
+    CeleryAdapter,
+)
 
 
 @pytest.mark.asyncio
@@ -105,4 +111,67 @@ async def test_successful_publish_extends_dispatch_claim(monkeypatch):
 
     assert dispatched is True
     assert [call[0] for call in calls] == ["set", "publish", "eval"]
+    assert calls[0][1][0] == f"{AGENT_DISPATCH_KEY_PREFIX}assistant-message"
     assert calls[-1][1][-1] == agent_dispatcher.ACTIVE_JOB_TTL
+
+
+def test_agent_enqueue_records_worker_visible_dispatch_marker():
+    marker = []
+    adapter = CeleryAdapter.__new__(CeleryAdapter)
+    adapter.celery = SimpleNamespace(
+        send_task=lambda *_args, **_kwargs: SimpleNamespace(id="task-id")
+    )
+    adapter.redis = SimpleNamespace(
+        setex=lambda key, ttl, value: marker.append((key, ttl, value))
+    )
+
+    result = adapter.enqueue_agent_job(
+        thread_id="thread",
+        user_id="user",
+        user_message_id="question",
+        assistant_message_id="answer",
+    )
+
+    assert result == "task-id"
+    assert marker == [
+        (f"{AGENT_DISPATCH_KEY_PREFIX}answer", ACTIVE_JOB_TTL, "task-id")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_scans_beyond_first_hundred_marker_held_jobs(monkeypatch):
+    messages = [
+        SimpleNamespace(
+            id=f"message-{index}",
+            metadata_={
+                "_agent_job": {
+                    "thread_id": "thread",
+                    "user_id": "user",
+                    "user_message_id": "question",
+                }
+            },
+        )
+        for index in range(101)
+    ]
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, statement):
+            limit = getattr(statement._limit_clause, "value", None)
+            selected = messages if limit is None else messages[:limit]
+            return SimpleNamespace(
+                scalars=lambda: SimpleNamespace(all=lambda: selected)
+            )
+
+    async def dispatch(message_id, _job):
+        return message_id == "message-100"
+
+    monkeypatch.setattr(agent_dispatcher, "async_session_factory", Session)
+    monkeypatch.setattr(agent_dispatcher, "dispatch_agent_job", dispatch)
+
+    assert await agent_dispatcher.reconcile_agent_jobs_once() == 1

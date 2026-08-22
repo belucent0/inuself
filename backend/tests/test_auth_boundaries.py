@@ -15,6 +15,7 @@ from app.controllers import (
     media_controller,
 )
 from app.core import auth
+from app.core.config import get_settings
 
 
 @pytest.fixture(scope="module")
@@ -91,11 +92,16 @@ async def test_bearer_and_query_tokens_do_not_authenticate_without_cookie():
 
 
 def test_origin_boundary_rejects_foreign_unsafe_requests_only(app_client):
+    allowed_origin = next(
+        origin.strip()
+        for origin in get_settings().cors_origins.split(",")
+        if origin.strip()
+    )
     foreign = app_client.post(
         "/api/auth/logout", headers={"Origin": "https://evil.example"}
     )
     allowed = app_client.post(
-        "/api/auth/logout", headers={"Origin": "http://localhost:5173"}
+        "/api/auth/logout", headers={"Origin": allowed_origin}
     )
     absent = app_client.post("/api/auth/logout")
 

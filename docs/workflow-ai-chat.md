@@ -7,12 +7,13 @@
 ```text
 Browser
   │ POST /api/threads 또는 /api/threads/{thread_id}/messages
-  │ { query, mode, stream: true }
+  │ { query, mode, reasoning, allow_remote, context? }
   ▼
 Backend (FastAPI)
   ├─ 사용자 메시지와 queued AI 메시지를 PostgreSQL에 commit
   ├─ Celery `agent` 큐에 message_id enqueue
-  └─ `events:agent:{message_id}` subscribe 후 accepted SSE 전송
+  └─ {thread_id, message_id, user_message_id} JSON 응답
+  ▲ GET /api/threads/{thread_id}/messages/{message_id}/stream
   ▼
 Agent Worker
   ├─ PostgreSQL에서 요청과 대화 history 로드
@@ -28,12 +29,12 @@ Backend는 LangGraph를 요청 프로세스에서 직접 실행하지 않습니�
 
 ## API 계약
 
-| 요청 | `stream: false` | `stream: true` |
-|------|-----------------|----------------|
-| `POST /api/threads` | `{thread_id, message_id, user_message_id}` JSON | 같은 ID를 `accepted`로 먼저 보내고 inline SSE 계속 |
-| `POST /api/threads/{thread_id}/messages` | queued JSON | `accepted`부터 시작하는 inline SSE |
-| `POST /api/threads/{thread_id}/regenerate` | 해당 없음 | `accepted`부터 시작하는 SSE |
-| `GET /api/threads/{thread_id}/messages/{message_id}/stream` | 해당 없음 | 기존 작업 재접속/복구 SSE |
+| 요청 | 응답 |
+|------|------|
+| `POST /api/threads` | `{thread_id, message_id, user_message_id}` JSON |
+| `POST /api/threads/{thread_id}/messages` | `{thread_id, message_id, user_message_id}` JSON |
+| `POST /api/threads/{thread_id}/regenerate` | `accepted`부터 시작하는 SSE |
+| `GET /api/threads/{thread_id}/messages/{message_id}/stream` | 기존 작업 전달/재접속/복구 SSE |
 
 `accepted` 데이터:
 
@@ -63,29 +64,27 @@ Backend는 LangGraph를 요청 프로세스에서 직접 실행하지 않습니�
 
 Frontend의 `chatStreamService.ts`가 Fetch `ReadableStream`을 처리합니다.
 
-1. POST SSE에서 `accepted`를 받은 뒤 연결이 끊기면 동일 `message_id`의 GET SSE로 전환합니다.
+1. 생성/추가 POST의 JSON에서 작업 ID를 받은 뒤 동일 `message_id`의 GET SSE를 즉시 엽니다.
 2. GET은 0초, 1초, 2초, 5초에 시도하며 1/2/5초에는 ±20% jitter를 적용합니다.
 3. 최대 4회 실패하면 한 번만 최종 오류를 표시합니다.
-4. GET 401은 인증 토큰을 한 번 갱신하고 동일 GET을 한 번 재요청합니다.
+4. GET 오류 뒤 세션을 재확인하고, 401이면 만료된 브라우저 로그인을 종료합니다. 5xx/network는 로그인 상태를 유지합니다.
 5. 페이지 이탈이나 content 변경 시 AbortController로 POST/GET/대기 timer를 함께 취소합니다.
 
 다음은 자동 재시도하지 않습니다.
 
-- `accepted` 이전 POST 실패: 요청 생성 여부가 불명확해 중복 메시지 위험이 있음
+- 작업 생성 POST 실패
 - Worker가 저장한 `failed`/`cancelled` 및 terminal `error`
 - 4xx, UI callback 오류, 사용자 abort
 
 사용자 abort는 브라우저의 SSE 연결과 재접속만 중단합니다. 현재 별도 Agent 취소 API는 없으므로 Worker 작업은 완료될 때까지 계속됩니다.
 
-POST 자체의 안전한 자동 재시도는 `Idempotency-Key`를 도입한 뒤 추가합니다.
-
 ## 동시성과 장애 복구
 
-- `agent-worker`의 기본 동시성은 1이며 `AGENT_WORKER_CONCURRENCY`로 조절합니다.
+- `agent-worker`의 기본 동시성은 4이며 `AGENT_WORKER_CONCURRENCY`로 조절합니다.
 - `worker_prefetch_multiplier=1`로 한 child가 앞선 작업을 과도하게 선점하지 않습니다.
 - `active_agent_thread:{thread_id}`로 한 thread에는 한 응답만 실행합니다.
 - `lock:agent:message:{message_id}`로 Celery redelivery의 중복 실행을 막습니다.
-- DB commit 후 broker enqueue가 실패한 queued 메시지는 Watchdog이 dispatch marker를 확인해 다시 enqueue합니다.
+- DB commit 후 broker enqueue가 실패한 queued 메시지는 5초 주기 dispatch reconciler가 marker를 확인해 다시 enqueue합니다.
 
 ## 추론 라우팅
 
@@ -109,6 +108,6 @@ FastFlowLM은 Compose 외부 프로세스입니다. `NPU_LLM_BASE_URL`이 비어
 | 요청 영속화·enqueue·SSE relay | `backend/app/controllers/ai_chat_controller.py` |
 | Agent Celery 설정 | `backend/app/agent_celery.py` |
 | LangGraph 실행·Pub/Sub·DB 저장 | `backend/app/tasks/agent_task.py` |
-| queued handoff 복구 | `backend/app/services/agent_job_recovery.py` |
+| queued handoff 복구 | `backend/app/services/agent_dispatcher.py` |
 | Frontend SSE 파싱·재접속 | `frontend/src/shared/services/chatStreamService.ts` |
 | NPU/GPU 라우팅 | `infra/ai-gateway/routes/chat.py` |

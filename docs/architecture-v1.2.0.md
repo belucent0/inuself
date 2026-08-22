@@ -16,7 +16,7 @@
 | v1.0.1 | 2026-02-21 | lemonade-server / LLMTier 상수 / model_copy 정리 (incremental) |
 | v1.1.0 | 2026-02-27 | Frontend 상세, Backend 레이어, AI Agent 전체, WPI, DB 스키마, API 레퍼런스, Valkey 구조 추가 |
 | **v1.2.0** | 2026-05-04 | **현행.** Provider Manager(Redis Stream + Host PM2 프로세스) · LiteLLM 프록시 · FLM NPU 통합 · 옛 추론 Stream(`stream:chat:requests` 등) 모두 폐기. ai-gateway가 추론 컨테이너(`ai-llm`/`ai-asr-vllm`/`ai-diarize`/`ai-embedding`)를 httpx로 직접 호출. WSL ROCm 컨테이너 운영으로 통일. backend/worker 코드의 `litellm` 명칭도 `ai_gateway`로 일소(PR #124, #127). |
-| 운영 갱신 | 2026-08-22 | LangGraph를 전용 Agent Worker로 분리. 일반 메시지도 POST SSE 지원. `accepted` 이후 GET SSE 자동 복구 추가. `RoutingProfile`기반 NPU/GPU/Codex health·capacity 라우팅 추가. |
+| 운영 갱신 | 2026-08-22 | LangGraph를 전용 Agent Worker로 분리. POST로 작업 ID를 받은 뒤 GET SSE로 응답을 복구. `RoutingProfile` 기반 NPU/GPU/Codex health·capacity 라우팅과 서버 세션 인증 추가. |
 
 ---
 
@@ -88,7 +88,7 @@ docker-compose.yml
 ├── ai-gateway     :4000       — FastAPI 추론 라우터 (httpx + AsyncOpenAI)
 ├── cli-proxy-api  :8317/:1455 — OAuth CLI Proxy (Codex 접근, serverless 폴백)
 │
-├── ai-llm         :8000       — vLLM 0.26 Gemma 4 12B W4A16 CT + MTP k=1 (ROCm)
+├── ai-llm         :8000       — vLLM 0.26 Gemma 4 26B A4B AWQ INT4 + MTP k=4 (ROCm)
 ├── ai-asr-vllm    :8000       — vLLM Whisper-large-v3-turbo
 ├── ai-diarize     :8003       — pyannote community-1 (ROCm)
 ├── ai-translate   :8000       — vLLM EXAONE 4.0 1.2B
@@ -292,20 +292,19 @@ interface ChatStore {
 Frontend: chatStreamService.ts
 │
 ├── POST /api/threads 또는 /api/threads/{id}/messages
-│      body: { ..., stream: true }
-│      ├── accepted  → thread_id/message_id 확보
-│      ├── status/thinking_step/query_analysis/search_queries/sources
-│      ├── token/content/partial_restore
-│      └── done/error
+│      body: { query, mode, reasoning, allow_remote, context? }
+│      └── JSON { thread_id, message_id, user_message_id }
 │
-└── accepted 이후 POST SSE가 끊긴 경우에만
+└── 작업 ID를 받은 즉시
        GET /api/threads/{id}/messages/{msgId}/stream
-       └── 같은 Worker 작업에 재접속하고 DB snapshot/final로 누락 보정
+       ├── status/thinking_step/query_analysis/search_queries/sources
+       ├── token/content/partial_restore
+       └── done/error; DB snapshot/final로 누락 보정
 
 재연결 전략:
 - Fetch ReadableStream 기반. GET 재접속은 0/1/2/5초 ±20% jitter, 최대 4회
-- `accepted` 이전 POST, Worker의 terminal error, 4xx, 사용자 abort는 자동 재시도하지 않음
-- GET 401은 토큰을 한 번 갱신한 뒤 동일 GET을 한 번 재요청
+- 작업 생성 POST, Worker의 terminal error, 4xx, 사용자 abort는 자동 재시도하지 않음
+- GET 401은 세션을 재확인해 만료된 브라우저 로그인을 종료
 ```
 
 ### 2.5 주요 컴포넌트 계층
@@ -528,7 +527,7 @@ class GraphState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     query: str
     mode: AIMode
-    selected_model: str | None
+    selected_reasoning: Literal["none", "low", "medium", "high"]
     intent_confidence: float
     requires_clarification: bool
     clarification_question: str | None
@@ -792,12 +791,13 @@ Valkey PUBLISH "events:file_progress:{file_id}"
 ```
 Browser
   │ POST /api/threads 또는 /api/threads/{id}/messages
-  │ {query, mode, stream: true}
+  │ {query, mode, reasoning, allow_remote, context?}
   ▼
 Backend
   ├─ user/assistant(queued) 메시지 PostgreSQL commit
   ├─ Valkey Celery `agent` 큐 enqueue
-  └─ `events:agent:{message_id}` subscribe 후 accepted SSE
+  └─ {thread_id, message_id, user_message_id} JSON 응답
+  ▲ GET /api/threads/{id}/messages/{message_id}/stream
   ▼
 Agent Worker
   ├─ LangGraph 실행
@@ -825,12 +825,12 @@ Agent Worker가 `ai_message.status`를 저장하고 Pub/Sub 이벤트를 발행�
 
 ### 8.3 SSE 재연결 처리
 
-1. POST SSE의 `accepted` 이벤트로 `thread_id`, `message_id`, `user_message_id`를 확정합니다.
-2. 그 뒤 relay 연결이 끊기거나 `relay_unavailable`이 오면 동일 메시지의 GET SSE로 전환합니다.
+1. 생성/추가 POST의 JSON 응답으로 `thread_id`, `message_id`, `user_message_id`를 확정합니다.
+2. 동일 메시지의 GET SSE를 즉시 열고, 연결이 끊기거나 `relay_unavailable`이 오면 재접속합니다.
 3. GET은 0/1/2/5초(각 ±20% jitter) 간격으로 최대 4회 시도합니다.
 4. Backend는 Pub/Sub을 다시 구독하고 PostgreSQL의 상태, partial snapshot, 최종 응답으로 누락 이벤트를 보정합니다.
 
-`accepted` 이전에는 요청이 생성됐는지 확정할 수 없으므로 POST를 자동 재시도하지 않습니다. Worker terminal error, 4xx, callback error, 사용자 abort도 재시도하지 않습니다. POST 자체의 안전한 자동 재시도는 향후 `Idempotency-Key`를 도입할 때 추가합니다.
+작업 생성 POST, Worker terminal error, 4xx, callback error, 사용자 abort는 자동 재시도하지 않습니다.
 
 ### 8.4 콘텐츠 기반 채팅
 
@@ -1120,14 +1120,14 @@ Bearer 인증, query-string access token은 제공하지 않는다. unsafe metho
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | GET | `/` | 스레드 목록 |
-| POST | `/` | 새 스레드 생성. `stream: false`는 queued JSON, `stream: true`는 `accepted`부터 시작하는 SSE |
+| POST | `/` | 새 스레드와 queued 메시지 생성 후 작업 ID JSON 반환 |
 | GET | `/{thread_id}` | 스레드 상세 |
 | PATCH | `/{thread_id}` | 스레드 수정 (제목/아카이브) |
 | PATCH | `/{thread_id}/metadata` | 메타데이터 수정 |
 | DELETE | `/{thread_id}` | 스레드 삭제 |
 | POST | `/bulk-delete` | 다중 스레드 삭제 |
-| POST | `/{thread_id}/messages` | 메시지 전송. `stream: false`는 queued JSON, `stream: true`는 inline SSE |
-| GET | `/{thread_id}/messages/{message_id}/stream` | 기존 Agent 작업 SSE 재접속/복구 |
+| POST | `/{thread_id}/messages` | queued 메시지 생성 후 작업 ID JSON 반환 |
+| GET | `/{thread_id}/messages/{message_id}/stream` | Agent 작업 SSE 전달/재접속/복구 |
 | POST | `/{thread_id}/regenerate` | 마지막 응답 재생성 SSE |
 
 **Agent SSE 이벤트:** `accepted`, `status`, `thinking_step`, `query_analysis`, `search_queries`, `sources`, `token`, `content`, `partial_restore`, `done`, `error`
@@ -1199,10 +1199,10 @@ AI Agent는 같은 Backend 이미지를 사용하는 별도 Celery 앱으로 실
 
 ```bash
 celery -A app.agent_celery:celery_app worker --loglevel=info \
-  -Q agent -c ${AGENT_WORKER_CONCURRENCY:-1}
+  -Q agent -c ${AGENT_WORKER_CONCURRENCY:-4}
 ```
 
-`worker_prefetch_multiplier=1`, late ack, worker-loss reject를 사용합니다. 메시지별 Redis lock과 thread별 active slot으로 중복 실행과 같은 thread의 동시 응답 생성을 막습니다. DB commit 뒤 broker handoff가 실패한 queued 메시지는 watchdog이 다시 enqueue합니다.
+`worker_prefetch_multiplier=1`, late ack, worker-loss reject를 사용합니다. 메시지별 Redis lock과 thread별 active slot으로 중복 실행과 같은 thread의 동시 응답 생성을 막습니다. DB commit 뒤 broker handoff가 실패한 queued 메시지는 5초 주기 dispatch reconciler가 다시 enqueue합니다.
 
 **실행 명령:**
 ```bash
@@ -1349,7 +1349,7 @@ Media/embedding 경로는 RoutingProfile 대상이 아니며 기존 전용 라�
 
 | 컨테이너 | 이미지/베이스 | GPU 사용 | 모델 | 컨텍스트 |
 |---------|--------------|---------|------|---------|
-| `ai-llm` | `vllm/vllm-openai-rocm:v0.26.0` | gfx1150 | Gemma 4 12B W4A16 CT + MTP k=1 | 16384 |
+| `ai-llm` | `vllm/vllm-openai-rocm:v0.26.0` | gfx1150 | Gemma 4 26B A4B AWQ INT4 + MTP k=4 | 32768 |
 | `ai-asr-vllm` | `ai-llm-gemma4:0.26.0` (vLLM ROCm 공용 이미지) | gfx1150 | Whisper-large-v3-turbo | — |
 | `ai-diarize` | `pyannote-audio` (custom ROCm build) | gfx1150 | community-1 | — |
 | `ai-ocr` (legacy profile) | `llama.cpp` (HIP build) | gfx1150 | dots.ocr Q8 GGUF | 8192 |
@@ -1363,8 +1363,8 @@ Media/embedding 경로는 RoutingProfile 대상이 아니며 기존 전용 라�
 ### 12.5 ai-llm 서빙 체크리스트
 
 - Hugging Face에서 target/assistant 모델 사용 조건에 동의하고 `.env`에 `HF_TOKEN`을 설정한다. 이미 캐시된 호스트에서도 clean deploy를 위해 유지한다.
-- WSL 메모리는 32 GiB로 제한한다. `ai-llm`은 모델+MTP 약 8.89 GiB와 고정 4 GiB KV cache를 사용하며, `gpu_memory_utilization`은 사용하지 않는다.
-- 운영 설정은 `max-model-len=16384`, `max-num-seqs=1`, image=1, video/audio=0이다. 멀티모달은 이미지 OCR만 활성화한다.
+- WSL 메모리는 32 GiB로 제한한다. `ai-llm`은 모델+MTP 약 8.89 GiB와 고정 3 GiB KV cache를 사용하며, `gpu_memory_utilization`은 사용하지 않는다.
+- 운영 설정은 `max-model-len=32768`, `max-num-seqs=4`, image=1, video/audio=0이다. 멀티모달은 이미지 OCR만 활성화한다.
 - cold start는 약 4분, 첫 OCR은 ROCm Triton JIT 때문에 약 45~50초까지 걸릴 수 있다.
 - 로그의 `TRITON_ATTN`/Triton JIT는 vLLM 내부 ROCm 커널이다. 별도 NVIDIA Triton Inference Server는 PoC 후 채택하지 않았으며 운영 서비스에 없다.
 
@@ -1437,7 +1437,7 @@ client ← ai-gateway SSE 스트림
 | `job:{job_id}` | 86,400s (24시간) | 작업 임시 데이터 |
 | `worker:{device}:active` | 3,600s (1시간) | GPU 동시성 세마포어 |
 | `active_agent_thread:{thread_id}` | 7,200s | thread별 동시 Agent 실행 방지 |
-| `dispatched_agent_message:{message_id}` | 7,200s | broker handoff 확인/Watchdog 복구 판단 |
+| `dispatched_agent_message:{message_id}` | 7,200s | broker handoff 확인/5초 dispatch reconciler 중복 방지 |
 | `auth:session:{sha256}` | idle 12시간, absolute 14일 이내 | opaque 브라우저 세션 record |
 | `auth:user-session-version:{user_id}` | 만료 없음 | logout-all generation |
 | `auth:login-failure:{sha256(login_id)}` | 300s | 로그인 실패 fixed window |
@@ -1533,7 +1533,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | Agent Celery 앱 | `backend/app/agent_celery.py` |
 | Agent Worker task | `backend/app/tasks/agent_task.py` |
 | Agent 작업 handoff/키 상수 | `backend/app/utils/task_queue_adapter.py` |
-| queued 작업 Watchdog 복구 | `backend/app/services/agent_job_recovery.py` |
+| queued 작업 dispatch 복구 | `backend/app/services/agent_dispatcher.py` |
 | LangGraph 그래프 | `backend/app/agents/graph.py` |
 | GraphState | `backend/app/agents/state.py` |
 | WPI 서비스 | `backend/app/services/wpi_service.py` |
