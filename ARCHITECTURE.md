@@ -7,12 +7,11 @@
 flowchart TD
     %% 사용자 및 프론트엔드
     User([User]) -->|Browser| Frontend[Frontend Vite + React]
-    Frontend -->|HTTP / SSE| Nginx[Nginx Proxy]
+    Frontend -->|HTTP/SSE| Nginx[Nginx Proxy]
 
     %% 백엔드 및 코어 서비스
     subgraph Core_Services [Core Services]
         Nginx -->|/api| Backend[Backend API FastAPI BFF]
-        Nginx -->|/socket.io| Backend
         Backend -->|일부 동기 추론| AIGW[AI Gateway FastAPI]
     end
 
