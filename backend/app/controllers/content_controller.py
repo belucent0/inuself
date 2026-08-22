@@ -12,7 +12,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.session import get_session
-from ..core.auth import get_current_user_id
+from ..core.auth import get_current_user_id, require_admin
 from ..schemas.content import (
     BulkDeleteRequest,
     BulkDeleteResponse,
@@ -276,7 +276,10 @@ async def upload_from_youtube(
 
 
 @router.delete("/queued", tags=["contents"])
-async def delete_queued_contents(service: ContentService = Depends(get_service)):
+async def delete_queued_contents(
+    _admin=Depends(require_admin),
+    service: ContentService = Depends(get_service),
+):
     """QUEUED 상태인 모든 콘텐츠 삭제."""
     try:
         count = await service.delete_queued_contents()

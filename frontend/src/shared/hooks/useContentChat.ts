@@ -9,7 +9,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { httpClient } from '@/shared/services'
-import { getAccessToken } from '@/shared/services/authToken'
 import { getThreads, updateThreadMetadata } from '@/shared/services/endpoints/threads'
 import type { SearchSource, ThinkingStep, AIMode } from '@/features/chat/types'
 import type { ReasoningPreference } from '@/shared/types'
@@ -157,7 +156,7 @@ export function useContentChat(
       let buffer = ''
       let fullContent = ''
       let sources: SearchSource[] = []
-      let thinkingSteps: ThinkingStep[] = []
+      const thinkingSteps: ThinkingStep[] = []
 
       while (true) {
         const { done, value } = await reader.read()
@@ -247,10 +246,7 @@ export function useContentChat(
   const connectEventSource = useCallback(
     (threadId: string, messageId: string, mode: string): Promise<void> => {
       return new Promise((resolve, reject) => {
-        const accessToken = getAccessToken()
-        const streamUrl = `${httpClient.getBaseUrl()}/threads/${threadId}/messages/${messageId}/stream${
-          accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : ''
-        }`
+        const streamUrl = `${httpClient.getBaseUrl()}/threads/${threadId}/messages/${messageId}/stream`
 
         const eventSource = new EventSource(streamUrl)
         let fullContent = ''
@@ -330,6 +326,7 @@ export function useContentChat(
 
         eventSource.onerror = () => {
           eventSource.close()
+          void httpClient.verifySessionAfterStreamError()
           reject(new Error('SSE connection error'))
         }
       })

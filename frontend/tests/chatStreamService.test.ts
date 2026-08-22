@@ -30,14 +30,13 @@ assert.equal(completedContent, 'authoritative')
 assert.equal(result.content, 'authoritative')
 
 const originalFetch = globalThis.fetch
-const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
 let regenerateBody: unknown
-Object.defineProperty(globalThis, 'localStorage', {
-  configurable: true,
-  value: { getItem: () => null },
-})
+let regenerateCredentials: RequestCredentials | undefined
+let regenerateHeaders: HeadersInit | undefined
 globalThis.fetch = (async (_input, init) => {
   regenerateBody = JSON.parse(String(init?.body))
+  regenerateCredentials = init?.credentials
+  regenerateHeaders = init?.headers
   return new Response('data: {"type":"done","data":null}\n\n')
 }) as typeof fetch
 
@@ -52,11 +51,8 @@ try {
     onError: (error) => { throw error },
   })
   assert.deepEqual(regenerateBody, { mode: 'rag', reasoning: 'high', allow_remote: true })
+  assert.equal(regenerateCredentials, 'same-origin')
+  assert.equal(new Headers(regenerateHeaders).has('Authorization'), false)
 } finally {
   globalThis.fetch = originalFetch
-  if (localStorageDescriptor) {
-    Object.defineProperty(globalThis, 'localStorage', localStorageDescriptor)
-  } else {
-    delete (globalThis as { localStorage?: Storage }).localStorage
-  }
 }

@@ -7,7 +7,7 @@
 
 import type { Message, Source, ThinkingStep } from '@/shared/types'
 import type { ReasoningPreference } from '@/shared/types'
-import { getAccessToken } from './authToken'
+import { httpClient } from './api/httpClient'
 
 // ============================================================
 // Types
@@ -194,22 +194,6 @@ export async function processSSEStream(
 }
 
 // ============================================================
-// Helper Functions
-// ============================================================
-
-/**
- * 인증 헤더를 포함한 기본 헤더를 생성합니다.
- */
-function createAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const accessToken = getAccessToken()
-  if (accessToken) {
-    headers['Authorization'] = `Bearer ${accessToken}`
-  }
-  return headers
-}
-
-// ============================================================
 // API Functions
 // ============================================================
 
@@ -221,16 +205,10 @@ export async function regenerateStream(
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
-  const response = await fetch(`/api/threads/${threadId}/regenerate`, {
-    method: 'POST',
-    headers: createAuthHeaders(),
-    body: JSON.stringify({ mode, reasoning, allow_remote: allowRemote }),
-    signal: abortSignal,
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to regenerate: ${response.statusText}`)
-  }
-
-  await processSSEStream(response, mode, callbacks, abortSignal)
+  const stream = await httpClient.postStream(
+    `/threads/${threadId}/regenerate`,
+    { mode, reasoning, allow_remote: allowRemote },
+    { signal: abortSignal }
+  )
+  await processSSEStream(new Response(stream), mode, callbacks, abortSignal)
 }

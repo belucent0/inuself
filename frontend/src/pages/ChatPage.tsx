@@ -17,11 +17,14 @@ import { httpClient } from '@/shared/services'
 import { ChatArea } from '@/features/chat/components/ChatArea'
 import { ContentBanner } from '@/features/chat/components/ContentBanner'
 import { toast } from 'sonner'
-import { getAccessToken } from '@/shared/services/authToken'
 import type { ReasoningPreference } from '@/shared/types'
 
 // v1.0.0: 메시지 상태 타입
 type MessageStatus = 'queued' | 'analyzing' | 'searching' | 'thinking' | 'generating' | 'completed' | 'failed'
+
+interface QueuedMessageResponse {
+  message_id: string
+}
 
 export function ChatPage() {
   const { threadId: paramThreadId } = useParams<{ threadId: string }>()
@@ -167,10 +170,7 @@ export function ChatPage() {
     console.log('[ChatPage v1.0.0] Connecting SSE:', { threadId, messageId })
 
     // SSE 연결
-    const accessToken = getAccessToken()
-    const streamUrl = `${httpClient.getBaseUrl()}/threads/${threadId}/messages/${messageId}/stream${
-      accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : ''
-    }`
+    const streamUrl = `${httpClient.getBaseUrl()}/threads/${threadId}/messages/${messageId}/stream`
     const eventSource = new EventSource(streamUrl)
     eventSourceRef.current = eventSource
 
@@ -266,6 +266,7 @@ export function ChatPage() {
 
     eventSource.onerror = (err) => {
       console.error('[ChatPage v1.0.0] SSE connection error:', err)
+      void httpClient.verifySessionAfterStreamError()
       // 재연결 시도하지 않고 에러 처리 (브라우저가 자동 재연결)
     }
 
@@ -322,15 +323,10 @@ export function ChatPage() {
         messages: [...state.messages, tempUserMessage],
       }))
 
-      // 2. POST /api/threads/{threadId}/messages (auth 헤더 포함)
-      const accessToken = getAccessToken()
-      const response = await fetch(`${httpClient.getBaseUrl()}/threads/${threadId}/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({
+      // 2. POST /api/threads/{threadId}/messages
+      const { message_id } = await httpClient.post<QueuedMessageResponse>(
+        `/threads/${threadId}/messages`,
+        {
           query: content,
           mode: effectiveMode,
           reasoning,
@@ -338,14 +334,8 @@ export function ChatPage() {
           context: contentContextEnabled && threadContentId
             ? { content_id: threadContentId }
             : undefined,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error('메시지 전송 실패')
-      }
-
-      const { message_id } = await response.json()
+        }
+      )
 
       // 3. connectedMessageIdRef 리셋하여 SSE 재연결 허용
       connectedMessageIdRef.current = null

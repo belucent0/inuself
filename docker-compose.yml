@@ -114,7 +114,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - TASK_QUEUE_TYPE=celery
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
       - REDIS_URL=redis://asr-valkey:6379/0
@@ -217,7 +216,6 @@ services:
       args:
         - VITE_GRAFANA_DASHBOARD_URL=${VITE_GRAFANA_DASHBOARD_URL:-${NEXT_PUBLIC_GRAFANA_DASHBOARD_URL}}
         - VITE_GRAFANA_LOKI_URL=${VITE_GRAFANA_LOKI_URL:-${NEXT_PUBLIC_GRAFANA_LOKI_URL}}
-        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-}
     image: asr-frontend:latest
     container_name: asr-frontend
     ports:

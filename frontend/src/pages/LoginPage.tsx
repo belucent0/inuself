@@ -6,6 +6,7 @@ import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
 import { AuthBrandMark } from '@/shared/components/auth/AuthBrandMark'
 import { useAuth } from '@/shared/contexts'
+import { isApiUnavailable, type ApiError } from '@/shared/services/api/httpClient'
 import { toast } from 'sonner'
 
 export function LoginPage() {
@@ -27,8 +28,15 @@ export function LoginPage() {
       toast.success('로그인되었습니다.')
       const redirectPath = (location.state as { from?: { pathname?: string } } | undefined)?.from?.pathname || '/'
       navigate(redirectPath, { replace: true })
-    } catch {
-      toast.error('로그인에 실패했습니다. 아이디/비밀번호를 확인해주세요.')
+    } catch (error) {
+      const status = (error as ApiError)?.status
+      if (status === 429) {
+        toast.error('로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.')
+      } else if (isApiUnavailable(error)) {
+        toast.error('인증 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.')
+      } else {
+        toast.error('로그인에 실패했습니다. 아이디/비밀번호를 확인해주세요.')
+      }
     } finally {
       setIsSubmitting(false)
     }

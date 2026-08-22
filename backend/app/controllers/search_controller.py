@@ -10,18 +10,23 @@ import re
 from typing import Optional, AsyncGenerator
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
 from ..core.ai_gateway import get_async_openai_client
+from ..core.auth import get_current_user
 from ..core.config import get_settings
 from ..core.logging import logger
 from ..core.reasoning import routing_profile
 from ..prompts.search import SEARCH_SYSTEM_PROMPT, SEARCH_USER_TEMPLATE
 
-router = APIRouter(prefix="/api", tags=["search"])
+router = APIRouter(
+    prefix="/api",
+    tags=["search"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 # ============================================================

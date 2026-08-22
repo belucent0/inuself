@@ -2,14 +2,19 @@
 
 OpenAI SDK를 사용하여 AI Gateway를 통해 추론 컨테이너로 라우팅됩니다.
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ..core.ai_gateway import get_async_openai_client
+from ..core.auth import get_current_user
 from ..core.logging import logger
 from ..core.reasoning import routing_profile
 
-router = APIRouter(prefix="/api", tags=["chat"])
+router = APIRouter(
+    prefix="/api",
+    tags=["chat"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.post("/chat")
