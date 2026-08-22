@@ -9,6 +9,7 @@ import {
 import { httpClient } from '../src/shared/services/api/httpClient'
 import { tokenManager } from '../src/shared/services/tokenManager'
 import { regenerateSummaryBlock } from '../src/shared/services/endpoints/contents'
+import { useChatStore } from '../src/shared/stores/chatStore'
 
 const events = [
   { type: 'accepted', data: { thread_id: 'thread', message_id: 'answer', user_message_id: 'question' } },
@@ -383,5 +384,31 @@ await assert.rejects(
   regenerateSummaryBlock('content', 'title'),
   /generation failed/
 )
+
+const threadAMessages = [
+  { role: 'user' as const, content: 'A question', timestamp: 1 },
+  { role: 'assistant' as const, content: 'A answer', timestamp: 2 },
+]
+const threadBMessages = [
+  { role: 'user' as const, content: 'B question', timestamp: 3 },
+  { role: 'assistant' as const, content: 'B answer', timestamp: 4 },
+]
+useChatStore.getState().switchThread('thread-a', threadAMessages)
+let markRequestStarted!: () => void
+const requestStarted = new Promise<void>((resolve) => { markRequestStarted = resolve })
+globalThis.fetch = async (_input, init) => {
+  markRequestStarted()
+  return new Promise<Response>((_resolve, reject) => {
+    const abort = () => reject(new DOMException('Aborted', 'AbortError'))
+    if (init?.signal?.aborted) abort()
+    else init?.signal?.addEventListener('abort', abort, { once: true })
+  })
+}
+const regeneration = useChatStore.getState().regenerate('simple')
+await requestStarted
+useChatStore.getState().switchThread('thread-b', threadBMessages)
+await regeneration
+assert.equal(useChatStore.getState().threadId, 'thread-b')
+assert.deepEqual(useChatStore.getState().messages, threadBMessages)
 
 globalThis.fetch = originalFetch

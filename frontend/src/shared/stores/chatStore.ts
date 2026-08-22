@@ -193,7 +193,9 @@ export const useChatStore = create<ChatStore>()(
             },
           }, abortController.signal)
         } catch (err) {
-          if (!accepted) set({ messages: [...newMessages, removedAssistant] }, false, 'restoreLastAssistant')
+          if (!accepted && get().threadId === threadId) {
+            set({ messages: [...newMessages, removedAssistant] }, false, 'restoreLastAssistant')
+          }
           if (err instanceof DOMException && err.name === 'AbortError') {
             return
           }
