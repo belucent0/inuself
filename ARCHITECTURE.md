@@ -7,7 +7,7 @@
 flowchart TD
     %% 사용자 및 프론트엔드
     User([User]) -->|Browser| Frontend[Frontend Vite + React]
-    Frontend -->|HTTP/WS| Nginx[Nginx Proxy]
+    Frontend -->|HTTP/SSE| Nginx[Nginx Proxy]
 
     %% 백엔드 및 코어 서비스
     subgraph Core_Services [Core Services]
