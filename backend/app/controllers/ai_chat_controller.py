@@ -88,7 +88,9 @@ class ThreadDetailResponse(BaseModel):
 # === 의존성 ===
 
 
-async def get_svc(session: AsyncSession = Depends(get_session)) -> ThreadService:
+async def get_svc(
+    session: AsyncSession = Depends(get_session, scope="function"),
+) -> ThreadService:
     """스레드 서비스 의존성 (DB 세션 포함)."""
     return get_thread_service(session)
 
@@ -300,10 +302,6 @@ def _agent_stream_response(message_id: str, accepted: dict | None = None):
     )
 
 
-# TODO: 실제 인증 구현 시 교체
-# get_current_user_id는 core.auth에서 import됨 (JWT 기반 인증)
-
-
 def _normalize_mode_name(mode: Any) -> str:
     """AIMode/문자열 모드를 UI 친화 문자열로 정규화."""
     if mode is None:
@@ -430,7 +428,7 @@ async def list_threads(
     content_id: str | None = None,
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session, scope="function"),
 ):
     """스레드 목록 조회.
 
@@ -589,7 +587,7 @@ async def regenerate_response(
     request: RegenerateRequest,
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Replace the last assistant response with a queued Agent Worker run."""
     thread = await svc.get_thread(thread_id, user_id=user_id)
@@ -696,7 +694,7 @@ async def create_thread(
     request: CreateThreadRequest,
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session, scope="function"),
 ):
     """새 스레드 생성 (AI 실행 없음, 확인 후 라우팅용).
 
@@ -791,7 +789,7 @@ async def add_message(
     request: AddMessageRequest,
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session, scope="function"),
 ):
     """기존 스레드에 메시지 추가 (AI 실행 없음).
 
@@ -880,7 +878,7 @@ async def stream_message_v2(
     message_id: str,
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Relay Agent Worker Pub/Sub events and repair missed events from PostgreSQL."""
     thread = await svc.get_thread(thread_id, user_id=user_id)

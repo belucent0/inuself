@@ -17,7 +17,6 @@ import { httpClient } from '@/shared/services'
 import { ChatArea } from '@/features/chat/components/ChatArea'
 import { ContentBanner } from '@/features/chat/components/ContentBanner'
 import { toast } from 'sonner'
-import { getAccessToken } from '@/shared/services/authToken'
 import { sendMessageStream } from '@/shared/services/chatStreamService'
 import type { ReasoningPreference } from '@/shared/types'
 
@@ -168,10 +167,7 @@ export function ChatPage() {
     console.log('[ChatPage v1.0.0] Connecting SSE:', { threadId, messageId })
 
     // SSE 연결
-    const accessToken = getAccessToken()
-    const streamUrl = `${httpClient.getBaseUrl()}/threads/${threadId}/messages/${messageId}/stream${
-      accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : ''
-    }`
+    const streamUrl = `${httpClient.getBaseUrl()}/threads/${threadId}/messages/${messageId}/stream`
     const eventSource = new EventSource(streamUrl)
     eventSourceRef.current = eventSource
 
@@ -267,6 +263,7 @@ export function ChatPage() {
 
     eventSource.onerror = (err) => {
       console.error('[ChatPage v1.0.0] SSE connection error:', err)
+      void httpClient.verifySessionAfterStreamError()
       // 재연결 시도하지 않고 에러 처리 (브라우저가 자동 재연결)
     }
 

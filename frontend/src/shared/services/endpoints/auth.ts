@@ -9,12 +9,7 @@ export interface AuthUser {
   created_at: string
 }
 
-export interface AuthTokenResponse {
-  access_token: string
-  refresh_token: string
-  token_type: string
-  access_expires_in: number
-  refresh_expires_in: number
+export interface AuthSessionResponse {
   user: AuthUser
 }
 
@@ -35,39 +30,38 @@ export interface LoginIdCheckResponse {
   available: boolean
 }
 
-export async function signup(data: SignupRequest): Promise<AuthTokenResponse> {
-  return httpClient.post<AuthTokenResponse>('/auth/signup', data, { skipAuth: true })
+export function signup(data: SignupRequest): Promise<AuthSessionResponse> {
+  return httpClient.post<AuthSessionResponse>('/auth/signup', data, { reportUnauthorized: false })
 }
 
-export async function login(data: LoginRequest): Promise<AuthTokenResponse> {
-  return httpClient.post<AuthTokenResponse>('/auth/login', data, { skipAuth: true })
+export function login(data: LoginRequest): Promise<AuthSessionResponse> {
+  return httpClient.post<AuthSessionResponse>('/auth/login', data, { reportUnauthorized: false })
 }
 
-export async function refresh(refreshToken: string): Promise<AuthTokenResponse> {
-  return httpClient.post<AuthTokenResponse>('/auth/refresh', { refresh_token: refreshToken }, { skipAuth: true, retryOnAuthFailure: false })
+export function me(reportUnauthorized = true): Promise<AuthUser> {
+  return httpClient.get<AuthUser>('/auth/me', { reportUnauthorized })
 }
 
-export async function me(): Promise<AuthUser> {
-  return httpClient.get<AuthUser>('/auth/me')
-}
-
-export async function checkLoginId(loginId: string): Promise<LoginIdCheckResponse> {
+export function checkLoginId(loginId: string): Promise<LoginIdCheckResponse> {
   const query = new URLSearchParams({ login_id: loginId }).toString()
   return httpClient.get<LoginIdCheckResponse>(`/auth/check-id?${query}`, {
-    skipAuth: true,
-    retryOnAuthFailure: false,
+    reportUnauthorized: false,
   })
 }
 
-export async function logout(refreshToken?: string): Promise<void> {
-  await httpClient.post('/auth/logout', { refresh_token: refreshToken })
+export function logout(): Promise<void> {
+  return httpClient.post<void>('/auth/logout', undefined, { reportUnauthorized: false })
+}
+
+export function logoutAll(): Promise<void> {
+  return httpClient.post<void>('/auth/logout-all', undefined, { reportUnauthorized: false })
 }
 
 export const authApi = {
   signup,
   login,
-  refresh,
   me,
   checkLoginId,
   logout,
+  logoutAll,
 }

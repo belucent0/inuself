@@ -4,10 +4,12 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from .core.config import get_settings
+from .core.auth import origin_is_forbidden
 from .core.logging import logger
 from .core.storage import check_storage_health
 from .controllers import content_controller
@@ -104,7 +106,6 @@ def cleanup_temp_files() -> None:
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 실행되는 lifespan 이벤트."""
     import asyncio
-    import os
 
     # 임시 파일 정리 (서버 시작 시)
     logger.info("[Lifespan] Cleaning up temporary files...")
@@ -117,17 +118,6 @@ async def lifespan(app: FastAPI):
         warmup_kiwi()
     except Exception as e:
         logger.warning(f"[Lifespan] Kiwi warmup failed: {e}")
-
-    # RedisListener 시작
-    from .websocket.dependencies import get_redis_listener
-
-    redis_listener = get_redis_listener()
-
-    try:
-        await redis_listener.start(pattern="events:*")
-        logger.info("[Lifespan] RedisListener started")
-    except Exception as exc:
-        logger.exception("[Lifespan] Failed to start RedisListener: {}", exc)
 
     # StreamConsumer 시작 (워커 결과 수신)
     from .services.stream_consumer import get_stream_consumer
@@ -182,13 +172,6 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.exception("[Lifespan] Error stopping StreamConsumer: {}", exc)
 
-    # 종료 시: RedisListener 중지
-    try:
-        await redis_listener.stop()
-        logger.info("[Lifespan] RedisListener stopped")
-    except Exception as exc:
-        logger.exception("[Lifespan] Error stopping RedisListener: {}", exc)
-
 
 def create_app() -> FastAPI:
     """FastAPI 애플리케이션 생성."""
@@ -217,6 +200,18 @@ def create_app() -> FastAPI:
         allow_methods=["*"],  # 모든 HTTP 메서드 허용
         allow_headers=["*"],  # 모든 헤더 허용
     )
+
+    allowed_origins = set(cors_origins)
+
+    @app.middleware("http")
+    async def validate_unsafe_request_origin(request: Request, call_next):
+        origin = request.headers.get("origin")
+        if origin_is_forbidden(request.method, origin, allowed_origins):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Origin is not allowed."},
+            )
+        return await call_next(request)
 
     # OpenTelemetry 분산 추적 초기화 (optional)
     if telemetry_available:
@@ -261,12 +256,6 @@ def create_app() -> FastAPI:
 
     app.include_router(langfuse_controller.router, prefix=settings.api_prefix)
     logger.info("[FastAPI] Langfuse routes registered at /api/admin/langfuse")
-    # WebSocket 라우터 추가 (별도 경로, prefix 없음)
-    from .controllers import websocket_controller
-
-    app.include_router(websocket_controller.router)
-    logger.info("[FastAPI] WebSocket routes registered at /ws")
-
     # AI Chat 라우터 추가 (V8.0 LangGraph 기반)
     from .controllers import ai_chat_controller
 

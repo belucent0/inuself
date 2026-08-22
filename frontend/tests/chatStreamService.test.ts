@@ -7,7 +7,6 @@ import {
   type StreamingCallbacks,
 } from '../src/shared/services/chatStreamService'
 import { httpClient } from '../src/shared/services/api/httpClient'
-import { tokenManager } from '../src/shared/services/tokenManager'
 import { regenerateSummaryBlock } from '../src/shared/services/endpoints/contents'
 
 const events = [
@@ -72,21 +71,6 @@ await assert.rejects(
 )
 assert.equal(streamError, 'SSE stream ended before done')
 
-const storageValues = new Map<string, string>([
-  ['auth_refresh_token', 'refresh-token'],
-])
-Object.defineProperty(globalThis, 'localStorage', {
-  configurable: true,
-  value: {
-    getItem: (key: string) => storageValues.get(key) ?? null,
-    setItem: (key: string, value: string) => storageValues.set(key, value),
-    removeItem: (key: string) => storageValues.delete(key),
-    clear: () => storageValues.clear(),
-    key: (index: number) => [...storageValues.keys()][index] ?? null,
-    get length() { return storageValues.size },
-  } as Storage,
-})
-
 const callbackState = {
   accepted: 0,
   completed: 0,
@@ -113,8 +97,12 @@ const reconnectCallbacks: StreamingCallbacks = {
 const originalFetch = globalThis.fetch
 const reconnectRequests: string[] = []
 let sendBody: unknown
+const reconnectCredentials: Array<RequestCredentials | undefined> = []
+const reconnectAuthorization: Array<string | null> = []
 globalThis.fetch = async (input, init) => {
   reconnectRequests.push(`${init?.method || 'GET'} ${String(input)}`)
+  reconnectCredentials.push(init?.credentials)
+  reconnectAuthorization.push(new Headers(init?.headers).get('Authorization'))
   if (init?.method === 'POST') {
     sendBody = JSON.parse(String(init?.body))
     return new Response(
@@ -145,6 +133,8 @@ assert.deepEqual(sendBody, {
   allow_remote: false,
   stream: true,
 })
+assert.deepEqual(reconnectCredentials, ['same-origin', 'same-origin'])
+assert.deepEqual(reconnectAuthorization, [null, null])
 assert.equal(callbackState.accepted, 1)
 assert.equal(callbackState.completed, 1)
 assert.equal(callbackState.errors, 0)
@@ -313,44 +303,13 @@ assert.equal(exhaustedFetches, 5)
 assert.equal(exhaustedErrors, 1)
 globalThis.setTimeout = originalSetTimeout
 
-const authRequests: string[] = []
-const authHeaders: Array<string | null> = []
-let protectedGetCount = 0
-globalThis.fetch = async (input, init) => {
-  const url = String(input)
-  authRequests.push(`${init?.method || 'GET'} ${url}`)
-  if (url.endsWith('/auth/refresh')) {
-    return new Response(JSON.stringify({
-      access_token: 'refreshed-access',
-      refresh_token: 'refreshed-refresh',
-      access_expires_in: 3600,
-    }), { status: 200 })
-  }
-
-  protectedGetCount += 1
-  authHeaders.push(new Headers(init?.headers).get('Authorization'))
-  if (protectedGetCount === 1) {
-    return new Response('expired', { status: 401, statusText: 'Unauthorized' })
-  }
-  return new Response('authenticated stream')
-}
-
-try {
-  const authStream = await httpClient.getStream('/retry-auth')
-  assert.equal(await new Response(authStream).text(), 'authenticated stream')
-} finally {
-  tokenManager.stop()
-}
-assert.deepEqual(authRequests, [
-  'GET /api/retry-auth',
-  'POST /api/auth/refresh',
-  'GET /api/retry-auth',
-])
-assert.deepEqual(authHeaders, [null, 'Bearer refreshed-access'])
-
 let regenerateBody: unknown
+let regenerateCredentials: RequestCredentials | undefined
+let regenerateAuthorization: string | null = null
 globalThis.fetch = async (_input, init) => {
   regenerateBody = JSON.parse(String(init?.body))
+  regenerateCredentials = init?.credentials
+  regenerateAuthorization = new Headers(init?.headers).get('Authorization')
   return new Response('data: {"type":"done","data":null}\n\n')
 }
 await regenerateStream('thread-1', 'rag', 'high', true, {
@@ -363,6 +322,8 @@ await regenerateStream('thread-1', 'rag', 'high', true, {
   onError: (error) => { throw error },
 })
 assert.deepEqual(regenerateBody, { mode: 'rag', reasoning: 'high', allow_remote: true })
+assert.equal(regenerateCredentials, 'same-origin')
+assert.equal(regenerateAuthorization, null)
 
 globalThis.fetch = async () => new Response(JSON.stringify({
   success: false,

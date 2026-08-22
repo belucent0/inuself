@@ -52,6 +52,7 @@ import { useThreads } from '@/shared/hooks/useThreads'
 import { dispatchContentsRefresh } from '@/shared/hooks/useContents'
 import type { Thread } from '@/shared/types'
 import { useAuth } from '@/shared/contexts'
+import type { ApiError } from '@/shared/services/api/httpClient'
 
 function groupThreadsByDate(threads: Thread[]) {
   const now = new Date()
@@ -112,8 +113,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       navigate('/contents')
       dispatchContentsRefresh()
     } catch (error: unknown) {
-      const axiosError = error as { response?: { data?: { detail?: string } } }
-      const detail = axiosError?.response?.data?.detail
+      const detail = ((error as ApiError)?.data as { detail?: string } | undefined)?.detail
 
       if (detail?.includes('2시간')) {
         toast.error('2시간을 초과하는 영상은 처리할 수 없습니다.', { id: toastId })
@@ -130,8 +130,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   const handleLogout = async () => {
     if (confirm('로그아웃하시겠습니까?')) {
-      await logout()
-      navigate('/login')
+      try {
+        await logout()
+        navigate('/login')
+      } catch {
+        toast.error('로그아웃을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.')
+      }
     }
   }
 

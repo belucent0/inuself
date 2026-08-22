@@ -6,7 +6,7 @@ import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
 import { AuthBrandMark } from '@/shared/components/auth/AuthBrandMark'
 import { useAuth } from '@/shared/contexts'
-import type { ApiError } from '@/shared/services/api/httpClient'
+import { isApiUnavailable, type ApiError } from '@/shared/services/api/httpClient'
 import { authApi } from '@/shared/services/endpoints/auth'
 import { toast } from 'sonner'
 
@@ -155,6 +155,10 @@ export function SignupPage() {
       const apiError = error as ApiError
       if (apiError?.status === 403) {
         toast.error('가입 인증코드가 유효하지 않습니다.')
+      } else if (apiError?.status === 409) {
+        toast.error('이미 사용 중인 아이디입니다.')
+      } else if (isApiUnavailable(error)) {
+        toast.error('인증 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.')
       } else {
         toast.error('회원가입에 실패했습니다. 입력 정보를 확인해주세요.')
       }

@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react'
 import type { FileProgressEvent } from '@/features/upload/types'
+import { httpClient } from '@/shared/services'
 
 /**
  * SSE 이벤트 리스너 콜백
@@ -35,7 +36,6 @@ export function useFileProgressSSE() {
   const listenersRef = useRef<Set<FileProgressListener>>(new Set())
   const [isConnected, setIsConnected] = useState(false)
   const [error, setError] = useState<Error | null>(null)
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   /**
    * EventSource 연결 시작
@@ -79,13 +79,7 @@ export function useFileProgressSSE() {
       eventSource.onerror = () => {
         setIsConnected(false)
         setError(new Error('SSE connection error'))
-        eventSourceRef.current = null
-
-        // 자동 재연결 (3초 후)
-        reconnectTimeoutRef.current = setTimeout(() => {
-          console.log('[SSE] Attempting to reconnect...')
-          connect()
-        }, 3000)
+        void httpClient.verifySessionAfterStreamError()
       }
 
       eventSourceRef.current = eventSource
@@ -108,10 +102,6 @@ export function useFileProgressSSE() {
       console.log('[SSE] Disconnected from file progress stream')
     }
 
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current)
-      reconnectTimeoutRef.current = null
-    }
   }, [])
 
   /**

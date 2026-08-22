@@ -218,7 +218,6 @@ frontend/src/
 │   ├── services/
 │   │   ├── api/httpClient.ts     # Axios 기반 HTTP 클라이언트
 │   │   ├── endpoints/            # auth, contents, threads, upload, langfuse
-│   │   ├── authToken.ts          # JWT 토큰 관리
 │   │   └── chatStreamService.ts  # SSE 스트리밍 서비스
 │   ├── stores/chatStore.ts       # Zustand 채팅 상태
 │   ├── types/                    # 공유 타입 정의
@@ -284,7 +283,7 @@ interface ChatStore {
 
 | 컨텍스트 | 파일 | 역할 |
 |---------|------|------|
-| `AuthContext` | shared/contexts/AuthContext.tsx | 로그인 상태, JWT 토큰, 사용자 정보 |
+| `AuthContext` | shared/contexts/AuthContext.tsx | HttpOnly 세션 상태, 인증 장애 상태, 사용자 정보 |
 | `ThreadTitleContext` | shared/contexts/ThreadTitleContext.tsx | 스레드 제목 동적 업데이트 |
 
 ### 2.4 SSE 스트리밍 아키텍처
@@ -375,7 +374,6 @@ HTTP Request
 | `events_controller.py` | `/api/events` | StreamConsumer |
 | `media_controller.py` | `/api/media` | MediaCacheService, FileService |
 | `langfuse_controller.py` | `/api/admin/langfuse` | LangfuseDashboardService |
-| `websocket_controller.py` | `/ws` | Valkey Pub/Sub |
 
 ### 3.3 FastAPI 앱 라이프사이클
 
@@ -1091,12 +1089,18 @@ counseling_session (
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | GET | `/check-id` | 로그인 ID 중복 확인 |
-| POST | `/signup` | 회원가입 |
-| POST | `/login` | 이메일/비밀번호 로그인 |
-| POST | `/refresh` | JWT 액세스 토큰 갱신 |
-| POST | `/logout` | 단일 기기 로그아웃 |
-| POST | `/logout-all` | 모든 기기 로그아웃 |
-| GET | `/me` | 현재 사용자 프로필 |
+| POST | `/signup` | 회원가입 후 opaque 세션 쿠키 발급 |
+| POST | `/login` | 이메일/비밀번호 로그인 후 세션 쿠키 발급 |
+| POST | `/logout` | 현재 세션 폐기 (204, body 없음) |
+| POST | `/logout-all` | 사용자 세션 generation 증가로 모든 기기 세션 폐기 |
+| GET | `/me` | 현재 HttpOnly 세션의 사용자 프로필 |
+
+브라우저 인증은 host-only `timblo_session` 쿠키만 사용한다. 쿠키는 `HttpOnly`,
+`SameSite=Lax`, `Path=/`이며 운영 HTTPS에서는 `Secure`가 필수다. 세션은 Valkey의
+opaque digest record로 관리하며 idle 12시간, absolute 14일 제한을 적용한다. 인증
+실패는 401, Valkey/DB 인증 저장소 장애는 503으로 구분한다. `/api/auth/refresh`,
+Bearer 인증, query-string access token은 제공하지 않는다. unsafe method는 허용된
+`Origin`만 통과한다.
 
 ### 10.2 콘텐츠 (`/api/contents`)
 
@@ -1106,7 +1110,7 @@ counseling_session (
 | GET | `/{content_id}` | 콘텐츠 상세 |
 | POST | `/upload` | 파일 업로드 |
 | POST | `/upload-youtube` | YouTube URL 다운로드 (비동기) |
-| DELETE | `/queued` | 대기 중 콘텐츠 전체 삭제 |
+| DELETE | `/queued` | 대기 중 콘텐츠 전체 삭제 (관리자 전용) |
 | POST | `/bulk-delete` | 다중 콘텐츠 삭제 |
 | POST | `/{content_id}/retry` | 실패 단계 재처리 |
 | POST | `/{content_id}/recluster-speakers` | 화자 재클러스터링 |
@@ -1132,8 +1136,8 @@ counseling_session (
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| POST | `/search` | 심층 검색 (SSE 스트리밍) |
-| GET | `/search` | GET 방식 검색 |
+| POST | `/search` | 인증 사용자 심층 검색 (SSE 스트리밍) |
+| GET | `/search` | 인증 사용자 GET 방식 검색 |
 
 **SSE 이벤트:** `status`, `sources`, `token`, `error`, `done`
 
@@ -1155,13 +1159,13 @@ counseling_session (
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| GET | `/events/file-progress/stream` | 파일 진행률 SSE 스트림 |
+| GET | `/events/file-progress/stream` | 인증 사용자 소유 파일만 전달하는 진행률 SSE 스트림 |
 
 ### 10.7 미디어 (`/api/media`)
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| GET | `/{content_id}` | 미디어 스트리밍 (인증, Range 지원) |
+| GET/HEAD | `/{content_id}` | 소유자 전용 미디어 스트리밍 (인증, Range, no-store) |
 
 ### 10.8 관리자 (`/api/admin`)
 
@@ -1173,16 +1177,6 @@ counseling_session (
 | GET | `/admin/langfuse/traces` | LLM 트레이스 목록 |
 | GET | `/admin/langfuse/traces/{trace_id}` | 트레이스 상세 |
 | GET | `/admin/langfuse/sessions/{session_id}` | 세션 타임라인 |
-
-### 10.9 WebSocket (`/ws`)
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| WS | `/test-ws` | WebSocket 테스트 |
-| WS | `/file-progress-simple/{file_id}` | 파일 진행률 (레거시) |
-| WS | `/file-progress/global` | 전역 파일 진행률 (Valkey Pub/Sub) |
-
----
 
 ## 11. Worker Architecture
 
@@ -1422,7 +1416,7 @@ client ← ai-gateway SSE 스트림
 
 ## 13. Valkey Data Architecture
 
-> v1.1.0 시기에는 추론 요청도 Valkey Stream(`stream:chat:requests` / `stream:media:requests` / `stream:gpu:responses` 등)으로 Provider Manager에 라우팅했지만, 현재 추론 호출은 ai-gateway HTTP 직결입니다. Valkey는 **Celery broker + Pub/Sub 이벤트 + 락/dispatch marker + 캐시/세마포어**에 사용하며, 응답 토큰을 Stream에 적재하지 않습니다.
+> v1.1.0 시기의 추론 요청 Valkey Stream은 폐기했고, 현재 추론 호출은 ai-gateway HTTP 직결입니다. Valkey는 **Celery broker + opaque 브라우저 세션 + Pub/Sub 이벤트 + 락/dispatch marker + 캐시/세마포어**에 사용하며, 응답 토큰을 Stream에 적재하지 않습니다.
 
 ### 13.1 Pub/Sub 채널
 
@@ -1430,10 +1424,10 @@ client ← ai-gateway SSE 스트림
 |-----------|------|--------|--------|
 | `events:agent:{message_id}` | Agent 상태·토큰·완료 이벤트 | Agent Worker | Backend SSE relay |
 | `events:file_progress:{file_id}` | 파일 처리 진행률 | Worker | Backend SSE |
-| `events:asr_stream:{file_id}` | 실시간 ASR 텍스트 | Worker | Backend WebSocket |
-| `events:llm_stream:{file_id}` | 실시간 LLM 토큰 | Worker | Backend WebSocket |
+| `events:asr_stream:{file_id}` | 실시간 ASR 텍스트 | Worker | Backend 내부 소비자 |
+| `events:llm_stream:{file_id}` | 실시간 LLM 토큰 | Worker | Backend 내부 소비자 |
 | `events:content_created` | 콘텐츠 생성 완료 | Worker | Backend |
-| `events:file_progress:global` | 전역 파일 진행률 | Worker | Backend WebSocket |
+| `events:file_progress:global` | 전역 파일 진행률 | Worker | Backend 사용자 격리 SSE |
 
 ### 13.2 Cache Key 패턴 & TTL
 
@@ -1444,12 +1438,15 @@ client ← ai-gateway SSE 스트림
 | `worker:{device}:active` | 3,600s (1시간) | GPU 동시성 세마포어 |
 | `active_agent_thread:{thread_id}` | 7,200s | thread별 동시 Agent 실행 방지 |
 | `dispatched_agent_message:{message_id}` | 7,200s | broker handoff 확인/Watchdog 복구 판단 |
+| `auth:session:{sha256}` | idle 12시간, absolute 14일 이내 | opaque 브라우저 세션 record |
+| `auth:user-session-version:{user_id}` | 만료 없음 | logout-all generation |
+| `auth:login-failure:{sha256(login_id)}` | 300s | 로그인 실패 fixed window |
 
 ### 13.3 메모리 정책
 
 ```yaml
 maxmemory: 2gb
-maxmemory-policy: volatile-lru    # TTL 있는 키부터 LRU 삭제
+maxmemory-policy: allkeys-lru     # 전체 키 중 LRU 삭제
 ```
 
 ### 13.4 데이터 플로우 요약 (v1.2.0)
@@ -1460,9 +1457,10 @@ Backend ── HTTP ──► ai-gateway ── HTTP ──► ai-llm / ai-asr-v
 
 Backend ── Celery enqueue ──► Valkey ──► Agent/Batch Worker
 Agent Worker ── PUBLISH events:agent:* ──► Valkey ──► Backend ── SSE ──► Browser
-Batch Worker ── PUBLISH events:* ──► Valkey ──► Backend SSE/WebSocket
+Batch Worker ── PUBLISH events:* ──► Valkey ──► Backend 소유권 검증 ── SSE ──► Browser
 Backend ── SET cache:search ──► Valkey ──► GET cache:search
 Backend / Worker ── SET worker:gpu:active ──► Valkey (TTL-based 세마포어)
+Browser ── HttpOnly cookie ──► Backend ── SHA-256 digest lookup/touch ──► Valkey session
 ```
 
 ---

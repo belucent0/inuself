@@ -1,38 +1,47 @@
-import json
 import hashlib
+import hmac
+import json
 import os
+import secrets
+import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
-import jwt
-from fastapi import Depends, HTTPException, Query, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jwt import InvalidTokenError
+from fastapi import Depends, HTTPException, Request, Response, status
+from redis.exceptions import RedisError
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import User
 from ..db.session import get_session
 from .config import get_settings
+from .logging import logger
 from .redis import get_redis_client
 
-ACCESS_KEY_PREFIX = "auth:access:"
-REFRESH_KEY_PREFIX = "auth:refresh:"
-REFRESH_FAMILY_KEY_PREFIX = "auth:refresh-family:"
-REFRESH_FAMILY_REVOKED_PREFIX = "auth:refresh-family-revoked:"
-USER_TOKEN_VERSION_PREFIX = "auth:user-token-version:"
+SESSION_COOKIE_NAME = "timblo_session"
+SESSION_KEY_PREFIX = "auth:session:"
+USER_SESSION_VERSION_PREFIX = "auth:user-session-version:"
+LOGIN_FAILURE_KEY_PREFIX = "auth:login-failure:"
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_FAILURE_WINDOW_SECONDS = 5 * 60
+_LOGIN_FAILURE_SCRIPT = """
+local count = redis.call('INCR', KEYS[1])
+local ttl = redis.call('TTL', KEYS[1])
+if count == 1 or ttl <= 0 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+    ttl = tonumber(ARGV[1])
+end
+return {count, ttl}
+"""
 
-http_bearer = HTTPBearer(auto_error=False)
+_STORE_ERRORS = (RedisError, OSError, TimeoutError)
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _seconds_until(expires_at: datetime) -> int:
-    seconds = int((expires_at - _utcnow()).total_seconds())
-    return max(seconds, 1)
+def origin_is_forbidden(method: str, origin: str | None, allowed: set[str]) -> bool:
+    return bool(origin and method in _UNSAFE_METHODS and origin not in allowed)
 
 
 def hash_password(password: str) -> str:
@@ -43,311 +52,217 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    import hmac
-
     try:
         algorithm, iterations_raw, salt_hex, hash_hex = password_hash.split("$", 3)
-    except ValueError:
-        return False
-
-    if algorithm != "pbkdf2_sha256":
-        return False
-
-    try:
         iterations = int(iterations_raw)
         salt = bytes.fromhex(salt_hex)
         expected_hash = bytes.fromhex(hash_hex)
     except (TypeError, ValueError):
         return False
 
+    if algorithm != "pbkdf2_sha256":
+        return False
+
     computed_hash = hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), salt, iterations
     )
-
     return hmac.compare_digest(computed_hash, expected_hash)
 
 
-def _encode_token(payload: dict[str, Any]) -> str:
-    settings = get_settings()
-    return jwt.encode(
-        payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
+def session_key(token: str) -> str:
+    return f"{SESSION_KEY_PREFIX}{hashlib.sha256(token.encode('utf-8')).hexdigest()}"
+
+
+def login_failure_key(login_id: str) -> str:
+    digest = hashlib.sha256(login_id.encode("utf-8")).hexdigest()
+    return f"{LOGIN_FAILURE_KEY_PREFIX}{digest}"
+
+
+def _unauthorized(reason: str, token: str | None = None) -> HTTPException:
+    digest = session_key(token)[-64:-56] if token else None
+    logger.info("[Auth] session rejected reason={} digest={}", reason, digest)
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication is required.",
     )
 
 
-def _decode_token(token: str, expected_type: str) -> dict[str, Any]:
-    settings = get_settings()
-
-    try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm],
-            issuer=settings.jwt_issuer,
-            audience=settings.jwt_audience,
-            options={
-                "require": ["exp", "iat", "nbf", "iss", "aud", "sub", "jti", "typ"],
-            },
-        )
-    except InvalidTokenError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="유효하지 않은 토큰입니다.",
-        ) from exc
-
-    token_type = str(payload.get("typ", ""))
-    if token_type != expected_type:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="토큰 타입이 올바르지 않습니다.",
-        )
-
-    return payload
+def _store_unavailable(operation: str, exc: BaseException) -> HTTPException:
+    logger.error("[Auth] session store unavailable operation={}: {}", operation, exc)
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Authentication service is temporarily unavailable.",
+    )
 
 
-async def _get_user_token_version(user_id: str) -> int:
-    redis = get_redis_client()
-    value = await redis.get(f"{USER_TOKEN_VERSION_PREFIX}{user_id}")
-    if value is None:
-        return 0
-    # Decode bytes to string if needed
+def _decode_int(value: Any, *, default: int | None = None) -> int:
+    if value is None and default is not None:
+        return default
     if isinstance(value, bytes):
-        value = value.decode('utf-8')
+        value = value.decode("utf-8")
+    if isinstance(value, bool):
+        raise ValueError("boolean is not an integer")
+    return int(value)
+
+
+async def get_user_session_version(user_id: str) -> int:
     try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
+        value = await get_redis_client().get(
+            f"{USER_SESSION_VERSION_PREFIX}{user_id}"
+        )
+        return _decode_int(value, default=0)
+    except _STORE_ERRORS as exc:
+        raise _store_unavailable("read-version", exc) from exc
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise _store_unavailable("decode-version", exc) from exc
 
 
-async def issue_token_pair(
-    user_id: str, family_id: str | None = None
-) -> dict[str, Any]:
-    settings = get_settings()
-    redis = get_redis_client()
+def _decode_session_record(raw: Any) -> dict[str, int | str]:
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    record = json.loads(raw)
+    if not isinstance(record, dict):
+        raise ValueError("session record is not an object")
 
-    now = _utcnow()
-    access_expires_at = now + timedelta(minutes=settings.jwt_access_token_ttl_minutes)
-    refresh_expires_at = now + timedelta(days=settings.jwt_refresh_token_ttl_days)
-    token_version = await _get_user_token_version(user_id)
-
-    family = family_id or str(uuid.uuid4())
-    access_jti = str(uuid.uuid4())
-    refresh_jti = str(uuid.uuid4())
-
-    access_payload = {
-        "sub": user_id,
-        "jti": access_jti,
-        "typ": "access",
-        "sid": family,
-        "ver": token_version,
-        "iss": settings.jwt_issuer,
-        "aud": settings.jwt_audience,
-        "iat": now,
-        "nbf": now,
-        "exp": access_expires_at,
-    }
-    refresh_payload = {
-        "sub": user_id,
-        "jti": refresh_jti,
-        "typ": "refresh",
-        "sid": family,
-        "ver": token_version,
-        "iss": settings.jwt_issuer,
-        "aud": settings.jwt_audience,
-        "iat": now,
-        "nbf": now,
-        "exp": refresh_expires_at,
-    }
-
-    access_token = _encode_token(access_payload)
-    refresh_token = _encode_token(refresh_payload)
-
-    access_ttl = _seconds_until(access_expires_at)
-    refresh_ttl = _seconds_until(refresh_expires_at)
-
-    await redis.set(
-        f"{ACCESS_KEY_PREFIX}{access_jti}",
-        user_id,
-        ex=access_ttl,
-    )
-
-    refresh_record = {
-        "user_id": user_id,
-        "family_id": family,
-        "status": "active",
-        "token_version": token_version,
-        "expires_at": refresh_expires_at.isoformat(),
-    }
-    await redis.set(
-        f"{REFRESH_KEY_PREFIX}{refresh_jti}",
-        json.dumps(refresh_record),
-        ex=refresh_ttl,
-    )
-    await redis.set(f"{REFRESH_FAMILY_KEY_PREFIX}{family}", refresh_jti, ex=refresh_ttl)
-
+    user_id = record.get("user_id")
+    version = record.get("version")
+    created_at = record.get("created_at")
+    absolute_expires_at = record.get("absolute_expires_at")
+    if not isinstance(user_id, str):
+        raise ValueError("missing user_id")
+    uuid.UUID(user_id)
+    if any(
+        isinstance(value, bool) or not isinstance(value, int)
+        for value in (version, created_at, absolute_expires_at)
+    ):
+        raise ValueError("invalid session timestamps or version")
+    if created_at >= absolute_expires_at:
+        raise ValueError("invalid session lifetime")
     return {
         "user_id": user_id,
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "Bearer",
-        "access_expires_in": access_ttl,
-        "refresh_expires_in": refresh_ttl,
-        "family_id": family,
+        "version": version,
+        "created_at": created_at,
+        "absolute_expires_at": absolute_expires_at,
     }
 
 
-async def revoke_access_token_jti(access_jti: str) -> None:
+async def _delete_key(key: str, *, required: bool) -> None:
+    try:
+        await get_redis_client().delete(key)
+    except _STORE_ERRORS as exc:
+        if required:
+            raise _store_unavailable("delete-session", exc) from exc
+        logger.warning("[Auth] failed to clean invalid session: {}", exc)
+
+
+async def create_session(user_id: str) -> tuple[str, dict[str, int | str]]:
+    settings = get_settings()
+    now = int(time.time())
+    absolute_expires_at = now + settings.session_absolute_ttl_days * 24 * 60 * 60
+    record: dict[str, int | str] = {
+        "user_id": user_id,
+        "version": await get_user_session_version(user_id),
+        "created_at": now,
+        "absolute_expires_at": absolute_expires_at,
+    }
+    token = secrets.token_urlsafe(32)
+    ttl = min(
+        settings.session_idle_ttl_hours * 60 * 60,
+        absolute_expires_at - now,
+    )
+    try:
+        await get_redis_client().set(session_key(token), json.dumps(record), ex=ttl)
+    except _STORE_ERRORS as exc:
+        raise _store_unavailable("create-session", exc) from exc
+    return token, record
+
+
+async def delete_session(token: str | None) -> None:
+    if token:
+        await _delete_key(session_key(token), required=True)
+
+
+async def validate_session_token(
+    token: str | None, *, touch: bool
+) -> dict[str, int | str]:
+    if not token:
+        raise _unauthorized("missing-cookie")
+
+    key = session_key(token)
     redis = get_redis_client()
-    await redis.delete(f"{ACCESS_KEY_PREFIX}{access_jti}")
-
-
-async def revoke_user_sessions(user_id: str) -> None:
-    redis = get_redis_client()
-    await redis.incr(f"{USER_TOKEN_VERSION_PREFIX}{user_id}")
-
-
-async def rotate_refresh_token(refresh_token: str) -> dict[str, Any]:
-    payload = _decode_token(refresh_token, expected_type="refresh")
-    redis = get_redis_client()
-
-    refresh_jti = str(payload["jti"])
-    family_id = str(payload["sid"])
-    user_id = str(payload["sub"])
-
-    family_revoked_key = f"{REFRESH_FAMILY_REVOKED_PREFIX}{family_id}"
-    if await redis.get(family_revoked_key):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="세션이 만료되었습니다. 다시 로그인 해주세요.",
-        )
-
-    record_key = f"{REFRESH_KEY_PREFIX}{refresh_jti}"
-    refresh_record_raw = await redis.get(record_key)
-    if refresh_record_raw is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="유효하지 않은 리프레시 토큰입니다.",
-        )
-
-    # Decode bytes to string if needed
-    if isinstance(refresh_record_raw, bytes):
-        refresh_record_raw = refresh_record_raw.decode('utf-8')
+    try:
+        raw = await redis.get(key)
+    except _STORE_ERRORS as exc:
+        raise _store_unavailable("read-session", exc) from exc
+    if raw is None:
+        raise _unauthorized("missing-or-idle-expired", token)
 
     try:
-        refresh_record = json.loads(refresh_record_raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="리프레시 토큰 상태가 손상되었습니다.",
-        ) from exc
+        record = _decode_session_record(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        logger.warning("[Auth] malformed session record digest={}: {}", key[-64:-56], exc)
+        await _delete_key(key, required=False)
+        raise _unauthorized("malformed", token) from exc
 
-    family_current_key = f"{REFRESH_FAMILY_KEY_PREFIX}{family_id}"
-    current_jti = await redis.get(family_current_key)
-    # Decode bytes to string if needed
-    if isinstance(current_jti, bytes):
-        current_jti = current_jti.decode('utf-8')
-    if current_jti != refresh_jti or refresh_record.get("status") != "active":
-        refresh_ttl = await redis.ttl(record_key)
-        if refresh_ttl > 0:
-            await redis.set(family_revoked_key, "1", ex=refresh_ttl)
-        await redis.delete(family_current_key)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="리프레시 토큰 재사용이 감지되었습니다. 다시 로그인 해주세요.",
+    now = int(time.time())
+    absolute_expires_at = int(record["absolute_expires_at"])
+    if absolute_expires_at <= now:
+        await _delete_key(key, required=False)
+        raise _unauthorized("absolute-expired", token)
+
+    current_version = await get_user_session_version(str(record["user_id"]))
+    if int(record["version"]) != current_version:
+        await _delete_key(key, required=False)
+        raise _unauthorized("revoked", token)
+
+    if touch:
+        settings = get_settings()
+        ttl = min(
+            settings.session_idle_ttl_hours * 60 * 60,
+            absolute_expires_at - now,
         )
+        try:
+            touched = await redis.expire(key, ttl)
+        except _STORE_ERRORS as exc:
+            raise _store_unavailable("touch-session", exc) from exc
+        if not touched:
+            raise _unauthorized("expired-during-touch", token)
 
-    token_version = await _get_user_token_version(user_id)
-    if int(payload.get("ver", 0)) != token_version:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="세션이 갱신되어 다시 로그인이 필요합니다.",
-        )
-
-    refresh_ttl = await redis.ttl(record_key)
-    refresh_record["status"] = "rotated"
-    await redis.set(record_key, json.dumps(refresh_record), ex=max(refresh_ttl, 1))
-
-    return await issue_token_pair(user_id=user_id, family_id=family_id)
+    return record
 
 
-async def revoke_refresh_family(refresh_token: str) -> None:
-    payload = _decode_token(refresh_token, expected_type="refresh")
-    redis = get_redis_client()
-
-    family_id = str(payload["sid"])
-    refresh_jti = str(payload["jti"])
-    family_current_key = f"{REFRESH_FAMILY_KEY_PREFIX}{family_id}"
-    record_key = f"{REFRESH_KEY_PREFIX}{refresh_jti}"
-    refresh_ttl = await redis.ttl(record_key)
-
-    if refresh_ttl > 0:
-        await redis.set(
-            f"{REFRESH_FAMILY_REVOKED_PREFIX}{family_id}",
-            "1",
-            ex=refresh_ttl,
-        )
-
-    await redis.delete(family_current_key)
-    await redis.delete(record_key)
-
-
-async def validate_access_token(access_token: str) -> dict[str, Any]:
-    payload = _decode_token(access_token, expected_type="access")
-
-    redis = get_redis_client()
-    access_jti = str(payload["jti"])
-    user_id = str(payload["sub"])
-
-    exists_user_id = await redis.get(f"{ACCESS_KEY_PREFIX}{access_jti}")
-    # Decode bytes to string if needed
-    if isinstance(exists_user_id, bytes):
-        exists_user_id = exists_user_id.decode('utf-8')
-
-    if exists_user_id != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="만료되었거나 폐기된 액세스 토큰입니다.",
-        )
-
-    token_version = await _get_user_token_version(user_id)
-    if int(payload.get("ver", 0)) != token_version:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="세션이 만료되었습니다. 다시 로그인 해주세요.",
-        )
-
-    return payload
-
-
-async def get_current_access_payload(
-    credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer),
-    access_token: str | None = Query(None),
-) -> dict[str, Any]:
-    token = credentials.credentials if credentials else access_token
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="인증 토큰이 필요합니다.",
-        )
-    return await validate_access_token(token)
+async def authenticate_session(
+    token: str | None,
+    session: AsyncSession,
+    *,
+    touch: bool,
+) -> User:
+    record = await validate_session_token(token, touch=False)
+    stmt = (
+        select(User)
+        .where(User.id == uuid.UUID(str(record["user_id"])), User.is_active.is_(True))
+        .execution_options(populate_existing=True)
+    )
+    try:
+        result = await session.execute(stmt)
+    except SQLAlchemyError as exc:
+        raise _store_unavailable("read-user", exc) from exc
+    user = result.scalar_one_or_none()
+    if user is None:
+        await _delete_key(session_key(token or ""), required=False)
+        raise _unauthorized("inactive-or-deleted-user", token)
+    if touch:
+        await validate_session_token(token, touch=True)
+    return user
 
 
 async def get_current_user(
-    payload: dict[str, Any] = Depends(get_current_access_payload),
-    session: AsyncSession = Depends(get_session),
+    request: Request,
+    session: AsyncSession = Depends(get_session, scope="function"),
 ) -> User:
-    user_id = str(payload["sub"])
-
-    stmt = select(User).where(User.id == uuid.UUID(user_id), User.is_active.is_(True))
-    result = await session.execute(stmt)
-    user = result.scalar_one_or_none()
-
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="활성 사용자 정보를 찾을 수 없습니다.",
-        )
-
-    return user
+    return await authenticate_session(
+        request.cookies.get(SESSION_COOKIE_NAME), session, touch=True
+    )
 
 
 async def get_current_user_id(
@@ -362,6 +277,96 @@ async def require_admin(
     if not current_user.is_super:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="관리자 권한이 필요합니다.",
+            detail="Administrator access is required.",
         )
     return current_user
+
+
+async def revoke_user_sessions(user_id: str) -> None:
+    try:
+        await get_redis_client().incr(f"{USER_SESSION_VERSION_PREFIX}{user_id}")
+    except _STORE_ERRORS as exc:
+        raise _store_unavailable("revoke-user-sessions", exc) from exc
+
+
+def _rate_limited(retry_after: int) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many login attempts. Try again later.",
+        headers={"Retry-After": str(max(retry_after, 1))},
+    )
+
+
+async def ensure_login_allowed(login_id: str) -> None:
+    redis = get_redis_client()
+    key = login_failure_key(login_id)
+    try:
+        count = _decode_int(await redis.get(key), default=0)
+        if count >= LOGIN_FAILURE_LIMIT:
+            ttl = await redis.ttl(key)
+            if ttl <= 0:
+                await redis.expire(key, LOGIN_FAILURE_WINDOW_SECONDS)
+                ttl = LOGIN_FAILURE_WINDOW_SECONDS
+            raise _rate_limited(ttl)
+    except HTTPException:
+        raise
+    except _STORE_ERRORS as exc:
+        raise _store_unavailable("check-login-limit", exc) from exc
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise _store_unavailable("decode-login-limit", exc) from exc
+
+
+async def record_login_failure(login_id: str) -> None:
+    redis = get_redis_client()
+    key = login_failure_key(login_id)
+    try:
+        count_raw, ttl_raw = await redis.eval(
+            _LOGIN_FAILURE_SCRIPT,
+            1,
+            key,
+            LOGIN_FAILURE_WINDOW_SECONDS,
+        )
+        count = _decode_int(count_raw)
+        ttl = _decode_int(ttl_raw)
+        if count >= LOGIN_FAILURE_LIMIT:
+            raise _rate_limited(ttl)
+    except HTTPException:
+        raise
+    except _STORE_ERRORS as exc:
+        raise _store_unavailable("record-login-failure", exc) from exc
+    except (TypeError, UnicodeDecodeError, ValueError) as exc:
+        raise _store_unavailable("decode-login-failure", exc) from exc
+
+
+async def clear_login_failures(login_id: str) -> None:
+    try:
+        await get_redis_client().delete(login_failure_key(login_id))
+    except _STORE_ERRORS as exc:
+        raise _store_unavailable("clear-login-failures", exc) from exc
+
+
+def set_session_cookie(
+    response: Response, token: str, absolute_expires_at: int
+) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=settings.session_absolute_ttl_days * 24 * 60 * 60,
+        expires=datetime.fromtimestamp(absolute_expires_at, timezone.utc),
+        path="/",
+        secure=settings.session_cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    settings = get_settings()
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path="/",
+        secure=settings.session_cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
