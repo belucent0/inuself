@@ -54,6 +54,7 @@ export interface StreamResult {
 interface RelayErrorData {
   code?: string
   message?: string
+  error_id?: string
   retryable?: boolean
 }
 
@@ -83,6 +84,9 @@ function parseStreamError(data: unknown): Error {
     const relayError = data as RelayErrorData
     if (relayError.code === 'relay_unavailable' && relayError.retryable === true) {
       return new RetryableStreamError(relayError.message || 'Streaming relay unavailable')
+    }
+    if (typeof relayError.message === 'string') {
+      return new TerminalStreamError(relayError.message)
     }
   }
   return new TerminalStreamError(typeof data === 'string' ? data : 'Agent stream failed')
@@ -339,22 +343,40 @@ async function postAgentStream(
   const acceptedMessage = accepted
   if (!acceptedMessage) throw new TerminalStreamError('Accepted message is missing')
 
+  await resumeMessageStream(
+    acceptedMessage.thread_id,
+    acceptedMessage.message_id,
+    mode,
+    callbacks,
+    abortSignal
+  )
+}
+
+export async function resumeMessageStream(
+  threadId: string,
+  messageId: string,
+  mode: string,
+  callbacks: StreamingCallbacks,
+  abortSignal?: AbortSignal
+): Promise<void> {
+
   let lastError: Error = new RetryableStreamError('SSE connection lost')
   for (const delayMs of RECONNECT_DELAYS_MS) {
     await waitForReconnect(delayMs, abortSignal)
     try {
       const stream = await httpClient.getStream(
-        `/threads/${acceptedMessage.thread_id}/messages/${acceptedMessage.message_id}/stream`,
+        `/threads/${threadId}/messages/${messageId}/stream`,
         { signal: abortSignal }
       )
       await processSSEStream(
         new Response(stream),
         mode,
         {
-          ...quietCallbacks,
+          ...callbacks,
+          onError: () => {},
           onComplete: (message) => callbacks.onComplete({
             ...message,
-            message_id: acceptedMessage.message_id,
+            message_id: messageId,
           }),
         },
         abortSignal

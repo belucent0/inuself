@@ -29,21 +29,21 @@ from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
-from redis.exceptions import RedisError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings, Settings
 from ..core.auth import get_current_user_id
 from ..core.redis import get_redis_client
 from ..db.session import get_session, async_session_factory
+from ..repositories.thread_repository import ACTIVE_ASSISTANT_STATUSES
 from ..services.thread_service import (
     get_thread_service,
     ThreadService,
 )
 from ..utils.task_queue_adapter import (
-    ACTIVE_JOB_TTL,
     AGENT_EVENT_CHANNEL_PREFIX,
-    AGENT_THREAD_KEY_PREFIX,
+    AGENT_FAILURE_CONTENT,
     get_task_queue,
 )
 
@@ -90,20 +90,32 @@ async def get_svc(session: AsyncSession = Depends(get_session)) -> ThreadService
     return get_thread_service(session)
 
 
-async def _clear_agent_thread_slot(thread_id: str, message_id: str) -> None:
-    redis = get_redis_client()
-    with suppress(RedisError):
-        await redis.eval(
-            """
-            if redis.call('get', KEYS[1]) == ARGV[1] then
-                return redis.call('del', KEYS[1])
-            end
-            return 0
-            """,
-            1,
-            f"{AGENT_THREAD_KEY_PREFIX}{thread_id}",
-            message_id,
-        )
+ACTIVE_ASSISTANT_INDEX = "uq_ai_message_active_assistant_per_thread"
+
+
+def _is_active_assistant_conflict(exc: IntegrityError) -> bool:
+    original = getattr(exc, "orig", None)
+    diagnostic = getattr(original, "diag", None)
+    cause = getattr(original, "__cause__", None)
+    constraint_name = (
+        getattr(diagnostic, "constraint_name", None)
+        or getattr(original, "constraint_name", None)
+        or getattr(cause, "constraint_name", None)
+    )
+    return constraint_name == ACTIVE_ASSISTANT_INDEX
+
+
+async def _raise_database_error(
+    session: AsyncSession, exc: IntegrityError, correlation_id: str
+) -> None:
+    await session.rollback()
+    if _is_active_assistant_conflict(exc):
+        raise HTTPException(
+            status_code=409,
+            detail="This thread already has an active response",
+        ) from exc
+    logger.exception("[Thread] Database error: correlation_id={}", correlation_id)
+    raise HTTPException(status_code=500, detail="Failed to persist agent request") from exc
 
 
 async def _commit_and_enqueue_agent(
@@ -115,30 +127,26 @@ async def _commit_and_enqueue_agent(
     user_message_id: str,
     assistant_message_id: str,
 ) -> None:
-    """Commit the turn, then hand it to the Agent Worker exactly once per thread."""
-    await svc.update_message_metadata(
-        assistant_message_id,
-        agent_user_id=str(user_id),
-        agent_user_message_id=user_message_id,
-    )
-    redis = get_redis_client()
-    reserved = await redis.set(
-        f"{AGENT_THREAD_KEY_PREFIX}{thread_id}",
-        assistant_message_id,
-        nx=True,
-        ex=ACTIVE_JOB_TTL,
-    )
-    if not reserved:
-        raise HTTPException(
-            status_code=409,
-            detail="This thread already has an active response",
-        )
-
-    committed = False
+    """Commit the turn, then hand it to the Agent Worker."""
     try:
+        await svc.update_message_metadata(
+            assistant_message_id,
+            agent_user_id=str(user_id),
+            agent_user_message_id=user_message_id,
+        )
         await session.commit()
-        committed = True
+    except IntegrityError as exc:
+        await _raise_database_error(session, exc, assistant_message_id)
+    except Exception as exc:
+        await session.rollback()
+        logger.exception(
+            "[Thread] Agent commit failed: correlation_id={}", assistant_message_id
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to persist agent request"
+        ) from exc
 
+    try:
         def enqueue() -> None:
             get_task_queue().enqueue_agent_job(
                 thread_id=thread_id,
@@ -148,23 +156,12 @@ async def _commit_and_enqueue_agent(
             )
 
         await asyncio.to_thread(enqueue)
-    except Exception as exc:
-        if committed:
-            logger.exception(
-                "[Thread] Agent enqueue deferred to watchdog: thread_id={} message_id={}",
-                thread_id,
-                assistant_message_id,
-            )
-            return
-
-        await _clear_agent_thread_slot(thread_id, assistant_message_id)
-        await session.rollback()
+    except Exception:
         logger.exception(
-            "[Thread] Agent commit failed: thread_id={} message_id={}",
+            "[Thread] Agent enqueue deferred to watchdog: thread_id={} message_id={}",
             thread_id,
             assistant_message_id,
         )
-        raise HTTPException(status_code=503, detail="Failed to persist agent request") from exc
 
 
 def _sse_event(event_type: str, data: Any) -> str:
@@ -205,7 +202,7 @@ async def _relay_agent_events(message_id: str, accepted: dict | None = None):
             )
             return
         if current.status in {"failed", "cancelled"}:
-            yield _sse_event("error", current.content or current.status)
+            yield _sse_event("error", AGENT_FAILURE_CONTENT)
             return
         if current.partial_content:
             last_partial = current.partial_content
@@ -220,10 +217,21 @@ async def _relay_agent_events(message_id: str, accepted: dict | None = None):
             if event:
                 raw = event["data"]
                 payload = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+                try:
+                    decoded = json.loads(payload)
+                    event_type = decoded.get("type") if isinstance(decoded, dict) else None
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "[Thread] Ignoring malformed Agent event: message_id={}",
+                        message_id,
+                    )
+                    continue
+                if event_type == "error":
+                    yield _sse_event("error", AGENT_FAILURE_CONTENT)
+                    return
                 yield f"data: {payload}\n\n"
-                with suppress(json.JSONDecodeError):
-                    if json.loads(payload).get("type") in {"done", "error"}:
-                        return
+                if event_type == "done":
+                    return
                 continue
 
             current = await db_get_message()
@@ -238,7 +246,7 @@ async def _relay_agent_events(message_id: str, accepted: dict | None = None):
                 )
                 return
             if current.status in {"failed", "cancelled"}:
-                yield _sse_event("error", current.content or current.status)
+                yield _sse_event("error", AGENT_FAILURE_CONTENT)
                 return
             if current.partial_content and current.partial_content != last_partial:
                 last_partial = current.partial_content
@@ -568,14 +576,17 @@ async def regenerate_response(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    messages = await svc.get_messages(thread_id, user_id=user_id)
-    last_assistant = messages[-1] if messages and messages[-1].role == "assistant" else None
-    last_user_message = next(
-        (message for message in reversed(messages[:-1]) if message.role == "user"),
-        None,
-    )
+    last_assistant = await svc.get_last_message(thread_id)
+    last_user_message = await svc.get_last_message(thread_id, role="user")
     if not last_assistant or not last_user_message:
         raise HTTPException(status_code=400, detail="No assistant response to regenerate")
+    if last_assistant.role != "assistant":
+        raise HTTPException(status_code=400, detail="No assistant response to regenerate")
+    if last_assistant.status in ACTIVE_ASSISTANT_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="This thread already has an active response",
+        )
     previous_replacements = last_assistant.metadata.get("replaces_message_ids", [])
     replacement_ids = [
         last_assistant.message_id,
@@ -587,27 +598,30 @@ async def regenerate_response(
         context=request.context,
         requested_model=request.model,
     )
-    assistant_message = await svc.add_message(
-        thread_id,
-        user_id=user_id,
-        role="assistant",
-        content="",
-        status="queued",
-        metadata={
-            "mode": request.mode,
-            "context": agent_metadata,
-            "regenerated": True,
-            "replaces_message_ids": replacement_ids,
-        },
-    )
-    await _commit_and_enqueue_agent(
-        session=session,
-        svc=svc,
-        thread_id=thread_id,
-        user_id=user_id,
-        user_message_id=last_user_message.message_id,
-        assistant_message_id=assistant_message.message_id,
-    )
+    try:
+        assistant_message = await svc.add_message(
+            thread_id,
+            user_id=user_id,
+            role="assistant",
+            content="",
+            status="queued",
+            metadata={
+                "mode": request.mode,
+                "context": agent_metadata,
+                "regenerated": True,
+                "replaces_message_ids": replacement_ids,
+            },
+        )
+        await _commit_and_enqueue_agent(
+            session=session,
+            svc=svc,
+            thread_id=thread_id,
+            user_id=user_id,
+            user_message_id=last_user_message.message_id,
+            assistant_message_id=assistant_message.message_id,
+        )
+    except IntegrityError as exc:
+        await _raise_database_error(session, exc, thread_id)
 
     return _agent_stream_response(
         assistant_message.message_id,
@@ -753,9 +767,13 @@ async def create_thread(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"[Thread] Create error: {e}")
-        raise HTTPException(status_code=500, detail=f"스레드 생성 실패: {str(e)}")
+    except IntegrityError as exc:
+        correlation_id = thread.thread_id if "thread" in locals() else "create"
+        await _raise_database_error(session, exc, correlation_id)
+    except Exception as exc:
+        await session.rollback()
+        logger.exception("[Thread] Create failed")
+        raise HTTPException(status_code=500, detail="Failed to create thread") from exc
 
 
 @router.post("/{thread_id}/messages", response_model=AddMessageResponse)
@@ -845,9 +863,12 @@ async def add_message(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"[Thread] Add message error: {e}")
-        raise HTTPException(status_code=500, detail=f"메시지 추가 실패: {str(e)}")
+    except IntegrityError as exc:
+        await _raise_database_error(session, exc, thread_id)
+    except Exception as exc:
+        await session.rollback()
+        logger.exception("[Thread] Add message failed: thread_id={}", thread_id)
+        raise HTTPException(status_code=500, detail="Failed to add message") from exc
 
 
 @router.get("/{thread_id}/messages/{message_id}/stream")
@@ -863,9 +884,15 @@ async def stream_message_v2(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    messages = await svc.get_messages(thread_id, user_id=user_id)
-    message = next((item for item in messages if item.message_id == message_id), None)
-    if not message or message.role != "assistant":
+    try:
+        message = await svc.get_message(message_id)
+    except (TypeError, ValueError):
+        message = None
+    if (
+        not message
+        or message.thread_id != thread.thread_id
+        or message.role != "assistant"
+    ):
         raise HTTPException(status_code=404, detail="Assistant message not found")
 
     await session.rollback()
