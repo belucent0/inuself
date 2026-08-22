@@ -19,6 +19,7 @@ import { ContentBanner } from '@/features/chat/components/ContentBanner'
 import { toast } from 'sonner'
 import { getAccessToken } from '@/shared/services/authToken'
 import { sendMessageStream } from '@/shared/services/chatStreamService'
+import type { ReasoningPreference } from '@/shared/types'
 
 // v1.0.0: 메시지 상태 타입
 type MessageStatus = 'queued' | 'analyzing' | 'searching' | 'thinking' | 'generating' | 'completed' | 'failed'
@@ -303,7 +304,7 @@ export function ChatPage() {
   // ============================================================
   // 이벤트 핸들러
   // ============================================================
-  const handleSendMessage = async (content: string, msgMode?: string, model?: string) => {
+  const handleSendMessage = async (content: string, msgMode: string, reasoning: ReasoningPreference, allowRemote: boolean) => {
     // v1.0.0: 두 번째 메시지도 확인 후 라우팅 흐름 사용
     if (!threadId || streaming.isStreaming) return
 
@@ -332,7 +333,8 @@ export function ChatPage() {
         {
           query: content,
           mode: effectiveMode,
-          model,
+          reasoning,
+          allow_remote: allowRemote,
           context: contentContextEnabled && threadContentId
             ? { content_id: threadContentId }
             : undefined,
@@ -375,8 +377,8 @@ export function ChatPage() {
     }
   }
 
-  const handleRegenerate = async (regenMode?: string, model?: string) => {
-    await regenerate(regenMode || mode, model)
+  const handleRegenerate = async (regenMode: string, reasoning: ReasoningPreference, allowRemote: boolean) => {
+    await regenerate(regenMode || mode, reasoning, allowRemote)
   }
 
   // ============================================================

@@ -123,8 +123,6 @@ services:
       - LLM_PROVIDER=ai-gateway
       - AI_GATEWAY_URL=http://ai-gateway:4000
       - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY}
-      - AI_GATEWAY_MODEL=${AI_GATEWAY_MODEL:-tier-simple}
-      - AI_GATEWAY_MODEL_SUMMARIZE=${AI_GATEWAY_MODEL_SUMMARIZE:-tier-recap}
       # AI Translate 전용 컨테이너 (PR-Translate.3, EXAONE 4.0-1.2B)
       - AI_TRANSLATE_URL=http://ai-translate:8000
       - AI_TRANSLATE_MODEL=${AI_TRANSLATE_MODEL:-exaone-translate}
@@ -163,7 +161,7 @@ services:
     image: asr-backend:latest
     command: >-
       celery -A app.agent_celery:celery_app worker --loglevel=info
-      -Q agent -c ${AGENT_WORKER_CONCURRENCY:-1}
+      -Q agent -c ${AGENT_WORKER_CONCURRENCY:-4}
     env_file:
       - .env
     volumes:
@@ -171,9 +169,9 @@ services:
       - ./docs/wpis:/app/docs/wpis:ro
       - ./backend/app:/app/app:ro
       - ./backend/alembic:/app/alembic:ro
+      - ./infra/inference/wait-for-service.sh:/usr/local/bin/wait-for-service.sh:ro
+    entrypoint: ["bash", "/usr/local/bin/wait-for-service.sh", "http://ai-gateway:4000/health/liveliness"]
     depends_on:
-      backend:
-        condition: service_healthy
       postgres:
         condition: service_healthy
       valkey:
@@ -181,7 +179,7 @@ services:
       minio:
         condition: service_healthy
       ai-gateway:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -196,7 +194,6 @@ services:
       - LLM_PROVIDER=ai-gateway
       - AI_GATEWAY_URL=http://ai-gateway:4000
       - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY}
-      - AI_GATEWAY_MODEL=${AI_GATEWAY_MODEL:-tier-simple}
       - AGENT_SEARCH_WEB_LIMIT=${AGENT_SEARCH_WEB_LIMIT:-15}
       - AGENT_HYBRID_WEB_LIMIT=${AGENT_HYBRID_WEB_LIMIT:-10}
       - AGENT_CONTENT_FETCH_TOP_K=${AGENT_CONTENT_FETCH_TOP_K:-8}
@@ -210,15 +207,7 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-pk-lf-torch-dev}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-sk-lf-torch-dev}
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "celery -A app.agent_celery:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5 | grep -q pong",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+      disable: true
 
   # Vite 기반 프론트엔드 (React + Vite)
   frontend:
@@ -365,8 +354,6 @@ services:
       # AI Gateway 설정 (LLM 요약용)
       - AI_GATEWAY_URL=http://ai-gateway:4000
       - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY}
-      - AI_GATEWAY_MODEL=${AI_GATEWAY_MODEL:-tier-simple}
-      - AI_GATEWAY_MODEL_SUMMARIZE=${AI_GATEWAY_MODEL_SUMMARIZE:-tier-recap}
       # AI Translate 전용 컨테이너 (PR-Translate.3, EXAONE 4.0-1.2B)
       - AI_TRANSLATE_URL=http://ai-translate:8000
       - AI_TRANSLATE_MODEL=${AI_TRANSLATE_MODEL:-exaone-translate}
@@ -712,7 +699,8 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      - ./infra/shared:/app/infra/shared:ro # 공통 tier_config 모듈
+      - ./infra/shared:/app/infra/shared:ro # routing policy
+      - ./infra/inference/wait-for-service.sh:/usr/local/bin/wait-for-service.sh:ro
     env_file:
       - .env
     environment:

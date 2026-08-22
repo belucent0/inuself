@@ -1,21 +1,44 @@
 """LLM 클라이언트 (비동기).
 
 LangGraph 노드에서 사용할 비동기 LLM 호출 함수를 제공합니다.
-기존 AI Gateway를 통해 GPU/NPU로 자동 라우팅됩니다.
+AI Gateway를 통해 RoutingProfile에 맞는 provider로 라우팅됩니다.
 """
 from __future__ import annotations
 
+import asyncio
 from loguru import logger
 from functools import lru_cache
 from typing import Any, AsyncIterator, Iterable, Mapping
 
 from openai import AsyncOpenAI, APIConnectionError, APIStatusError, APITimeoutError
 
+from ...core.reasoning import RoutingProfile, routing_profile
+from ...services.ai_gateway_client import _gateway_error_type, _retry_after_seconds
 
 
 
 class LLMClientError(RuntimeError):
     """LLM 클라이언트 호출 실패 예외."""
+
+
+async def _create_with_overload_retry(client: AsyncOpenAI, **kwargs):
+    for attempt in range(3):
+        try:
+            return await client.chat.completions.create(**kwargs)
+        except APIStatusError as exc:
+            overloaded = (
+                exc.status_code == 503
+                and _gateway_error_type(getattr(exc, "body", None)) == "overloaded"
+            )
+            if not overloaded or attempt == 2:
+                raise
+            delay = min(_retry_after_seconds(exc, 5.0), 30.0)
+            logger.info(
+                "[LLM] Providers overloaded, retrying in {}s ({}/2)",
+                delay,
+                attempt + 1,
+            )
+            await asyncio.sleep(delay)
 
 
 @lru_cache(maxsize=1)
@@ -62,15 +85,17 @@ async def async_llm_completion(
     settings: Any,
     messages: Iterable[Mapping[str, str]],
     model: str | None = None,
+    routing: RoutingProfile | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
 ) -> str:
     """비동기 LLM 완성 요청.
 
     Args:
-        settings: 애플리케이션 설정 (ai_gateway_url, ai_gateway_api_key, ai_gateway_model 포함)
+        settings: 애플리케이션 설정
         messages: 대화 메시지 목록
-        model: 사용할 LLM 모델명 (동적 라우팅, None이면 settings 기본값 사용)
+        model: 사용할 LLM 모델명 (None이면 auto)
+        routing: Gateway RoutingProfile (미지정 시 chat/none/local_only)
         temperature: 온도 (기본값: settings에서 가져옴)
         max_tokens: 최대 토큰 수 (기본값: settings에서 가져옴)
 
@@ -82,17 +107,19 @@ async def async_llm_completion(
     """
     client = _get_async_client(settings.ai_gateway_url, settings.ai_gateway_api_key)
 
-    # 동적 모델 라우팅: 명시적 모델 > settings 기본값
-    actual_model = model or settings.ai_gateway_model
+    actual_model = model or "auto"
+    profile = routing or routing_profile("chat", "none")
     logger.info(f"[LLM] Async request: model={actual_model}")
 
     try:
-        response = await client.chat.completions.create(
+        response = await _create_with_overload_retry(
+            client,
             model=actual_model,
             messages=_build_messages(messages),
             temperature=temperature if temperature is not None else getattr(settings, 'llm_temperature', 0.7),
             max_tokens=max_tokens if max_tokens is not None else getattr(settings, 'llm_max_tokens', 2048),
             stream=False,
+            extra_body={"routing": profile},
         )
 
         content = response.choices[0].message.content
@@ -129,6 +156,7 @@ async def async_llm_completion_stream(
     settings: Any,
     messages: Iterable[Mapping[str, str]],
     model: str | None = None,
+    routing: RoutingProfile | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
 ) -> AsyncIterator[str]:
@@ -137,7 +165,8 @@ async def async_llm_completion_stream(
     Args:
         settings: 애플리케이션 설정
         messages: 대화 메시지 목록
-        model: 사용할 LLM 모델명 (동적 라우팅, None이면 settings 기본값 사용)
+        model: 사용할 LLM 모델명 (None이면 auto)
+        routing: Gateway RoutingProfile (미지정 시 chat/none/local_only)
         temperature: 온도
         max_tokens: 최대 토큰 수
 
@@ -149,17 +178,19 @@ async def async_llm_completion_stream(
     """
     client = _get_async_client(settings.ai_gateway_url, settings.ai_gateway_api_key)
 
-    # 동적 모델 라우팅: 명시적 모델 > settings 기본값
-    actual_model = model or settings.ai_gateway_model
+    actual_model = model or "auto"
+    profile = routing or routing_profile("chat", "none")
     logger.info(f"[LLM] Async stream request: model={actual_model}")
 
     try:
-        response = await client.chat.completions.create(
+        response = await _create_with_overload_retry(
+            client,
             model=actual_model,
             messages=_build_messages(messages),
             temperature=temperature if temperature is not None else getattr(settings, 'llm_temperature', 0.7),
             max_tokens=max_tokens if max_tokens is not None else getattr(settings, 'llm_max_tokens', 2048),
             stream=True,
+            extra_body={"routing": profile},
         )
 
         async for chunk in response:

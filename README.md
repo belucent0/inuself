@@ -20,7 +20,7 @@ Browser ── POST(stream=true) ──► Backend (FastAPI BFF)
                          └──────────┬──────────────┘
                                     ▼
                               AI Gateway
-                         tier routing / fallback
+                       profile routing / fallback
                            ┌────────┴────────┐
                            ▼                 ▼
                  FastFlowLM (NPU, 선택)   ai-* (ROCm GPU)
@@ -43,7 +43,7 @@ Valkey: Celery broker·실시간 Pub/Sub·락/캐시 (응답 토큰 영속 저�
 | **WPI 심리검사** | 5유형 × 5차원 성격 분석, AI 에이전트 활용, 검사 결과에 개인 맞춤형 마음읽기 해설 제공 |
 | **YouTube 영상 처리** | 다운로드 → 전사 → 구조화 요약 |
 | **웹 검색 통합** | SearXNG 기반 딥서치, 멀티턴 검색 재시도 |
-| **AI 추론 게이트웨이** | ai-gateway (FastAPI + httpx) — `tier-simple`은 선택적으로 FastFlowLM NPU, 실패 시 GPU 폴백. 그 외 로컬 추론 컨테이너 및 serverless 폴백 |
+| **AI 추론 게이트웨이** | ai-gateway (FastAPI + OpenAI SDK) — `RoutingProfile` 능력 필터, Provider health/circuit, NPU 1 · GPU 4 · Codex 2 동시성 제어, 조건부 serverless 폴백 |
 | **옵저버빌리티** | Grafana + Prometheus + Loki + Tempo + Langfuse |
 
 ---
@@ -68,6 +68,8 @@ Valkey: Celery broker·실시간 Pub/Sub·락/캐시 (응답 토큰 영속 저�
 
 - 아키텍처 상세 → [`docs/architecture-v1.2.0.md`](docs/architecture-v1.2.0.md)
 - AI 채팅 요청·SSE 복구 흐름 → [`docs/workflow-ai-chat.md`](docs/workflow-ai-chat.md)
+- LLM RoutingProfile 운영 계약 → [`docs/routing-v2.md`](docs/routing-v2.md)
+- NPU/GPU/Codex capacity 실증 → [`docs/benchmarks/routing-npu-gpu-overflow.md`](docs/benchmarks/routing-npu-gpu-overflow.md)
 - Gemma 4 서빙·벤치마크 → [`docs/benchmarks/gemma4-12b-vllm-mtp.md`](docs/benchmarks/gemma4-12b-vllm-mtp.md)
 - GPU/ROCm 설치 가이드 → [`docs/archived/README-legacy.md`](docs/archived/README-legacy.md)
 

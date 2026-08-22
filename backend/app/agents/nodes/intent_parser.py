@@ -1,10 +1,10 @@
 """Intent Parser 노드.
 
 사용자 쿼리의 의도를 분석하여 적절한 AI 모드를 결정합니다.
-또한 Tier 기반 라우팅을 수행하여 쿼리에 적합한 능력 티어를 선택합니다.
+또한 요청과 모드에 맞는 추론 수준을 선택합니다.
 
 설계 원칙:
-- Backend(LangGraph): WHAT - "이 쿼리에 어떤 능력이 필요한가?" (tier 결정)
+- Backend(LangGraph): WHAT - "이 쿼리에 어떤 추론이 필요한가?" (reasoning 결정)
 - Infrastructure(StreamProcessor): HOW - "그 능력을 어떤 모델로 제공할 것인가?" (model 결정)
 
 V8.1: 형태소 분석(kiwi) + 임베딩 하이브리드 쿼리 추출
@@ -34,9 +34,8 @@ from loguru import logger
 
 from ..state import GraphState, AIMode, ThinkingStep, QueryAnalysis
 from ..tools.llm_client import async_llm_completion
-from ..tools.model_router import TierRouter
 from ..tools.datetime_tool import get_current_datetime
-from ...core.llm_tier import LLMTier
+from ...core.reasoning import ResolvedReasoning, resolve_reasoning
 
 # Kiwi 형태소 분석기 싱글톤 (로딩 시간 절약)
 _kiwi_instance: Kiwi | None = None
@@ -713,8 +712,7 @@ class LanguageRouterTransformer(QueryTransformer):
 class IntentParserNode:
     """사용자 쿼리의 의도를 분석하여 적절한 모드를 결정하는 노드.
 
-    또한 임베딩 기반 Tier 라우팅을 수행합니다.
-    선택된 tier는 인프라 레이어(StreamProcessor)에서 실제 모델로 매핑됩니다.
+    최종 모드와 컨텍스트에 따라 Gateway 추론 수준을 결정합니다.
 
     V8.3: 플러그인 기반 Query Transformation
     - QueryTransformer 플러그인들을 순차 적용
@@ -728,7 +726,6 @@ class IntentParserNode:
             settings: 애플리케이션 설정 (AI Gateway 연결 정보 등)
         """
         self.settings = settings
-        self.tier_router = TierRouter(settings)
 
         # Query Transformation 플러그인 등록 (순서대로 실행)
         self.transformers: list[QueryTransformer] = [
@@ -742,24 +739,25 @@ class IntentParserNode:
             f"[IntentParser] Initialized with {len(self.transformers)} query transformers"
         )
 
-    def _resolve_selected_model(self, state: GraphState, fallback_tier: str) -> str:
-        """요청 메타데이터 모델 오버라이드를 우선 적용한다.
-
-        우선순위:
-        1. metadata.model 또는 metadata.llm_model
-        2. tier router가 선택한 fallback_tier
-        """
+    @staticmethod
+    def _resolve_reasoning(
+        state: GraphState,
+        mode: AIMode,
+        context_chars: int,
+    ) -> ResolvedReasoning:
         metadata = state.get("metadata")
-        if isinstance(metadata, dict):
-            requested = metadata.get("model") or metadata.get("llm_model")
-            if isinstance(requested, str):
-                normalized = requested.strip()
-                if normalized:
-                    logger.info(
-                        f"[IntentParser] Using requested model override: {normalized}"
-                    )
-                    return normalized
-        return fallback_tier
+        requested = (
+            metadata.get("reasoning", "auto")
+            if isinstance(metadata, dict)
+            else "auto"
+        )
+        return resolve_reasoning(
+            requested
+            if requested in {"auto", "none", "low", "medium", "high"}
+            else "auto",
+            mode,
+            context_chars,
+        )
 
     async def __call__(self, state: GraphState) -> dict:
         """의도 분석 실행.
@@ -788,11 +786,10 @@ class IntentParserNode:
                 )
             )
 
-            # Tier 기반 라우팅
-            selected_tier = await self.tier_router.select_tier(
-                query=query, mode=current_mode.value, context_size=0
+            selected_reasoning = self._resolve_reasoning(
+                state, current_mode, len(state.get("content_context", ""))
             )
-            logger.info(f"[IntentParser] Tier routing: {selected_tier}")
+            logger.info(f"[IntentParser] Reasoning routing: {selected_reasoning}")
 
             # 검색 모드면 쿼리 재정의 수행
             query_analysis = None
@@ -816,14 +813,13 @@ class IntentParserNode:
             thinking_steps.append(
                 ThinkingStep(
                     step="intent_result",
-                    content=f"모드: {current_mode}, 티어: {selected_tier}",
+                    content=f"모드: {current_mode}, 추론: {selected_reasoning}",
                     timestamp=time.time(),
                 )
             )
-            selected_model = self._resolve_selected_model(state, selected_tier)
             return {
                 "mode": current_mode,
-                "selected_model": selected_model,
+                "selected_reasoning": selected_reasoning,
                 "intent_confidence": 1.0,
                 "requires_clarification": False,
                 "query_analysis": query_analysis,
@@ -842,20 +838,19 @@ class IntentParserNode:
                     timestamp=time.time(),
                 )
             )
-            selected_tier = await self.tier_router.select_tier(
-                query=query, mode="rag", context_size=len(content_context)
+            selected_reasoning = self._resolve_reasoning(
+                state, AIMode.RAG, len(content_context)
             )
             thinking_steps.append(
                 ThinkingStep(
                     step="intent_result",
-                    content=f"RAG 모드 (콘텐츠 우선), 티어: {selected_tier}",
+                    content=f"RAG 모드 (콘텐츠 우선), 추론: {selected_reasoning}",
                     timestamp=time.time(),
                 )
             )
-            selected_model = self._resolve_selected_model(state, selected_tier)
             return {
                 "mode": AIMode.RAG,
-                "selected_model": selected_model,
+                "selected_reasoning": selected_reasoning,
                 "intent_confidence": 1.0,
                 "requires_clarification": False,
                 "query_analysis": None,
@@ -877,11 +872,10 @@ class IntentParserNode:
         if quick_mode:
             logger.info(f"[IntentParser] Quick classification: mode={quick_mode}")
 
-            # Tier 기반 라우팅
-            selected_tier = await self.tier_router.select_tier(
-                query=query, mode=quick_mode.value, context_size=0
+            selected_reasoning = self._resolve_reasoning(
+                state, quick_mode, len(state.get("content_context", ""))
             )
-            logger.info(f"[IntentParser] Tier routing: {selected_tier}")
+            logger.info(f"[IntentParser] Reasoning routing: {selected_reasoning}")
 
             # 검색 모드면 쿼리 재정의 수행
             query_analysis = None
@@ -905,14 +899,13 @@ class IntentParserNode:
             thinking_steps.append(
                 ThinkingStep(
                     step="intent_result",
-                    content=f"빠른 분류: {quick_mode} 모드, 티어: {selected_tier}",
+                    content=f"빠른 분류: {quick_mode} 모드, 추론: {selected_reasoning}",
                     timestamp=time.time(),
                 )
             )
-            selected_model = self._resolve_selected_model(state, selected_tier)
             return {
                 "mode": quick_mode,
-                "selected_model": selected_model,
+                "selected_reasoning": selected_reasoning,
                 "intent_confidence": 0.9,
                 "requires_clarification": False,
                 "query_analysis": query_analysis,
@@ -943,11 +936,10 @@ class IntentParserNode:
                 f"[IntentParser] LLM classification: mode={mode}, confidence={confidence}"
             )
 
-            # Tier 기반 라우팅
-            selected_tier = await self.tier_router.select_tier(
-                query=query, mode=mode.value, context_size=0
+            selected_reasoning = self._resolve_reasoning(
+                state, mode, len(state.get("content_context", ""))
             )
-            logger.info(f"[IntentParser] Tier routing: {selected_tier}")
+            logger.info(f"[IntentParser] Reasoning routing: {selected_reasoning}")
 
             # 검색 모드면 쿼리 재정의 수행
             query_analysis = None
@@ -971,15 +963,14 @@ class IntentParserNode:
             thinking_steps.append(
                 ThinkingStep(
                     step="intent_result",
-                    content=f"의도 분석: {mode} 모드, 티어: {selected_tier} (신뢰도: {confidence:.0%})",
+                    content=f"의도 분석: {mode} 모드, 추론: {selected_reasoning} (신뢰도: {confidence:.0%})",
                     timestamp=time.time(),
                 )
             )
 
-            selected_model = self._resolve_selected_model(state, selected_tier)
             return {
                 "mode": mode,
-                "selected_model": selected_model,
+                "selected_reasoning": selected_reasoning,
                 "intent_confidence": confidence,
                 "requires_clarification": confidence < 0.7,
                 "query_analysis": query_analysis,
@@ -998,10 +989,12 @@ class IntentParserNode:
                     timestamp=time.time(),
                 )
             )
-            selected_model = self._resolve_selected_model(state, LLMTier.SIMPLE)
+            selected_reasoning = self._resolve_reasoning(
+                state, AIMode.SIMPLE, len(state.get("content_context", ""))
+            )
             return {
                 "mode": AIMode.SIMPLE,
-                "selected_model": selected_model,
+                "selected_reasoning": selected_reasoning,
                 "intent_confidence": 0.5,
                 "requires_clarification": False,
                 "query_analysis": None,

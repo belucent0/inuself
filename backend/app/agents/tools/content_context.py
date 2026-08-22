@@ -53,10 +53,10 @@ async def load_content_context(
         async with AsyncSessionLocal() as session:
             stmt = (
                 select(File)
+                .join(Content, Content.file_id == File.id)
                 .options(
                     selectinload(File.content).selectinload(Content.transcription_result)
                 )
-                .join(Content, Content.file_id == File.id)
                 .where(File.id.in_(content_ids), Content.user_id == owner_id)
             )
             result = await session.execute(stmt)

@@ -16,6 +16,7 @@ from ..state import GraphState, AIMode, ThinkingStep, SearchResult
 from ..tools.llm_client import async_llm_completion_stream
 from ..tools.datetime_tool import get_current_datetime
 from ...utils.citation_manager import CitationManager
+from ...core.reasoning import REASONING_DISPLAY_MAP, routing_profile
 
 
 # 모드별 시스템 프롬프트 베이스 (날짜는 get_system_prompt()에서 동적 주입)
@@ -182,13 +183,18 @@ class GeneratorNode:
             messages.append({"role": "user", "content": query})
 
         try:
-            # LLM 호출 (스트리밍) - 동적 모델 라우팅
-            selected_model = state.get("selected_model")
+            selected_reasoning = state.get("selected_reasoning", "none")
+            metadata = state.get("metadata", {})
             response_chunks = []
             async for chunk in async_llm_completion_stream(
                 settings=self.settings,
                 messages=messages,
-                model=selected_model,
+                model="auto",
+                routing=routing_profile(
+                    "chat",
+                    selected_reasoning,
+                    bool(metadata.get("allow_remote", False)),
+                ),
             ):
                 response_chunks.append(chunk)
 
@@ -288,14 +294,14 @@ class GeneratorNode:
         else:
             messages.append({"role": "user", "content": query})
 
-        # 스트리밍 응답 생성 - 동적 모델 라우팅
-        selected_model = state.get("selected_model")
+        selected_reasoning = state.get("selected_reasoning", "none")
+        metadata = state.get("metadata", {})
 
         yield {
             "type": "thinking",
             "data": {
                 "step": "generation_start",
-                "content": f"응답 생성 시작 (모델: {selected_model or 'auto'})",
+                "content": f"응답 생성 시작 (추론: {REASONING_DISPLAY_MAP[selected_reasoning]})",
                 "timestamp": time.time(),
             },
         }
@@ -304,7 +310,12 @@ class GeneratorNode:
         async for chunk in async_llm_completion_stream(
             settings=self.settings,
             messages=messages,
-            model=selected_model,
+            model="auto",
+            routing=routing_profile(
+                "chat",
+                selected_reasoning,
+                bool(metadata.get("allow_remote", False)),
+            ),
         ):
             response_chunks.append(chunk)
             yield {"type": "content", "data": chunk}

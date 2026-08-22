@@ -21,6 +21,7 @@ from typing import Any
 from uuid import UUID
 
 from ..core.config import get_settings
+from ..core.reasoning import routing_profile
 from ..db.session import AsyncSessionLocal
 from ..prompts.translation import (
     TRANSLATION_CHUNK_TEMPLATE,
@@ -32,7 +33,6 @@ from .ai_gateway_client import (
     AIGatewayClientError,
     request_ai_gateway_completion_async,
 )
-from .circuit_breaker import CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -188,12 +188,7 @@ async def translate_transcription(file_id: UUID, target_lang: str = "ko") -> dic
                     transcription_data=transcription_data,
                 )
 
-        try:
-            await asyncio.gather(*(_run_chunk(s) for s in targets))
-        except CircuitBreakerOpenError as exc:
-            logger.warning(f"[Translation] circuit breaker open: {exc}")
-            # 다음 라운드 백오프 후 재진입
-            continue
+        await asyncio.gather(*(_run_chunk(s) for s in targets))
 
     # 4. 종료 이벤트
     success_count = sum(1 for s in chunk_states if s.status == "success")
@@ -260,21 +255,17 @@ async def _translate_one_chunk(
     )
 
     try:
-        # PR-Translate.3: 번역은 ai-translate 컨테이너(EXAONE 4.0-1.2B) 직접 호출.
-        # ai-llm(Qwen3-VL-4B)의 GPU 큐 경합 분리 + 한국어 dual-training 모델로 quality ↑.
+        # 번역은 일반 채팅 작업으로 로컬 provider에서 실행한다.
         response = await request_ai_gateway_completion_async(
             settings=settings,
-            base_url=settings.ai_translate_url,
-            api_key="none",  # 내부 컨테이너 인증 없음
-            model=settings.ai_translate_model,
+            model="auto",
+            routing=routing_profile("chat", "none"),
             messages=[
                 {"role": "system", "content": TRANSLATION_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
         )
         translations = _parse_translations(response, expected=len(chunk_segments))
-    except CircuitBreakerOpenError:
-        raise
     except (AIGatewayClientError, ValueError, Exception) as exc:
         state.status = "failed"
         state.last_error = str(exc)

@@ -144,7 +144,19 @@ async def lifespan(app: FastAPI):
     watchdog_scheduler_task = asyncio.create_task(watchdog_scheduler.start())
     logger.info("[Lifespan] StateWatchdog scheduler started (interval: 5m)")
 
+    from .services.agent_dispatcher import run_agent_dispatch_reconciler
+
+    agent_dispatch_task = asyncio.create_task(run_agent_dispatch_reconciler())
+    logger.info("[Lifespan] Agent dispatch reconciler started")
+
     yield
+
+    agent_dispatch_task.cancel()
+    try:
+        await agent_dispatch_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("[Lifespan] Agent dispatch reconciler stopped")
 
     # 종료 시: WatchdogScheduler 중지
     try:

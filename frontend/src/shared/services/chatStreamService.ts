@@ -6,6 +6,7 @@
  */
 
 import type { Message, Source, ThinkingStep } from '@/shared/types'
+import type { ReasoningPreference } from '@/shared/types'
 import { httpClient } from './api/httpClient'
 
 // ============================================================
@@ -26,7 +27,8 @@ export interface AcceptedMessage {
 export interface AgentMessageRequest {
   query: string
   mode: string
-  model?: string
+  reasoning: ReasoningPreference
+  allow_remote: boolean
   context?: Record<string, unknown>
 }
 
@@ -400,13 +402,14 @@ export async function sendMessageStream(
 export async function regenerateStream(
   threadId: string,
   mode: string,
-  model: string | undefined,
+  reasoning: ReasoningPreference,
+  allowRemote: boolean,
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
   await postAgentStream(
     `/threads/${threadId}/regenerate`,
-    { mode, model },
+    { mode, reasoning, allow_remote: allowRemote },
     mode,
     callbacks,
     abortSignal

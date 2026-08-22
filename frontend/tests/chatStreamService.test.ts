@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 import {
   processSSEStream,
+  regenerateStream,
   sendMessageStream,
   type StreamingCallbacks,
 } from '../src/shared/services/chatStreamService'
@@ -111,9 +112,11 @@ const reconnectCallbacks: StreamingCallbacks = {
 
 const originalFetch = globalThis.fetch
 const reconnectRequests: string[] = []
+let sendBody: unknown
 globalThis.fetch = async (input, init) => {
   reconnectRequests.push(`${init?.method || 'GET'} ${String(input)}`)
   if (init?.method === 'POST') {
+    sendBody = JSON.parse(String(init?.body))
     return new Response(
       `data: ${JSON.stringify({ type: 'accepted', data: { thread_id: 'thread', message_id: 'answer', user_message_id: 'question' } })}\n\n` +
       `data: ${JSON.stringify({ type: 'error', data: { code: 'relay_unavailable', message: 'retry', retryable: true } })}\n\n`
@@ -127,7 +130,7 @@ globalThis.fetch = async (input, init) => {
 
 await sendMessageStream(
   'thread',
-  { query: 'hello', mode: 'simple' },
+  { query: 'hello', mode: 'simple', reasoning: 'none', allow_remote: false },
   reconnectCallbacks
 )
 
@@ -135,6 +138,13 @@ assert.deepEqual(reconnectRequests, [
   'POST /api/threads/thread/messages',
   'GET /api/threads/thread/messages/answer/stream',
 ])
+assert.deepEqual(sendBody, {
+  query: 'hello',
+  mode: 'simple',
+  reasoning: 'none',
+  allow_remote: false,
+  stream: true,
+})
 assert.equal(callbackState.accepted, 1)
 assert.equal(callbackState.completed, 1)
 assert.equal(callbackState.errors, 0)
@@ -157,7 +167,7 @@ globalThis.fetch = async (_input, init) => {
 
 await sendMessageStream(
   'thread',
-  { query: 'eof', mode: 'simple' },
+  { query: 'eof', mode: 'simple', reasoning: 'none', allow_remote: false },
   {
     ...reconnectCallbacks,
     onComplete: () => { eofCompleted += 1 },
@@ -179,7 +189,7 @@ globalThis.fetch = async () => {
 await assert.rejects(
   sendMessageStream(
     'thread',
-    { query: 'fail', mode: 'simple' },
+    { query: 'fail', mode: 'simple', reasoning: 'none', allow_remote: false },
     {
       ...reconnectCallbacks,
       onError: () => { terminalErrorCallbacks += 1 },
@@ -202,7 +212,7 @@ globalThis.fetch = async () => {
 await assert.rejects(
   sendMessageStream(
     'thread',
-    { query: 'callback error', mode: 'simple' },
+    { query: 'callback error', mode: 'simple', reasoning: 'none', allow_remote: false },
     {
       ...reconnectCallbacks,
       onComplete: () => { throw new TypeError('UI callback failed') },
@@ -224,7 +234,7 @@ globalThis.fetch = async () => {
 await assert.rejects(
   sendMessageStream(
     'thread',
-    { query: 'ambiguous', mode: 'simple' },
+    { query: 'ambiguous', mode: 'simple', reasoning: 'none', allow_remote: false },
     {
       ...reconnectCallbacks,
       onError: () => { unacceptedErrors += 1 },
@@ -254,7 +264,7 @@ const abortStartedAt = Date.now()
 await assert.rejects(
   sendMessageStream(
     'thread',
-    { query: 'abort retry', mode: 'simple' },
+    { query: 'abort retry', mode: 'simple', reasoning: 'none', allow_remote: false },
     {
       ...reconnectCallbacks,
       onError: () => { abortErrors += 1 },
@@ -291,7 +301,7 @@ globalThis.fetch = async (_input, init) => {
 await assert.rejects(
   sendMessageStream(
     'thread',
-    { query: 'exhaust retries', mode: 'simple' },
+    { query: 'exhaust retries', mode: 'simple', reasoning: 'none', allow_remote: false },
     {
       ...reconnectCallbacks,
       onError: () => { exhaustedErrors += 1 },
@@ -337,6 +347,22 @@ assert.deepEqual(authRequests, [
   'GET /api/retry-auth',
 ])
 assert.deepEqual(authHeaders, [null, 'Bearer refreshed-access'])
+
+let regenerateBody: unknown
+globalThis.fetch = async (_input, init) => {
+  regenerateBody = JSON.parse(String(init?.body))
+  return new Response('data: {"type":"done","data":null}\n\n')
+}
+await regenerateStream('thread-1', 'rag', 'high', true, {
+  onToken: () => {},
+  onThinkingStep: () => {},
+  onSource: () => {},
+  onSources: () => {},
+  onSearchQueries: () => {},
+  onComplete: () => {},
+  onError: (error) => { throw error },
+})
+assert.deepEqual(regenerateBody, { mode: 'rag', reasoning: 'high', allow_remote: true })
 
 globalThis.fetch = async () => new Response(JSON.stringify({
   success: false,

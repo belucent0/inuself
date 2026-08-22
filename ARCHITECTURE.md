@@ -61,7 +61,7 @@ flowchart TD
     AIGW -->|audio/transcriptions| AI_ASR
     AIGW -->|diarization| AI_DIARIZE
     AIGW -->|embeddings| AI_EMBED
-    AIGW -->|tier-simple| NPU
+    AIGW -->|chat / none| NPU
     AIGW -.->|NPU unavailable before first token| AI_LLM
     AIGW -.->|DEPLOY_MODE=serverless| Codex
 
@@ -87,7 +87,7 @@ flowchart TD
 ### 1. Core Services
 - **Nginx**: 모든 트래픽의 진입점 (SSL termination, /api → backend, /socket.io → backend WS).
 - **Backend (FastAPI BFF)**: 인증, DB/S3 연동, Celery 작업 접수, Agent Worker의 Pub/Sub 이벤트를 SSE로 relay. LangGraph를 요청 프로세스에서 직접 실행하지 않음.
-- **AI Gateway (FastAPI + httpx)**: 추론 라우터. tier 기반 모델 매핑(`tier-simple` / `tier-thinking` / `tier-recap`), `DEPLOY_MODE=local-gpu` 시 로컬 추론 직결, `serverless` 시 Codex/RunPod 폴백. 이전의 LiteLLM Proxy + Provider Manager(Host PM2)는 폐기.
+- **AI Gateway (FastAPI + httpx)**: `RoutingProfile(workload, reasoning, execution_scope)`과 Provider health/circuit/capacity를 기준으로 NPU/GPU/Codex를 선택. `DEPLOY_MODE=serverless`에서는 RunPod/Codex를 사용. 이전의 LiteLLM Proxy + Provider Manager(Host PM2)는 폐기.
 
 ### 2. Worker Layer (Celery)
 - **Agent Worker**: `agent` 큐를 소비해 LangGraph를 실행하고, PostgreSQL에 상태/partial/final을 저장하면서 `events:agent:{message_id}`로 실시간 이벤트 발행. 기본 동시성은 1이며 `AGENT_WORKER_CONCURRENCY`로 조절.

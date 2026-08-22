@@ -2,9 +2,9 @@
 
 > **Timblo AI Platform — 종합 아키텍처 문서 (Source of Truth)**
 >
-> 작성일: 2026-05-04 | 최근 갱신: 2026-08-12 | 대상 코드베이스: `develop` 브랜치
+> 작성일: 2026-05-04 | 최근 갱신: 2026-08-22 | 대상 코드베이스: `develop` 브랜치
 >
-> 이 문서가 현재 운영 architecture를 기술하는 단일 SoT입니다. 옛 버전(v1.0.x / v1.1.0)은 `docs/archived/`로 이동되었습니다. LiteLLM Proxy, Provider Manager, PM2, Redis Stream 추론 라우팅은 폐기되었고, NPU는 ai-gateway가 선택적으로 직접 호출합니다.
+> 이 문서가 현재 운영 architecture를 기술하는 단일 SoT입니다. 옛 버전(v1.0.x / v1.1.0)은 `docs/archived/`로 이동되었습니다. LiteLLM Proxy, Provider Manager, PM2, Redis Stream 추론 라우팅은 폐기되었고, ai-gateway가 `RoutingProfile`과 Provider health/capacity를 기준으로 NPU, GPU, optional Codex를 선택합니다.
 
 ---
 
@@ -16,7 +16,7 @@
 | v1.0.1 | 2026-02-21 | lemonade-server / LLMTier 상수 / model_copy 정리 (incremental) |
 | v1.1.0 | 2026-02-27 | Frontend 상세, Backend 레이어, AI Agent 전체, WPI, DB 스키마, API 레퍼런스, Valkey 구조 추가 |
 | **v1.2.0** | 2026-05-04 | **현행.** Provider Manager(Redis Stream + Host PM2 프로세스) · LiteLLM 프록시 · FLM NPU 통합 · 옛 추론 Stream(`stream:chat:requests` 등) 모두 폐기. ai-gateway가 추론 컨테이너(`ai-llm`/`ai-asr-vllm`/`ai-diarize`/`ai-embedding`)를 httpx로 직접 호출. WSL ROCm 컨테이너 운영으로 통일. backend/worker 코드의 `litellm` 명칭도 `ai_gateway`로 일소(PR #124, #127). |
-| 운영 갱신 | 2026-08-12 | LangGraph를 전용 Agent Worker로 분리. 일반 메시지도 POST SSE 지원. `accepted` 이후 GET SSE 자동 복구 추가. `tier-simple`의 선택적 FastFlowLM NPU 라우팅과 GPU 폴백 추가. |
+| 운영 갱신 | 2026-08-22 | LangGraph를 전용 Agent Worker로 분리. 일반 메시지도 POST SSE 지원. `accepted` 이후 GET SSE 자동 복구 추가. `RoutingProfile`기반 NPU/GPU/Codex health·capacity 라우팅 추가. |
 
 ---
 
@@ -59,7 +59,7 @@ Browser ── POST(stream=true) ──► Backend (FastAPI BFF)
                          └──────────┬──────────────┘
                                     ▼
                               AI Gateway
-                         tier routing / fallback
+                       profile routing / fallback
                            ┌────────┴────────┐
                            ▼                 ▼
               FastFlowLM (Windows NPU, 선택)  ai-* (WSL ROCm GPU)
@@ -118,7 +118,7 @@ docker-compose.yml
 
 ### 1.3 호스트 환경 (WSL2 + ROCm)
 
-GPU 추론 백엔드는 컨테이너로 운영합니다. `tier-simple`용 FastFlowLM은 선택적 Windows Host 프로세스이며, Compose가 생명주기를 관리하지 않습니다.
+GPU 추론 백엔드는 컨테이너로 운영합니다. `chat/none`용 FastFlowLM은 선택적 Windows Host 프로세스이며, Compose가 생명주기를 관리하지 않습니다.
 
 ```
 Windows Host
@@ -563,16 +563,16 @@ class GraphState(TypedDict):
     retry_reason: str
 ```
 
-### 4.6 Tier 라우팅
+### 4.6 Reasoning 해석과 라우팅
 
-IntentParserNode의 TierRouter가 쿼리 복잡도에 따라 LLM Tier를 결정합니다.
+IntentParserNode는 최종 `reasoning` 선택을 `selected_reasoning`으로 한 번 규정합니다. Generator와 Reasoner는 이 값을 `RoutingProfile(workload="chat", reasoning=..., execution_scope=...)`로 Gateway에 전달합니다.
 
-| Tier | 모델 (v1.2.0) | 특징 |
-|------|--------------|------|
-| `tier-simple` | `gemma4-12b` (ai-llm vLLM) | 일반 대화 |
-| `tier-thinking` | `gemma4-12b` (local) → Codex(serverless fallback) | 복잡한 추론, 분석 |
-| `tier-recap` | `gemma4-12b` (요약 전용 라우팅) | 문서 요약 |
-| `codex-medium` | CLIProxy API (OpenAI Codex) | WPI 보고서, 코드 생성 (serverless 모드) |
+| Reasoning | 일반 local-gpu Provider | 원격 허용 시 |
+|------|------|------|
+| `none`, `low` | NPU(`none`) 우선, 불가 시 GPU | 미사용 |
+| `medium` | GPU | 미사용 |
+| `high` | GPU | `remote_allowed`일 때 Codex overflow/fallback |
+| `auto` | Backend에서 한 번 해석해 고정 | 사용자의 `allow_remote`에 따름 |
 
 ### 4.7 검색 재시도 플로우 (V8.4)
 
@@ -1290,9 +1290,8 @@ Backend / Agent Worker / Batch Worker
     │ HTTP POST /v1/ocr  (커스텀 엔드포인트)
     ▼
 ai-gateway (FastAPI :4000)
-    │ infra/ai-gateway/services/routing.py
-    │   - tier_config.py로 tier→model 매핑
-    │   - tier-simple + NPU_LLM_BASE_URL → Windows FastFlowLM
+    │ infra/ai-gateway/services/provider_pool.py
+    │   - routing_policy.json capability/health/circuit/capacity 정책
     │   - DEPLOY_MODE=local-gpu | serverless 분기
     │   - serverless 모드: Codex(CLIProxy) / RunPod 폴백
     ▼ httpx.AsyncClient
@@ -1327,27 +1326,26 @@ infra/ai-gateway/
     └── response.py          — OpenAI 응답 정규화
 ```
 
-### 12.3 모델 라우팅 (tier 기반)
+### 12.3 RoutingProfile과 capacity 라우팅
 
-`infra/shared/tier_config.py`의 `TIER_MODEL_MAP`이 tier 이름을 실제 모델로 매핑.
+`infra/shared/routing_policy.json`은 Provider URL/model 환경변수, workload/reasoning 범위, scope, health probe, inflight 한도를 정의합니다. Gateway 로컬 라우팅은 `ProviderPool`이 이 정책을 읽어 단일 호출 계약으로 시행합니다.
 
-| Tier | Local 모델 | Serverless 폴백 | 용도 |
-|------|-----------|-----------------|------|
-| `tier-simple` | `gemma4-it:e2b` (FastFlowLM NPU, 선택) → `gemma4-12b` (GPU fallback) | codex-low | 짧은 응답, 분류 |
-| `tier-standard` | `gemma4-12b` (ai-llm) | codex-medium | 일반 채팅, RAG |
-| `tier-thinking` | `gemma4-12b` (ai-llm) | codex-high | 추론, WPI 보고서 |
+| Provider | Capacity | Capability | Fallback 규칙 |
+|------|------:|------|------|
+| `npu-chat` | 1 | `chat/none`, local | full/unhealthy/실패 시 로컬 GPU |
+| `gpu-llm` | 4 | `chat·summary/none..high`, local | `high + remote_allowed`일 때 Codex |
+| `codex` | 2 | `chat/high`, remote | explicit Codex 실패 시 GPU high/local 1회 |
+
+Media/embedding 경로는 RoutingProfile 대상이 아니며 기존 전용 라우팅 계약을 유지합니다.
+
+| Task | Primary | Fallback | 방식 |
+|------|---------|----------|------|
 | `embedding` | `embeddinggemma-300m` (ai-embedding) | bge-small-en-v1.5 (RunPod) | 벡터화 |
 | `asr` | Whisper-large-v3-turbo (ai-asr-vllm) | — | 음성 전사 |
 | `diarization` | pyannote community-1 (ai-diarize) | — | 화자 분리 |
-| `ocr` | `gemma4-12b` vision (ai-llm) | — | 이미지 OCR + 표 |
+| `ocr` | `gemma4-a4b` vision (ai-llm) | — | 이미지 OCR + 표 |
 
-라우팅 정책: `DEPLOY_MODE=local-gpu`(기본) → 컨테이너 직결, `DEPLOY_MODE=serverless` → Codex/RunPod.
-
-#### `tier-simple` NPU 경로
-
-`.env`의 `NPU_LLM_BASE_URL`이 설정된 경우에만 FastFlowLM을 사용합니다. `NPU_LLM_MODEL_NAME` 기본값은 `gemma4-it:e2b`, timeout 기본값은 60초입니다. NPU가 응답하지 않거나 스트림의 첫 chunk 전에 실패하면 ai-gateway가 `ai-llm` GPU로 fallback합니다. 첫 chunk 이후 스트림 실패는 같은 요청 안에서 다른 모델로 재실행하지 않습니다.
-
-FastFlowLM 프로세스의 시작/재시작은 Docker Compose 범위 밖입니다. 운영에서 재부팅 후 자동 기동이 필요하면 Windows 서비스 또는 작업 스케줄러로 별도 관리해야 하며, 저장소에는 아직 그 서비스 정의가 없습니다.
+`model=auto`이면 route 순서와 capability를 모두 만족하는 첫 healthy slot을 선택합니다. full 상태는 다음 eligible Provider로 overflow하고, 모두 full이면 30초 한도로 대기합니다. 세부 규칙은 [`routing-v2.md`](routing-v2.md)를 따릅니다.
 
 > `ai-embedding`은 벡터 생성 전용이다. 별도 cross-encoder 리랭커 서비스는 없으며,
 > 웹 검색은 RRF·키워드 관련성·품질/본문 점수로, 문서 RAG는 키워드 검색과
@@ -1405,11 +1403,13 @@ OOM/restart, `SpecDecoding metrics`를 확인한다. 롤백은 이전 Git releas
 ### 12.6 호출 예시 (chat completion)
 
 ```
-client → ai-gateway POST /v1/chat/completions {model: "tier-thinking", messages: [...]}
+client → ai-gateway POST /v1/chat/completions
+         {model: "auto", routing: {workload: "chat", reasoning: "high",
+                                    execution_scope: "local_only"}, messages: [...]}
    │
-   ▼ services/routing.py: tier_thinking → model="gemma4-12b", base=ai-llm
-   │
-   ▼ httpx AsyncClient stream: POST http://ai-llm:8000/v1/chat/completions
+   ▼ routes/chat.py → ProviderPool: local GPU primary
+   │                  └ remote_allowed + overflow/실패 조건에서만 Codex
+   ▼ AsyncOpenAI stream: POST /v1/chat/completions
    │
    ▼ vLLM SSE 스트림 → ai-gateway가 chunk 단위 relay
    │
@@ -1571,7 +1571,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | Chat 엔드포인트 | `infra/ai-gateway/routes/chat.py` |
 | Embeddings 엔드포인트 | `infra/ai-gateway/routes/embeddings.py` |
 | Media (ASR/OCR) 엔드포인트 | `infra/ai-gateway/routes/media.py` |
-| Tier ↔ 모델 매핑 | `infra/shared/tier_config.py` |
+| Provider 정책·capacity | `infra/shared/routing_policy.json`, `infra/ai-gateway/services/provider_pool.py` |
 | ai-llm (vLLM) | `infra/inference/llm/` (Dockerfile + WSL shims/MTP patch) |
 | ai-asr-vllm (Whisper) | `docker-compose.yml`의 vLLM 서비스 정의 |
 | ai-diarize (pyannote) | `infra/inference/diarize/` |
@@ -1616,13 +1616,13 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 | 용어 | 설명 |
 |------|------|
-| FastFlowLM | Ryzen AI NPU용 OpenAI 호환 LLM 서버. `tier-simple`의 선택적 외부 추론 대상 |
+| FastFlowLM | Ryzen AI NPU용 OpenAI 호환 LLM 서버. `chat/none` 요청 우선, full/unhealthy/실패 시 GPU fallback |
 | ai-gateway | 추론 라우터 컨테이너 — LiteLLM/Provider Manager의 후속 (v1.2.0~) |
 | RRF | Reciprocal Rank Fusion — 다중 검색 결과 리랭킹 알고리즘 |
 | pgvector | PostgreSQL 벡터 확장 — 임베딩 유사도 검색 |
 | VAD | Voice Activity Detection — 음성 감지 (침묵 제거) |
 | Diarization | 화자 분리 — 누가 말했는지 구분 |
-| Tier | LLM 성능 티어 — simple(빠름) / thinking(정확) |
+| RoutingProfile | `workload + reasoning + execution_scope`로 구성된 LLM 라우팅 요청 |
 | GraphState | LangGraph 상태 객체 — 노드 간 데이터 공유 |
 | SSE | Server-Sent Events — 서버→클라이언트 단방향 실시간 스트림 |
 | Watchdog | 비정상 파일 상태 감지 및 자동 복구 스케줄러 |

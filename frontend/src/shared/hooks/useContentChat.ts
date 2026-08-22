@@ -17,6 +17,7 @@ import {
 } from '@/shared/services/chatStreamService'
 import { getThreads, updateThreadMetadata } from '@/shared/services/endpoints/threads'
 import type { SearchSource, ThinkingStep, AIMode } from '@/features/chat/types'
+import type { ReasoningPreference } from '@/shared/types'
 
 interface ContentMessage {
   role: 'user' | 'assistant'
@@ -186,7 +187,7 @@ export function useContentChat(
   )
 
   const sendMessage = useCallback(
-    async (content: string, _mode?: string, model?: string) => {
+    async (content: string, _mode: string, reasoning: ReasoningPreference, allowRemote: boolean) => {
       // sourceOptions에서 mode 자동 결정 (ChatArea의 mode 파라미터 무시)
       const effectiveMode = sourceOptions?.include_web_search ? 'hybrid' : 'rag'
 
@@ -217,7 +218,13 @@ export function useContentChat(
           msgContext.search_scope = sourceOptions.include_all_docs ? 'all' : 'selected'
         }
 
-        const request = { query: content, mode: effectiveMode, context: msgContext, model }
+        const request = {
+          query: content,
+          mode: effectiveMode,
+          reasoning,
+          allow_remote: allowRemote,
+          context: msgContext,
+        }
         if (!threadIdRef.current) {
           await createThreadStream(
             request,
@@ -250,7 +257,7 @@ export function useContentChat(
   )
 
   const regenerate = useCallback(
-    async (_mode?: string, model?: string) => {
+    async (_mode: string, reasoning: ReasoningPreference, allowRemote: boolean) => {
       if (!threadIdRef.current || messages.length === 0) return
       if (messages[messages.length - 1].role !== 'assistant') return
 
@@ -272,7 +279,8 @@ export function useContentChat(
         await requestRegenerateStream(
           threadIdRef.current,
           effectiveMode,
-          model,
+          reasoning,
+          allowRemote,
           createStreamCallbacks(),
           abortController.signal
         )

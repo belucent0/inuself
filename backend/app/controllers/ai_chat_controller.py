@@ -20,31 +20,34 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from contextlib import suppress
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from redis.exceptions import RedisError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.config import get_settings, Settings
 from ..core.auth import get_current_user_id
 from ..core.redis import get_redis_client
+from ..db.models import Content
 from ..db.session import get_session, async_session_factory
 from ..services.thread_service import (
     get_thread_service,
     ThreadService,
 )
+from ..services.agent_dispatcher import (
+    AGENT_JOB_METADATA_KEY,
+    dispatch_agent_job,
+)
 from ..utils.task_queue_adapter import (
     ACTIVE_JOB_TTL,
     AGENT_EVENT_CHANNEL_PREFIX,
     AGENT_THREAD_KEY_PREFIX,
-    get_task_queue,
 )
 
 router = APIRouter(prefix="/api/threads", tags=["threads"])
@@ -53,15 +56,15 @@ router = APIRouter(prefix="/api/threads", tags=["threads"])
 class RegenerateRequest(BaseModel):
     """답변 재생성 요청."""
 
+    model_config = ConfigDict(extra="forbid")
+
     mode: str = Field(
         default="auto",
         description="AI 모드 (auto, simple, search, rag, reasoning, hybrid)",
     )
     context: dict | None = Field(default=None, description="추가 컨텍스트")
-    model: str | None = Field(
-        default=None,
-        description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
-    )
+    reasoning: Literal["auto", "none", "low", "medium", "high"] = "auto"
+    allow_remote: bool = False
 
 
 class ThreadListResponse(BaseModel):
@@ -116,11 +119,6 @@ async def _commit_and_enqueue_agent(
     assistant_message_id: str,
 ) -> None:
     """Commit the turn, then hand it to the Agent Worker exactly once per thread."""
-    await svc.update_message_metadata(
-        assistant_message_id,
-        agent_user_id=str(user_id),
-        agent_user_message_id=user_message_id,
-    )
     redis = get_redis_client()
     reserved = await redis.set(
         f"{AGENT_THREAD_KEY_PREFIX}{thread_id}",
@@ -134,37 +132,42 @@ async def _commit_and_enqueue_agent(
             detail="This thread already has an active response",
         )
 
-    committed = False
+    job = {
+        "thread_id": thread_id,
+        "user_id": str(user_id),
+        "user_message_id": user_message_id,
+    }
     try:
+        outbox_message = await svc.update_message_metadata(
+            assistant_message_id,
+            **{AGENT_JOB_METADATA_KEY: job},
+        )
+        if outbox_message is None:
+            raise RuntimeError("Assistant message disappeared before dispatch")
         await session.commit()
-        committed = True
-
-        def enqueue() -> None:
-            get_task_queue().enqueue_agent_job(
-                thread_id=thread_id,
-                user_id=str(user_id),
-                user_message_id=user_message_id,
-                assistant_message_id=assistant_message_id,
-            )
-
-        await asyncio.to_thread(enqueue)
     except Exception as exc:
-        if committed:
-            logger.exception(
-                "[Thread] Agent enqueue deferred to watchdog: thread_id={} message_id={}",
-                thread_id,
-                assistant_message_id,
-            )
-            return
-
         await _clear_agent_thread_slot(thread_id, assistant_message_id)
         await session.rollback()
         logger.exception(
-            "[Thread] Agent commit failed: thread_id={} message_id={}",
+            "[Thread] Agent turn commit failed: thread_id={} message_id={}",
             thread_id,
             assistant_message_id,
         )
-        raise HTTPException(status_code=503, detail="Failed to persist agent request") from exc
+        raise HTTPException(
+            status_code=503,
+            detail="Agent turn could not be saved",
+        ) from exc
+
+    try:
+        await dispatch_agent_job(assistant_message_id, job)
+    except Exception as exc:
+        # Broker errors are ambiguous: keep the DB outbox queued for safe republish.
+        logger.warning(
+            "[Thread] Agent publish deferred: thread_id={} message_id={} error={}",
+            thread_id,
+            assistant_message_id,
+            exc,
+        )
 
 
 def _sse_event(event_type: str, data: Any) -> str:
@@ -186,6 +189,7 @@ async def _relay_agent_events(message_id: str, accepted: dict | None = None):
     pubsub = None
     accepted_sent = False
     last_partial = ""
+    persisted_content_sequence = 0
     try:
         redis = get_redis_client()
         pubsub = redis.pubsub()
@@ -209,6 +213,9 @@ async def _relay_agent_events(message_id: str, accepted: dict | None = None):
             return
         if current.partial_content:
             last_partial = current.partial_content
+            persisted_content_sequence = int(
+                current.metadata.get("_content_sequence", 0)
+            )
             yield _sse_event("partial_restore", last_partial)
         yield _sse_event("status", current.status)
 
@@ -220,10 +227,21 @@ async def _relay_agent_events(message_id: str, accepted: dict | None = None):
             if event:
                 raw = event["data"]
                 payload = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
-                yield f"data: {payload}\n\n"
                 with suppress(json.JSONDecodeError):
-                    if json.loads(payload).get("type") in {"done", "error"}:
+                    parsed = json.loads(payload)
+                    sequence = parsed.get("content_sequence")
+                    if parsed.get("type") == "token" and isinstance(sequence, int):
+                        if sequence <= persisted_content_sequence:
+                            continue
+                    elif parsed.get("type") == "content" and isinstance(sequence, int):
+                        persisted_content_sequence = max(
+                            persisted_content_sequence,
+                            sequence,
+                        )
+                    if parsed.get("type") in {"done", "error"}:
+                        yield f"data: {payload}\n\n"
                         return
+                yield f"data: {payload}\n\n"
                 continue
 
             current = await db_get_message()
@@ -242,6 +260,10 @@ async def _relay_agent_events(message_id: str, accepted: dict | None = None):
                 return
             if current.partial_content and current.partial_content != last_partial:
                 last_partial = current.partial_content
+                persisted_content_sequence = max(
+                    persisted_content_sequence,
+                    int(current.metadata.get("_content_sequence", 0)),
+                )
                 yield _sse_event("partial_restore", last_partial)
             yield ": ping\n\n"
     except asyncio.CancelledError:
@@ -303,54 +325,61 @@ def _normalize_mode_name(mode: Any) -> str:
     return text.lower()
 
 
-MODEL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+(?:\([A-Za-z0-9._:-]+\))?$")
-
-
-def _parse_allowed_models(settings: Settings) -> set[str]:
-    raw = settings.ai_gateway_allowed_models.strip()
-    if not raw:
-        return set()
-    return {item.strip() for item in raw.split(",") if item.strip()}
-
-
-def _validate_requested_model(settings: Settings, requested_model: str) -> str:
-    model = requested_model.strip()
-    if not model:
-        raise HTTPException(status_code=400, detail="model must not be empty")
-    if len(model) > 120 or not MODEL_NAME_PATTERN.fullmatch(model):
-        raise HTTPException(status_code=400, detail="invalid model format")
-
-    allowed = _parse_allowed_models(settings)
-    if allowed and model not in allowed:
-        raise HTTPException(
-            status_code=400,
-            detail=f"model '{model}' is not in AI_GATEWAY_ALLOWED_MODELS",
-        )
-    return model
-
-
 def _build_agent_metadata(
     *,
-    settings: Settings,
     context: dict | None,
-    requested_model: str | None,
-) -> dict[str, Any] | None:
+    reasoning: Literal["auto", "none", "low", "medium", "high"],
+    allow_remote: bool,
+) -> dict[str, Any]:
     metadata: dict[str, Any] = dict(context) if isinstance(context, dict) else {}
-
-    model_candidate = requested_model
-    if model_candidate is None:
-        context_model = metadata.get("model") or metadata.get("llm_model")
-        if isinstance(context_model, str):
-            model_candidate = context_model
-
-    if isinstance(model_candidate, str) and model_candidate.strip():
-        metadata["model"] = _validate_requested_model(settings, model_candidate)
+    metadata.pop("model", None)
+    metadata.pop("llm_model", None)
+    metadata.pop(AGENT_JOB_METADATA_KEY, None)
+    metadata.pop("_content_sequence", None)
+    metadata["reasoning"] = reasoning
+    metadata["allow_remote"] = allow_remote
 
     # content_id → content_ids 정규화 (RAG 필터링 일관성)
     if "content_id" in metadata and "content_ids" not in metadata:
         metadata["content_ids"] = [metadata["content_id"]]
 
-    return metadata or None
+    return metadata
+
+
+async def _validate_content_ownership(
+    session: AsyncSession,
+    user_id: UUID,
+    metadata: dict[str, Any],
+) -> None:
+    """Reject missing or foreign File IDs before persisting an Agent run."""
+    raw_many = metadata.get("content_ids")
+    if raw_many is not None and not isinstance(raw_many, list):
+        raise HTTPException(status_code=400, detail="content_ids must be a list of UUIDs")
+
+    requested = list(raw_many or [])
+    if metadata.get("content_id") is not None:
+        requested.append(metadata["content_id"])
+    if not requested:
+        return
+
+    try:
+        file_ids = list(dict.fromkeys(UUID(str(value)) for value in requested))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=400, detail="content IDs must be valid UUIDs") from exc
+
+    result = await session.execute(
+        select(Content.file_id).where(
+            Content.file_id.in_(file_ids),
+            Content.user_id == user_id,
+        )
+    )
+    owned_ids = set(result.scalars().all())
+    if owned_ids != set(file_ids):
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    metadata["content_ids"] = [str(file_id) for file_id in file_ids]
+    if metadata.get("content_id") is not None:
+        metadata["content_id"] = str(UUID(str(metadata["content_id"])))
 
 
 def _build_langfuse_trace_metadata(
@@ -558,7 +587,6 @@ async def bulk_delete_threads(
 async def regenerate_response(
     thread_id: str,
     request: RegenerateRequest,
-    settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
@@ -568,6 +596,13 @@ async def regenerate_response(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
+    agent_metadata = _build_agent_metadata(
+        context=request.context,
+        reasoning=request.reasoning,
+        allow_remote=request.allow_remote,
+    )
+    await _validate_content_ownership(session, user_id, agent_metadata)
+
     messages = await svc.get_messages(thread_id, user_id=user_id)
     last_assistant = messages[-1] if messages and messages[-1].role == "assistant" else None
     last_user_message = next(
@@ -576,17 +611,14 @@ async def regenerate_response(
     )
     if not last_assistant or not last_user_message:
         raise HTTPException(status_code=400, detail="No assistant response to regenerate")
-    previous_replacements = last_assistant.metadata.get("replaces_message_ids", [])
+    previous_replacements = (last_assistant.metadata or {}).get(
+        "replaces_message_ids", []
+    )
     replacement_ids = [
         last_assistant.message_id,
         *(previous_replacements if isinstance(previous_replacements, list) else []),
     ]
 
-    agent_metadata = _build_agent_metadata(
-        settings=settings,
-        context=request.context,
-        requested_model=request.model,
-    )
     assistant_message = await svc.add_message(
         thread_id,
         user_id=user_id,
@@ -622,14 +654,13 @@ async def regenerate_response(
 class CreateThreadRequest(BaseModel):
     """스레드+메시지 생성 요청 (AI 실행 없음)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(..., description="사용자 질문", min_length=1)
     mode: str = Field(default="auto", description="AI 모드")
     context: dict | None = Field(default=None, description="추가 컨텍스트")
-    model: str | None = Field(
-        default=None,
-        description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
-    )
-    stream: bool = Field(default=False, description="SSE 스트리밍 응답 여부")
+    reasoning: Literal["auto", "none", "low", "medium", "high"] = "auto"
+    allow_remote: bool = False
 
 
 class CreateThreadResponse(BaseModel):
@@ -643,14 +674,13 @@ class CreateThreadResponse(BaseModel):
 class AddMessageRequest(BaseModel):
     """기존 스레드에 메시지 추가 요청 (AI 실행 없음)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(..., description="사용자 질문", min_length=1)
     mode: str = Field(default="auto", description="AI 모드")
     context: dict | None = Field(default=None, description="추가 컨텍스트")
-    model: str | None = Field(
-        default=None,
-        description="요청별 LLM 모델 오버라이드 (예: tier-simple, codex-high)",
-    )
-    stream: bool = Field(default=False, description="SSE 스트리밍 응답 여부")
+    reasoning: Literal["auto", "none", "low", "medium", "high"] = "auto"
+    allow_remote: bool = False
 
 
 class AddMessageResponse(BaseModel):
@@ -664,7 +694,6 @@ class AddMessageResponse(BaseModel):
 @router.post("", response_model=CreateThreadResponse)
 async def create_thread(
     request: CreateThreadRequest,
-    settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
@@ -686,10 +715,11 @@ async def create_thread(
         f"[Thread] Create: user={user_id}, query='{request.query[:50]}...', mode={request.mode}"
     )
     agent_metadata = _build_agent_metadata(
-        settings=settings,
         context=request.context,
-        requested_model=request.model,
+        reasoning=request.reasoning,
+        allow_remote=request.allow_remote,
     )
+    await _validate_content_ownership(session, user_id, agent_metadata)
 
     try:
         # 1. 새 스레드 생성
@@ -742,27 +772,23 @@ async def create_thread(
             assistant_message_id=ai_message.message_id,
         )
 
-        response = CreateThreadResponse(
+        return CreateThreadResponse(
             thread_id=thread.thread_id,
             message_id=ai_message.message_id,
             user_message_id=user_message.message_id,
         )
-        if request.stream:
-            return _agent_stream_response(ai_message.message_id, response.model_dump())
-        return response
 
     except HTTPException:
         raise
     except Exception as e:
         logger.exception(f"[Thread] Create error: {e}")
-        raise HTTPException(status_code=500, detail=f"스레드 생성 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail="Thread creation failed")
 
 
 @router.post("/{thread_id}/messages", response_model=AddMessageResponse)
 async def add_message(
     thread_id: str,
     request: AddMessageRequest,
-    settings: Settings = Depends(get_settings),
     svc: ThreadService = Depends(get_svc),
     user_id: UUID = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
@@ -782,15 +808,16 @@ async def add_message(
         f"[Thread] Add message: user={user_id}, thread_id={thread_id}, query='{request.query[:50]}...'"
     )
     agent_metadata = _build_agent_metadata(
-        settings=settings,
         context=request.context,
-        requested_model=request.model,
+        reasoning=request.reasoning,
+        allow_remote=request.allow_remote,
     )
 
     # 스레드 존재 및 권한 확인
     thread = await svc.get_thread(thread_id, user_id=user_id)
     if not thread:
         raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다")
+    await _validate_content_ownership(session, user_id, agent_metadata)
 
     try:
         # 1. 사용자 메시지 저장 (completed)
@@ -834,20 +861,17 @@ async def add_message(
             assistant_message_id=ai_message.message_id,
         )
 
-        response = AddMessageResponse(
+        return AddMessageResponse(
             thread_id=thread_id,
             message_id=ai_message.message_id,
             user_message_id=user_message.message_id,
         )
-        if request.stream:
-            return _agent_stream_response(ai_message.message_id, response.model_dump())
-        return response
 
     except HTTPException:
         raise
     except Exception as e:
         logger.exception(f"[Thread] Add message error: {e}")
-        raise HTTPException(status_code=500, detail=f"메시지 추가 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail="Message creation failed")
 
 
 @router.get("/{thread_id}/messages/{message_id}/stream")

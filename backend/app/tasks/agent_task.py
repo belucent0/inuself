@@ -48,12 +48,21 @@ def _run_async(coro):
     return _worker_loop.run_until_complete(coro)
 
 
-async def _publish(redis: Redis, message_id: str, event_type: str, data: Any) -> None:
+async def _publish(
+    redis: Redis,
+    message_id: str,
+    event_type: str,
+    data: Any,
+    *,
+    content_sequence: int | None = None,
+) -> None:
     event = {
         "type": event_type,
         "data": data,
         "message_id": message_id,
     }
+    if content_sequence is not None:
+        event["content_sequence"] = content_sequence
     try:
         await redis.publish(
             f"{AGENT_EVENT_CHANNEL_PREFIX}{message_id}",
@@ -93,6 +102,8 @@ async def _load_run(
             return None
 
         base_metadata = dict(assistant_message.metadata_ or {})
+        base_metadata.pop("_agent_job", None)
+        base_metadata.pop("_content_sequence", None)
         context = dict(base_metadata.get("context") or {})
         context.update(
             {
@@ -130,7 +141,7 @@ async def _save_status(
         await session.commit()
 
 
-async def _save_partial(message_id: str, content: str) -> None:
+async def _save_partial(message_id: str, content: str, content_sequence: int) -> None:
     async with async_session_factory() as session:
         service = get_thread_service(session)
         message = await service.update_message_partial_content(
@@ -140,6 +151,10 @@ async def _save_partial(message_id: str, content: str) -> None:
         )
         if not message:
             raise ValueError(f"Assistant message not found: {message_id}")
+        await service.update_message_metadata(
+            message_id,
+            _content_sequence=content_sequence,
+        )
         await session.commit()
 
 
@@ -254,6 +269,7 @@ async def run_agent_message(
         await _publish(redis, assistant_message_id, "status", "analyzing")
 
         full_response = ""
+        content_sequence = 0
         current_status = "analyzing"
         last_save = time.monotonic()
         result_metadata = {
@@ -339,17 +355,40 @@ async def run_agent_message(
                     await _publish(redis, assistant_message_id, "status", current_status)
                 token = data if isinstance(data, str) else str(data or "")
                 full_response += token
-                await _publish(redis, assistant_message_id, "token", token)
+                content_sequence += 1
+                await _publish(
+                    redis,
+                    assistant_message_id,
+                    "token",
+                    token,
+                    content_sequence=content_sequence,
+                )
 
                 if time.monotonic() - last_save >= PARTIAL_SAVE_INTERVAL_SECONDS:
-                    await _save_partial(assistant_message_id, full_response)
-                    await _publish(redis, assistant_message_id, "content", full_response)
+                    await _save_partial(
+                        assistant_message_id,
+                        full_response,
+                        content_sequence,
+                    )
+                    await _publish(
+                        redis,
+                        assistant_message_id,
+                        "content",
+                        full_response,
+                        content_sequence=content_sequence,
+                    )
                     await _publish(redis, assistant_message_id, "partial_save", True)
                     last_save = time.monotonic()
 
             elif event_type == "content":
                 full_response = data if isinstance(data, str) else str(data or "")
-                await _publish(redis, assistant_message_id, event_type, full_response)
+                await _publish(
+                    redis,
+                    assistant_message_id,
+                    event_type,
+                    full_response,
+                    content_sequence=content_sequence,
+                )
 
             elif event_type == "done":
                 await _save_completed(
@@ -388,10 +427,15 @@ async def run_agent_message(
             await _save_status(
                 assistant_message_id,
                 "failed",
-                content=f"Agent execution failed: {exc}",
+                content="Agent execution failed. Please retry.",
             )
         await _clear_thread_slot(redis, thread_id, assistant_message_id)
-        await _publish(redis, assistant_message_id, "error", str(exc))
+        await _publish(
+            redis,
+            assistant_message_id,
+            "error",
+            "Agent execution failed. Please retry.",
+        )
         raise
     finally:
         if heartbeat is not None:

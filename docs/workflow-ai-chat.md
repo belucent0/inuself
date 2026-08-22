@@ -92,11 +92,11 @@ POST 자체의 안전한 자동 재시도는 `Idempotency-Key`를 도입한 뒤 
 Agent Worker는 OpenAI 호환 요청을 ai-gateway로 보냅니다.
 
 ```text
-tier-simple + NPU_LLM_BASE_URL 설정
-  → Windows Host FastFlowLM (gemma4-it:e2b)
-  → 첫 chunk 전 실패 시 ai-llm GPU fallback
+RoutingProfile(chat, none, local_only)
+  → Windows Host FastFlowLM NPU 우선
+  → full/unhealthy/첫 chunk 전 실패 시 ai-llm GPU fallback
 
-그 외 local tier
+RoutingProfile(chat, medium|high, local_only)
   → WSL Docker ai-llm (vLLM Gemma 4)
 ```
 
