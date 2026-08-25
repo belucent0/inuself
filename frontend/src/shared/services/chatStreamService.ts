@@ -6,6 +6,7 @@
  */
 
 import type { Message, Source, ThinkingStep } from '@/shared/types'
+import type { ReasoningPreference } from '@/shared/types'
 import { httpClient } from './api/httpClient'
 
 // ============================================================
@@ -16,7 +17,6 @@ export interface SSEChunk {
   type: 'accepted' | 'thread_id' | 'thinking' | 'thinking_step' | 'query_analysis' | 'source' | 'sources' | 'content' | 'partial_restore' | 'token' | 'done' | 'error' | 'search_queries'
   data: unknown
 }
-
 export interface AcceptedMessage {
   thread_id: string
   message_id: string
@@ -26,7 +26,8 @@ export interface AcceptedMessage {
 export interface AgentMessageRequest {
   query: string
   mode: string
-  model?: string
+  reasoning: ReasoningPreference
+  allow_remote: boolean
   context?: Record<string, unknown>
 }
 
@@ -313,7 +314,7 @@ export async function processSSEStream(
 
 async function postAgentStream(
   endpoint: string,
-  body: Record<string, unknown>,
+  body: unknown,
   mode: string,
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
@@ -340,12 +341,39 @@ async function postAgentStream(
     }
   }
 
-  const acceptedMessage = accepted
-  if (!acceptedMessage) throw new TerminalStreamError('Accepted message is missing')
+  await resumeMessageStream(
+    accepted.thread_id,
+    accepted.message_id,
+    mode,
+    callbacks,
+    abortSignal
+  )
+}
+
+async function postAgentJob(
+  endpoint: string,
+  body: unknown,
+  mode: string,
+  callbacks: StreamingCallbacks,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  let accepted: AcceptedMessage
+  try {
+    accepted = await httpClient.post<AcceptedMessage>(endpoint, body, { signal: abortSignal })
+    const onAccepted = callbacks.onAccepted
+    if (onAccepted) {
+      invokeCallback(() => onAccepted(accepted))
+    }
+  } catch (error) {
+    if (!isAbortError(error)) {
+      callbacks.onError(asError(error))
+    }
+    throw error
+  }
 
   await resumeMessageStream(
-    acceptedMessage.thread_id,
-    acceptedMessage.message_id,
+    accepted.thread_id,
+    accepted.message_id,
     mode,
     callbacks,
     abortSignal
@@ -359,7 +387,6 @@ export async function resumeMessageStream(
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
-
   let lastError: Error = new RetryableStreamError('SSE connection lost')
   for (const delayMs of RECONNECT_DELAYS_MS) {
     await waitForReconnect(delayMs, abortSignal)
@@ -401,7 +428,7 @@ export async function createThreadStream(
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
-  await postAgentStream('/threads', { ...request, stream: true }, request.mode, callbacks, abortSignal)
+  await postAgentJob('/threads', request, request.mode, callbacks, abortSignal)
 }
 
 export async function sendMessageStream(
@@ -410,9 +437,9 @@ export async function sendMessageStream(
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
-  await postAgentStream(
+  await postAgentJob(
     `/threads/${threadId}/messages`,
-    { ...request, stream: true },
+    request,
     request.mode,
     callbacks,
     abortSignal
@@ -422,13 +449,14 @@ export async function sendMessageStream(
 export async function regenerateStream(
   threadId: string,
   mode: string,
-  model: string | undefined,
+  reasoning: ReasoningPreference,
+  allowRemote: boolean,
   callbacks: StreamingCallbacks,
   abortSignal?: AbortSignal
 ): Promise<void> {
   await postAgentStream(
     `/threads/${threadId}/regenerate`,
-    { mode, model },
+    { mode, reasoning, allow_remote: allowRemote },
     mode,
     callbacks,
     abortSignal

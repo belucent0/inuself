@@ -54,14 +54,6 @@ class AuthLoginRequest(BaseModel):
         return login_id
 
 
-class AuthRefreshRequest(BaseModel):
-    refresh_token: str = Field(..., min_length=20)
-
-
-class AuthLogoutRequest(BaseModel):
-    refresh_token: str | None = None
-
-
 class AuthUserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -73,12 +65,7 @@ class AuthUserResponse(BaseModel):
     created_at: datetime
 
 
-class AuthTokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "Bearer"
-    access_expires_in: int
-    refresh_expires_in: int
+class AuthSessionResponse(BaseModel):
     user: AuthUserResponse
 
 

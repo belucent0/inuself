@@ -40,7 +40,7 @@ async def test_agent_stream_starts_with_accepted_message_ids(monkeypatch):
         "type": "accepted",
         "data": accepted,
     }
-    assert ai_chat_controller.AddMessageRequest(query="hello").stream is False
+    assert "stream" not in ai_chat_controller.AddMessageRequest.model_fields
 
 
 @pytest.mark.asyncio
@@ -136,13 +136,13 @@ async def test_committed_message_stays_queued_when_broker_is_unavailable(monkeyp
     class Service:
         async def update_message_metadata(self, message_id, **metadata):
             metadata_updates.append((message_id, metadata))
+            return SimpleNamespace(message_id=message_id)
 
-    class Queue:
-        def enqueue_agent_job(self, **_kwargs):
-            raise ConnectionError("broker down")
+    async def dispatch_agent_job(*_args, **_kwargs):
+        raise ConnectionError("broker down")
 
     session = Session()
-    monkeypatch.setattr(ai_chat_controller, "get_task_queue", lambda: Queue())
+    monkeypatch.setattr(ai_chat_controller, "dispatch_agent_job", dispatch_agent_job)
 
     await ai_chat_controller._commit_and_enqueue_agent(
         session=session,
@@ -156,6 +156,7 @@ async def test_committed_message_stays_queued_when_broker_is_unavailable(monkeyp
     assert session.commits == 1
     assert session.rollbacks == 0
     assert metadata_updates[0][0] == "answer"
+    assert ai_chat_controller.AGENT_JOB_METADATA_KEY in metadata_updates[0][1]
 
 
 @pytest.mark.asyncio
@@ -189,7 +190,6 @@ async def test_regeneration_keeps_old_answer_until_replacement_completes(monkeyp
     response = await ai_chat_controller.regenerate_response(
         thread_id="thread",
         request=ai_chat_controller.RegenerateRequest(mode="simple"),
-        settings=SimpleNamespace(),
         svc=Service(),
         user_id=user_id,
         session=SimpleNamespace(),
@@ -270,7 +270,6 @@ async def test_regenerate_rejects_active_latest_assistant_before_mutation():
         await ai_chat_controller.regenerate_response(
             thread_id="thread",
             request=ai_chat_controller.RegenerateRequest(),
-            settings=SimpleNamespace(),
             svc=Service(),
             user_id=uuid4(),
             session=SimpleNamespace(),

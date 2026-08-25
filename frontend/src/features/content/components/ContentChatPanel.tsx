@@ -14,6 +14,7 @@ import { getContent } from '@/shared/services/endpoints/contents'
 import type { SourceOptions } from './SourceContextPopover'
 import type { ContentDetail, ContentSummary } from '../types'
 import type { ContentSourceOptions } from '@/shared/hooks/useContentChat'
+import type { ReasoningPreference } from '@/shared/types'
 
 const MAX_SELECTED_DOCS = 5
 
@@ -100,14 +101,14 @@ export function ContentChatPanel({
   )
 
   const handleSendMessage = useCallback(
-    (msg: string, mode?: string, model?: string) => {
-      sendMessage(msg, mode, model)
+    (msg: string, mode: string, reasoning: ReasoningPreference, allowRemote: boolean) => {
+      sendMessage(msg, mode, reasoning, allowRemote)
     },
     [sendMessage]
   )
 
-  const handleRegenerate = useCallback((mode?: string, model?: string) => {
-    regenerate(mode, model)
+  const handleRegenerate = useCallback((mode: string, reasoning: ReasoningPreference, allowRemote: boolean) => {
+    regenerate(mode, reasoning, allowRemote)
   }, [regenerate])
 
   const sourceContextSlot = (

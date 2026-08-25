@@ -29,7 +29,7 @@ async def search_internal_content(
     settings: Any,
     user_id: UUID | str | None,
     limit: int = 5,
-    content_ids: list[int] | None = None,
+    content_ids: list[UUID] | None = None,
     search_mode: str = "hybrid",  # "keyword", "vector", "hybrid"
     keyword_weight: float = 0.6,
     vector_weight: float = 0.4,
@@ -152,7 +152,7 @@ async def _keyword_search(
     query: str,
     user_id: UUID | str,
     limit: int,
-    content_ids: list[int] | None,
+    content_ids: list[UUID] | None,
 ) -> list[tuple[File, float]]:
     """키워드 검색 (기존 ILIKE 로직).
 
@@ -296,7 +296,7 @@ def _extract_relevant_snippet(text: str, keywords: list[str], max_length: int = 
 
 
 async def get_content_context(
-    content_ids: list[int],
+    content_ids: list[UUID],
     *,
     user_id: UUID | str | None,
     include_transcription: bool = False,
@@ -318,8 +318,8 @@ async def get_content_context(
         async with AsyncSessionLocal() as session:
             stmt = (
                 select(File)
-                .options(selectinload(File.content).selectinload(Content.transcription_result))
                 .join(Content, Content.file_id == File.id)
+                .options(selectinload(File.content).selectinload(Content.transcription_result))
                 .where(File.id.in_(content_ids), Content.user_id == owner_id)
             )
             result = await session.execute(stmt)

@@ -3,10 +3,6 @@ name: E2E Chat Quality Gate
 on:
   workflow_dispatch:
     inputs:
-      base_url:
-        description: "백엔드 URL (예: http://your-server:8000)"
-        required: false
-        default: "http://localhost:8000"
       login_id:
         description: "테스트 계정 아이디 (기본: Secrets.E2E_LOGIN_ID)"
         required: false
@@ -41,8 +37,12 @@ jobs:
 
       - name: Health check
         env:
-          BASE_URL: ${{ inputs.base_url || 'http://localhost:8000' }}
+          BASE_URL: ${{ vars.E2E_BASE_URL }}
         run: |
+          if [[ "$BASE_URL" != https://* ]]; then
+            echo "::error::Set the repository variable E2E_BASE_URL to the deployed HTTPS origin."
+            exit 1
+          fi
           echo "백엔드 헬스 체크: $BASE_URL"
           for i in 1 2 3 4 5; do
             if curl -sf "$BASE_URL/health" > /dev/null 2>&1; then
@@ -57,7 +57,7 @@ jobs:
 
       - name: Run E2E chat quality tests
         env:
-          E2E_BASE_URL: ${{ inputs.base_url || 'http://localhost:8000' }}
+          E2E_BASE_URL: ${{ vars.E2E_BASE_URL }}
           E2E_LOGIN_ID: ${{ inputs.login_id || secrets.E2E_LOGIN_ID }}
           E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
         run: |

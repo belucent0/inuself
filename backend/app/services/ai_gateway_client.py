@@ -1,7 +1,7 @@
 """AI Gateway를 통한 LLM 요청 클라이언트.
 
 OpenAI SDK를 사용하여 AI Gateway와 통신합니다.
-GPU/NPU 자원 상태에 따라 AI Gateway가 자동으로 라우팅합니다.
+AI Gateway가 RoutingProfile을 배포된 provider로 라우팅합니다.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 from functools import lru_cache
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 from openai import (
     OpenAI,
@@ -22,13 +22,30 @@ from openai import (
 from openai.types.chat import ChatCompletionMessageParam
 
 from ..core.config import Settings
-from .circuit_breaker import CircuitBreakerOpenError, vllm_breaker
+from ..core.reasoning import RoutingProfile
 
 logger = logging.getLogger(__name__)
 
 
 class AIGatewayClientError(RuntimeError):
     """AI Gateway 호출 실패 시 사용하는 예외."""
+
+
+def _gateway_error_type(body: Any) -> str | None:
+    if not isinstance(body, Mapping):
+        return None
+    error = body.get("error")
+    return error.get("type") if isinstance(error, Mapping) else None
+
+
+def _retry_after_seconds(exc: APIStatusError, fallback: float) -> float:
+    headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+    raw = headers.get("Retry-After")
+    try:
+        value = float(raw)
+        return value if value > 0 else fallback
+    except (TypeError, ValueError):
+        return fallback
 
 
 @lru_cache(maxsize=1)
@@ -84,6 +101,7 @@ def request_ai_gateway_completion(
     max_tokens: int | None = None,
     stream: bool = False,
     model: str | None = None,
+    routing: RoutingProfile | None = None,
     request_timeout_seconds: float | None = None,
     max_retry_time: int | None = None,
     retry_interval: int | None = None,
@@ -91,13 +109,18 @@ def request_ai_gateway_completion(
     """AI Gateway를 통한 Chat Completion 요청.
 
     OpenAI SDK를 사용하여 AI Gateway와 통신합니다.
-    AI Gateway가 GPU/NPU 자원 상태에 따라 자동으로 라우팅합니다.
+    AI Gateway가 RoutingProfile을 배포된 provider로 라우팅합니다.
     """
     client = get_openai_client(settings.ai_gateway_url, settings.ai_gateway_api_key)
 
-    model_name = model or settings.ai_gateway_model
+    model_name = model or "auto"
+    if model_name == "auto" and routing is None:
+        raise AIGatewayClientError("RoutingProfile is required for model=auto")
 
     logger.info("[AIGateway] Request: model=%s", model_name)
+    routing_kwargs = (
+        {"extra_body": {"routing": routing}} if routing is not None else {}
+    )
 
     # 재시도 로직 (모델 로딩 대기)
     effective_request_timeout = (
@@ -133,6 +156,7 @@ def request_ai_gateway_completion(
                 else settings.llm_max_tokens,
                 stream=False,
                 timeout=effective_request_timeout,
+                **routing_kwargs,
             )
 
             # 스트리밍이 아닌 경우 응답 처리
@@ -174,19 +198,21 @@ def request_ai_gateway_completion(
                 return content.strip()
 
         except APIStatusError as exc:
-            # 503 에러: 모델 로딩 중
-            if exc.status_code == 503:
-                error_body = getattr(exc, "body", {}) or {}
-                error_message = str(error_body)
-                if "Loading" in error_message or "busy" in error_message.lower():
-                    if elapsed + effective_retry_interval > effective_max_retry_time:
-                        break
-                    logger.info(
-                        "[AIGateway] Providers busy or loading, waiting... (%ds)", elapsed
-                    )
-                    time.sleep(effective_retry_interval)
-                    elapsed += effective_retry_interval
-                    continue
+            if (
+                exc.status_code == 503
+                and _gateway_error_type(getattr(exc, "body", None)) == "overloaded"
+            ):
+                delay = _retry_after_seconds(exc, effective_retry_interval)
+                if elapsed + delay > effective_max_retry_time:
+                    break
+                logger.info(
+                    "[AIGateway] Providers overloaded, retrying in %ss (%ss)",
+                    delay,
+                    elapsed,
+                )
+                time.sleep(delay)
+                elapsed += delay
+                continue
 
             error_msg = f"AI Gateway HTTP error ({exc.status_code}): {exc.message}"
             logger.error(error_msg)
@@ -227,33 +253,33 @@ async def request_ai_gateway_completion_async(
     max_tokens: int | None = None,
     stream: bool = False,
     model: str | None = None,
+    routing: RoutingProfile | None = None,
     request_timeout_seconds: float | None = None,
     max_retry_time: int | None = None,
     retry_interval: int | None = None,
-    base_url: str | None = None,
-    api_key: str | None = None,
 ) -> str:
     """AI Gateway를 통한 비동기 Chat Completion 요청.
 
     AsyncOpenAI SDK를 사용하여 AI Gateway와 통신합니다.
     이벤트 루프를 블로킹하지 않으므로 FastAPI와 함께 사용하기에 적합합니다.
 
-    base_url/api_key를 명시 지정하면 AI Gateway 대신 해당 endpoint를 직접
-    호출한다 (PR-Translate.3: ai-translate 컨테이너 직접 호출용).
+    모든 auto 요청은 AI Gateway가 RoutingProfile로 provider를 선택한다.
     """
-    # circuit breaker 차단 중이면 즉시 fail (partial retry loop의 라운드 진입 직전 검사)
-    vllm_breaker.assert_closed()
-
-    effective_base_url = base_url or settings.ai_gateway_url
-    effective_api_key = (
-        api_key if api_key is not None else settings.ai_gateway_api_key
+    client = get_async_openai_client(
+        settings.ai_gateway_url, settings.ai_gateway_api_key
     )
-    client = get_async_openai_client(effective_base_url, effective_api_key)
 
-    model_name = model or settings.ai_gateway_model
+    model_name = model or "auto"
+    if model_name == "auto" and routing is None:
+        raise AIGatewayClientError("RoutingProfile is required for model=auto")
 
     logger.info(
-        "[AI Gateway/Async] Request: model=%s, base=%s", model_name, effective_base_url
+        "[AI Gateway/Async] Request: model=%s, base=%s",
+        model_name,
+        settings.ai_gateway_url,
+    )
+    routing_kwargs = (
+        {"extra_body": {"routing": routing}} if routing is not None else {}
     )
 
     # 재시도 로직 (모델 로딩 대기)
@@ -290,6 +316,7 @@ async def request_ai_gateway_completion_async(
                 else settings.llm_max_tokens,
                 stream=False,
                 timeout=effective_request_timeout,
+                **routing_kwargs,
             )
 
             # 스트리밍이 아닌 경우 응답 처리
@@ -328,34 +355,29 @@ async def request_ai_gateway_completion_async(
                     len(content),
                     finish_reason,
                 )
-                vllm_breaker.record_success()
                 return content.strip()
 
         except APIStatusError as exc:
-            # 503 에러: 모델 로딩 중
-            if exc.status_code == 503:
-                error_body = getattr(exc, "body", {}) or {}
-                error_message = str(error_body)
-                if "Loading" in error_message or "busy" in error_message.lower():
-                    if elapsed + effective_retry_interval > effective_max_retry_time:
-                        break
-                    logger.info(
-                        "[AI Gateway/Async] Providers busy or loading, waiting... (%ds)",
-                        elapsed,
-                    )
-                    await asyncio.sleep(effective_retry_interval)
-                    elapsed += effective_retry_interval
-                    continue
-
-            # 5xx (서버 오류)는 vLLM 다운 신호로 보고 회로 카운트
-            if 500 <= exc.status_code < 600:
-                vllm_breaker.record_failure()
+            if (
+                exc.status_code == 503
+                and _gateway_error_type(getattr(exc, "body", None)) == "overloaded"
+            ):
+                delay = _retry_after_seconds(exc, effective_retry_interval)
+                if elapsed + delay > effective_max_retry_time:
+                    break
+                logger.info(
+                    "[AI Gateway/Async] Providers overloaded, retrying in %ss (%ss)",
+                    delay,
+                    elapsed,
+                )
+                await asyncio.sleep(delay)
+                elapsed += delay
+                continue
             error_msg = f"AI Gateway HTTP error ({exc.status_code}): {exc.message}"
             logger.error(error_msg)
             raise AIGatewayClientError(error_msg) from exc
 
         except APITimeoutError as exc:
-            vllm_breaker.record_failure()
             error_msg = f"AI Gateway timeout: {exc}"
             logger.error(error_msg)
             raise AIGatewayClientError(error_msg) from exc
@@ -370,14 +392,9 @@ async def request_ai_gateway_completion_async(
                 await asyncio.sleep(effective_retry_interval)
                 elapsed += effective_retry_interval
                 continue
-            vllm_breaker.record_failure()
             error_msg = f"AI Gateway connection error (retry timeout): {exc}"
             logger.error(error_msg)
             raise AIGatewayClientError(error_msg) from exc
-
-        except CircuitBreakerOpenError:
-            # 회로가 호출 도중 추가 열림 등은 호출자에게 그대로 노출
-            raise
 
         except Exception as exc:
             error_msg = f"AI Gateway request failed: {exc}"

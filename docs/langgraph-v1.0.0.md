@@ -11,7 +11,7 @@
 ### 1.1 목적
 - 기존 순차적 PhaseExecutor를 대체하여 병렬 섹션 생성
 - 모든 TOC 주제에 대해 상세 내용 생성 (누락 없음)
-- 법률/전문 용어 처리 능력 향상 (tier-recap 모델 사용)
+- 법률/전문 용어 처리 능력 향상 (`summary/low/local_only` RoutingProfile 사용)
 
 ### 1.2 주요 특징
 | 특징 | 설명 |
@@ -91,10 +91,10 @@
     ▼
 [SectionGraphExecutor.execute()]
     │
-    ├─▶ [Phase 1] 메타데이터 추출 (tier-recap)
+    ├─▶ [Phase 1] 메타데이터 추출 (summary/low)
     │       └─▶ title, keywords[], toc[]
     │
-    └─▶ [Phase 2] LangGraph 병렬 섹션 생성 (tier-recap)
+    └─▶ [Phase 2] LangGraph 병렬 섹션 생성 (summary/low)
             │
             ├─▶ initialize_node (상태 초기화)
             │
@@ -128,7 +128,7 @@
 ```python
 # section_executor.py::_execute_phase_1()
 
-1. tier-recap 모델로 LLM 호출
+1. `model="auto"`, `summary/low/local_only` profile로 LLM 호출
    └─▶ PHASE1_STRUCTURE_TEMPLATE_V2
 
 2. JSON 파싱
@@ -171,7 +171,7 @@
     1. 재시도 횟수 확인
     2. 프롬프트 준비 (SECTION_GENERATION_TEMPLATE)
        └─▶ 재시도 시 이전 답변 길이 피드백 추가
-    3. tier-recap LLM 호출
+    3. `summary/low/local_only` LLM 호출
     4. JSON 파싱 → content 추출
 
 [출력]
@@ -331,9 +331,6 @@ class LlmSummaryService:
 # backend/app/core/config.py
 
 class Settings:
-    # LLM 모델 설정
-    litellm_model_summarize: str = "tier-recap"  # Phase 1 & 2 모두 사용
-    
     # LangGraph 설정
     section_max_retries: int = 3
     section_min_length: int = 50   # 최소 50자
@@ -417,7 +414,7 @@ langgraph_fallback_usage_total      # 폴백 사용 횟수
 
 **신규 기능:**
 - LangGraph 기반 병렬 섹션 생성
-- tier-recap 모델 통합 (Phase 1 & 2)
+- 요약 전용 RoutingProfile 통합 (Phase 1 & 2)
 - 글자수 50-300자로 조정
 - 재시도 피드백 메커니즘
 - 자동 폴백 처리

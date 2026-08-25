@@ -15,14 +15,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 # uv 환경 변수 설정
-ENV UV_SYSTEM_PYTHON=1
 ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
 
 # 의존성 파일 복사
 COPY pyproject.toml uv.lock ./
 
-# 의존성 설치 (uv pip 방식 - 시스템 Python에 직접 설치)
-RUN uv pip install --system -r pyproject.toml
+# uv.lock과 정확히 일치하는 런타임 의존성 설치
+RUN uv sync --frozen --no-dev --no-install-project
 
 # ===========================================
 # Stage 2: 런타임 (빌드 도구 제외)
@@ -46,8 +46,8 @@ ENV DENO_INSTALL="/root/.deno"
 ENV PATH="${DENO_INSTALL}/bin:${PATH}"
 
 # 빌드 단계에서 설치된 Python 패키지 복사
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from=builder /app/.venv /app/.venv
+ENV PATH="/app/.venv/bin:${PATH}"
 
 # 애플리케이션 코드 복사
 COPY . .

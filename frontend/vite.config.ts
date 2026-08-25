@@ -17,10 +17,6 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
-      '/ws': {
-        target: 'http://localhost:8000',
-        ws: true,
-      },
       '/media': {
         target: 'http://localhost:9000/asr-media',
         rewrite: (path) => path.replace(/^\/media/, ''),

@@ -1,4 +1,3 @@
-import secrets
 from functools import lru_cache
 from pathlib import Path
 from pydantic import Field, model_validator
@@ -8,9 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def _get_project_root() -> Path:
     """프로젝트 루트 디렉토리를 반환한다 (backend의 부모 디렉토리)."""
     # backend/app/core/config.py -> backend -> 프로젝트 루트
-    current_file = Path(__file__)
-    backend_dir = current_file.parent.parent.parent
-    return backend_dir.parent
+    backend_root = Path(__file__).resolve().parents[2]
+    return backend_root.parent if backend_root.name == "backend" else backend_root
 
 
 class Settings(BaseSettings):
@@ -74,22 +72,6 @@ class Settings(BaseSettings):
         validation_alias="AI_GATEWAY_URL",
     )
     ai_gateway_api_key: str = Field("", validation_alias="AI_GATEWAY_API_KEY")
-    ai_gateway_model: str = Field("tier-simple", validation_alias="AI_GATEWAY_MODEL")
-    ai_gateway_model_summarize: str = Field(
-        "tier-recap", validation_alias="AI_GATEWAY_MODEL_SUMMARIZE"
-    )
-    ai_gateway_allowed_models: str = Field("", validation_alias="AI_GATEWAY_ALLOWED_MODELS")
-
-    # AI Translate 전용 컨테이너 (PR-Translate.3, EXAONE 4.0-1.2B)
-    # ai-llm(Qwen3-VL-4B)와 분리하여 GPU 큐 경합 회피.
-    ai_translate_url: str = Field(
-        "http://ai-translate:8000",
-        validation_alias="AI_TRANSLATE_URL",
-    )
-    ai_translate_model: str = Field(
-        "exaone-translate", validation_alias="AI_TRANSLATE_MODEL"
-    )
-
     # AI Agent 검색 품질 튜닝 파라미터
     agent_search_web_limit: int = Field(
         15,
@@ -122,19 +104,36 @@ class Settings(BaseSettings):
     )  # LibreOffice 실행 파일 경로
 
     # CORS 설정
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://asr.timblo.io,http://asr.timblo.io:3000"
+    cors_origins: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "https://asr.timblo.io,http://asr.timblo.io:3000"
+    )
 
-    # JWT 인증 설정
-    jwt_secret_key: str = Field("", validation_alias="JWT_SECRET_KEY")
-    jwt_algorithm: str = "HS256"
-    jwt_issuer: str = Field("playful-planet", validation_alias="JWT_ISSUER")
-    jwt_audience: str = Field("playful-planet-api", validation_alias="JWT_AUDIENCE")
-    jwt_access_token_ttl_minutes: int = Field(
-        10, validation_alias="JWT_ACCESS_TOKEN_TTL_MINUTES"
+    # Server-side browser session settings
+    session_idle_ttl_hours: int = Field(12, validation_alias="SESSION_IDLE_TTL_HOURS")
+    session_absolute_ttl_days: int = Field(
+        14, validation_alias="SESSION_ABSOLUTE_TTL_DAYS"
     )
-    jwt_refresh_token_ttl_days: int = Field(
-        14, validation_alias="JWT_REFRESH_TOKEN_TTL_DAYS"
+    session_cookie_secure: bool = Field(
+        False, validation_alias="SESSION_COOKIE_SECURE"
     )
+    signup_access_code: str = Field("", validation_alias="SIGNUP_ACCESS_CODE")
+
+    @model_validator(mode="after")
+    def validate_session_settings(self) -> "Settings":
+        idle_seconds = self.session_idle_ttl_hours * 60 * 60
+        absolute_seconds = self.session_absolute_ttl_days * 24 * 60 * 60
+        if idle_seconds <= 0 or idle_seconds > absolute_seconds:
+            raise ValueError(
+                "SESSION_IDLE_TTL_HOURS must be positive and no longer than "
+                "SESSION_ABSOLUTE_TTL_DAYS"
+            )
+        if not self.signup_access_code.strip():
+            raise ValueError("SIGNUP_ACCESS_CODE must be configured")
+        if "*" in {origin.strip() for origin in self.cors_origins.split(",")}:
+            raise ValueError("CORS_ORIGINS cannot contain wildcard with credentials")
+        return self
 
 
 @lru_cache
@@ -150,12 +149,12 @@ def get_settings() -> Settings:
 
     settings = Settings()
 
-    if not settings.jwt_secret_key:
-        settings.jwt_secret_key = secrets.token_urlsafe(64)
-        logger.warning(
-            "[Auth] JWT_SECRET_KEY not set. Generated temporary in-memory key."
-        )
-
     logger.info("[Config] task_queue_type loaded: {}", settings.task_queue_type)
+    logger.info(
+        "[Auth] session idle={}h absolute={}d cookie_secure={}",
+        settings.session_idle_ttl_hours,
+        settings.session_absolute_ttl_days,
+        settings.session_cookie_secure,
+    )
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     return settings

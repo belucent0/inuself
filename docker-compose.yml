@@ -111,7 +111,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - TASK_QUEUE_TYPE=celery
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-asr}:${POSTGRES_PASSWORD:-changeme}@asr-postgres:5432/${POSTGRES_DB:-asr}
       - REDIS_URL=redis://asr-valkey:6379/0
@@ -123,8 +122,6 @@ services:
       - LLM_PROVIDER=ai-gateway
       - AI_GATEWAY_URL=http://ai-gateway:4000
       - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY}
-      - AI_GATEWAY_MODEL=${AI_GATEWAY_MODEL:-tier-simple}
-      - AI_GATEWAY_MODEL_SUMMARIZE=${AI_GATEWAY_MODEL_SUMMARIZE:-tier-recap}
       # AI Translate 전용 컨테이너 (PR-Translate.3, EXAONE 4.0-1.2B)
       - AI_TRANSLATE_URL=http://ai-translate:8000
       - AI_TRANSLATE_MODEL=${AI_TRANSLATE_MODEL:-exaone-translate}
@@ -163,7 +160,7 @@ services:
     image: asr-backend:latest
     command: >-
       celery -A app.agent_celery:celery_app worker --loglevel=info
-      -Q agent -c ${AGENT_WORKER_CONCURRENCY:-1}
+      -Q agent -c ${AGENT_WORKER_CONCURRENCY:-4}
     env_file:
       - .env
     volumes:
@@ -171,9 +168,9 @@ services:
       - ./docs/wpis:/app/docs/wpis:ro
       - ./backend/app:/app/app:ro
       - ./backend/alembic:/app/alembic:ro
+      - ./infra/inference/wait-for-ai-gateway.sh:/usr/local/bin/wait-for-ai-gateway.sh:ro
+    entrypoint: ["bash", "/usr/local/bin/wait-for-ai-gateway.sh", "http://ai-gateway:4000/health/liveliness"]
     depends_on:
-      backend:
-        condition: service_healthy
       postgres:
         condition: service_healthy
       valkey:
@@ -181,7 +178,7 @@ services:
       minio:
         condition: service_healthy
       ai-gateway:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -196,7 +193,6 @@ services:
       - LLM_PROVIDER=ai-gateway
       - AI_GATEWAY_URL=http://ai-gateway:4000
       - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY}
-      - AI_GATEWAY_MODEL=${AI_GATEWAY_MODEL:-tier-simple}
       - AGENT_SEARCH_WEB_LIMIT=${AGENT_SEARCH_WEB_LIMIT:-15}
       - AGENT_HYBRID_WEB_LIMIT=${AGENT_HYBRID_WEB_LIMIT:-10}
       - AGENT_CONTENT_FETCH_TOP_K=${AGENT_CONTENT_FETCH_TOP_K:-8}
@@ -210,15 +206,7 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-pk-lf-torch-dev}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-sk-lf-torch-dev}
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "celery -A app.agent_celery:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5 | grep -q pong",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+      disable: true
 
   # Vite 기반 프론트엔드 (React + Vite)
   frontend:
@@ -228,7 +216,6 @@ services:
       args:
         - VITE_GRAFANA_DASHBOARD_URL=${VITE_GRAFANA_DASHBOARD_URL:-${NEXT_PUBLIC_GRAFANA_DASHBOARD_URL}}
         - VITE_GRAFANA_LOKI_URL=${VITE_GRAFANA_LOKI_URL:-${NEXT_PUBLIC_GRAFANA_LOKI_URL}}
-        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-}
     image: asr-frontend:latest
     container_name: asr-frontend
     ports:
@@ -365,8 +352,6 @@ services:
       # AI Gateway 설정 (LLM 요약용)
       - AI_GATEWAY_URL=http://ai-gateway:4000
       - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY}
-      - AI_GATEWAY_MODEL=${AI_GATEWAY_MODEL:-tier-simple}
-      - AI_GATEWAY_MODEL_SUMMARIZE=${AI_GATEWAY_MODEL_SUMMARIZE:-tier-recap}
       # AI Translate 전용 컨테이너 (PR-Translate.3, EXAONE 4.0-1.2B)
       - AI_TRANSLATE_URL=http://ai-translate:8000
       - AI_TRANSLATE_MODEL=${AI_TRANSLATE_MODEL:-exaone-translate}
@@ -393,9 +378,9 @@ services:
     restart: unless-stopped
 
   # ─── 추론 컨테이너 (refactor/inference): WSL2 + AMD ROCm gfx1150 ───
-  # ai-llm: vLLM 0.26 + official Gemma 4 12B W4A16 CT.
-  #          Official BF16 assistant MTP k=1; text chat + vision OCR unified.
-  #          WSL 32GiB limit: fixed 4GiB KV cache instead of UMA utilization.
+  # ai-llm: vLLM 0.26 + Gemma 4 26B A4B QAT AWQ INT4.
+  #          Official BF16 assistant MTP k=4; text chat + vision OCR unified.
+  #          WSL 32GiB limit: fixed 3GiB KV cache instead of UMA utilization.
   # ai-ocr: llama.cpp HIP + dots.ocr 1.7B Q8 (always-on, ~3.8 GB VRAM)
   #          Override model via env: OCR_MODEL_REPO / OCR_MODEL_FILE / OCR_MMPROJ_FILE
   # ai-asr: transformers Whisper-large-v3-turbo FastAPI (lazy-load,
@@ -420,20 +405,20 @@ services:
       - VLLM_USE_V2_MODEL_RUNNER=0
       - HF_TOKEN=${HF_TOKEN:-}
     command: >
-      vllm serve google/gemma-4-12B-it-qat-w4a16-ct
-      --max-model-len 16384
-      --kv-cache-memory 4294967296
-      --max-num-batched-tokens 512
-      --max-num-seqs 1
+      vllm serve cyankiwi/gemma-4-26B-A4B-it-qat-AWQ-INT4
+      --max-model-len 32768
+      --kv-cache-memory 3221225472
+      --max-num-batched-tokens 1024
+      --max-num-seqs 4
       --enable-prefix-caching
       --enforce-eager
       --model-impl vllm
       --dtype bfloat16
       --limit-mm-per-prompt '{"image":1,"video":0,"audio":0}'
       --speculative-config.method mtp
-      --speculative-config.model google/gemma-4-12B-it-qat-q4_0-unquantized-assistant
-      --speculative-config.num_speculative_tokens 1
-      --served-model-name gemma4-12b
+      --speculative-config.model google/gemma-4-26B-A4B-it-qat-q4_0-unquantized-assistant
+      --speculative-config.num_speculative_tokens 4
+      --served-model-name gemma4-a4b
       --host 0.0.0.0 --port 8000
     cap_add: [SYS_PTRACE]
     security_opt: [seccomp=unconfined]
@@ -489,7 +474,7 @@ services:
 
   # ai-translate: 번역 전용 sLLM (PR-Translate.3).
   # EXAONE 4.0-1.2B (LG, 2025, 한국어 dual-training)으로 영→한 transcript 번역 처리.
-  # ai-llm(Gemma 4 12B)의 GPU 큐 경합을 분리하기 위함. 메모리: model ~3GB + KV ~1.5GB ≈ 4-5GB.
+  # ai-llm(Gemma 4 A4B)의 GPU 큐 경합을 분리하기 위함. 메모리: model ~3GB + KV ~1.5GB ≈ 4-5GB.
   # backend/translation_runner.py가 AI_TRANSLATE_URL로 직접 호출 (ai-gateway 경유 안 함).
   ai-translate:
     image: ai-llm-gemma4:0.26.0
@@ -505,7 +490,7 @@ services:
     environment:
       - HSA_ENABLE_DXG_DETECTION=1
     # EXAONE 4.0은 Llama 호환 architecture → vLLM 정식 지원.
-    # 1.2B bf16 ≈ 2.4GB weights + KV cache 합쳐 ~3GB. ai-llm(Gemma 4 12B) GPU
+    # 1.2B bf16 ≈ 2.4GB weights + KV cache 합쳐 ~3GB. ai-llm(Gemma 4 A4B) GPU
     # 점유 고려해 utilization 0.06 (≈1.9GB)로 더 조여둠 — 32GB VRAM 한도에서
     # ai-llm OOM(exit 137) 발생 후 ai-translate 마진 축소. max-num-seqs=2:
     # 우리 CHUNK_CONCURRENCY=1이라 사실상 직렬, 동시 콘텐츠 대비 여유분만 둠.
@@ -562,7 +547,7 @@ services:
       start_period: 180s
 
   # ai-ocr-qwen은 ai-llm vision 통합으로 더 이상 필요 없음 (이전 PR #144 도입,
-  # 본 PR에서 제거). 모든 OCR이 ai-llm(vLLM Gemma 4 12B)으로 라우팅.
+  # 본 PR에서 제거). 모든 OCR이 ai-llm(vLLM Gemma 4 A4B)으로 라우팅.
 
   # ai-asr: legacy — whisper.cpp HIP build (Whisper Large-v3-turbo F16).
   # vLLM Whisper(ai-asr-vllm) 채택으로 legacy profile 강등. fallback / 비교 측정 시 활성화.
@@ -712,7 +697,7 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      - ./infra/shared:/app/infra/shared:ro # 공통 tier_config 모듈
+      - ./infra/shared:/app/infra/shared:ro # routing policy
     env_file:
       - .env
     environment:
@@ -723,13 +708,13 @@ services:
       - CLIPROXY_API_KEY=${CLIPROXY_API_KEY:-}
       # 컨테이너 추론 백엔드 (refactor/inference)
       # OCR을 vLLM Gemma 4로 통합 — chat/요약/OCR이 단일 모델 사용.
-      # ai-llm이 Gemma 4 12B를 서빙하며 OpenAI vision API 호환.
+      # ai-llm이 Gemma 4 A4B를 서빙하며 OpenAI vision API 호환.
       - OCR_BASE_URL=http://ai-llm:8000
-      - OCR_MODEL_NAME=gemma4-12b
+      - OCR_MODEL_NAME=gemma4-a4b
       - LLM_BASE_URL=http://ai-llm:8000
-      - LLM_MODEL_NAME=gemma4-12b
+      - LLM_MODEL_NAME=gemma4-a4b
       - NPU_LLM_BASE_URL=${NPU_LLM_BASE_URL:-}
-      - NPU_LLM_MODEL_NAME=${NPU_LLM_MODEL_NAME:-gemma4-it:e2b}
+      - NPU_LLM_MODEL_NAME=${NPU_LLM_MODEL_NAME:-gemma4-it:e4b}
       - NPU_LLM_REQUEST_TIMEOUT=${NPU_LLM_REQUEST_TIMEOUT:-60}
       - ASR_BASE_URL=http://ai-asr-vllm:8000
       - DIARIZE_BASE_URL=http://ai-diarize:8003

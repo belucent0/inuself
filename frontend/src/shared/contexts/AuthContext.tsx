@@ -1,125 +1,122 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { authApi, type AuthTokenResponse, type AuthUser, type LoginRequest, type SignupRequest } from '@/shared/services/endpoints/auth'
-import { clearAuthTokens, getRefreshToken, setAuthTokens } from '@/shared/services/authToken'
-import { tokenManager } from '@/shared/services/tokenManager'
+import {
+  authApi,
+  type AuthUser,
+  type LoginRequest,
+  type SignupRequest,
+} from '@/shared/services/endpoints/auth'
+import { AUTH_UNAUTHORIZED_EVENT, type ApiError } from '@/shared/services/api/httpClient'
 import { queryClient } from '@/shared/lib/queryClient'
 import { useChatStore } from '@/shared/stores/chatStore'
+
+type AuthStatus = 'loading' | 'authenticated' | 'anonymous' | 'unavailable'
 
 interface AuthContextValue {
   user: AuthUser | null
   isAuthenticated: boolean
   isLoading: boolean
+  isUnavailable: boolean
   login: (payload: LoginRequest) => Promise<void>
   signup: (payload: SignupRequest) => Promise<void>
   logout: () => Promise<void>
   refreshUser: () => Promise<void>
+  retryAuth: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const userRef = useRef(user)
-  useEffect(() => { userRef.current = user }, [user])
+  const [status, setStatus] = useState<AuthStatus>('loading')
+  const userRef = useRef<AuthUser | null>(null)
+  const unauthorizedHandledRef = useRef(false)
 
-  /** 인증 결과를 적용: 토큰 저장 + silent refresh 스케줄링 + 사용자 설정 */
-  const applyAuthResult = (result: AuthTokenResponse) => {
-    setAuthTokens({
-      accessToken: result.access_token,
-      refreshToken: result.refresh_token,
-    })
-    tokenManager.start(result.access_expires_in)
-    setUser(result.user)
-  }
+  const setAuthenticatedUser = useCallback((nextUser: AuthUser) => {
+    userRef.current = nextUser
+    unauthorizedHandledRef.current = false
+    setUser(nextUser)
+    setStatus('authenticated')
+  }, [])
 
-  /** 모든 인증 상태 정리 (토큰 + 캐시 + 스토어 + 사용자) */
-  const clearSession = () => {
-    tokenManager.stop()
-    clearAuthTokens()
+  const clearSession = useCallback(() => {
     queryClient.clear()
     useChatStore.getState().switchThread(null)
+    userRef.current = null
     setUser(null)
-  }
+    setStatus('anonymous')
+  }, [])
 
-  const refreshUser = async () => {
-    const me = await authApi.me()
-    setUser(me)
-  }
-
-  const login = async (payload: LoginRequest) => {
-    const result = await authApi.login(payload)
-    applyAuthResult(result)
-  }
-
-  const signup = async (payload: SignupRequest) => {
-    const result = await authApi.signup(payload)
-    applyAuthResult(result)
-  }
-
-  const logout = async () => {
-    const refreshToken = getRefreshToken() || undefined
+  const bootstrap = useCallback(async () => {
     try {
-      await authApi.logout(refreshToken)
-    } catch {
-      // 서버 로그아웃 실패 시에도 클라이언트 상태는 정리
-    }
-    clearSession()
-  }
-
-  // Bootstrap: 앱 시작 시 refresh token으로 세션 복원 + TTL 확보
-  useEffect(() => {
-    const bootstrap = async () => {
-      const refreshToken = getRefreshToken()
-      if (!refreshToken) {
-        setIsLoading(false)
-        return
-      }
-
-      try {
-        const result = await authApi.refresh(refreshToken)
-        applyAuthResult(result)
-      } catch {
+      setAuthenticatedUser(await authApi.me(false))
+    } catch (error) {
+      if ((error as ApiError)?.status === 401) {
         clearSession()
-      } finally {
-        setIsLoading(false)
+      } else {
+        setStatus('unavailable')
       }
     }
-    void bootstrap()
-  }, [])
+  }, [clearSession, setAuthenticatedUser])
 
-  // tokenManager 인증 실패 콜백 등록
+  const refreshUser = useCallback(async () => {
+    setAuthenticatedUser(await authApi.me())
+  }, [setAuthenticatedUser])
+
+  const login = useCallback(async (payload: LoginRequest) => {
+    const result = await authApi.login(payload)
+    setAuthenticatedUser(result.user)
+  }, [setAuthenticatedUser])
+
+  const signup = useCallback(async (payload: SignupRequest) => {
+    const result = await authApi.signup(payload)
+    setAuthenticatedUser(result.user)
+  }, [setAuthenticatedUser])
+
+  const logout = useCallback(async () => {
+    await authApi.logout()
+    clearSession()
+  }, [clearSession])
+
+  const retryAuth = useCallback(async () => {
+    setStatus('loading')
+    await bootstrap()
+  }, [bootstrap])
+
   useEffect(() => {
-    tokenManager.setOnAuthFailure(() => {
-      toast.info('세션이 만료되었습니다. 다시 로그인해주세요.')
+    try {
+      localStorage.removeItem('auth_access_token')
+      localStorage.removeItem('auth_refresh_token')
+    } catch {
+      // Storage can be unavailable in hardened browser contexts.
+    }
+    queueMicrotask(() => { void bootstrap() })
+  }, [bootstrap])
+
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      if (!userRef.current || unauthorizedHandledRef.current) return
+      unauthorizedHandledRef.current = true
       clearSession()
-    })
-    return () => tokenManager.setOnAuthFailure(null)
-  }, [])
-
-  // 탭 복귀 시 세션 확인 (ref로 user 참조하여 리스너 재등록 방지)
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible' && userRef.current) {
-        void tokenManager.refreshNow()
-      }
+      toast.info('세션이 만료되었습니다. 다시 로그인해 주세요.')
     }
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => document.removeEventListener('visibilitychange', handleVisibility)
-  }, [])
+    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized)
+    return () => window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized)
+  }, [clearSession])
 
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
-      isAuthenticated: !!user,
-      isLoading,
+      isAuthenticated: status === 'authenticated',
+      isLoading: status === 'loading',
+      isUnavailable: status === 'unavailable',
       login,
       signup,
       logout,
       refreshUser,
+      retryAuth,
     }),
-    [user, isLoading]
+    [login, logout, refreshUser, retryAuth, signup, status, user]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

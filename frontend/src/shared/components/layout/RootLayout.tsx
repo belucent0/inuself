@@ -84,12 +84,26 @@ function AuthenticatedLayout() {
 
 export function RootLayout() {
   const location = useLocation()
-  const { isAuthenticated, isLoading } = useAuth()
+  const { isAuthenticated, isLoading, isUnavailable, retryAuth } = useAuth()
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <p className="text-muted-foreground">로딩 중...</p>
+      </div>
+    )
+  }
+
+  if (isUnavailable) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 text-center">
+        <div>
+          <h1 className="text-lg font-semibold">인증 서비스를 사용할 수 없습니다</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            로그인 상태는 변경하지 않았습니다. 잠시 후 다시 시도해 주세요.
+          </p>
+        </div>
+        <Button onClick={() => void retryAuth()}>다시 시도</Button>
       </div>
     )
   }

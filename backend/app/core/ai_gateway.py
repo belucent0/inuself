@@ -2,7 +2,7 @@
 
 여러 controller(chat / search 등)가 동일한 base_url / api_key /
 AsyncOpenAI 클라이언트 생성 코드를 중복 정의하던 것을 단일 모듈로
-통합. tier 결정 같은 caller-specific 로직은 각 controller에 유지.
+통합. 라우팅 프로필 결정 같은 caller-specific 로직은 각 controller에 유지.
 """
 from __future__ import annotations
 

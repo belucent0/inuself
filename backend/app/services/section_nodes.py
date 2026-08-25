@@ -10,6 +10,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.config import Settings
+from ..core.reasoning import routing_profile
 from ..core.logging import logger
 from ..prompts.summary import SECTION_GENERATION_TEMPLATE, SUMMARY_SYSTEM_PROMPT
 from .ai_gateway_client import request_ai_gateway_completion_async
@@ -176,7 +177,8 @@ async def create_section_node(
         # LLM 호출 (비동기)
         response = await request_ai_gateway_completion_async(
             settings=settings,
-            model=settings.ai_gateway_model_summarize,
+            model="auto",
+            routing=routing_profile("summary", "low"),
             messages=messages,
         )
 
@@ -367,7 +369,8 @@ async def fallback_section_node(
 
         response = await request_ai_gateway_completion_async(
             settings=settings,
-            model=settings.ai_gateway_model_summarize,
+            model="auto",
+            routing=routing_profile("summary", "low"),
             messages=messages,
         )
 

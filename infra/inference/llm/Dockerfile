@@ -34,7 +34,7 @@ RUN ldconfig
 # (3) Fake amdsmi Python module so vLLM platform detection succeeds.
 COPY amdsmi_fake.py /usr/local/lib/python3.12/dist-packages/amdsmi/__init__.py
 
-# Backport the Gemma 4 12B target-width MTP embedding fix from vLLM main.
+# Backport the Gemma 4 target-width MTP embedding fix from vLLM main.
 COPY patch_gemma4_mtp.py /tmp/patch_gemma4_mtp.py
 RUN python /tmp/patch_gemma4_mtp.py
 

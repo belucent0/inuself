@@ -57,12 +57,21 @@ def _run_async(coro):
     return _worker_loop.run_until_complete(coro)
 
 
-async def _publish(redis: Redis, message_id: str, event_type: str, data: Any) -> None:
+async def _publish(
+    redis: Redis,
+    message_id: str,
+    event_type: str,
+    data: Any,
+    *,
+    content_sequence: int | None = None,
+) -> None:
     event = {
         "type": event_type,
         "data": data,
         "message_id": message_id,
     }
+    if content_sequence is not None:
+        event["content_sequence"] = content_sequence
     try:
         await redis.publish(
             f"{AGENT_EVENT_CHANNEL_PREFIX}{message_id}",
@@ -102,6 +111,8 @@ async def _load_run(
             return None
 
         base_metadata = dict(assistant_message.metadata_ or {})
+        base_metadata.pop("_agent_job", None)
+        base_metadata.pop("_content_sequence", None)
         context = dict(base_metadata.get("context") or {})
         context.update(
             {
@@ -140,10 +151,19 @@ async def _save_status(
         await session.commit()
 
 
-async def _save_partial(message_id: str, content: str) -> None:
+async def _save_partial(message_id: str, content: str, content_sequence: int) -> None:
     async with async_session_factory() as session:
-        updated = await ThreadRepository(session).update_active_assistant_message(
-            UUID(message_id), partial_content=content, status="generating"
+        repo = ThreadRepository(session)
+        current = await repo.get_message(UUID(message_id))
+        if not current:
+            raise AgentMessageTerminal(message_id)
+        metadata = dict(current.metadata_ or {})
+        metadata["_content_sequence"] = content_sequence
+        updated = await repo.update_active_assistant_message(
+            UUID(message_id),
+            partial_content=content,
+            status="generating",
+            metadata_=metadata,
         )
         if not updated:
             raise AgentMessageTerminal(message_id)
@@ -225,7 +245,7 @@ async def run_agent_message(
             raise AgentMessageBusy(assistant_message_id)
 
         # Delivery is now protected by the message lock. Removing the handoff
-        # marker lets the watchdog recover a worker lost before status advances.
+        # marker lets the dispatch reconciler recover a worker lost before status advances.
         await redis.delete(f"{AGENT_DISPATCH_KEY_PREFIX}{assistant_message_id}")
         heartbeat = asyncio.create_task(_refresh_lock(lock, lock_lost))
 
@@ -243,6 +263,7 @@ async def run_agent_message(
         await _publish(redis, assistant_message_id, "status", "analyzing")
 
         full_response = ""
+        content_sequence = 0
         current_status = "analyzing"
         last_save = time.monotonic()
         result_metadata = {
@@ -328,17 +349,40 @@ async def run_agent_message(
                     await _publish(redis, assistant_message_id, "status", current_status)
                 token = data if isinstance(data, str) else str(data or "")
                 full_response += token
-                await _publish(redis, assistant_message_id, "token", token)
+                content_sequence += 1
+                await _publish(
+                    redis,
+                    assistant_message_id,
+                    "token",
+                    token,
+                    content_sequence=content_sequence,
+                )
 
                 if time.monotonic() - last_save >= PARTIAL_SAVE_INTERVAL_SECONDS:
-                    await _save_partial(assistant_message_id, full_response)
-                    await _publish(redis, assistant_message_id, "content", full_response)
+                    await _save_partial(
+                        assistant_message_id,
+                        full_response,
+                        content_sequence,
+                    )
+                    await _publish(
+                        redis,
+                        assistant_message_id,
+                        "content",
+                        full_response,
+                        content_sequence=content_sequence,
+                    )
                     await _publish(redis, assistant_message_id, "partial_save", True)
                     last_save = time.monotonic()
 
             elif event_type == "content":
                 full_response = data if isinstance(data, str) else str(data or "")
-                await _publish(redis, assistant_message_id, event_type, full_response)
+                await _publish(
+                    redis,
+                    assistant_message_id,
+                    event_type,
+                    full_response,
+                    content_sequence=content_sequence,
+                )
 
             elif event_type == "done":
                 await _save_completed(

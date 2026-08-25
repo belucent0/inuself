@@ -20,8 +20,13 @@ import {
 } from '@/shared/components/ui/dialog'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/shared/components/ui/dropdown-menu'
 import {
@@ -41,6 +46,7 @@ import { MarkdownContent } from './MarkdownContent'
 import { ThinkingProcessAccordion } from './ThinkingDisplay'
 import { cn } from '@/shared/utils/cn'
 import type { SearchSource, ThinkingStep, AIMode } from '../types'
+import type { ReasoningPreference } from '@/shared/types'
 import { AI_MODE_CONFIG } from '../types'
 
 // Message 인터페이스
@@ -67,14 +73,6 @@ const MESSAGE_STATUS_CONFIG: Record<string, { icon: typeof Loader2; text: string
   thinking: { icon: Loader2, text: '생각 중...' },
   generating: { icon: Loader2, text: '답변 작성 중...' },
 }
-
-const MODEL_OPTIONS = [
-  'tier-simple',
-  'tier-thinking',
-  'codex-high',
-  'codex-medium',
-  'codex-low',
-] as const
 
 // 출처 모달 컴포넌트
 function SourcesModal({ sources }: { sources: SearchSource[] }) {
@@ -159,8 +157,8 @@ interface ChatAreaProps {
   currentStreamingMessage: string
   currentThinkingSteps?: ThinkingStep[]
   currentSources?: SearchSource[]
-  onSendMessage: (content: string, mode?: string, model?: string) => void
-  onRegenerate?: (mode?: string, model?: string) => void
+  onSendMessage: (content: string, mode: string, reasoning: ReasoningPreference, allowRemote: boolean) => void
+  onRegenerate?: (mode: string, reasoning: ReasoningPreference, allowRemote: boolean) => void
   /** 새 대화 시작 콜백 (콘텐츠 채팅 전용). 전달 시 메시지 영역 상단에 버튼 표시 */
   onNewChat?: () => void
   initialMode?: AIMode
@@ -392,7 +390,8 @@ export function ChatArea({
 }: ChatAreaProps) {
   const [inputValue, setInputValue] = useState('')
   const [mode, setMode] = useState<AIMode>(initialMode ?? 'auto')
-  const [model, setModel] = useState<string | undefined>(undefined)
+  const [reasoning, setReasoning] = useState<ReasoningPreference>('auto')
+  const [allowRemote, setAllowRemote] = useState(false)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
   const [inputHeight, setInputHeight] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -541,12 +540,12 @@ export function ChatArea({
       const height = inputContainerRef.current.offsetHeight
       setInputHeight(height)
     }
-  }, [mode, isStreaming])
+  }, [mode, reasoning, allowRemote, isStreaming])
 
   const handleSubmit = () => {
     if (!inputValue.trim() || isStreaming) return
 
-    onSendMessage(inputValue, mode, model)
+    onSendMessage(inputValue, mode, reasoning, allowRemote)
     setInputValue('')
     setShowScrollBottom(false)
 
@@ -627,7 +626,7 @@ export function ChatArea({
                   message={message}
                   isLastInTurn={isLastInTurn}
                   isLastAssistant={isLastAssistant}
-                  onRegenerate={onRegenerate ? () => onRegenerate(mode, model) : undefined}
+                  onRegenerate={onRegenerate ? () => onRegenerate(mode, reasoning, allowRemote) : undefined}
                   isStreaming={isStreaming}
                 />
               </div>
@@ -714,26 +713,35 @@ export function ChatArea({
                     className="h-7 px-3 rounded-full text-xs font-medium gap-1 text-muted-foreground hover:text-foreground hover:bg-muted/50"
                   >
                     <Bot className="h-3 w-3" />
-                    {model || '자동'}
+                    {reasoning === 'medium' ? '일반' : reasoning === 'high' ? '심층' : '자동'}
                     <ChevronDown className="h-3 w-3 opacity-50" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent side="top" align="start" className="min-w-[180px]">
-                  <DropdownMenuItem
-                    onClick={() => setModel(undefined)}
-                    className={cn('cursor-pointer', !model && 'bg-accent')}
+                <DropdownMenuContent side="top" align="start" className="min-w-[220px]">
+                  <DropdownMenuRadioGroup
+                    value={reasoning}
+                    onValueChange={(value) => setReasoning(value as ReasoningPreference)}
                   >
-                    자동 모델
-                  </DropdownMenuItem>
-                  {MODEL_OPTIONS.map((option) => (
-                    <DropdownMenuItem
-                      key={option}
-                      onClick={() => setModel(option)}
-                      className={cn('cursor-pointer', model === option && 'bg-accent')}
-                    >
-                      {option}
-                    </DropdownMenuItem>
-                  ))}
+                    {([
+                      ['auto', '자동'],
+                      ['medium', '일반'],
+                      ['high', '심층'],
+                    ] as const).map(([value, label]) => (
+                      <DropdownMenuRadioItem key={value} value={value}>
+                        {label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={allowRemote}
+                    onCheckedChange={setAllowRemote}
+                  >
+                    로컬 실패 시 외부 모델 허용
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuLabel className="whitespace-normal text-xs font-normal text-muted-foreground">
+                    심층은 high 라우팅 의도이며, 정상 로컬 상태에서는 일반과 같은 GPU를 사용합니다.
+                  </DropdownMenuLabel>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>

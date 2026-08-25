@@ -1,8 +1,8 @@
 # Valkey (Redis) Architecture & Strategy v1.0
 
 > **Version:** 1.1 (Enhanced Visualization)
-> **Last Updated:** 2026-08-12
-> **Role:** Celery Broker, Event Bus (Pub/Sub) & High-Speed Cache
+> **Last Updated:** 2026-08-22
+> **Role:** Celery Broker, Browser Session Store, Event Bus (Pub/Sub) & High-Speed Cache
 
 > ⚠️ **v1.2.0 마이그레이션 경고** (2026-05-04 갱신)
 >
@@ -12,10 +12,13 @@
 > 추론 컨테이너(`ai-llm`/`ai-asr-vllm`/`ai-embedding`/`ai-diarize`)를 httpx로
 > 직접 호출하며, 워커 작업 큐는 **Celery (Redis broker)** 만 사용합니다.
 >
-> Pub/Sub `events:*` 채널과 `volatile-lru` 메모리 정책은 그대로 유효합니다.
+> Pub/Sub `events:*` 채널과 `allkeys-lru` 메모리 정책은 그대로 유효합니다.
 > AI 채팅은 Celery `agent` 큐와 `events:agent:{message_id}` Pub/Sub을 사용하며,
 > 토큰을 Redis Stream에 적재하지 않습니다. PostgreSQL의 5초 partial snapshot과
 > 최종 메시지가 복구용 source of truth입니다.
+> Pub/Sub `events:*` 채널은 유효하며, 브라우저 인증은 `auth:*` 세션 키를 사용합니다.
+> 현재 `allkeys-lru` 정책에서는 세션도 eviction 대상이므로 배포 acceptance에서
+> `evicted_keys=0`을 확인하고 증가 시 auth 전용 Valkey 분리를 검토합니다.
 > 본 문서는 v1.1 시점의 SoT로 보존되며, 현행 운영 다이어그램은
 > [`architecture-v1.2.0.md`](./architecture-v1.2.0.md)를 참조하세요.
 
@@ -30,7 +33,8 @@
 | **Stream** ⚠️ | `stream:recap:requests`| Summary — *v1.2.0 폐기* | MAXLEN 1000. 백그라운드 처리. |
 | **Celery Broker** | `agent` / batch queues | 비동기 작업 전달 | Agent/Batch Worker가 소비하고 ack. |
 | **Pub/Sub**| `events:*` | **실시간 알림** | 저장 안 됨. Frontend 진행률 표시용. |
-| **Policy** | `volatile-lru` | **메모리 정책** | 메모리 부족 시 **TTL 있는 캐시만 삭제**. |
+| **Session** | `auth:session:{sha256}` | **HttpOnly 브라우저 세션** | 원문 token 미저장, idle 12시간/absolute 14일. |
+| **Policy** | `allkeys-lru` | **메모리 정책** | 모든 키가 eviction 대상이므로 `evicted_keys=0` 운영 감시 필수. |
 
 ---
 
@@ -41,12 +45,12 @@
 ```text
                                 [ User / Frontend ]
                                         ▲
-                                        │ WebSocket (Real-time Events)
+                                        │ authenticated SSE (Real-time Events)
                                         ▼
 +-------------------------------------------------------------------------------+
 | [ Backend Service ]                                                           |
 |  - API Server                                                                 |
-|  - RedisListener (Sub: events:*) ◀─────────────────────────────┐             |
+|  - Session validation + user-scoped SSE ◀──────────────────────┐             |
 +-----------------------------------------------------------------|--------------+
             │ (Enqueue Task)                                      │
             ▼                                                     │
@@ -133,15 +137,16 @@ V8.1 아키텍처부터는 데이터의 크기와 목적에 따라 **3개의 독
 ## 4. 📢 Pub/Sub Topology (Real-time Events)
 
 Redis Pub/Sub은 **"데이터 저장"이 아닌 "실시간 알림(Notification)"** 용도로 사용합니다.
-Worker가 발행(Publish)하고, Backend가 구독(Subscribe)하여 SSE 또는 WebSocket으로 전달합니다.
+Worker가 발행(Publish)하고, Backend가 구독(Subscribe)하여 인증된 SSE로 전달합니다. 파일 진행률은 Backend가 `events:file_progress:global`을 구독한 뒤 DB 소유권을 확인해 현재 HttpOnly 세션 사용자에게만 전달합니다. 공개 `/ws/*` 경로는 없습니다.
 
 | 채널 패턴 (Channel) | 용도 | 발행자 (Producer) | 구독자 (Consumer) |
 | :--- | :--- | :--- | :--- |
 | `events:agent:{message_id}` | Agent 상태·토큰·완료 | Agent Worker | Backend (SSE relay) |
-| `events:file_progress:{file_id}` | 파일 처리 진행률 (Processing, Download...) | Worker | Backend (WebSocket) |
-| `events:asr_stream:{file_id}` | 실시간 ASR 텍스트 스트리밍 | Worker | Backend (WebSocket) |
-| `events:llm_stream:{file_id}` | 실시간 LLM 토큰 스트리밍 | Worker | Backend (WebSocket) |
-| `events:content_created` | 새 콘텐츠 생성 알림 (목록 갱신용) | Worker | Backend (WebSocket) |
+| `events:file_progress:{file_id}` | 파일 처리 진행률 (Processing, Download...) | Worker | 내부 소비자 |
+| `events:file_progress:global` | 파일 처리 진행률 집계 | Worker | Backend 사용자 격리 SSE |
+| `events:asr_stream:{file_id}` | 실시간 ASR 텍스트 스트리밍 | Worker | 내부 소비자 |
+| `events:llm_stream:{file_id}` | 실시간 LLM 토큰 스트리밍 | Worker | 내부 소비자 |
+| `events:content_created` | 새 콘텐츠 생성 알림 (목록 갱신용) | Worker | Backend |
 
 > **주의:** Pub/Sub 메시지는 소비자가 없으면 **즉시 사라집니다 (휘발성).** 데이터 저장이 필요한 경우 Stream을 사용해야 합니다.
 
@@ -154,8 +159,8 @@ Worker가 발행(Publish)하고, Backend가 구독(Subscribe)하여 SSE 또는 W
 *   **Safe Zone:** 1GB 이하 권장 (Copy-on-Write 버퍼 고려)
 
 ### 관리 정책 (Eviction Policy)
-*   **권장 설정:** `maxmemory-policy volatile-lru`
-*   **동작 방식:** 메모리가 가득 차면 **TTL(유효기간)이 설정된 캐시 키부터 삭제**하고, TTL이 없는 중요 데이터(스트림 큐, 설정값)는 보존하여 시스템 셧다운을 방지함.
+*   **현재 설정:** `maxmemory-policy allkeys-lru`
+*   **동작 방식:** 메모리가 가득 차면 모든 키가 LRU eviction 대상입니다. 세션 유실을 로그인 만료로 오인하지 않도록 `INFO stats`의 `evicted_keys=0`을 배포와 운영에서 확인합니다.
 
 ### TTL (Time-To-Live) Policies
 | 데이터 종류 | 패턴 (Pattern) | TTL (유효기간) | 비고 |
@@ -163,3 +168,6 @@ Worker가 발행(Publish)하고, Backend가 구독(Subscribe)하여 SSE 또는 W
 | **검색 캐시** | `cache:search:*` | **1시간** (3600s) | 실시간성 보장을 위해 짧게 유지. |
 | **대화 히스토리** | `history:{session_id}` | **7일** | 단기 기억 유지. 장기 기억은 DB(Vector Store)로 이관. |
 | **작업 임시 데이터** | `job:{job_id}` | **24시간** | 작업 실패 시 디버깅용. 성공 시 즉시 삭제 권장. |
+| **브라우저 세션** | `auth:session:{sha256(token)}` | **idle 12시간**, absolute 14일 이내 | 원문 token은 cookie에만 존재. 일반 HTTP 요청에서 sliding touch. |
+| **사용자 세션 generation** | `auth:user-session-version:{user_id}` | 만료 없음 | logout-all 시 증가. |
+| **로그인 실패** | `auth:login-failure:{sha256(login_id)}` | **5분** | 5회 실패 fixed window. |
