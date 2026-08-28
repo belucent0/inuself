@@ -27,7 +27,7 @@ export type FileStatus =
   | 'FAILED'
   | 'CANCELLED'
 
-// 파일 처리 단계 (WebSocket)
+// 파일 처리 단계 (SSE)
 export type FileProgressStep =
   | 'youtube_download'
   | 'uploading'

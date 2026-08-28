@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings, Settings
+from ..core.reasoning import routing_profile
 from ..core.logging import logger
 from ..db.models import FileStatus, ContentType
 from ..repositories.file_repository import FileRepository
@@ -400,7 +401,7 @@ def build_llm_messages_3phase(
             f"[3-Phase Builder] Phase 2 prompt built ({len(phase2_messages)} messages)"
         )
 
-        # Phase 3: 상세 내용 (Detailed Content) - tier-recap 전용
+        # Phase 3: 상세 내용 (Detailed Content) - summary/low
         phase3_prompt = PHASE3_DETAIL_TEMPLATE.format(
             transcript=chunk,
             toc="- 주제가 없습니다.",  # 임시 TOC, Phase 1 결과로 대체될 것
@@ -523,7 +524,7 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
 
     Phase 1: 구조 분석 (제목, 키워드, 목차)
     Phase 2: 핵심 요약 (bullet points)
-    Phase 3: 상세 내용 (tier-recap 전용)
+    Phase 3: 상세 내용 (summary/low)
 
     Args:
         text: 요약할 전사 텍스트
@@ -550,7 +551,10 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
         ]
 
         phase1_response = request_ai_gateway_completion(
-            settings=settings, messages=phase1_messages
+            settings=settings,
+            model="auto",
+            routing=routing_profile("summary", "low"),
+            messages=phase1_messages,
         )
         phase1_result = _parse_json_response(phase1_response)
 
@@ -596,7 +600,10 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
         ]
 
         phase2_response = request_ai_gateway_completion(
-            settings=settings, messages=phase2_messages
+            settings=settings,
+            model="auto",
+            routing=routing_profile("summary", "low"),
+            messages=phase2_messages,
         )
         core_summary = phase2_response.strip()
 
@@ -613,9 +620,9 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
         core_summary = "## 핵심 요약\n- 핵심 요약 생성에 실패했습니다."
 
     # ========================================
-    # Phase 3: 상세 내용 (Detailed Content) - tier-recap 전용
+    # Phase 3: 상세 내용 (Detailed Content) - summary/low
     # ========================================
-    logger.info("[3-Phase] Phase 3: Detailed Content (tier-recap)")
+    logger.info("[3-Phase] Phase 3: Detailed Content (summary/low)")
     try:
         if toc:
             toc_text = "\n".join([f"- {item}" for item in toc])
@@ -631,7 +638,10 @@ def summarize_transcription_3phase(text: str, settings: Settings) -> tuple[str, 
         ]
 
         phase3_response = request_ai_gateway_completion(
-            settings=settings, model=settings.ai_gateway_model_summarize, messages=phase3_messages
+            settings=settings,
+            model="auto",
+            routing=routing_profile("summary", "low"),
+            messages=phase3_messages,
         )
         detail_content = phase3_response.strip()
 
@@ -721,7 +731,12 @@ def summarize_transcription_old(text: str) -> tuple[str, str]:
                 {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ]
-            response = request_ai_gateway_completion(settings=settings, messages=messages)
+            response = request_ai_gateway_completion(
+                settings=settings,
+                model="auto",
+                routing=routing_profile("summary", "low"),
+                messages=messages,
+            )
             result = _parse_json_response(response)
             summaries.append(result)
             logger.info(
@@ -772,7 +787,12 @@ def _merge_summaries(summaries: list[dict[str, Any]], settings) -> dict[str, Any
     ]
 
     try:
-        response = request_ai_gateway_completion(settings=settings, messages=messages)
+        response = request_ai_gateway_completion(
+            settings=settings,
+            model="auto",
+            routing=routing_profile("summary", "low"),
+            messages=messages,
+        )
         result = _parse_json_response(response)
 
         # 키워드 통합

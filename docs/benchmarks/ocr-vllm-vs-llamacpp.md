@@ -1,5 +1,8 @@
 # OCR 백엔드 마이그레이션 + 벤치마크 — FLM(NPU) → dots.ocr → Qwen3-VL(llama.cpp) → vLLM Qwen3-VL
 
+> 역사적 비교 기록입니다. 현재 운영 OCR은 별도 컨테이너 없이
+> `ai-gateway → ai-llm(Gemma 4 26B A4B vision)` 경로를 사용합니다.
+
 > 한 문장 요약: NPU(FLM)가 WSL에서 동작 안 해 GPU 컨테이너 백엔드로 마이그레이션 — dots.ocr는 chat prompt와 호환 안 됨 → Qwen3-VL 4B로 복구 → vLLM 통합으로 chat/요약/OCR 단일 모델로 단순화.
 
 ## 0. 배경 (Context)
@@ -148,7 +151,7 @@ vllm serve Qwen/Qwen3-VL-4B-Instruct
 
 ### 종합 비교 (전체 마이그레이션)
 
-| 항목 | dots.ocr (이전) | ai-ocr-qwen (PR #144 임시) | vLLM Qwen3-VL (현재) |
+| 항목 | dots.ocr (이전) | ai-ocr-qwen (PR #144 임시) | vLLM Qwen3-VL (PR #145 당시) |
 |------|------------------|-----------------------------|------------------------|
 | 모델 | dots.ocr Q8 (1.7B) | Qwen3-VL 4B Q4_K_M | **Qwen3-VL 4B BF16** |
 | chat instructions | ❌ 미지원 | ✅ | ✅ |
@@ -159,7 +162,7 @@ vllm serve Qwen/Qwen3-VL-4B-Instruct
 
 ### 전체 시스템 메모리 변화
 
-| 컴포넌트 | dots.ocr 시대 | ai-ocr-qwen 추가 시 | vLLM 통합 (현재) |
+| 컴포넌트 | dots.ocr 시대 | ai-ocr-qwen 추가 시 | vLLM 통합 (PR #145 당시) |
 |---------|---------------|----------------------|-------------------|
 | vLLM (text/chat) | 14 GB | 14 GB | 14 GB (Qwen3-VL로 교체) |
 | ai-ocr (dots.ocr) | 3.9 GB | 3.9 GB | (stop, legacy) |
@@ -168,7 +171,7 @@ vllm serve Qwen/Qwen3-VL-4B-Instruct
 
 ---
 
-## 5. 결정 — vLLM Qwen3-VL 4B BF16 채택
+## 5. 당시 결정 — vLLM Qwen3-VL 4B BF16 채택
 
 ### 채택 이유
 1. **chat/요약/OCR 단일 모델·단일 인프라** — 운영/모니터링/로깅 단순화
@@ -182,12 +185,9 @@ vllm serve Qwen/Qwen3-VL-4B-Instruct
 
 ---
 
-## 6. 후속 작업
+## 6. 후속 전환 완료
 
-- **dots.ocr 재활용 가능성**: `profiles: ["legacy"]`로 보존 — 단순 prompt OCR(고속/저비용 케이스) 도입 시 별도 라우팅으로 분기 후보
-- **Qwen3-VL 8B PoC**: BF16 17 GB + max-model-len 8192로 fit 가능. quality 잠재 vs 메모리 trade-off. 별도 PoC PR
-- **dots.ocr 폐기**: legacy profile에서 일정 기간 후 완전 제거 검토
-- **FLM(NPU) 재검토**: NPU가 WSL 환경에서 동작 가능해지면 FLM 백엔드 재도입 검토. 현재 GPU 동시 처리로 충분하므로 우선순위 낮음
+- **2026-08**: OCR을 Gemma 4 26B A4B vision으로 전환하고 Qwen3-VL·dots.ocr·`ai-ocr*` 로컬 구성을 제거했다.
 
 ---
 

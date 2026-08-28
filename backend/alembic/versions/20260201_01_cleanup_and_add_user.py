@@ -45,6 +45,7 @@ def upgrade() -> None:
         sa.Column('password', sa.String(255), nullable=False),
         sa.Column('name', sa.String(100), nullable=True),
         sa.Column('avatar_url', sa.String(512), nullable=True),
+        sa.Column('storage_key', sa.String(16), nullable=False, unique=True),
         sa.Column('is_active', sa.Boolean(), nullable=False, server_default='true'),
         sa.Column('is_super', sa.Boolean(), nullable=False, server_default='false'),
         sa.Column('created_at', sa.TIMESTAMP(timezone=True), nullable=False),

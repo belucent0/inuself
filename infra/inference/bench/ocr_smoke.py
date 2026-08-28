@@ -21,6 +21,8 @@ DEFAULT_PROMPT = (
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     if len(sys.argv) < 2:
         print("usage: ocr_smoke.py IMAGE [PROMPT]", file=sys.stderr)
         sys.exit(2)
@@ -28,7 +30,7 @@ def main() -> None:
     image_path = Path(sys.argv[1])
     prompt = sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_PROMPT
     base_url = "http://localhost:18000/v1/chat/completions"
-    model = "gemma4-12b"
+    model = "gemma4-a4b"
 
     img_bytes = image_path.read_bytes()
     b64 = base64.b64encode(img_bytes).decode()

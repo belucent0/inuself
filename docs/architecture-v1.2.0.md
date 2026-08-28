@@ -2,9 +2,9 @@
 
 > **Timblo AI Platform — 종합 아키텍처 문서 (Source of Truth)**
 >
-> 작성일: 2026-05-04 | 최근 갱신: 2026-08-12 | 대상 코드베이스: `develop` 브랜치
+> 작성일: 2026-05-04 | 최근 갱신: 2026-08-22 | 대상 코드베이스: `develop` 브랜치
 >
-> 이 문서가 현재 운영 architecture를 기술하는 단일 SoT입니다. 옛 버전(v1.0.x / v1.1.0)은 `docs/archived/`로 이동되었습니다. LiteLLM Proxy, Provider Manager, PM2, Redis Stream 추론 라우팅은 폐기되었고, NPU는 ai-gateway가 선택적으로 직접 호출합니다.
+> 이 문서가 현재 운영 architecture를 기술하는 단일 SoT입니다. 옛 버전(v1.0.x / v1.1.0)은 `docs/archived/`로 이동되었습니다. LiteLLM Proxy, Provider Manager, PM2, Redis Stream 추론 라우팅은 폐기되었고, ai-gateway가 `RoutingProfile`과 Provider health/capacity를 기준으로 NPU, GPU, optional Codex를 선택합니다.
 
 ---
 
@@ -16,7 +16,7 @@
 | v1.0.1 | 2026-02-21 | lemonade-server / LLMTier 상수 / model_copy 정리 (incremental) |
 | v1.1.0 | 2026-02-27 | Frontend 상세, Backend 레이어, AI Agent 전체, WPI, DB 스키마, API 레퍼런스, Valkey 구조 추가 |
 | **v1.2.0** | 2026-05-04 | **현행.** Provider Manager(Redis Stream + Host PM2 프로세스) · LiteLLM 프록시 · FLM NPU 통합 · 옛 추론 Stream(`stream:chat:requests` 등) 모두 폐기. ai-gateway가 추론 컨테이너(`ai-llm`/`ai-asr-vllm`/`ai-diarize`/`ai-embedding`)를 httpx로 직접 호출. WSL ROCm 컨테이너 운영으로 통일. backend/worker 코드의 `litellm` 명칭도 `ai_gateway`로 일소(PR #124, #127). |
-| 운영 갱신 | 2026-08-12 | LangGraph를 전용 Agent Worker로 분리. 일반 메시지도 POST SSE 지원. `accepted` 이후 GET SSE 자동 복구 추가. `tier-simple`의 선택적 FastFlowLM NPU 라우팅과 GPU 폴백 추가. |
+| 운영 갱신 | 2026-08-22 | LangGraph를 전용 Agent Worker로 분리. POST로 작업 ID를 받은 뒤 GET SSE로 응답을 복구. `RoutingProfile` 기반 NPU/GPU/Codex health·capacity 라우팅과 서버 세션 인증 추가. |
 
 ---
 
@@ -59,7 +59,7 @@ Browser ── POST(stream=true) ──► Backend (FastAPI BFF)
                          └──────────┬──────────────┘
                                     ▼
                               AI Gateway
-                         tier routing / fallback
+                       profile routing / fallback
                            ┌────────┴────────┐
                            ▼                 ▼
               FastFlowLM (Windows NPU, 선택)  ai-* (WSL ROCm GPU)
@@ -88,11 +88,10 @@ docker-compose.yml
 ├── ai-gateway     :4000       — FastAPI 추론 라우터 (httpx + AsyncOpenAI)
 ├── cli-proxy-api  :8317/:1455 — OAuth CLI Proxy (Codex 접근, serverless 폴백)
 │
-├── ai-llm         :8000       — vLLM 0.26 Gemma 4 12B W4A16 CT + MTP k=1 (ROCm)
-├── ai-asr-vllm    :8000       — vLLM Whisper-large-v3-turbo
-├── ai-diarize     :8003       — pyannote community-1 (ROCm)
-├── ai-translate   :8000       — vLLM EXAONE 4.0 1.2B
-├── ai-embedding   :8000(int)  — EmbeddingGemma 308M Q4 GGUF (llama.cpp)
+├── ai-llm         :8000       — vLLM 0.26 Gemma 4 26B A4B AWQ INT4 + MTP k=4 (ROCm)
+├── ai-asr-vllm    :8000       — vLLM Whisper-large-v3-turbo (512 MiB KV, seqs=1)
+├── ai-diarize     :8003       — pyannote community-1 (ROCm, startup warm-up)
+├── ai-embedding   :8000(int)  — EmbeddingGemma 308M Q4 GGUF (llama.cpp CPU)
 ├── FastFlowLM     :52625(ext) — Windows Host NPU, `NPU_LLM_BASE_URL` 설정 시에만
 │
 ├── postgres       :5432       — PostgreSQL + pgvector
@@ -112,13 +111,13 @@ docker-compose.yml
 **서비스 의존성:**
 - `backend` → postgres(healthy), valkey(healthy), minio(healthy), ai-gateway(healthy)
 - `agent-worker` → valkey(healthy), postgres(healthy), ai-gateway(healthy)
-- `worker` → valkey(healthy), postgres(healthy), tempo(started)
+- `worker` → valkey(healthy), postgres(healthy), tempo(started), ai-gateway(healthy)
 - `ai-gateway` → FastFlowLM(선택)/ai-llm/ai-asr-vllm/ai-diarize/ai-embedding (httpx 호출 시점에만)
 - `langfuse` → postgres(healthy)
 
 ### 1.3 호스트 환경 (WSL2 + ROCm)
 
-GPU 추론 백엔드는 컨테이너로 운영합니다. `tier-simple`용 FastFlowLM은 선택적 Windows Host 프로세스이며, Compose가 생명주기를 관리하지 않습니다.
+GPU 추론 백엔드는 컨테이너로 운영합니다. `chat/none`용 FastFlowLM은 선택적 Windows Host 프로세스이며, Compose가 생명주기를 관리하지 않습니다.
 
 ```
 Windows Host
@@ -218,7 +217,6 @@ frontend/src/
 │   ├── services/
 │   │   ├── api/httpClient.ts     # Axios 기반 HTTP 클라이언트
 │   │   ├── endpoints/            # auth, contents, threads, upload, langfuse
-│   │   ├── authToken.ts          # JWT 토큰 관리
 │   │   └── chatStreamService.ts  # SSE 스트리밍 서비스
 │   ├── stores/chatStore.ts       # Zustand 채팅 상태
 │   ├── types/                    # 공유 타입 정의
@@ -284,7 +282,7 @@ interface ChatStore {
 
 | 컨텍스트 | 파일 | 역할 |
 |---------|------|------|
-| `AuthContext` | shared/contexts/AuthContext.tsx | 로그인 상태, JWT 토큰, 사용자 정보 |
+| `AuthContext` | shared/contexts/AuthContext.tsx | HttpOnly 세션 상태, 인증 장애 상태, 사용자 정보 |
 | `ThreadTitleContext` | shared/contexts/ThreadTitleContext.tsx | 스레드 제목 동적 업데이트 |
 
 ### 2.4 SSE 스트리밍 아키텍처
@@ -293,20 +291,19 @@ interface ChatStore {
 Frontend: chatStreamService.ts
 │
 ├── POST /api/threads 또는 /api/threads/{id}/messages
-│      body: { ..., stream: true }
-│      ├── accepted  → thread_id/message_id 확보
-│      ├── status/thinking_step/query_analysis/search_queries/sources
-│      ├── token/content/partial_restore
-│      └── done/error
+│      body: { query, mode, reasoning, allow_remote, context? }
+│      └── JSON { thread_id, message_id, user_message_id }
 │
-└── accepted 이후 POST SSE가 끊긴 경우에만
+└── 작업 ID를 받은 즉시
        GET /api/threads/{id}/messages/{msgId}/stream
-       └── 같은 Worker 작업에 재접속하고 DB snapshot/final로 누락 보정
+       ├── status/thinking_step/query_analysis/search_queries/sources
+       ├── token/content/partial_restore
+       └── done/error; DB snapshot/final로 누락 보정
 
 재연결 전략:
 - Fetch ReadableStream 기반. GET 재접속은 0/1/2/5초 ±20% jitter, 최대 4회
-- `accepted` 이전 POST, Worker의 terminal error, 4xx, 사용자 abort는 자동 재시도하지 않음
-- GET 401은 토큰을 한 번 갱신한 뒤 동일 GET을 한 번 재요청
+- 작업 생성 POST, Worker의 terminal error, 4xx, 사용자 abort는 자동 재시도하지 않음
+- GET 401은 세션을 재확인해 만료된 브라우저 로그인을 종료
 ```
 
 ### 2.5 주요 컴포넌트 계층
@@ -375,7 +372,6 @@ HTTP Request
 | `events_controller.py` | `/api/events` | StreamConsumer |
 | `media_controller.py` | `/api/media` | MediaCacheService, FileService |
 | `langfuse_controller.py` | `/api/admin/langfuse` | LangfuseDashboardService |
-| `websocket_controller.py` | `/ws` | Valkey Pub/Sub |
 
 ### 3.3 FastAPI 앱 라이프사이클
 
@@ -530,7 +526,7 @@ class GraphState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     query: str
     mode: AIMode
-    selected_model: str | None
+    selected_reasoning: Literal["none", "low", "medium", "high"]
     intent_confidence: float
     requires_clarification: bool
     clarification_question: str | None
@@ -563,16 +559,16 @@ class GraphState(TypedDict):
     retry_reason: str
 ```
 
-### 4.6 Tier 라우팅
+### 4.6 Reasoning 해석과 라우팅
 
-IntentParserNode의 TierRouter가 쿼리 복잡도에 따라 LLM Tier를 결정합니다.
+IntentParserNode는 최종 `reasoning` 선택을 `selected_reasoning`으로 한 번 규정합니다. Generator와 Reasoner는 이 값을 `RoutingProfile(workload="chat", reasoning=..., execution_scope=...)`로 Gateway에 전달합니다.
 
-| Tier | 모델 (v1.2.0) | 특징 |
-|------|--------------|------|
-| `tier-simple` | `gemma4-12b` (ai-llm vLLM) | 일반 대화 |
-| `tier-thinking` | `gemma4-12b` (local) → Codex(serverless fallback) | 복잡한 추론, 분석 |
-| `tier-recap` | `gemma4-12b` (요약 전용 라우팅) | 문서 요약 |
-| `codex-medium` | CLIProxy API (OpenAI Codex) | WPI 보고서, 코드 생성 (serverless 모드) |
+| Reasoning | 일반 local-gpu Provider | 원격 허용 시 |
+|------|------|------|
+| `none`, `low` | NPU(`none`) 우선, 불가 시 GPU | 미사용 |
+| `medium` | GPU | 미사용 |
+| `high` | GPU | `remote_allowed`일 때 Codex overflow/fallback |
+| `auto` | Backend에서 한 번 해석해 고정 | 사용자의 `allow_remote`에 따름 |
 
 ### 4.7 검색 재시도 플로우 (V8.4)
 
@@ -794,12 +790,13 @@ Valkey PUBLISH "events:file_progress:{file_id}"
 ```
 Browser
   │ POST /api/threads 또는 /api/threads/{id}/messages
-  │ {query, mode, stream: true}
+  │ {query, mode, reasoning, allow_remote, context?}
   ▼
 Backend
   ├─ user/assistant(queued) 메시지 PostgreSQL commit
   ├─ Valkey Celery `agent` 큐 enqueue
-  └─ `events:agent:{message_id}` subscribe 후 accepted SSE
+  └─ {thread_id, message_id, user_message_id} JSON 응답
+  ▲ GET /api/threads/{id}/messages/{message_id}/stream
   ▼
 Agent Worker
   ├─ LangGraph 실행
@@ -827,12 +824,12 @@ Agent Worker가 `ai_message.status`를 저장하고 Pub/Sub 이벤트를 발행�
 
 ### 8.3 SSE 재연결 처리
 
-1. POST SSE의 `accepted` 이벤트로 `thread_id`, `message_id`, `user_message_id`를 확정합니다.
-2. 그 뒤 relay 연결이 끊기거나 `relay_unavailable`이 오면 동일 메시지의 GET SSE로 전환합니다.
+1. 생성/추가 POST의 JSON 응답으로 `thread_id`, `message_id`, `user_message_id`를 확정합니다.
+2. 동일 메시지의 GET SSE를 즉시 열고, 연결이 끊기거나 `relay_unavailable`이 오면 재접속합니다.
 3. GET은 0/1/2/5초(각 ±20% jitter) 간격으로 최대 4회 시도합니다.
 4. Backend는 Pub/Sub을 다시 구독하고 PostgreSQL의 상태, partial snapshot, 최종 응답으로 누락 이벤트를 보정합니다.
 
-`accepted` 이전에는 요청이 생성됐는지 확정할 수 없으므로 POST를 자동 재시도하지 않습니다. Worker terminal error, 4xx, callback error, 사용자 abort도 재시도하지 않습니다. POST 자체의 안전한 자동 재시도는 향후 `Idempotency-Key`를 도입할 때 추가합니다.
+작업 생성 POST, Worker terminal error, 4xx, callback error, 사용자 abort는 자동 재시도하지 않습니다.
 
 ### 8.4 콘텐츠 기반 채팅
 
@@ -1091,12 +1088,18 @@ counseling_session (
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | GET | `/check-id` | 로그인 ID 중복 확인 |
-| POST | `/signup` | 회원가입 |
-| POST | `/login` | 이메일/비밀번호 로그인 |
-| POST | `/refresh` | JWT 액세스 토큰 갱신 |
-| POST | `/logout` | 단일 기기 로그아웃 |
-| POST | `/logout-all` | 모든 기기 로그아웃 |
-| GET | `/me` | 현재 사용자 프로필 |
+| POST | `/signup` | 회원가입 후 opaque 세션 쿠키 발급 |
+| POST | `/login` | 이메일/비밀번호 로그인 후 세션 쿠키 발급 |
+| POST | `/logout` | 현재 세션 폐기 (204, body 없음) |
+| POST | `/logout-all` | 사용자 세션 generation 증가로 모든 기기 세션 폐기 |
+| GET | `/me` | 현재 HttpOnly 세션의 사용자 프로필 |
+
+브라우저 인증은 host-only `timblo_session` 쿠키만 사용한다. 쿠키는 `HttpOnly`,
+`SameSite=Lax`, `Path=/`이며 운영 HTTPS에서는 `Secure`가 필수다. 세션은 Valkey의
+opaque digest record로 관리하며 idle 12시간, absolute 14일 제한을 적용한다. 인증
+실패는 401, Valkey/DB 인증 저장소 장애는 503으로 구분한다. `/api/auth/refresh`,
+Bearer 인증, query-string access token은 제공하지 않는다. unsafe method는 허용된
+`Origin`만 통과한다.
 
 ### 10.2 콘텐츠 (`/api/contents`)
 
@@ -1106,7 +1109,7 @@ counseling_session (
 | GET | `/{content_id}` | 콘텐츠 상세 |
 | POST | `/upload` | 파일 업로드 |
 | POST | `/upload-youtube` | YouTube URL 다운로드 (비동기) |
-| DELETE | `/queued` | 대기 중 콘텐츠 전체 삭제 |
+| DELETE | `/queued` | 대기 중 콘텐츠 전체 삭제 (관리자 전용) |
 | POST | `/bulk-delete` | 다중 콘텐츠 삭제 |
 | POST | `/{content_id}/retry` | 실패 단계 재처리 |
 | POST | `/{content_id}/recluster-speakers` | 화자 재클러스터링 |
@@ -1116,14 +1119,14 @@ counseling_session (
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | GET | `/` | 스레드 목록 |
-| POST | `/` | 새 스레드 생성. `stream: false`는 queued JSON, `stream: true`는 `accepted`부터 시작하는 SSE |
+| POST | `/` | 새 스레드와 queued 메시지 생성 후 작업 ID JSON 반환 |
 | GET | `/{thread_id}` | 스레드 상세 |
 | PATCH | `/{thread_id}` | 스레드 수정 (제목/아카이브) |
 | PATCH | `/{thread_id}/metadata` | 메타데이터 수정 |
 | DELETE | `/{thread_id}` | 스레드 삭제 |
 | POST | `/bulk-delete` | 다중 스레드 삭제 |
-| POST | `/{thread_id}/messages` | 메시지 전송. `stream: false`는 queued JSON, `stream: true`는 inline SSE |
-| GET | `/{thread_id}/messages/{message_id}/stream` | 기존 Agent 작업 SSE 재접속/복구 |
+| POST | `/{thread_id}/messages` | queued 메시지 생성 후 작업 ID JSON 반환 |
+| GET | `/{thread_id}/messages/{message_id}/stream` | Agent 작업 SSE 전달/재접속/복구 |
 | POST | `/{thread_id}/regenerate` | 마지막 응답 재생성 SSE |
 
 **Agent SSE 이벤트:** `accepted`, `status`, `thinking_step`, `query_analysis`, `search_queries`, `sources`, `token`, `content`, `partial_restore`, `done`, `error`
@@ -1132,8 +1135,8 @@ counseling_session (
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| POST | `/search` | 심층 검색 (SSE 스트리밍) |
-| GET | `/search` | GET 방식 검색 |
+| POST | `/search` | 인증 사용자 심층 검색 (SSE 스트리밍) |
+| GET | `/search` | 인증 사용자 GET 방식 검색 |
 
 **SSE 이벤트:** `status`, `sources`, `token`, `error`, `done`
 
@@ -1155,13 +1158,13 @@ counseling_session (
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| GET | `/events/file-progress/stream` | 파일 진행률 SSE 스트림 |
+| GET | `/events/file-progress/stream` | 인증 사용자 소유 파일만 전달하는 진행률 SSE 스트림 |
 
 ### 10.7 미디어 (`/api/media`)
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| GET | `/{content_id}` | 미디어 스트리밍 (인증, Range 지원) |
+| GET/HEAD | `/{content_id}` | 소유자 전용 미디어 스트리밍 (인증, Range, no-store) |
 
 ### 10.8 관리자 (`/api/admin`)
 
@@ -1173,16 +1176,6 @@ counseling_session (
 | GET | `/admin/langfuse/traces` | LLM 트레이스 목록 |
 | GET | `/admin/langfuse/traces/{trace_id}` | 트레이스 상세 |
 | GET | `/admin/langfuse/sessions/{session_id}` | 세션 타임라인 |
-
-### 10.9 WebSocket (`/ws`)
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| WS | `/test-ws` | WebSocket 테스트 |
-| WS | `/file-progress-simple/{file_id}` | 파일 진행률 (레거시) |
-| WS | `/file-progress/global` | 전역 파일 진행률 (Valkey Pub/Sub) |
-
----
 
 ## 11. Worker Architecture
 
@@ -1205,10 +1198,10 @@ AI Agent는 같은 Backend 이미지를 사용하는 별도 Celery 앱으로 실
 
 ```bash
 celery -A app.agent_celery:celery_app worker --loglevel=info \
-  -Q agent -c ${AGENT_WORKER_CONCURRENCY:-1}
+  -Q agent -c ${AGENT_WORKER_CONCURRENCY:-4}
 ```
 
-`worker_prefetch_multiplier=1`, late ack, worker-loss reject를 사용합니다. 메시지별 Redis lock과 thread별 active slot으로 중복 실행과 같은 thread의 동시 응답 생성을 막습니다. DB commit 뒤 broker handoff가 실패한 queued 메시지는 watchdog이 다시 enqueue합니다.
+`worker_prefetch_multiplier=1`, late ack, worker-loss reject를 사용합니다. 메시지별 Redis lock과 thread별 active slot으로 중복 실행과 같은 thread의 동시 응답 생성을 막습니다. DB commit 뒤 broker handoff가 실패한 queued 메시지는 5초 주기 dispatch reconciler가 다시 enqueue합니다.
 
 **실행 명령:**
 ```bash
@@ -1290,9 +1283,8 @@ Backend / Agent Worker / Batch Worker
     │ HTTP POST /v1/ocr  (커스텀 엔드포인트)
     ▼
 ai-gateway (FastAPI :4000)
-    │ infra/ai-gateway/services/routing.py
-    │   - tier_config.py로 tier→model 매핑
-    │   - tier-simple + NPU_LLM_BASE_URL → Windows FastFlowLM
+    │ infra/ai-gateway/services/provider_pool.py
+    │   - routing_policy.json capability/health/circuit/capacity 정책
     │   - DEPLOY_MODE=local-gpu | serverless 분기
     │   - serverless 모드: Codex(CLIProxy) / RunPod 폴백
     ▼ httpx.AsyncClient
@@ -1300,8 +1292,8 @@ ai-gateway (FastAPI :4000)
 FastFlowLM :52625  ai-llm :8000       ai-asr-vllm :8000
 (Windows NPU, 선택) (vLLM Gemma 4)     (vLLM Whisper)
 
-ai-diarize :8003   ai-translate :8000 ai-embedding :8000(internal)
-(pyannote comm-1)  (vLLM EXAONE)      (EmbeddingGemma 308M GGUF)
+ai-diarize :8003   ai-embedding :8000(internal)
+(pyannote comm-1)  (EmbeddingGemma 308M GGUF, CPU)
 ```
 
 > v1.1.0의 **LiteLLM 프록시 + Provider Manager(Redis Stream + Host PM2)**는 v1.2.0에서 제거.
@@ -1327,27 +1319,26 @@ infra/ai-gateway/
     └── response.py          — OpenAI 응답 정규화
 ```
 
-### 12.3 모델 라우팅 (tier 기반)
+### 12.3 RoutingProfile과 capacity 라우팅
 
-`infra/shared/tier_config.py`의 `TIER_MODEL_MAP`이 tier 이름을 실제 모델로 매핑.
+`infra/shared/routing_policy.json`은 Provider URL/model 환경변수, workload/reasoning 범위, scope, health probe, inflight 한도를 정의합니다. Gateway 로컬 라우팅은 `ProviderPool`이 이 정책을 읽어 단일 호출 계약으로 시행합니다.
 
-| Tier | Local 모델 | Serverless 폴백 | 용도 |
-|------|-----------|-----------------|------|
-| `tier-simple` | `gemma4-it:e2b` (FastFlowLM NPU, 선택) → `gemma4-12b` (GPU fallback) | codex-low | 짧은 응답, 분류 |
-| `tier-standard` | `gemma4-12b` (ai-llm) | codex-medium | 일반 채팅, RAG |
-| `tier-thinking` | `gemma4-12b` (ai-llm) | codex-high | 추론, WPI 보고서 |
+| Provider | Capacity | Capability | Fallback 규칙 |
+|------|------:|------|------|
+| `npu-chat` | 1 | `chat/none`, local | full/unhealthy/실패 시 로컬 GPU |
+| `gpu-llm` | 4 | `chat·summary/none..high`, local | `high + remote_allowed`일 때 Codex |
+| `codex` | 2 | `chat/high`, remote | explicit Codex 실패 시 GPU high/local 1회 |
+
+Media/embedding 경로는 RoutingProfile 대상이 아니며 기존 전용 라우팅 계약을 유지합니다.
+
+| Task | Primary | Fallback | 방식 |
+|------|---------|----------|------|
 | `embedding` | `embeddinggemma-300m` (ai-embedding) | bge-small-en-v1.5 (RunPod) | 벡터화 |
 | `asr` | Whisper-large-v3-turbo (ai-asr-vllm) | — | 음성 전사 |
 | `diarization` | pyannote community-1 (ai-diarize) | — | 화자 분리 |
-| `ocr` | `gemma4-12b` vision (ai-llm) | — | 이미지 OCR + 표 |
+| `ocr` | `gemma4-a4b` vision (ai-llm) | — | 이미지 OCR + 표 |
 
-라우팅 정책: `DEPLOY_MODE=local-gpu`(기본) → 컨테이너 직결, `DEPLOY_MODE=serverless` → Codex/RunPod.
-
-#### `tier-simple` NPU 경로
-
-`.env`의 `NPU_LLM_BASE_URL`이 설정된 경우에만 FastFlowLM을 사용합니다. `NPU_LLM_MODEL_NAME` 기본값은 `gemma4-it:e2b`, timeout 기본값은 60초입니다. NPU가 응답하지 않거나 스트림의 첫 chunk 전에 실패하면 ai-gateway가 `ai-llm` GPU로 fallback합니다. 첫 chunk 이후 스트림 실패는 같은 요청 안에서 다른 모델로 재실행하지 않습니다.
-
-FastFlowLM 프로세스의 시작/재시작은 Docker Compose 범위 밖입니다. 운영에서 재부팅 후 자동 기동이 필요하면 Windows 서비스 또는 작업 스케줄러로 별도 관리해야 하며, 저장소에는 아직 그 서비스 정의가 없습니다.
+`model=auto`이면 route 순서와 capability를 모두 만족하는 첫 healthy slot을 선택합니다. full 상태는 다음 eligible Provider로 overflow하고, 모두 full이면 30초 한도로 대기합니다. 세부 규칙은 [`routing-v2.md`](routing-v2.md)를 따릅니다.
 
 > `ai-embedding`은 벡터 생성 전용이다. 별도 cross-encoder 리랭커 서비스는 없으며,
 > 웹 검색은 RRF·키워드 관련성·품질/본문 점수로, 문서 RAG는 키워드 검색과
@@ -1357,39 +1348,45 @@ FastFlowLM 프로세스의 시작/재시작은 Docker Compose 범위 밖입니�
 
 | 컨테이너 | 이미지/베이스 | GPU 사용 | 모델 | 컨텍스트 |
 |---------|--------------|---------|------|---------|
-| `ai-llm` | `vllm/vllm-openai-rocm:v0.26.0` | gfx1150 | Gemma 4 12B W4A16 CT + MTP k=1 | 16384 |
-| `ai-asr-vllm` | `ai-llm-gemma4:0.26.0` (vLLM ROCm 공용 이미지) | gfx1150 | Whisper-large-v3-turbo | — |
+| `ai-llm` | `vllm/vllm-openai-rocm:v0.26.0` | gfx1150 | Gemma 4 26B A4B AWQ INT4 + MTP k=4 | 32768 |
+| `ai-asr-vllm` | `ai-llm-gemma4:0.26.0` (vLLM ROCm 공용 이미지) | gfx1150 | Whisper-large-v3-turbo | 448 |
 | `ai-diarize` | `pyannote-audio` (custom ROCm build) | gfx1150 | community-1 | — |
-| `ai-ocr` (legacy profile) | `llama.cpp` (HIP build) | gfx1150 | dots.ocr Q8 GGUF | 8192 |
-| `ai-embedding` | `llama.cpp` (HIP build) | gfx1150 | EmbeddingGemma 300M Q4 GGUF | 2048 |
+| `ai-embedding` | `llama.cpp` (CPU) | CPU | EmbeddingGemma 300M Q4 GGUF | 2048 |
 
 **공유 자원:**
 - Docker named volume `hf-cache-fast` — HuggingFace 모델 캐시 공유
-- Docker named volume `vllm-compile-cache` — ASR/번역 vLLM torch.compile 캐시 보존
-- WSL 추론 컨테이너에 `/dev/dxg`와 `libdxcore.so` 마운트
+- Docker named volume `vllm-compile-cache` — ASR vLLM torch.compile 캐시 보존
+- Docker named volume `tvm-ffi-cache` — vLLM 0.26 ROCm 보조 모듈 cold compile 캐시
+- GPU 추론 컨테이너에 `/dev/dxg`와 `libdxcore.so` 마운트
+
+`ai-asr-vllm`은 WSL UVA 제약 때문에 V1 runner를 사용한다. 운영값은 고정 KV 512 MiB,
+`max-num-batched-tokens=1536`, `max-num-seqs=1`이며 Pyannote와 병행한다.
 
 ### 12.5 ai-llm 서빙 체크리스트
 
 - Hugging Face에서 target/assistant 모델 사용 조건에 동의하고 `.env`에 `HF_TOKEN`을 설정한다. 이미 캐시된 호스트에서도 clean deploy를 위해 유지한다.
-- WSL 메모리는 32 GiB로 제한한다. `ai-llm`은 모델+MTP 약 8.89 GiB와 고정 4 GiB KV cache를 사용하며, `gpu_memory_utilization`은 사용하지 않는다.
-- 운영 설정은 `max-model-len=16384`, `max-num-seqs=1`, image=1, video/audio=0이다. 멀티모달은 이미지 OCR만 활성화한다.
-- cold start는 약 4분, 첫 OCR은 ROCm Triton JIT 때문에 약 45~50초까지 걸릴 수 있다.
+- WSL 메모리는 32 GiB로 제한한다. `ai-llm`은 A4B target+assistant 약 17.37 GiB와 고정 3 GiB KV cache를 사용하며, `gpu_memory_utilization`은 사용하지 않는다.
+- 운영 설정은 `max-model-len=32768`, `max-num-seqs=4`, `max-num-batched-tokens=1024`, image=1, video/audio=0이다. 멀티모달은 이미지 OCR만 활성화한다.
+- A4B 부하 실측 peak는 29.436 GiB, ASR·pyannote 공존 high-water는 30.195 GiB였고 swap은 증가하지 않았다. cold start는 약 10~12분이며 첫 요청은 ROCm Triton JIT로 느릴 수 있다.
+- 공유 iGPU에서 Whisper와 pyannote 동시 실행은 경합으로 약 5배 느렸으므로 worker는 같은 GPU lock 안에서 ASR 후 화자분리를 직렬 실행한다.
+- pyannote는 startup에서 패키지에 포함된 음성 fixture를 warm-up하며, 각 downstream entrypoint는 upstream 장애를 계속 감시해 A4B-first 순서로 자동 재대기한다.
 - 로그의 `TRITON_ATTN`/Triton JIT는 vLLM 내부 ROCm 커널이다. 별도 NVIDIA Triton Inference Server는 PoC 후 채택하지 않았으며 운영 서비스에 없다.
 
 ```bash
-# build
-docker compose build ai-llm ai-gateway
+# 이 호스트는 로컬 ROCr WSL poll-fix 이미지를 사용한다.
+COMPOSE_FILES="-f docker-compose.yml -f docker-compose.rocr-wsl-pollfix.yml"
+
+# 로컬 patched ROCr 이미지를 사용하지 않는 서비스만 build
+docker compose $COMPOSE_FILES build ai-embedding ai-gateway backend worker
 
 # 32 GiB 공유 UMA에서 교체 중 순간 OOM 방지
-docker compose stop ai-llm ai-asr-vllm ai-translate ai-diarize ai-embedding
-docker compose up -d --no-deps --wait --wait-timeout 900 ai-llm
+docker compose $COMPOSE_FILES stop ai-gateway backend worker
+docker compose $COMPOSE_FILES stop ai-llm ai-asr-vllm ai-diarize ai-embedding
+docker compose $COMPOSE_FILES up -d --no-deps --no-build ai-llm
 
-# ai-llm healthy 확인 후 나머지를 순차 생성·복구
-docker compose up -d --no-deps --wait --wait-timeout 900 ai-asr-vllm
-docker compose up -d --no-deps --wait --wait-timeout 900 ai-translate
-docker compose up -d --no-deps --wait --wait-timeout 900 ai-diarize
-docker compose up -d --no-deps --wait --wait-timeout 900 ai-embedding
-docker compose up -d --no-deps --wait --wait-timeout 120 ai-gateway
+# entrypoint가 ai-llm → ASR → pyannote → embedding 순서를 강제한다.
+docker compose $COMPOSE_FILES up -d --no-deps --no-build ai-asr-vllm ai-diarize ai-embedding
+docker compose $COMPOSE_FILES up -d --no-deps ai-gateway backend worker
 
 # health / OCR smoke
 curl -f http://localhost:18000/v1/models
@@ -1405,11 +1402,13 @@ OOM/restart, `SpecDecoding metrics`를 확인한다. 롤백은 이전 Git releas
 ### 12.6 호출 예시 (chat completion)
 
 ```
-client → ai-gateway POST /v1/chat/completions {model: "tier-thinking", messages: [...]}
+client → ai-gateway POST /v1/chat/completions
+         {model: "auto", routing: {workload: "chat", reasoning: "high",
+                                    execution_scope: "local_only"}, messages: [...]}
    │
-   ▼ services/routing.py: tier_thinking → model="gemma4-12b", base=ai-llm
-   │
-   ▼ httpx AsyncClient stream: POST http://ai-llm:8000/v1/chat/completions
+   ▼ routes/chat.py → ProviderPool: local GPU primary
+   │                  └ remote_allowed + overflow/실패 조건에서만 Codex
+   ▼ AsyncOpenAI stream: POST /v1/chat/completions
    │
    ▼ vLLM SSE 스트림 → ai-gateway가 chunk 단위 relay
    │
@@ -1422,7 +1421,7 @@ client ← ai-gateway SSE 스트림
 
 ## 13. Valkey Data Architecture
 
-> v1.1.0 시기에는 추론 요청도 Valkey Stream(`stream:chat:requests` / `stream:media:requests` / `stream:gpu:responses` 등)으로 Provider Manager에 라우팅했지만, 현재 추론 호출은 ai-gateway HTTP 직결입니다. Valkey는 **Celery broker + Pub/Sub 이벤트 + 락/dispatch marker + 캐시/세마포어**에 사용하며, 응답 토큰을 Stream에 적재하지 않습니다.
+> v1.1.0 시기의 추론 요청 Valkey Stream은 폐기했고, 현재 추론 호출은 ai-gateway HTTP 직결입니다. Valkey는 **Celery broker + opaque 브라우저 세션 + Pub/Sub 이벤트 + 락/dispatch marker + 캐시/세마포어**에 사용하며, 응답 토큰을 Stream에 적재하지 않습니다.
 
 ### 13.1 Pub/Sub 채널
 
@@ -1430,10 +1429,10 @@ client ← ai-gateway SSE 스트림
 |-----------|------|--------|--------|
 | `events:agent:{message_id}` | Agent 상태·토큰·완료 이벤트 | Agent Worker | Backend SSE relay |
 | `events:file_progress:{file_id}` | 파일 처리 진행률 | Worker | Backend SSE |
-| `events:asr_stream:{file_id}` | 실시간 ASR 텍스트 | Worker | Backend WebSocket |
-| `events:llm_stream:{file_id}` | 실시간 LLM 토큰 | Worker | Backend WebSocket |
+| `events:asr_stream:{file_id}` | 실시간 ASR 텍스트 | Worker | Backend 내부 소비자 |
+| `events:llm_stream:{file_id}` | 실시간 LLM 토큰 | Worker | Backend 내부 소비자 |
 | `events:content_created` | 콘텐츠 생성 완료 | Worker | Backend |
-| `events:file_progress:global` | 전역 파일 진행률 | Worker | Backend WebSocket |
+| `events:file_progress:global` | 전역 파일 진행률 | Worker | Backend 사용자 격리 SSE |
 
 ### 13.2 Cache Key 패턴 & TTL
 
@@ -1443,13 +1442,16 @@ client ← ai-gateway SSE 스트림
 | `job:{job_id}` | 86,400s (24시간) | 작업 임시 데이터 |
 | `worker:{device}:active` | 3,600s (1시간) | GPU 동시성 세마포어 |
 | `active_agent_thread:{thread_id}` | 7,200s | thread별 동시 Agent 실행 방지 |
-| `dispatched_agent_message:{message_id}` | 7,200s | broker handoff 확인/Watchdog 복구 판단 |
+| `dispatched_agent_message:{message_id}` | 7,200s | broker handoff 확인/5초 dispatch reconciler 중복 방지 |
+| `auth:session:{sha256}` | idle 12시간, absolute 14일 이내 | opaque 브라우저 세션 record |
+| `auth:user-session-version:{user_id}` | 만료 없음 | logout-all generation |
+| `auth:login-failure:{sha256(login_id)}` | 300s | 로그인 실패 fixed window |
 
 ### 13.3 메모리 정책
 
 ```yaml
 maxmemory: 2gb
-maxmemory-policy: volatile-lru    # TTL 있는 키부터 LRU 삭제
+maxmemory-policy: allkeys-lru     # 전체 키 중 LRU 삭제
 ```
 
 ### 13.4 데이터 플로우 요약 (v1.2.0)
@@ -1460,9 +1462,10 @@ Backend ── HTTP ──► ai-gateway ── HTTP ──► ai-llm / ai-asr-v
 
 Backend ── Celery enqueue ──► Valkey ──► Agent/Batch Worker
 Agent Worker ── PUBLISH events:agent:* ──► Valkey ──► Backend ── SSE ──► Browser
-Batch Worker ── PUBLISH events:* ──► Valkey ──► Backend SSE/WebSocket
+Batch Worker ── PUBLISH events:* ──► Valkey ──► Backend 소유권 검증 ── SSE ──► Browser
 Backend ── SET cache:search ──► Valkey ──► GET cache:search
 Backend / Worker ── SET worker:gpu:active ──► Valkey (TTL-based 세마포어)
+Browser ── HttpOnly cookie ──► Backend ── SHA-256 digest lookup/touch ──► Valkey session
 ```
 
 ---
@@ -1535,7 +1538,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | Agent Celery 앱 | `backend/app/agent_celery.py` |
 | Agent Worker task | `backend/app/tasks/agent_task.py` |
 | Agent 작업 handoff/키 상수 | `backend/app/utils/task_queue_adapter.py` |
-| queued 작업 Watchdog 복구 | `backend/app/services/agent_job_recovery.py` |
+| queued 작업 dispatch 복구 | `backend/app/services/agent_dispatcher.py` |
 | LangGraph 그래프 | `backend/app/agents/graph.py` |
 | GraphState | `backend/app/agents/state.py` |
 | WPI 서비스 | `backend/app/services/wpi_service.py` |
@@ -1571,11 +1574,10 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | Chat 엔드포인트 | `infra/ai-gateway/routes/chat.py` |
 | Embeddings 엔드포인트 | `infra/ai-gateway/routes/embeddings.py` |
 | Media (ASR/OCR) 엔드포인트 | `infra/ai-gateway/routes/media.py` |
-| Tier ↔ 모델 매핑 | `infra/shared/tier_config.py` |
+| Provider 정책·capacity | `infra/shared/routing_policy.json`, `infra/ai-gateway/services/provider_pool.py` |
 | ai-llm (vLLM) | `infra/inference/llm/` (Dockerfile + WSL shims/MTP patch) |
 | ai-asr-vllm (Whisper) | `docker-compose.yml`의 vLLM 서비스 정의 |
 | ai-diarize (pyannote) | `infra/inference/diarize/` |
-| ai-ocr (legacy) | `infra/inference/ocr-qwen/` |
 | ai-embedding (EmbeddingGemma) | `infra/inference/embedding/` |
 | Codex(CLIProxy) 폴백 | `infra/cliproxy/` |
 | Celery 앱 | `worker/celery_app.py` |
@@ -1616,13 +1618,13 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 | 용어 | 설명 |
 |------|------|
-| FastFlowLM | Ryzen AI NPU용 OpenAI 호환 LLM 서버. `tier-simple`의 선택적 외부 추론 대상 |
+| FastFlowLM | Ryzen AI NPU용 OpenAI 호환 LLM 서버. `chat/none` 요청 우선, full/unhealthy/실패 시 GPU fallback |
 | ai-gateway | 추론 라우터 컨테이너 — LiteLLM/Provider Manager의 후속 (v1.2.0~) |
 | RRF | Reciprocal Rank Fusion — 다중 검색 결과 리랭킹 알고리즘 |
 | pgvector | PostgreSQL 벡터 확장 — 임베딩 유사도 검색 |
 | VAD | Voice Activity Detection — 음성 감지 (침묵 제거) |
 | Diarization | 화자 분리 — 누가 말했는지 구분 |
-| Tier | LLM 성능 티어 — simple(빠름) / thinking(정확) |
+| RoutingProfile | `workload + reasoning + execution_scope`로 구성된 LLM 라우팅 요청 |
 | GraphState | LangGraph 상태 객체 — 노드 간 데이터 공유 |
 | SSE | Server-Sent Events — 서버→클라이언트 단방향 실시간 스트림 |
 | Watchdog | 비정상 파일 상태 감지 및 자동 복구 스케줄러 |

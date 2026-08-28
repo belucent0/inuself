@@ -70,22 +70,6 @@ export async function updateThreadMetadata(
 }
 
 /**
- * 메시지 재생성 (SSE 스트리밍)
- *
- * @returns ReadableStream for SSE events
- */
-export async function regenerateMessage(
-  threadId: string,
-  mode?: string,
-  model?: string
-): Promise<ReadableStream<Uint8Array>> {
-  return httpClient.postStream(`/threads/${threadId}/regenerate`, {
-    mode: mode || 'auto',
-    model,
-  })
-}
-
-/**
  * 다중 스레드 일괄 삭제
  */
 export async function bulkDeleteThreads(threadIds: string[]): Promise<{
@@ -107,7 +91,6 @@ export const threadsApi = {
   deleteThread,
   updateThreadTitle,
   updateThreadMetadata,
-  regenerateMessage,
   bulkDeleteThreads,
 }
 

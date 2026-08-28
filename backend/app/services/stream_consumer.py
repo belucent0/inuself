@@ -275,6 +275,11 @@ class StreamConsumer:
             async with AsyncSessionLocal() as session:
                 file_repo = FileRepository(session)
                 await file_repo.update_file_status(file_id, FileStatus.PROCESSING)
+                await file_repo.add_log(
+                    file_id,
+                    log={"event": "asr_started"},
+                    message="ASR processing started",
+                )
                 await session.commit()
             logger.info(f"ASR started: file_id={file_id}, event={event}")
             progress.asr_started()

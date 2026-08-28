@@ -187,7 +187,7 @@ class ProviderAttributes:
 
     # 프로바이더 정보
     PROVIDER_TYPE = "provider.type"  # gpu, npu
-    PROVIDER_NAME = "provider.name"  # ai-llm, ai-asr, ai-ocr, ai-diarize, ai-embedding
+    PROVIDER_NAME = "provider.name"  # ai-llm, ai-asr-vllm, ai-diarize, ai-embedding
     PROVIDER_URL = "provider.url"
     PROVIDER_HEALTHY = "provider.healthy"
 

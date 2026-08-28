@@ -12,6 +12,8 @@ from sqlalchemy import (
     TIMESTAMP,
     Text,
     Float,
+    Index,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -509,6 +511,17 @@ class AiMessage(Base):
     """
 
     __tablename__ = "ai_message"
+    __table_args__ = (
+        Index(
+            "uq_ai_message_active_assistant_per_thread",
+            "thread_id",
+            unique=True,
+            postgresql_where=text(
+                "role = 'assistant' AND status IN "
+                "('queued', 'analyzing', 'searching', 'thinking', 'generating')"
+            ),
+        ),
+    )
 
     # UUID v7 Primary Key
     id: Mapped[uuid.UUID] = mapped_column(

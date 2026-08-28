@@ -3,7 +3,7 @@
 이미지에서 텍스트를 추출하는 OCR 작업을 담당합니다.
 이미지 전처리(PDF → 이미지 변환 등)는 백엔드에서 수행합니다.
 
-v1.2.0 현행: Worker → ai-gateway → ai-ocr 컨테이너(dots.ocr) httpx 직결.
+현행: Worker → ai-gateway → ai-llm(Gemma 4 26B A4B)로 OCR 요청.
 """
 
 import base64
@@ -19,10 +19,8 @@ import httpx
 import redis
 from PIL import Image
 
-from worker.config import get_settings
 from worker.logging_config import logger
 
-# v1.2.0: ai-gateway httpx 직결로 ai-ocr 컨테이너(dots.ocr) 호출
 AI_GATEWAY_URL = os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
 AI_GATEWAY_API_KEY = os.getenv("AI_GATEWAY_API_KEY", "")
 OCR_REQUEST_TIMEOUT = 300.0  # 5분
@@ -31,7 +29,6 @@ OCR_REQUEST_TIMEOUT = 300.0  # 5분
 def _call_ocr_via_ai_gateway(
     image_base64: str,
     prompt: str,
-    model: str = "qwen3vl-it:4b",
     accuracy_mode: str = "speed",
     timeout: float = OCR_REQUEST_TIMEOUT,
     on_processing_started: callable = None,
@@ -39,13 +36,12 @@ def _call_ocr_via_ai_gateway(
 ) -> str:
     """ai-gateway를 통해 OCR 요청.
 
-    v1.2.0 흐름: Worker → ai-gateway → ai-ocr 컨테이너(dots.ocr) httpx 직결.
+    Worker → ai-gateway → ai-llm(Gemma 4 26B A4B)로 호출합니다.
 
     Args:
         image_base64: Base64 인코딩된 이미지
         prompt: OCR 프롬프트
-        model: 모델 이름 (사용되지 않음, accuracy_mode로 결정)
-        accuracy_mode: "speed" 또는 "accuracy" — ai-gateway에서 모델 매핑
+        accuracy_mode: "speed" 또는 "accuracy" — 이미지 전처리 품질 힌트
         timeout: 타임아웃 (초)
         on_processing_started: 처리 시작 시 호출될 콜백
         file_id: 파일 ID (Backend 상태 업데이트용)
@@ -53,13 +49,10 @@ def _call_ocr_via_ai_gateway(
     Returns:
         OCR 결과 텍스트
     """
-    # accuracy_mode에 따라 ai-gateway 라우팅 모델명 결정
-    if accuracy_mode == "speed":
-        final_model = "ocr-speed"
-    else:
-        final_model = "ocr-accuracy"
-
-    logger.info(f"[OCR Vision] Sending OCR via AI Gateway: model={final_model}, accuracy_mode={accuracy_mode}")
+    logger.info(
+        "[OCR Vision] Sending OCR via AI Gateway: model=gemma4-a4b, "
+        f"accuracy_mode={accuracy_mode}"
+    )
 
     # OpenAI Vision API 형식으로 요청
     url = f"{AI_GATEWAY_URL}/v1/chat/completions"
@@ -86,7 +79,7 @@ def _call_ocr_via_ai_gateway(
         extra_body["file_id"] = file_id
 
     payload = {
-        "model": final_model,
+        "model": "gemma4-a4b",
         "messages": [
             {
                 "role": "user",
@@ -138,13 +131,8 @@ class OcrVisionProcessor:
     이미지를 받아서 LLM Vision API로 텍스트를 추출합니다.
     """
 
-    def __init__(self, ocr_provider: str | None = None):
-        self.settings = get_settings()
-        # ocr_provider가 지정되면 임시로 오버라이드 (이 작업에만 적용)
-        if ocr_provider is not None:
-            self._ocr_provider_override = ocr_provider
-        else:
-            self._ocr_provider_override = None
+    def __init__(self, accuracy_mode: str = "speed"):
+        self.accuracy_mode = accuracy_mode
 
     def _image_to_base64(self, image: Image.Image, max_size: tuple[int, int] = (2048, 2048), quality: int = 85) -> str:
         """이미지를 base64 문자열로 변환."""
@@ -319,23 +307,15 @@ class OcrVisionProcessor:
     def _call_llm_api(self, prompt: str, image_base64: str | None = None, file_id: str = None) -> str:
         """ai-gateway를 통해 OCR 요청.
 
-        v1.2.0 흐름: Worker → ai-gateway → ai-ocr 컨테이너(dots.ocr) httpx 직결.
-        accuracy_mode/model은 ocr_provider override(speed=flm / accuracy=llamacpp_server)로 결정됩니다.
+        Worker → ai-gateway → ai-llm(Gemma 4 26B A4B)로 호출합니다.
         """
-        current_ocr_provider = self._ocr_provider_override if self._ocr_provider_override is not None else self.settings.ocr_provider
-        logger.debug(f"[OCR Vision] _call_llm_api: current_ocr_provider={current_ocr_provider}")
-
         if image_base64 is None:
             raise ValueError("OCR call requires image_base64")
-
-        accuracy_mode = "speed" if current_ocr_provider == "flm" else "accuracy"
-        model = "qwen3vl-it:4b" if current_ocr_provider == "flm" else "qwen3-vl"
 
         result = _call_ocr_via_ai_gateway(
             image_base64=image_base64,
             prompt=prompt,
-            model=model,
-            accuracy_mode=accuracy_mode,
+            accuracy_mode=self.accuracy_mode,
             file_id=file_id,
         )
         return self._remove_markdown_code_blocks(result)
@@ -361,9 +341,7 @@ class OcrVisionProcessor:
         try:
             has_table = False
 
-            # OCR provider 확인 (speed 모드는 더 작은 이미지 크기 필요)
-            current_ocr_provider = self._ocr_provider_override if self._ocr_provider_override is not None else self.settings.ocr_provider
-            is_speed_mode = current_ocr_provider != "llamacpp_server"
+            is_speed_mode = self.accuracy_mode == "speed"
 
             if ocr_mode != "portray":
                 # 표 감지를 위한 저해상도 이미지 (speed: 1024x1024, accuracy: 1536x1536)
@@ -407,7 +385,7 @@ class OcrVisionProcessor:
     ) -> dict[str, Any]:
         """여러 이미지를 OCR 처리.
 
-        v1.2.0: ai-gateway가 ai-ocr 컨테이너로 라우팅. host에서 서버 시작 불필요.
+        ai-gateway가 ai-llm(Gemma 4 26B A4B)로 라우팅합니다.
 
         Args:
             images: PIL Image 객체 목록
@@ -425,13 +403,10 @@ class OcrVisionProcessor:
         """
         logger.info(f"Processing {len(images)} images for OCR")
 
-        # ocr_provider 오버라이드 확인
-        current_ocr_provider = self._ocr_provider_override if self._ocr_provider_override is not None else self.settings.ocr_provider
-        logger.info(f"[OCR Vision] process_images: ocr_provider={current_ocr_provider}")
-
-        # OCR provider에 따라 리소스 타입 결정 (로깅용)
-        resource_type = "gpu" if current_ocr_provider == "llamacpp_server" else "npu"
-        logger.info(f"[OCR Vision] Using resource: {resource_type}/ocr for provider={current_ocr_provider}")
+        resource_type = "gpu"
+        logger.info(
+            f"[OCR Vision] Using resource: gpu/ocr, accuracy_mode={self.accuracy_mode}"
+        )
 
         # 이미지 OCR 처리 (리소스 게이트 없이 직접 처리)
         page_texts: list[str] = []
@@ -443,7 +418,7 @@ class OcrVisionProcessor:
             "pages": []
         }
 
-        # v1.2.0: ai-gateway가 ai-ocr 컨테이너로 라우팅. host에서 서버 시작 불필요.
+        # ai-gateway가 ai-llm으로 라우팅하므로 host에서 서버 시작 불필요.
         for idx, image in enumerate(images):
             page_num = idx + 1
             logger.info(f"Processing page {page_num}/{len(images)}")

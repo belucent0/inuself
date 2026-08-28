@@ -2,7 +2,7 @@
 
 이 모듈은 파일에서 텍스트를 추출합니다.
 - 전처리(PDF/Office → 이미지 변환)는 Worker에서 수행
-- OCR 추론은 ai-gateway → ai-ocr 컨테이너(dots.ocr) httpx 직결 호출
+- OCR 추론은 ai-gateway → ai-llm(Gemma 4 26B A4B) 호출
 - 결과는 S3에 저장하고 stream:worker:results로 완료 알림 (백엔드가 consume)
 """
 from io import BytesIO
@@ -106,20 +106,13 @@ async def _process_job(
             file_id, image_s3_keys, settings.s3_endpoint, settings.s3_bucket
         )
 
-    # OCR provider 결정 (리소스 획득 전에 필요)
-    if ocr_accuracy_mode == "speed":
-        ocr_provider = "flm"
-    elif ocr_accuracy_mode == "accuracy":
-        ocr_provider = "llamacpp_server"
-    else:
-        # 기본값은 speed (flm)
-        logger.warning(f"[OCR] Unknown ocr_accuracy_mode: {ocr_accuracy_mode}, using default 'speed' (flm)")
-        ocr_provider = "flm"
+    if ocr_accuracy_mode not in ("speed", "accuracy"):
+        logger.warning(
+            f"[OCR] Unknown ocr_accuracy_mode: {ocr_accuracy_mode}, using 'speed'"
+        )
+        ocr_accuracy_mode = "speed"
 
-    logger.info(f"[OCR] OCR accuracy mode: {ocr_accuracy_mode}, selected provider: {ocr_provider}")
-
-    ocr_processor = OcrVisionProcessor(ocr_provider=ocr_provider)
-    logger.info(f"[OCR] OcrVisionProcessor created with provider override: {ocr_processor._ocr_provider_override}")
+    ocr_processor = OcrVisionProcessor(accuracy_mode=ocr_accuracy_mode)
 
     images: list[Image.Image] = []
     temp_dir = settings.temp_dir / f"ocr_{file_id}_{uuid4().hex[:8]}"

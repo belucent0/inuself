@@ -304,7 +304,7 @@ def get_secure_media_url(content_id: str | "UUID") -> str:
     보안 미디어 URL을 반환 (백엔드 프록시 경유).
 
     인증 기반 접근 제어를 위해 /api/media/{content_id} 형식으로 반환합니다.
-    - JWT 인증 확인 후에만 접근 가능
+    - Cookie session 인증 확인 후에만 접근 가능
     - Range 요청 지원 (영상 탐색)
 
     Args:

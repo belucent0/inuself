@@ -7,6 +7,10 @@
 venv
 rocm_env
 litellm_env
+**/.venv
+**/venv
+**/node_modules
+**/__pycache__
 *.pyc
 *.pyo
 *.pyd

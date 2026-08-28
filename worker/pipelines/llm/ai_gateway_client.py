@@ -1,7 +1,7 @@
 """AI Gateway를 통한 LLM 요청 클라이언트.
 
 OpenAI SDK를 사용하여 AI Gateway와 통신합니다.
-GPU/NPU 자원 상태에 따라 AI Gateway가 자동으로 라우팅합니다.
+AI Gateway가 RoutingProfile을 배포 모드에 맞는 provider로 라우팅합니다.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from functools import lru_cache
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 from openai import OpenAI, APIConnectionError, APIStatusError, APITimeoutError
 
@@ -20,6 +20,23 @@ logger = logging.getLogger(__name__)
 
 class AIGatewayClientError(RuntimeError):
     """AI Gateway 호출 실패 시 사용하는 예외."""
+
+
+def _gateway_error_type(body: Any) -> str | None:
+    if not isinstance(body, Mapping):
+        return None
+    error = body.get("error")
+    return error.get("type") if isinstance(error, Mapping) else None
+
+
+def _retry_after_seconds(exc: APIStatusError, fallback: float) -> float:
+    headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+    raw = headers.get("Retry-After")
+    try:
+        value = float(raw)
+        return value if value > 0 else fallback
+    except (TypeError, ValueError):
+        return fallback
 
 
 @lru_cache(maxsize=1)
@@ -54,6 +71,7 @@ def request_ai_gateway_completion(
     max_tokens: int | None = None,
     stream: bool = False,
     model: str | None = None,
+    routing: dict | None = None,
     request_timeout_seconds: float | None = None,
     max_retry_time: int | None = None,
     retry_interval: int | None = None,
@@ -61,13 +79,19 @@ def request_ai_gateway_completion(
     """AI Gateway를 통한 Chat Completion 요청.
 
     OpenAI SDK를 사용하여 AI Gateway와 통신합니다.
-    AI Gateway가 GPU/NPU 자원 상태에 따라 자동으로 라우팅합니다.
+    AI Gateway가 RoutingProfile을 배포 모드에 맞는 provider로 라우팅합니다.
 
     Args:
-        model: 사용할 모델. None이면 settings.ai_gateway_model 사용
+        model: 사용할 모델. None이면 auto
+        routing: Gateway RoutingProfile. model=auto에서는 필수
     """
     client = get_openai_client(settings.ai_gateway_url, settings.ai_gateway_api_key)
-    model_name = model or settings.ai_gateway_model
+    model_name = model or "auto"
+    if model_name == "auto" and routing is None:
+        raise AIGatewayClientError("RoutingProfile is required for model=auto")
+    routing_kwargs = (
+        {"extra_body": {"routing": routing}} if routing is not None else {}
+    )
 
     logger.info("AI Gateway request: url=%s model=%s", client.base_url, model_name)
 
@@ -100,6 +124,7 @@ def request_ai_gateway_completion(
                 else settings.llm_max_tokens,
                 stream=stream,
                 timeout=effective_request_timeout,
+                **routing_kwargs,
             )
 
             # 스트리밍이 아닌 경우 응답 처리
@@ -148,22 +173,22 @@ def request_ai_gateway_completion(
             return "".join(chunks).strip()
 
         except APIStatusError as exc:
-            # 503 에러: 모델 로딩 중
-            if exc.status_code == 503:
-                error_body = getattr(exc, "body", {}) or {}
-                error_message = str(error_body)
-                if "Loading" in error_message or "busy" in error_message.lower():
-                    if elapsed + effective_retry_interval > effective_max_retry_time:
-                        break
-                    logger.info(
-                        "[AI Gateway] Providers busy/loading, retrying in %ss (%ss/%ss)",
-                        effective_retry_interval,
-                        elapsed,
-                        effective_max_retry_time,
-                    )
-                    time.sleep(effective_retry_interval)
-                    elapsed += effective_retry_interval
-                    continue
+            if (
+                exc.status_code == 503
+                and _gateway_error_type(getattr(exc, "body", None)) == "overloaded"
+            ):
+                delay = _retry_after_seconds(exc, effective_retry_interval)
+                if elapsed + delay > effective_max_retry_time:
+                    break
+                logger.info(
+                    "[AI Gateway] Providers overloaded, retrying in %ss (%ss/%ss)",
+                    delay,
+                    elapsed,
+                    effective_max_retry_time,
+                )
+                time.sleep(delay)
+                elapsed += delay
+                continue
 
             error_msg = f"AI Gateway HTTP error ({exc.status_code}): {exc.message}"
             logger.error(error_msg)

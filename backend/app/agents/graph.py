@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from typing import Any, AsyncIterator
+from uuid import UUID
 
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
@@ -15,7 +16,7 @@ from loguru import logger
 
 from .state import GraphState, AIMode
 from ..core.langfuse import get_langfuse_handler
-from ..core.llm_tier import TIER_DISPLAY_MAP, LLMTier
+from ..core.reasoning import REASONING_DISPLAY_MAP
 from .nodes import (
     IntentParserNode,
     GeneratorNode,
@@ -382,7 +383,11 @@ async def run_ai_agent(
             from ..db.session import async_session_factory
             async with async_session_factory() as session:
                 thread_svc = get_thread_service(session)
-                thread = await thread_svc.get_thread(thread_id)
+                thread = (
+                    await thread_svc.get_thread(thread_id, user_id=user_id)
+                    if user_id
+                    else None
+                )
                 if thread and thread.messages:
                     # completed 상태이고 content가 있는 메시지만 (queued/generating 제외)
                     recent_messages = _recent_completed_history(
@@ -412,12 +417,12 @@ async def run_ai_agent(
         ctx_ids = metadata.get("content_ids") or (
             [metadata["content_id"]] if metadata.get("content_id") else []
         )
-        if ctx_ids:
+        if ctx_ids and user_id:
             from .tools.content_context import load_content_context
             content_context = await load_content_context(
                 ctx_ids,
+                user_id=UUID(str(user_id)),
                 source_options=metadata.get("source_options"),
-                user_id=user_id,
             )
 
     # 초기 상태 구성
@@ -425,7 +430,7 @@ async def run_ai_agent(
         "messages": messages,
         "query": query,
         "mode": AIMode(mode) if mode and mode != "auto" else AIMode.SIMPLE,
-        "selected_model": None,  # 동적 라우팅으로 IntentParser에서 설정
+        "selected_reasoning": "none",
         "intent_confidence": 0.0,
         "requires_clarification": False,
         "clarification_question": None,
@@ -624,7 +629,11 @@ async def stream_ai_agent(
             from ..db.session import async_session_factory
             async with async_session_factory() as session:
                 thread_svc = get_thread_service(session)
-                thread = await thread_svc.get_thread(thread_id)
+                thread = (
+                    await thread_svc.get_thread(thread_id, user_id=user_id)
+                    if user_id
+                    else None
+                )
                 if thread and thread.messages:
                     # completed 상태이고 content가 있는 메시지만 (queued/generating 제외)
                     recent_messages = _recent_completed_history(
@@ -654,12 +663,12 @@ async def stream_ai_agent(
         ctx_ids = metadata.get("content_ids") or (
             [metadata["content_id"]] if metadata.get("content_id") else []
         )
-        if ctx_ids:
+        if ctx_ids and user_id:
             from .tools.content_context import load_content_context
             content_context = await load_content_context(
                 ctx_ids,
+                user_id=UUID(str(user_id)),
                 source_options=metadata.get("source_options"),
-                user_id=user_id,
             )
 
     # 초기 상태 구성
@@ -667,7 +676,7 @@ async def stream_ai_agent(
         "messages": messages,
         "query": query,
         "mode": AIMode(mode) if mode and mode != "auto" else AIMode.SIMPLE,
-        "selected_model": None,  # 동적 라우팅으로 IntentParser에서 설정
+        "selected_reasoning": "none",
         "intent_confidence": 0.0,
         "requires_clarification": False,
         "clarification_question": None,
@@ -717,34 +726,32 @@ async def stream_ai_agent(
             state.update(intent_result)
 
             detected_mode = state["mode"]
-            selected_tier = state.get(
-                "selected_model", LLMTier.SIMPLE
-            )  # tier명이 selected_model에 저장됨
+            selected_reasoning = state.get("selected_reasoning", "none")
             query_analysis = state.get("query_analysis")
 
             intent_otel.set_attribute("ai.detected_mode", str(detected_mode))
-            intent_otel.set_attribute("ai.selected_tier", selected_tier)
+            intent_otel.set_attribute("ai.reasoning", selected_reasoning)
 
         if intent_span:
             intent_span.end(
                 output={
                     "mode": str(detected_mode),
-                    "selected_tier": selected_tier,
+                    "selected_reasoning": selected_reasoning,
                     "query_analysis": query_analysis,
                 }
             )
 
-        # 모드/티어 한글 표시명 가져오기
+        # 모드/추론 한글 표시명 가져오기
         mode_display = MODE_DISPLAY_MAP.get(detected_mode, str(detected_mode))
-        tier_display = TIER_DISPLAY_MAP.get(selected_tier, selected_tier)
+        reasoning_display = REASONING_DISPLAY_MAP.get(selected_reasoning, selected_reasoning)
 
         yield {
             "type": "thinking",
             "data": {
                 "step": "intent_result",
-                "content": f"모드 선택 완료 ({mode_display} / {tier_display})",
+                "content": f"모드 선택 완료 ({mode_display} / {reasoning_display})",
                 "mode": detected_mode.value,
-                "selected_tier": selected_tier,
+                "selected_reasoning": selected_reasoning,
             },
         }
 
@@ -1195,7 +1202,7 @@ async def stream_ai_agent(
                     output={
                         "response": reasoning_response,
                         "mode": str(detected_mode),
-                        "selected_tier": selected_tier,
+                        "selected_reasoning": selected_reasoning,
                     }
                 )
                 if langfuse_client:
@@ -1252,7 +1259,7 @@ async def stream_ai_agent(
                 output={
                     "response": full_response,
                     "mode": str(detected_mode),
-                    "selected_tier": selected_tier,
+                    "selected_reasoning": selected_reasoning,
                 }
             )
             if langfuse_client:
@@ -1260,7 +1267,7 @@ async def stream_ai_agent(
 
         # OpenTelemetry span 완료
         otel_span.set_attribute("ai.detected_mode", str(detected_mode))
-        otel_span.set_attribute("ai.selected_tier", selected_tier)
+        otel_span.set_attribute("ai.reasoning", selected_reasoning)
         otel_span.set_attribute("ai.response_length", len(full_response))
         otel_context.detach(token)
         otel_span.end()

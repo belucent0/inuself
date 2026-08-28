@@ -11,9 +11,9 @@ import { useNavigate } from 'react-router-dom'
 import { ChatInput, type AIMode, AI_MODE_CONFIG } from '@/features/chat'
 import { cn } from '@/shared/utils/cn'
 import { toast } from 'sonner'
-import { useChatStore } from '@/shared/stores/chatStore'
 import { httpClient } from '@/shared/services'
-import { getAccessToken } from '@/shared/services/authToken'
+import type { AcceptedMessage } from '@/shared/services/chatStreamService'
+import { enterAcceptedHomeThread } from './homeThreadTransition'
 
 const suggestedQueries = [
   { text: '최근 AI 기술 트렌드는?', mode: 'search' as AIMode },
@@ -33,32 +33,12 @@ export function HomePage() {
     setIsNavigating(true)
 
     try {
-      const accessToken = getAccessToken()
-      const response = await fetch(`${httpClient.getBaseUrl()}/threads`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({ query: text, mode }),
-      })
+      const accepted = await httpClient.post<AcceptedMessage>(
+        '/threads',
+        { query: text, mode }
+      )
 
-      if (!response.ok) {
-        throw new Error('스레드 생성 실패')
-      }
-
-      const { thread_id, message_id } = await response.json()
-
-      useChatStore.getState().switchThread(thread_id, [{
-        message_id,
-        role: 'user',
-        content: text,
-        timestamp: Date.now(),
-        status: 'completed',
-        metadata: { mode },
-      }])
-
-      navigate(`/chat/${thread_id}?messageId=${message_id}`)
+      enterAcceptedHomeThread(accepted, text, mode, navigate)
     } catch (err) {
       console.error('[HomePage] Failed to create thread:', err)
       toast.error('대화 생성에 실패했습니다')

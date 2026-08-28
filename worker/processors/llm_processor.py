@@ -84,7 +84,12 @@ async def _process_job_async(
         response = request_ai_gateway_completion(
             settings=get_settings(),
             messages=messages,
-            model=get_settings().ai_gateway_model_summarize,
+            model="auto",
+            routing={
+                "workload": "summary",
+                "reasoning": "low",
+                "execution_scope": "local_only",
+            },
         )
 
         logger.info(f"[LLM] LLM response received: {len(response)} chars")

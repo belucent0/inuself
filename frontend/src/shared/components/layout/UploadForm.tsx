@@ -412,7 +412,7 @@ export default function UploadForm() {
                     <span className="text-sm font-semibold">문서 분석</span>
                   </div>
                   <p className="text-xs text-muted-foreground ml-6">
-                    Qwen3-VL 모델을 사용하여 문서의 텍스트와 구조를 심층적으로
+                    Gemma 4 모델을 사용하여 문서의 텍스트와 구조를 심층적으로
                     분석합니다. (일반 문서, 표가 포함된 문서에 권장)
                   </p>
                 </Label>

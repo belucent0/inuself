@@ -1,6 +1,6 @@
 """BlockGenerator partial retry 통합 테스트.
 
-실제 vLLM 호출 없이 mock으로 라운드 진행/실패 회복/circuit breaker 동작을 검증한다.
+실제 LLM 호출 없이 mock으로 라운드 진행과 실패 회복을 검증한다.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ from app.services.block_generator import (
     BlockGenerator,
     BlockState,
     SectionsState,
+    SUMMARY_MAX_TOKENS,
+    SUMMARY_TRANSCRIPT_CHARS,
 )
 from app.services.summary_templates import BlockStatus, get_template
 
@@ -44,15 +46,17 @@ def _patch_path():
 async def test_happy_path_all_blocks_success():
     """모든 block 1라운드 성공 → 정상 종료."""
     responses = iter([METADATA_RESPONSE, SECTION_RESPONSE_0, SECTION_RESPONSE_1])
+    calls = []
 
-    async def fake_call(**_kwargs):
+    async def fake_call(**kwargs):
+        calls.append(kwargs)
         return next(responses)
 
     with patch(_patch_path(), side_effect=fake_call):
         gen = BlockGenerator()
         # 백오프 시간 회피
         with patch("app.services.block_generator.ROUND_BACKOFF_SECONDS", (0, 0, 0, 0, 0)):
-            state = await gen.generate("긴 텍스트 " * 100)
+            state = await gen.generate("x" * SUMMARY_TRANSCRIPT_CHARS + "TAIL")
 
     assert state.blocks["title"].status == BlockStatus.SUCCESS
     assert state.blocks["title"].content == "AI와 직장"
@@ -63,6 +67,18 @@ async def test_happy_path_all_blocks_success():
     assert state.blocks["section_0"].status == BlockStatus.SUCCESS
     assert state.blocks["section_1"].status == BlockStatus.SUCCESS
     assert state.all_required_success(gen.template)
+    assert all(call["max_tokens"] == SUMMARY_MAX_TOKENS for call in calls)
+    assert all(call["model"] == "auto" for call in calls)
+    assert all(
+        call["routing"]
+        == {
+            "workload": "summary",
+            "reasoning": "low",
+            "execution_scope": "local_only",
+        }
+        for call in calls
+    )
+    assert all("TAIL" not in call["messages"][1]["content"] for call in calls)
 
 
 def _topic_marker(topic: str) -> str:
