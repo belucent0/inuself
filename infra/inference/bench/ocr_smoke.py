@@ -21,6 +21,8 @@ DEFAULT_PROMPT = (
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     if len(sys.argv) < 2:
         print("usage: ocr_smoke.py IMAGE [PROMPT]", file=sys.stderr)
         sys.exit(2)

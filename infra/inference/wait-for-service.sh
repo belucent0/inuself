@@ -1,10 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-url="${1:?usage: wait-for-ai-gateway.sh URL COMMAND...}"
+url="${1:?usage: wait-for-service.sh URL COMMAND...}"
 shift
-: "${1:?usage: wait-for-ai-gateway.sh URL COMMAND...}"
-
+: "${1:?usage: wait-for-service.sh URL COMMAND...}"
 check() {
   if command -v curl >/dev/null 2>&1; then
     curl -fs --max-time 3 "$url" >/dev/null 2>&1
@@ -12,7 +11,6 @@ check() {
     python3 -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=3)' "$url" >/dev/null 2>&1
   fi
 }
-
 until check; do
   sleep 5
 done

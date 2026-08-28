@@ -1,5 +1,8 @@
 # ASR 백엔드 마이그레이션 + 벤치마크 — Vulkan → transformers → whisper.cpp HIP → vLLM Whisper
 
+> 역사적 비교 기록입니다. 현재 운영은 `ai-asr-vllm`(Whisper Large-v3-Turbo)과
+> `ai-diarize`(pyannote community-1)입니다.
+
 > 한 문장 요약: GPU 가속을 잃지 않으면서 컨테이너 기반 운영을 가능하게 하기 위한 ASR 백엔드 마이그레이션 흐름. WSL2 컨테이너에서 Vulkan GPU 추론 불가 → 컨테이너용 transformers ROCm은 너무 느림 → whisper.cpp HIP F16으로 속도 회복 → 환각 잔존 문제를 vLLM Whisper 통합으로 해소.
 
 ## 0. 배경 (Context)
@@ -11,7 +14,7 @@
 | GPU runtime | AMD ROCm 7.2.1 + `/dev/dxg` (WSL DirectX bridge) |
 | GPU | gfx1150 (Radeon 890M, Strix Point iGPU) |
 | VRAM 운영 한도 | **32 GB** (시스템 공유) |
-| 컨테이너 | docker compose 기반 (`ai-llm` / `ai-asr` / `ai-ocr` / `ai-diarize` / `ai-embedding`) |
+| 현재 컨테이너 | docker compose 기반 (`ai-llm` / `ai-asr-vllm` / `ai-diarize` / `ai-embedding`) |
 | ASR 모델 | Whisper Large-v3-Turbo (전 구간 동일, 추론 엔진만 교체) |
 
 ### 사용 시나리오
@@ -175,11 +178,11 @@ vLLM Whisper 결과 (앞/뒤):
 PoC PR #146 이후 production 경로 전환. 핵심 변경: **worker 코드 무수정** — ai-gateway가 어댑터 책임.
 
 - [x] `ai-asr-vllm` `profile=poc` 제거 (기본 활성)
-- [x] whisper.cpp `ai-asr` 컨테이너 `profiles: ["legacy"]` 강등 (fallback 보존)
+- [x] whisper.cpp `ai-asr` 컨테이너는 legacy profile로 격리
 - [x] ai-gateway `ASR_BASE_URL` → `http://ai-asr-vllm:8000`
 - [x] ai-gateway `_handle_asr`: `/transcribe` → `/v1/audio/transcriptions` (OpenAI 호환) + verbose_json → worker 호환 포맷 변환
 - [x] **language 옵셔널 분기 추가**: 빈 값/`auto`/`none` 수신 시 vLLM에 전달하지 않고 자동 감지 위임 → 영한 혼합/영어 단일 콘텐츠 환각 해결
-- [x] ASR 런타임 의존성(`soundfile`, `av`)을 공용 `ai-llm` 이미지에 baked-in
+- [x] ASR 런타임 의존성(`soundfile`, `av`)을 공용 `ai-llm-gemma4:0.26.0` 이미지에 포함
 
 ### 6.1 production 전환 후 검증 (2026-05-14)
 
@@ -407,7 +410,7 @@ iGPU 32GB UMA + ai-llm 동시 운영 + 사용자 수~수십 명 환경:
 - **모델**: 전 구간 Whisper Large-v3-Turbo 유지. 추론 엔진만 교체.
 - **vLLM 환경 변수**: `VLLM_MAX_AUDIO_CLIP_FILESIZE_MB` 기본 25 MB (큰 파일은 명시 필요 — tariff 28 MB라 200으로 설정).
 - **vLLM 첫 콜드 스타트**: HF 다운로드 ~60s + KV cache + warmup ~130s = 약 4분.
-- **모델 캐시**: `hf-cache-fast` named volume (vLLM/ai-ocr와 공유).
+- **모델 캐시**: `hf-cache-fast` named volume (현행 `ai-*` 추론 서비스가 공유).
 - **CT2 ROCm 재시도 가치**: 낮음. 현재 whisper.cpp/vLLM 모두 production 수준이고, vLLM이 ASR도 통합하면 별도 추론 엔진 추가 필요 없음 (`docs/benchmarks/`에 별도 조사 결과 기록).
 
 ### 관련 PR

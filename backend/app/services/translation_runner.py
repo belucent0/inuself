@@ -40,9 +40,7 @@ logger = logging.getLogger(__name__)
 # 정책
 # ---------------------------------------------------------------------------
 CHUNK_SIZE = 1  # 한 청크에 묶을 segment 수.
-# 1.2B sLLM(EXAONE)은 일괄 N개 번역에서 응답 누락/병합으로 count mismatch가 잦다.
-# 단일 segment 단위는 누락 위험이 사실상 0이고, 짧은 응답으로 청크당 시간도 짧아
-# 총 시간은 청크 4 + 재시도 폭주 시나리오보다 오히려 빠르다.
+# 단일 segment 단위는 구조화 응답의 누락/병합과 전체 청크 재시도를 피한다.
 MAX_ROUNDS = 5
 ROUND_BACKOFF_SECONDS = (5, 30, 120, 300, 600)
 # vLLM 큐 폭주 → AI Gateway timeout 회피를 위해 직렬 처리. 다른 사용자/요약 작업과

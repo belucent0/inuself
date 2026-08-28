@@ -28,7 +28,8 @@ exec llama-server \
   --embeddings \
   --pooling "${EMB_POOLING}" \
   --ctx-size "${EMB_CTX_SIZE}" \
-  -ngl 999 \
+  -ngl 0 \
+  --poll 0 \
   --host 0.0.0.0 \
   --port 8000 \
   "$@"
