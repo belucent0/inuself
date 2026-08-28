@@ -40,6 +40,7 @@ RUN pip install --no-cache-dir --no-deps 'pyannote.audio==4.0.3' \
         'pytorch-lightning>=2.6,<3' \
         'pytorch-metric-learning>=2.9,<3' \
         'torchmetrics>=1.9,<2' \
+        'numpy<2.3' \
         'torch-audiomentations>=0.12' \
         'torch-pitch-shift>=1.2' \
         'asteroid-filterbanks>=0.4' \

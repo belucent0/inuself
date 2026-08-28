@@ -3,17 +3,13 @@
 Revision ID: 20260210_01
 Revises: 20260209_04
 Create Date: 2026-02-10
-
-Phase 1: Thread 영속화
-- ai_thread: 대화 세션 (사이드바에 표시되는 단위)
-- ai_message: 개별 대화 메시지 (user/assistant)
-- user_event: 사용자 행동 이벤트 추적 (개인화 준비)
 """
 
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 
@@ -23,16 +19,34 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _column_names() -> set[str]:
+    inspector = inspect(op.get_bind())
+    return {column["name"] for column in inspector.get_columns("user")}
+
+
 def upgrade() -> None:
-    # 0. 기본 사용자 생성 (임시 - 인증 시스템 구현 전까지)
-    # ai_chat_controller.py의 get_current_user_id()에서 사용하는 UUID와 일치
+    columns = _column_names()
+    if "storage_key" not in columns:
+        op.add_column(
+            "user",
+            sa.Column("storage_key", sa.String(length=16), nullable=True),
+        )
+        op.execute("""
+            UPDATE "user"
+            SET storage_key = substr(md5(id::text), 1, 12)
+            WHERE storage_key IS NULL
+        """)
+        op.alter_column("user", "storage_key", nullable=False)
+        op.create_index("ix_user_storage_key", "user", ["storage_key"], unique=True)
+
+    # Temporary default user used by ai_chat_controller.get_current_user_id().
     op.execute("""
-        INSERT INTO "user" (id, email, password_hash, name, storage_key, is_active, is_superuser, created_at)
+        INSERT INTO "user" (id, email, password, name, storage_key, is_active, is_super, created_at)
         VALUES (
             '01234567-89ab-cdef-0123-456789abcdef',
             'default@system.local',
             'not-used',
-            '기본 사용자',
+            'Default User',
             'default_sys',
             true,
             false,
@@ -147,11 +161,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # 0. 기본 사용자 삭제 (CASCADE로 관련 데이터도 함께 삭제됨)
-    op.execute("""
-        DELETE FROM "user" WHERE id = '01234567-89ab-cdef-0123-456789abcdef'
-    """)
-
     # user_event 삭제
     op.drop_index("ix_user_event_user_created", table_name="user_event")
     op.drop_index("ix_user_event_event_type", table_name="user_event")
@@ -168,3 +177,7 @@ def downgrade() -> None:
     op.drop_index("ix_ai_thread_content_id", table_name="ai_thread")
     op.drop_index("ix_ai_thread_user_id", table_name="ai_thread")
     op.drop_table("ai_thread")
+
+    op.execute("""
+        DELETE FROM "user" WHERE id = '01234567-89ab-cdef-0123-456789abcdef'
+    """)

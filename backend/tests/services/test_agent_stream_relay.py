@@ -7,11 +7,20 @@ from app.controllers import ai_chat_controller
 
 
 @pytest.mark.asyncio
-async def test_snapshot_sequence_drops_only_already_persisted_tokens(monkeypatch):
+async def test_snapshot_sequence_drops_already_persisted_events(monkeypatch):
     events = [
         {
             "data": json.dumps(
                 {"type": "token", "data": "duplicate", "content_sequence": 2}
+            )
+        },
+        {
+            "data": json.dumps(
+                {
+                    "type": "content",
+                    "data": "stale-content",
+                    "content_sequence": 2,
+                }
             )
         },
         {
@@ -72,6 +81,7 @@ async def test_snapshot_sequence_drops_only_already_persisted_tokens(monkeypatch
 
     assert "partial_restore" in output
     assert "duplicate" not in output
+    assert "stale-content" not in output
     assert '"data": "C"' in output
     assert '"type": "content", "data": "ABC"' in output
     assert '"type": "done"' in output

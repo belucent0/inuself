@@ -247,10 +247,10 @@ async def _relay_agent_events(message_id: str, accepted: dict | None = None):
                     yield _sse_event("error", AGENT_FAILURE_CONTENT)
                     return
                 sequence = decoded.get("content_sequence")
-                if event_type == "token" and isinstance(sequence, int):
+                if event_type in {"token", "content"} and isinstance(sequence, int):
                     if sequence <= persisted_content_sequence:
                         continue
-                elif event_type == "content" and isinstance(sequence, int):
+                if event_type == "content" and isinstance(sequence, int):
                     persisted_content_sequence = max(
                         persisted_content_sequence,
                         sequence,

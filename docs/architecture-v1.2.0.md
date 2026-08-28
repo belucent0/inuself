@@ -89,10 +89,9 @@ docker-compose.yml
 ├── cli-proxy-api  :8317/:1455 — OAuth CLI Proxy (Codex 접근, serverless 폴백)
 │
 ├── ai-llm         :8000       — vLLM 0.26 Gemma 4 26B A4B AWQ INT4 + MTP k=4 (ROCm)
-├── ai-asr-vllm    :8000       — vLLM Whisper-large-v3-turbo
-├── ai-diarize     :8003       — pyannote community-1 (ROCm)
-├── ai-translate   :8000       — vLLM EXAONE 4.0 1.2B
-├── ai-embedding   :8000(int)  — EmbeddingGemma 308M Q4 GGUF (llama.cpp)
+├── ai-asr-vllm    :8000       — vLLM Whisper-large-v3-turbo (512 MiB KV, seqs=1)
+├── ai-diarize     :8003       — pyannote community-1 (ROCm, startup warm-up)
+├── ai-embedding   :8000(int)  — EmbeddingGemma 308M Q4 GGUF (llama.cpp CPU)
 ├── FastFlowLM     :52625(ext) — Windows Host NPU, `NPU_LLM_BASE_URL` 설정 시에만
 │
 ├── postgres       :5432       — PostgreSQL + pgvector
@@ -112,7 +111,7 @@ docker-compose.yml
 **서비스 의존성:**
 - `backend` → postgres(healthy), valkey(healthy), minio(healthy), ai-gateway(healthy)
 - `agent-worker` → valkey(healthy), postgres(healthy), ai-gateway(healthy)
-- `worker` → valkey(healthy), postgres(healthy), tempo(started)
+- `worker` → valkey(healthy), postgres(healthy), tempo(started), ai-gateway(healthy)
 - `ai-gateway` → FastFlowLM(선택)/ai-llm/ai-asr-vllm/ai-diarize/ai-embedding (httpx 호출 시점에만)
 - `langfuse` → postgres(healthy)
 
@@ -1293,8 +1292,8 @@ ai-gateway (FastAPI :4000)
 FastFlowLM :52625  ai-llm :8000       ai-asr-vllm :8000
 (Windows NPU, 선택) (vLLM Gemma 4)     (vLLM Whisper)
 
-ai-diarize :8003   ai-translate :8000 ai-embedding :8000(internal)
-(pyannote comm-1)  (vLLM EXAONE)      (EmbeddingGemma 308M GGUF)
+ai-diarize :8003   ai-embedding :8000(internal)
+(pyannote comm-1)  (EmbeddingGemma 308M GGUF, CPU)
 ```
 
 > v1.1.0의 **LiteLLM 프록시 + Provider Manager(Redis Stream + Host PM2)**는 v1.2.0에서 제거.
@@ -1350,38 +1349,44 @@ Media/embedding 경로는 RoutingProfile 대상이 아니며 기존 전용 라�
 | 컨테이너 | 이미지/베이스 | GPU 사용 | 모델 | 컨텍스트 |
 |---------|--------------|---------|------|---------|
 | `ai-llm` | `vllm/vllm-openai-rocm:v0.26.0` | gfx1150 | Gemma 4 26B A4B AWQ INT4 + MTP k=4 | 32768 |
-| `ai-asr-vllm` | `ai-llm-gemma4:0.26.0` (vLLM ROCm 공용 이미지) | gfx1150 | Whisper-large-v3-turbo | — |
+| `ai-asr-vllm` | `ai-llm-gemma4:0.26.0` (vLLM ROCm 공용 이미지) | gfx1150 | Whisper-large-v3-turbo | 448 |
 | `ai-diarize` | `pyannote-audio` (custom ROCm build) | gfx1150 | community-1 | — |
-| `ai-ocr` (legacy profile) | `llama.cpp` (HIP build) | gfx1150 | dots.ocr Q8 GGUF | 8192 |
-| `ai-embedding` | `llama.cpp` (HIP build) | gfx1150 | EmbeddingGemma 300M Q4 GGUF | 2048 |
+| `ai-embedding` | `llama.cpp` (CPU) | CPU | EmbeddingGemma 300M Q4 GGUF | 2048 |
 
 **공유 자원:**
 - Docker named volume `hf-cache-fast` — HuggingFace 모델 캐시 공유
-- Docker named volume `vllm-compile-cache` — ASR/번역 vLLM torch.compile 캐시 보존
-- WSL 추론 컨테이너에 `/dev/dxg`와 `libdxcore.so` 마운트
+- Docker named volume `vllm-compile-cache` — ASR vLLM torch.compile 캐시 보존
+- Docker named volume `tvm-ffi-cache` — vLLM 0.26 ROCm 보조 모듈 cold compile 캐시
+- GPU 추론 컨테이너에 `/dev/dxg`와 `libdxcore.so` 마운트
+
+`ai-asr-vllm`은 WSL UVA 제약 때문에 V1 runner를 사용한다. 운영값은 고정 KV 512 MiB,
+`max-num-batched-tokens=1536`, `max-num-seqs=1`이며 Pyannote와 병행한다.
 
 ### 12.5 ai-llm 서빙 체크리스트
 
 - Hugging Face에서 target/assistant 모델 사용 조건에 동의하고 `.env`에 `HF_TOKEN`을 설정한다. 이미 캐시된 호스트에서도 clean deploy를 위해 유지한다.
-- WSL 메모리는 32 GiB로 제한한다. `ai-llm`은 모델+MTP 약 8.89 GiB와 고정 3 GiB KV cache를 사용하며, `gpu_memory_utilization`은 사용하지 않는다.
-- 운영 설정은 `max-model-len=32768`, `max-num-seqs=4`, image=1, video/audio=0이다. 멀티모달은 이미지 OCR만 활성화한다.
-- cold start는 약 4분, 첫 OCR은 ROCm Triton JIT 때문에 약 45~50초까지 걸릴 수 있다.
+- WSL 메모리는 32 GiB로 제한한다. `ai-llm`은 A4B target+assistant 약 17.37 GiB와 고정 3 GiB KV cache를 사용하며, `gpu_memory_utilization`은 사용하지 않는다.
+- 운영 설정은 `max-model-len=32768`, `max-num-seqs=4`, `max-num-batched-tokens=1024`, image=1, video/audio=0이다. 멀티모달은 이미지 OCR만 활성화한다.
+- A4B 부하 실측 peak는 29.436 GiB, ASR·pyannote 공존 high-water는 30.195 GiB였고 swap은 증가하지 않았다. cold start는 약 10~12분이며 첫 요청은 ROCm Triton JIT로 느릴 수 있다.
+- 공유 iGPU에서 Whisper와 pyannote 동시 실행은 경합으로 약 5배 느렸으므로 worker는 같은 GPU lock 안에서 ASR 후 화자분리를 직렬 실행한다.
+- pyannote는 startup에서 패키지에 포함된 음성 fixture를 warm-up하며, 각 downstream entrypoint는 upstream 장애를 계속 감시해 A4B-first 순서로 자동 재대기한다.
 - 로그의 `TRITON_ATTN`/Triton JIT는 vLLM 내부 ROCm 커널이다. 별도 NVIDIA Triton Inference Server는 PoC 후 채택하지 않았으며 운영 서비스에 없다.
 
 ```bash
-# build
-docker compose build ai-llm ai-gateway
+# 이 호스트는 로컬 ROCr WSL poll-fix 이미지를 사용한다.
+COMPOSE_FILES="-f docker-compose.yml -f docker-compose.rocr-wsl-pollfix.yml"
+
+# 로컬 patched ROCr 이미지를 사용하지 않는 서비스만 build
+docker compose $COMPOSE_FILES build ai-embedding ai-gateway backend worker
 
 # 32 GiB 공유 UMA에서 교체 중 순간 OOM 방지
-docker compose stop ai-llm ai-asr-vllm ai-translate ai-diarize ai-embedding
-docker compose up -d --no-deps --wait --wait-timeout 900 ai-llm
+docker compose $COMPOSE_FILES stop ai-gateway backend worker
+docker compose $COMPOSE_FILES stop ai-llm ai-asr-vllm ai-diarize ai-embedding
+docker compose $COMPOSE_FILES up -d --no-deps --no-build ai-llm
 
-# ai-llm healthy 확인 후 나머지를 순차 생성·복구
-docker compose up -d --no-deps --wait --wait-timeout 900 ai-asr-vllm
-docker compose up -d --no-deps --wait --wait-timeout 900 ai-translate
-docker compose up -d --no-deps --wait --wait-timeout 900 ai-diarize
-docker compose up -d --no-deps --wait --wait-timeout 900 ai-embedding
-docker compose up -d --no-deps --wait --wait-timeout 120 ai-gateway
+# entrypoint가 ai-llm → ASR → pyannote → embedding 순서를 강제한다.
+docker compose $COMPOSE_FILES up -d --no-deps --no-build ai-asr-vllm ai-diarize ai-embedding
+docker compose $COMPOSE_FILES up -d --no-deps ai-gateway backend worker
 
 # health / OCR smoke
 curl -f http://localhost:18000/v1/models
@@ -1573,7 +1578,6 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | ai-llm (vLLM) | `infra/inference/llm/` (Dockerfile + WSL shims/MTP patch) |
 | ai-asr-vllm (Whisper) | `docker-compose.yml`의 vLLM 서비스 정의 |
 | ai-diarize (pyannote) | `infra/inference/diarize/` |
-| ai-ocr (legacy) | `infra/inference/ocr-qwen/` |
 | ai-embedding (EmbeddingGemma) | `infra/inference/embedding/` |
 | Codex(CLIProxy) 폴백 | `infra/cliproxy/` |
 | Celery 앱 | `worker/celery_app.py` |

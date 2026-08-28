@@ -57,8 +57,11 @@ The OCR request used MTP: 37 draft tokens, 34 accepted tokens (91.9%). vLLM logs
 that the assistant falls back to text-only; the Gemma 4 target still performs image
 encoding and the assistant accelerates text decoding.
 
-## Decision
+## Historical decision
 
 Use MTP `k=1`. Reserve KV memory explicitly instead of using
 `gpu_memory_utilization`, because the GPU uses shared UMA while WSL is capped at
 32 GiB. Production uses a 4 GiB fixed KV cache for the existing 16K context limit.
+
+This profile was superseded by the A4B production profile documented in
+[`gemma4-a4b-vllm-tuning-draft.md`](./gemma4-a4b-vllm-tuning-draft.md).
