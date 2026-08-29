@@ -26,6 +26,36 @@ and keeps 32K as the default length because 48K/64K prefill is too slow. The
 combined seq8/batch1536 profile was slower and used more memory than
 seq8/batch1024, so it was rejected.
 
+### vLLM 0.28 production upgrade (2026-08-30)
+
+Production moved from vLLM 0.26.0 to 0.28.0 while keeping ROCm 7.2.3 and the
+same 32K / seq4 / KV 3 GiB / batch1024 / MTP k4 profile. The official base is
+pinned by digest in `infra/inference/llm/Dockerfile`. vLLM 0.28 includes the
+Gemma 4 target-width MTP fix, so the old source backport was removed.
+
+| Runtime | Single aggregate | Four-way aggregate | TTFT single / four-way | Warm 8K prefill |
+|---|---:|---:|---:|---:|
+| vLLM 0.26 + MTP k4 | 15.02 tok/s | 38.94 tok/s | 0.502 / 1.102 s | 12.66K tok/s |
+| vLLM 0.28 + MTP k4 | 17.61 tok/s | 42.92 tok/s | 0.389 / 0.732 s | 13.62K tok/s |
+| vLLM 0.28 without MTP | 7.80 tok/s | 30.21 tok/s | 0.302 / 0.598 s | 23.52K tok/s |
+
+MTP k4 remains the production choice: it was 2.26x faster for single-request
+generation and 1.42x faster for four-way aggregate generation than vLLM 0.28
+without MTP. Disabling MTP is only favorable for pure long-prefill workloads.
+
+WSL startup requires `ROCPROFILER_REGISTER_ENABLED=0`,
+`VLLM_WORKER_MULTIPROC_METHOD=spawn`, the DXG initializer at
+`/usr/lib/python3.12/sitecustomize.py`, and the existing ROCr idle-poll fix.
+The vLLM 0.26 profiler stub must not be copied into the 0.28 image because
+PyTorch 2.12 requires newer profiler symbols.
+
+The deployed wheel metadata reported vLLM `0.28.0+rocm723` while the runtime
+module reported `0.28.0`; A4B, Whisper v3 Turbo,
+pyannote, and CPU embedding all recovered healthy. A cold A4B marker request
+took 30.386 seconds including ROCm JIT, the next warm request took 4.281
+seconds, and the 34-second `sample.wav` completed through the Whisper OpenAI
+transcription endpoint.
+
 ## Production validation (2026-08-15)
 
 | Check | Result |
