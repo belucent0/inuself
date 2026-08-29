@@ -50,6 +50,7 @@ async def one_call(
     model: str,
     prompt: str,
     max_tokens: int,
+    ignore_eos: bool,
 ) -> CallResult:
     payload = {
         "model": model,
@@ -57,10 +58,14 @@ async def one_call(
         "max_tokens": max_tokens,
         "temperature": 0.2,
         "stream": True,
+        "stream_options": {"include_usage": True},
     }
+    if ignore_eos:
+        payload["ignore_eos"] = True
     t0 = time.perf_counter()
     ttft = None
     completion_tokens = 0
+    received_usage = False
     try:
         async with client.stream(
             "POST",
@@ -81,12 +86,28 @@ async def one_call(
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
                     continue
-                delta = chunk["choices"][0].get("delta", {})
+                if usage := chunk.get("usage"):
+                    completion_tokens = usage.get(
+                        "completion_tokens", completion_tokens
+                    )
+                    received_usage = True
+                    continue
+                choices = chunk.get("choices", [])
+                if not choices:
+                    continue
+                delta = choices[0].get("delta", {})
                 if delta.get("content"):
                     if ttft is None:
                         ttft = time.perf_counter() - t0
-                    completion_tokens += 1
         total = time.perf_counter() - t0
+        if not received_usage:
+            return CallResult(
+                False,
+                ttft or total,
+                total,
+                0,
+                "server omitted completion token usage",
+            )
         return CallResult(True, ttft or total, total, completion_tokens)
     except Exception as e:
         return CallResult(False, 0, time.perf_counter() - t0, 0, repr(e))
@@ -98,6 +119,7 @@ async def run_level(
     concurrency: int,
     n_requests: int,
     max_tokens: int,
+    ignore_eos: bool,
 ) -> list[CallResult]:
     sem = asyncio.Semaphore(concurrency)
     results: list[CallResult] = []
@@ -105,7 +127,9 @@ async def run_level(
         async def worker(i: int) -> None:
             async with sem:
                 prompt = PROMPTS[i % len(PROMPTS)]
-                r = await one_call(client, base_url, model, prompt, max_tokens)
+                r = await one_call(
+                    client, base_url, model, prompt, max_tokens, ignore_eos
+                )
                 results.append(r)
                 status = "OK" if r.success else f"ERR {r.error}"
                 print(
@@ -148,6 +172,7 @@ async def amain() -> None:
     ap.add_argument("--concurrency", default="1,3,5")
     ap.add_argument("--requests-per-level", type=int, default=10)
     ap.add_argument("--max-tokens", type=int, default=256)
+    ap.add_argument("--ignore-eos", action="store_true")
     args = ap.parse_args()
 
     levels = [int(x) for x in args.concurrency.split(",")]
@@ -157,7 +182,12 @@ async def amain() -> None:
         print(f"\n=== concurrency={lvl} ({args.requests_per_level} requests) ===")
         t0 = time.perf_counter()
         results = await run_level(
-            args.base_url, args.model, lvl, args.requests_per_level, args.max_tokens
+            args.base_url,
+            args.model,
+            lvl,
+            args.requests_per_level,
+            args.max_tokens,
+            args.ignore_eos,
         )
         wall = time.perf_counter() - t0
         s = summarize(lvl, results, wall)
