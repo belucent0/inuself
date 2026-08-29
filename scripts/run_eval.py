@@ -53,7 +53,7 @@ RUN_NAME = os.environ.get(
 
 # LLM-as-Judge 설정 (정보용 — CI 게이트에 영향 없음)
 JUDGE_AI_GATEWAY_URL = os.environ.get("JUDGE_AI_GATEWAY_URL", "http://localhost:4000")
-JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "tier-simple")
+JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "auto")
 JUDGE_ENABLED = os.environ.get("JUDGE_ENABLED", "true").lower() == "true"
 JUDGE_AI_GATEWAY_API_KEY = os.environ.get("JUDGE_AI_GATEWAY_API_KEY", os.environ.get("AI_GATEWAY_API_KEY", ""))
 
@@ -145,13 +145,18 @@ async def _llm_judge(
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0,
                     "max_tokens": 100,
+                    "routing": {
+                        "workload": "chat",
+                        "reasoning": "none",
+                        "execution_scope": "local_only",
+                    },
                 },
                 timeout=30.0,
             )
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
 
-        # <think>...</think> 블록 제거 (tier-thinking 모델 대응)
+        # 일부 모델의 내부 추론 태그를 제거해 채점 응답 형식을 정규화한다.
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
         score = -1.0

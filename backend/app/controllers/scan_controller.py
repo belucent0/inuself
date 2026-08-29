@@ -10,7 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..core.auth import get_current_user_id
+from ..core.auth import get_current_user, get_current_user_id
 from ..db.session import get_session
 from ..repositories.scan_repository import ScanRepository
 from ..schemas.wpi import (
@@ -27,7 +27,11 @@ from ..schemas.wpi import (
 )
 from ..services.wpi_service import WpiService
 
-router = APIRouter(prefix="/scan", tags=["scan"])
+router = APIRouter(
+    prefix="/scan",
+    tags=["scan"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 # === 의존성 ===

@@ -6,7 +6,7 @@
 - block 단위 추상화: title/keywords/headings/section_N 모두 block으로 통일
 - partial retry: 실패한 block만 다음 라운드에서 재시도
 - 라운드별 백오프 (5s → 30s → 2m → 5m → 10m)
-- circuit breaker 연동: vLLM 영구 다운 시 라운드 즉시 종료
+- Gateway 오류는 기존 라운드 백오프로 재시도
 - incremental persistence: block 완료 시점에 즉시 콜백 (DB 저장 가능)
 - 도메인 템플릿 확장 가능: BlockTemplate으로 schema 정의
 
@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from ..core.config import Settings, get_settings
+from ..core.reasoning import routing_profile
 from ..prompts.summary import (
     PHASE1_STRUCTURE_TEMPLATE_V2,
     SECTION_GENERATION_TEMPLATE,
@@ -36,7 +37,6 @@ from .ai_gateway_client import (
     AIGatewayClientError,
     request_ai_gateway_completion_async,
 )
-from .circuit_breaker import CircuitBreakerOpenError
 from .summary_templates import BlockStatus, BlockTemplate, DEFAULT_TEMPLATE, get_template
 
 logger = logging.getLogger(__name__)
@@ -50,8 +50,10 @@ MAX_TOTAL_SECONDS = 30 * 60  # 30분
 ROUND_BACKOFF_SECONDS = (5, 30, 120, 300, 600)  # 이후 600 고정
 SECTION_MIN_LENGTH = 50
 # vLLM 부하 회피: 본문 섹션 병렬 호출 동시성 상한
-# (vLLM Qwen3-VL-4B의 안정 동시 처리량 ≈ 2~3개. 그 이상은 큐 폭주로 timeout 유발)
+# Gemma 4 vLLM의 안정 동시 처리량은 Compose max-num-seqs 설정으로 제한한다.
 SECTION_CONCURRENCY = 2
+SUMMARY_MAX_TOKENS = 2400
+SUMMARY_TRANSCRIPT_CHARS = 10000  # ponytail: use tokenizer budgeting if the model or prompt changes
 
 
 # ---------------------------------------------------------------------------
@@ -227,15 +229,9 @@ class BlockGenerator:
                 logger.info(f"[BlockGenerator] round {round_idx} 백오프 {backoff}s")
                 await asyncio.sleep(backoff)
 
-            try:
-                progressed = await self._run_round(
-                    state, transcript, on_block_complete
-                )
-            except CircuitBreakerOpenError as exc:
-                logger.warning(f"[BlockGenerator] circuit breaker open: {exc}")
-                # 라운드 중단. 다음 라운드 백오프 후 재진입.
-                continue
-
+            progressed = await self._run_round(
+                state, transcript, on_block_complete
+            )
             if not progressed:
                 # 더 시도할 block이 없거나 모두 처리됨
                 logger.info(
@@ -293,18 +289,20 @@ class BlockGenerator:
             b.attempts += 1
 
         try:
-            prompt = PHASE1_STRUCTURE_TEMPLATE_V2.format(transcript=transcript[:10000])
+            prompt = PHASE1_STRUCTURE_TEMPLATE_V2.format(
+                transcript=transcript[:SUMMARY_TRANSCRIPT_CHARS]
+            )
             response = await request_ai_gateway_completion_async(
                 settings=self.settings,
-                model=self.settings.ai_gateway_model_summarize,
+                model="auto",
+                routing=routing_profile("summary", "low"),
                 messages=[
                     {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
+                max_tokens=SUMMARY_MAX_TOKENS,
             )
             parsed = self._parse_metadata_response(response)
-        except CircuitBreakerOpenError:
-            raise
         except (AIGatewayClientError, ValueError, Exception) as exc:
             err = f"metadata extraction failed: {exc}"
             for b in targets:
@@ -379,15 +377,17 @@ class BlockGenerator:
                     toc="|".join(headings),
                     keywords="|".join(keywords),
                     title=title,
-                    transcript=transcript,
+                    transcript=transcript[:SUMMARY_TRANSCRIPT_CHARS],
                 )
                 response = await request_ai_gateway_completion_async(
                     settings=self.settings,
-                    model=self.settings.ai_gateway_model_summarize,
+                    model="auto",
+                    routing=routing_profile("summary", "low"),
                     messages=[
                         {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
                     ],
+                    max_tokens=SUMMARY_MAX_TOKENS,
                 )
                 content = self._parse_section_response(response)
                 if len(content) < SECTION_MIN_LENGTH:
@@ -398,8 +398,6 @@ class BlockGenerator:
                     block.content = content
                     block.completed_at = _now_iso()
                     block.last_error = None
-            except CircuitBreakerOpenError:
-                raise
             except (AIGatewayClientError, Exception) as exc:
                 block.status = BlockStatus.FAILED
                 block.last_error = str(exc)

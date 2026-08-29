@@ -62,13 +62,6 @@ export interface CreateThreadRequest {
   metadata?: Record<string, unknown>
 }
 
-export interface SendMessageRequest {
-  content: string
-  mode?: AIMode
-  model?: string
-  metadata?: Record<string, unknown>
-}
-
 export interface ThreadListResponse {
   threads: Thread[]
   total: number
@@ -78,6 +71,8 @@ export interface ThreadListResponse {
  * AI 모드 타입
  */
 export type AIMode = 'auto' | 'simple' | 'search' | 'rag' | 'reasoning' | 'hybrid'
+
+export type ReasoningPreference = 'auto' | 'none' | 'low' | 'medium' | 'high'
 
 /**
  * SSE 이벤트 타입

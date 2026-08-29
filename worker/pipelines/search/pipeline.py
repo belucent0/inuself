@@ -148,6 +148,12 @@ def deep_search(
     try:
         summary = request_ai_gateway_completion(
             settings=settings,
+            model="auto",
+            routing={
+                "workload": "summary",
+                "reasoning": "low",
+                "execution_scope": "local_only",
+            },
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,

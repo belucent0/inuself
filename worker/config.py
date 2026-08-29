@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -65,18 +65,6 @@ class WorkerSettings(BaseSettings):
         "http://localhost:4000", validation_alias="AI_GATEWAY_URL"
     )
     ai_gateway_api_key: str = Field("", validation_alias="AI_GATEWAY_API_KEY")
-    ai_gateway_model: str = Field("tier-simple", validation_alias="AI_GATEWAY_MODEL")
-    ai_gateway_model_summarize: str = Field(
-        "tier-simple", validation_alias="AI_GATEWAY_MODEL_SUMMARIZE"
-    )
-
-    @field_validator("ai_gateway_url")
-    @classmethod
-    def resolve_docker_host(cls, v: str) -> str:
-        """Docker 서비스명(ai-gateway)을 로컬 환경(localhost)에 맞게 변환."""
-        if "ai-gateway" in v:
-            return v.replace("ai-gateway", "localhost")
-        return v
 
     # ========================================
     # LLM 공통 설정
@@ -93,9 +81,6 @@ class WorkerSettings(BaseSettings):
     # ========================================
     # OCR 설정
     # ========================================
-    # ocr_provider: vision.py에서 이미지 크기 분기·ai-gateway accuracy_mode 매핑 키.
-    # "flm" → speed mode, "llamacpp_server" → accuracy mode (의미는 모호하지만 식별자로 활성).
-    ocr_provider: str = Field("flm", validation_alias="OCR_PROVIDER")
     poppler_path: str = Field("", validation_alias="POPPLER_PATH")
     libreoffice_path: str = Field("", validation_alias="LIBREOFFICE_PATH")
 

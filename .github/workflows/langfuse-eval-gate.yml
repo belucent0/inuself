@@ -1,9 +1,7 @@
 name: Langfuse Eval Gate
 
-# PR 머지 전 실제 서버에서 멀티턴 채팅 품질을 검증합니다.
+# PR 머지 전 배포된 HTTPS 서버에서 멀티턴 채팅 품질을 검증합니다.
 # self-hosted runner (WSL)에서 실행
-# WSL2에서 localhost:8000 SSE 스트리밍이 중단되는 문제를 우회하기 위해
-# Windows 호스트 IP를 직접 사용합니다.
 # 소요 시간: ~60초 (3-turn 대화)
 
 on:
@@ -27,6 +25,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  E2E_BASE_URL: ${{ vars.E2E_BASE_URL }}
+
 jobs:
   langfuse-eval:
     name: 멀티턴 채팅 품질 검증 (Langfuse)
@@ -39,31 +40,25 @@ jobs:
         with:
           submodules: false
 
-      - name: Windows 호스트 IP 확인 (WSL2 SSE 스트리밍 우회)
+      - name: HTTPS E2E endpoint check
         run: |
-          # WSL2에서 localhost 경유 SSE 스트리밍이 끊기는 문제를 우회
-          # /etc/resolv.conf의 nameserver가 Windows 호스트 IP
-          WIN_IP=$(awk '/nameserver/{print $2; exit}' /etc/resolv.conf)
-          if [[ -z "$WIN_IP" ]]; then
-            echo "ERROR: Windows 호스트 IP를 추출할 수 없습니다 (WSL2 환경인지 확인 필요)"
-            cat /etc/resolv.conf
+          if [[ "$E2E_BASE_URL" != https://* ]]; then
+            echo "::error::Set the repository variable E2E_BASE_URL to the deployed HTTPS origin."
             exit 1
           fi
-          echo "WIN_IP=${WIN_IP}" >> $GITHUB_ENV
-          echo "Windows 호스트 IP: ${WIN_IP}"
 
       - name: 백엔드 헬스 체크
         run: |
           for i in 1 2 3; do
-            HTTP_CODE=$(curl -w "%{http_code}" -s -o /tmp/health_response.txt http://${WIN_IP}:8000/health)
+            HTTP_CODE=$(curl -w "%{http_code}" -s -o /tmp/health_response.txt "$E2E_BASE_URL/health")
             if [ "$HTTP_CODE" = "200" ]; then
-              echo "헬스 체크 성공 (${WIN_IP}:8000)"
+              echo "헬스 체크 성공 ($E2E_BASE_URL)"
               exit 0
             fi
             echo "시도 $i/3 실패 (HTTP ${HTTP_CODE}): $(cat /tmp/health_response.txt)"
             [ $i -lt 3 ] && sleep 3
           done
-          echo "백엔드가 응답하지 않습니다: http://${WIN_IP}:8000"
+          echo "백엔드가 응답하지 않습니다: $E2E_BASE_URL"
           exit 1
 
       - name: Python 의존성 설치 (영구 venv 캐시)
@@ -95,13 +90,12 @@ jobs:
           LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-          E2E_BASE_URL: http://${{ env.WIN_IP }}:8000
           E2E_LOGIN_ID: ${{ secrets.E2E_LOGIN_ID }}
           E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
           RUN_NAME: pr-${{ github.event.pull_request.number || 'manual' }}-${{ github.sha }}
           # LLM-as-Judge (정보용 — CI 게이트 무관)
           JUDGE_AI_GATEWAY_URL: ${{ secrets.JUDGE_AI_GATEWAY_URL || 'http://localhost:4000' }}
-          JUDGE_MODEL: ${{ secrets.JUDGE_MODEL || 'tier-simple' }}
+          JUDGE_MODEL: ${{ secrets.JUDGE_MODEL || 'auto' }}
           JUDGE_AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           JUDGE_ENABLED: "true"
         run: .eval-venv/bin/python scripts/run_eval.py

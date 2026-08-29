@@ -18,16 +18,17 @@ from ..core.config import get_settings
 from ..core.logging import logger
 from ..db.session import async_session_factory
 from ..repositories.thread_repository import ThreadRepository
-from ..services.thread_service import get_thread_service
 from ..utils.task_queue_adapter import (
     AGENT_DISPATCH_KEY_PREFIX,
     AGENT_EVENT_CHANNEL_PREFIX,
-    AGENT_THREAD_KEY_PREFIX,
+    AGENT_FAILURE_CONTENT,
+    AGENT_MESSAGE_LOCK_PREFIX,
+    AGENT_MESSAGE_LOCK_SECONDS,
 )
 
 
 PARTIAL_SAVE_INTERVAL_SECONDS = 5.0
-MESSAGE_LOCK_SECONDS = 90
+MESSAGE_LOCK_SECONDS = AGENT_MESSAGE_LOCK_SECONDS
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
 
@@ -40,6 +41,14 @@ class AgentMessageUnavailable(RuntimeError):
     """Raised when infrastructure failed before agent execution started."""
 
 
+class AgentMessageTerminal(RuntimeError):
+    """Raised when a concurrent finalizer already made the message terminal."""
+
+
+class AgentMessageLockLost(RuntimeError):
+    """Raised when this worker no longer owns the message lock."""
+
+
 def _run_async(coro):
     """Reuse one event loop per Celery child process."""
     global _worker_loop
@@ -48,12 +57,21 @@ def _run_async(coro):
     return _worker_loop.run_until_complete(coro)
 
 
-async def _publish(redis: Redis, message_id: str, event_type: str, data: Any) -> None:
+async def _publish(
+    redis: Redis,
+    message_id: str,
+    event_type: str,
+    data: Any,
+    *,
+    content_sequence: int | None = None,
+) -> None:
     event = {
         "type": event_type,
         "data": data,
         "message_id": message_id,
     }
+    if content_sequence is not None:
+        event["content_sequence"] = content_sequence
     try:
         await redis.publish(
             f"{AGENT_EVENT_CHANNEL_PREFIX}{message_id}",
@@ -89,10 +107,12 @@ async def _load_run(
             raise ValueError("Agent run message does not belong to the requested thread")
         if user_message.role != "user" or assistant_message.role != "assistant":
             raise ValueError("Agent run message roles are invalid")
-        if assistant_message.status == "completed":
+        if assistant_message.status in {"completed", "failed", "cancelled"}:
             return None
 
         base_metadata = dict(assistant_message.metadata_ or {})
+        base_metadata.pop("_agent_job", None)
+        base_metadata.pop("_content_sequence", None)
         context = dict(base_metadata.get("context") or {})
         context.update(
             {
@@ -118,47 +138,53 @@ async def _save_status(
     metadata: dict | None = None,
 ) -> None:
     async with async_session_factory() as session:
-        service = get_thread_service(session)
-        message = await service.update_message_status(
-            message_id,
-            status=status,
-            content=content,
-            metadata=metadata,
+        values: dict[str, Any] = {"status": status}
+        if content is not None:
+            values["content"] = content
+        if metadata is not None:
+            values["metadata_"] = metadata
+        updated = await ThreadRepository(session).update_active_assistant_message(
+            UUID(message_id), **values
         )
-        if not message:
-            raise ValueError(f"Assistant message not found: {message_id}")
+        if not updated:
+            raise AgentMessageTerminal(message_id)
         await session.commit()
 
 
-async def _save_partial(message_id: str, content: str) -> None:
+async def _save_partial(message_id: str, content: str, content_sequence: int) -> None:
     async with async_session_factory() as session:
-        service = get_thread_service(session)
-        message = await service.update_message_partial_content(
-            message_id,
+        repo = ThreadRepository(session)
+        current = await repo.get_message(UUID(message_id))
+        if not current:
+            raise AgentMessageTerminal(message_id)
+        metadata = dict(current.metadata_ or {})
+        metadata["_content_sequence"] = content_sequence
+        updated = await repo.update_active_assistant_message(
+            UUID(message_id),
             partial_content=content,
             status="generating",
+            metadata_=metadata,
         )
-        if not message:
-            raise ValueError(f"Assistant message not found: {message_id}")
+        if not updated:
+            raise AgentMessageTerminal(message_id)
         await session.commit()
 
 
 async def _save_completed(message_id: str, content: str, metadata: dict) -> None:
     async with async_session_factory() as session:
-        service = get_thread_service(session)
         repo = ThreadRepository(session)
         current = await repo.get_message(UUID(message_id))
         if not current:
             raise ValueError(f"Assistant message not found: {message_id}")
-        message = await service.update_message_status(
-            message_id,
+        updated = await repo.update_active_assistant_message(
+            UUID(message_id),
             status="completed",
             content=content,
-            metadata=metadata,
+            metadata_=metadata,
+            partial_content="",
         )
-        if not message:
-            raise ValueError(f"Assistant message not found: {message_id}")
-        await service.update_message_partial_content(message_id, partial_content="")
+        if not updated:
+            raise AgentMessageTerminal(message_id)
 
         replacement_ids = metadata.get("replaces_message_ids", [])
         for replaces_message_id in dict.fromkeys(
@@ -195,22 +221,6 @@ async def _refresh_lock(lock, lost: asyncio.Event) -> None:
             return
 
 
-async def _clear_thread_slot(redis: Redis, thread_id: str, message_id: str) -> None:
-    script = """
-    if redis.call('get', KEYS[1]) == ARGV[1] then
-        return redis.call('del', KEYS[1])
-    end
-    return 0
-    """
-    with suppress(RedisError):
-        await redis.eval(
-            script,
-            1,
-            f"{AGENT_THREAD_KEY_PREFIX}{thread_id}",
-            message_id,
-        )
-
-
 async def run_agent_message(
     *,
     thread_id: str,
@@ -223,10 +233,11 @@ async def run_agent_message(
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     lock = None
     heartbeat = None
+    lock_lost = asyncio.Event()
 
     try:
         lock = redis.lock(
-            f"lock:agent:message:{assistant_message_id}",
+            f"{AGENT_MESSAGE_LOCK_PREFIX}{assistant_message_id}",
             timeout=MESSAGE_LOCK_SECONDS,
             blocking=False,
         )
@@ -234,9 +245,8 @@ async def run_agent_message(
             raise AgentMessageBusy(assistant_message_id)
 
         # Delivery is now protected by the message lock. Removing the handoff
-        # marker lets the watchdog recover a worker lost before status advances.
+        # marker lets the dispatch reconciler recover a worker lost before status advances.
         await redis.delete(f"{AGENT_DISPATCH_KEY_PREFIX}{assistant_message_id}")
-        lock_lost = asyncio.Event()
         heartbeat = asyncio.create_task(_refresh_lock(lock, lock_lost))
 
         loaded = await _load_run(
@@ -246,14 +256,14 @@ async def run_agent_message(
             assistant_message_id=assistant_message_id,
         )
         if loaded is None:
-            await _clear_thread_slot(redis, thread_id, assistant_message_id)
-            return {"status": "already_completed", "message_id": assistant_message_id}
+            return {"status": "already_terminal", "message_id": assistant_message_id}
 
         query, mode, context, base_metadata = loaded
         await _save_status(assistant_message_id, "analyzing")
         await _publish(redis, assistant_message_id, "status", "analyzing")
 
         full_response = ""
+        content_sequence = 0
         current_status = "analyzing"
         last_save = time.monotonic()
         result_metadata = {
@@ -283,7 +293,7 @@ async def run_agent_message(
             user_id=user_id,
         ):
             if lock_lost.is_set():
-                raise RuntimeError("Agent message lock was lost")
+                raise AgentMessageLockLost(assistant_message_id)
 
             event_type = str(event.get("type") or "")
             data = event.get("data")
@@ -339,17 +349,40 @@ async def run_agent_message(
                     await _publish(redis, assistant_message_id, "status", current_status)
                 token = data if isinstance(data, str) else str(data or "")
                 full_response += token
-                await _publish(redis, assistant_message_id, "token", token)
+                content_sequence += 1
+                await _publish(
+                    redis,
+                    assistant_message_id,
+                    "token",
+                    token,
+                    content_sequence=content_sequence,
+                )
 
                 if time.monotonic() - last_save >= PARTIAL_SAVE_INTERVAL_SECONDS:
-                    await _save_partial(assistant_message_id, full_response)
-                    await _publish(redis, assistant_message_id, "content", full_response)
+                    await _save_partial(
+                        assistant_message_id,
+                        full_response,
+                        content_sequence,
+                    )
+                    await _publish(
+                        redis,
+                        assistant_message_id,
+                        "content",
+                        full_response,
+                        content_sequence=content_sequence,
+                    )
                     await _publish(redis, assistant_message_id, "partial_save", True)
                     last_save = time.monotonic()
 
             elif event_type == "content":
                 full_response = data if isinstance(data, str) else str(data or "")
-                await _publish(redis, assistant_message_id, event_type, full_response)
+                await _publish(
+                    redis,
+                    assistant_message_id,
+                    event_type,
+                    full_response,
+                    content_sequence=content_sequence,
+                )
 
             elif event_type == "done":
                 await _save_completed(
@@ -358,7 +391,6 @@ async def run_agent_message(
                     result_metadata,
                 )
                 done = {"content": full_response, "metadata": result_metadata}
-                await _clear_thread_slot(redis, thread_id, assistant_message_id)
                 await _publish(redis, assistant_message_id, "done", done)
                 return {
                     "status": "completed",
@@ -376,9 +408,23 @@ async def run_agent_message(
 
     except AgentMessageBusy:
         raise
+    except AgentMessageLockLost:
+        logger.warning(
+            "[AgentWorker] Message lock lost; leaving state to the current owner: message_id={}",
+            assistant_message_id,
+        )
+        raise
+    except AgentMessageTerminal:
+        return {"status": "already_terminal", "message_id": assistant_message_id}
     except RedisError as exc:
         raise AgentMessageUnavailable(assistant_message_id) from exc
     except Exception as exc:
+        if lock_lost.is_set():
+            logger.warning(
+                "[AgentWorker] Error after message lock loss; state left unchanged: message_id={}",
+                assistant_message_id,
+            )
+            raise AgentMessageLockLost(assistant_message_id) from exc
         logger.exception(
             "[AgentWorker] Run failed: message_id={} error={}",
             assistant_message_id,
@@ -388,10 +434,9 @@ async def run_agent_message(
             await _save_status(
                 assistant_message_id,
                 "failed",
-                content=f"Agent execution failed: {exc}",
+                content=AGENT_FAILURE_CONTENT,
             )
-        await _clear_thread_slot(redis, thread_id, assistant_message_id)
-        await _publish(redis, assistant_message_id, "error", str(exc))
+        await _publish(redis, assistant_message_id, "error", AGENT_FAILURE_CONTENT)
         raise
     finally:
         if heartbeat is not None:
@@ -417,6 +462,7 @@ def process_agent_message(
     user_id: str,
     user_message_id: str,
     assistant_message_id: str,
+    _lock_retry_count: int = 0,
 ):
     try:
         return _run_async(
@@ -427,5 +473,20 @@ def process_agent_message(
                 assistant_message_id=assistant_message_id,
             )
         )
-    except (AgentMessageBusy, AgentMessageUnavailable) as exc:
+    except (AgentMessageBusy, AgentMessageLockLost) as exc:
+        if _lock_retry_count >= 1:
+            return {"status": "lock_unresolved", "message_id": assistant_message_id}
+        raise self.retry(
+            exc=exc,
+            countdown=MESSAGE_LOCK_SECONDS + 1,
+            max_retries=self.request.retries + 1,
+            kwargs={
+                "thread_id": thread_id,
+                "user_id": user_id,
+                "user_message_id": user_message_id,
+                "assistant_message_id": assistant_message_id,
+                "_lock_retry_count": 1,
+            },
+        )
+    except AgentMessageUnavailable as exc:
         raise self.retry(exc=exc, countdown=5, max_retries=120)

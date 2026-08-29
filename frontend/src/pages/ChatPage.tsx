@@ -13,12 +13,11 @@ import { useThread } from '@/shared/hooks/useThreads'
 import { useChatStore } from '@/shared/stores/chatStore'
 import { useThreadTitle } from '@/shared/contexts/ThreadTitleContext'
 import { threadsApi } from '@/shared/services'
-import { httpClient } from '@/shared/services'
 import { ChatArea } from '@/features/chat/components/ChatArea'
 import { ContentBanner } from '@/features/chat/components/ContentBanner'
 import { toast } from 'sonner'
-import { getAccessToken } from '@/shared/services/authToken'
-import { sendMessageStream } from '@/shared/services/chatStreamService'
+import { resumeMessageStream, sendMessageStream } from '@/shared/services/chatStreamService'
+import type { ReasoningPreference } from '@/shared/types'
 
 // v1.0.0: 메시지 상태 타입
 type MessageStatus = 'queued' | 'analyzing' | 'searching' | 'thinking' | 'generating' | 'completed' | 'failed'
@@ -148,7 +147,6 @@ export function ChatPage() {
   // v1.0.0: SSE 스트리밍 연결 (messageId가 있을 때)
   // ============================================================
   const connectedMessageIdRef = useRef<string | null>(null)
-  const eventSourceRef = useRef<EventSource | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_messageStatus, setMessageStatus] = useState<MessageStatus | null>(null)
 
@@ -166,125 +164,48 @@ export function ChatPage() {
 
     console.log('[ChatPage v1.0.0] Connecting SSE:', { threadId, messageId })
 
-    // SSE 연결
-    const accessToken = getAccessToken()
-    const streamUrl = `${httpClient.getBaseUrl()}/threads/${threadId}/messages/${messageId}/stream${
-      accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : ''
-    }`
-    const eventSource = new EventSource(streamUrl)
-    eventSourceRef.current = eventSource
-
     // 스트리밍 모드 시작 (UI 상태 업데이트)
     // 매번 getState()를 호출하여 최신 액션을 사용해야 React 리렌더링이 트리거됨
-    useChatStore.getState().startStreamingMode()
-
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        const eventType = data.type
-        const eventData = data.data
-
-        // 중요: 매 이벤트마다 getState()를 호출하여 최신 액션 참조
-        // 한 번만 호출하고 재사용하면 React 컴포넌트 리렌더링이 안됨
-        const store = useChatStore.getState()
-
-        switch (eventType) {
-          case 'status':
-            // 상태 변화 이벤트
-            setMessageStatus(eventData as MessageStatus)
-            break
-
-          case 'partial_restore':
-            // 재연결 시 기존 부분 컨텐츠 복구
-            store.setStreamingContent(eventData || '')
-            break
-
-          case 'thinking_step':
-            // 사고 과정 추가
-            store.addThinkingStep(eventData)
-            break
-
-          case 'query_analysis':
-            // 쿼리 분석 결과
-            store.addThinkingStep({ type: 'query_analysis', ...eventData })
-            break
-
-          case 'sources':
-            // 참고 자료
-            store.setSources(eventData || [])
-            break
-
-          case 'citations':
-            // 출처 표시
-            // store에 citations 추가 필요 시 여기서 처리
-            break
-
-          case 'search_queries':
-          case 'search_results':
-            // 검색 관련 이벤트 (UI에서 필요시 처리)
-            break
-
-          case 'token':
-            // 토큰 스트리밍
-            store.appendStreamingContent(eventData || '')
-            break
-
-          case 'content':
-            // 전체 콘텐츠 업데이트
-            store.setStreamingContent(eventData || '')
-            break
-
-          case 'partial_save':
-            // 2초마다 DB 저장 알림 (클라이언트에서는 무시)
-            break
-
-          case 'done':
-            // 스트리밍 완료
-            console.log('[ChatPage v1.0.0] Streaming done')
-            store.finishStreaming(eventData?.content || '', eventData?.metadata || {}, messageId)
-            setMessageStatus('completed')
-            eventSource.close()
-            // messageId 파라미터 제거
-            setSearchParams((prev) => {
-              prev.delete('messageId')
-              return prev
-            })
-            break
-
-          case 'error':
-            // 에러 발생
-            console.error('[ChatPage v1.0.0] Stream error:', eventData)
-            toast.error(`오류: ${eventData}`)
-            setMessageStatus('failed')
-            eventSource.close()
-            break
-        }
-      } catch (err) {
-        console.error('[ChatPage v1.0.0] Failed to parse event:', err)
+    const store = useChatStore.getState()
+    store.startStreamingMode()
+    const abortController = new AbortController()
+    void resumeMessageStream(threadId, messageId, mode, {
+      onToken: store.appendStreamingContent,
+      onContent: store.setStreamingContent,
+      onThinkingStep: store.addThinkingStep,
+      onSource: () => {},
+      onSources: store.setSources,
+      onSearchQueries: () => {},
+      onComplete: (message) => {
+        store.finishStreaming(message.content, message.metadata, messageId)
+        setMessageStatus('completed')
+        setSearchParams((prev) => {
+          prev.delete('messageId')
+          return prev
+        })
+      },
+      onError: (error) => {
+        store.cancelStreaming()
+        setMessageStatus('failed')
+        toast.error(`Stream error: ${error.message}`)
+      },
+    }, abortController.signal).catch((error) => {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        console.error('[ChatPage v1.0.0] SSE connection failed:', error)
       }
-    }
-
-    eventSource.onerror = (err) => {
-      console.error('[ChatPage v1.0.0] SSE connection error:', err)
-      // 재연결 시도하지 않고 에러 처리 (브라우저가 자동 재연결)
-    }
+    })
 
     // 클린업
     return () => {
       console.log('[ChatPage v1.0.0] Closing SSE connection')
-      eventSource.close()
-      eventSourceRef.current = null
-      // connectedMessageIdRef는 리셋하지 않음 - 같은 messageId로 재연결 방지
+      abortController.abort()
+      connectedMessageIdRef.current = null
     }
-  }, [messageId, threadId, setSearchParams])
+  }, [messageId, mode, threadId, setSearchParams])
 
   // 페이지 떠날 때 SSE 연결 정리
   useEffect(() => {
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close()
-        eventSourceRef.current = null
-      }
       useChatStore.getState().cancelStreaming()
     }
   }, [])
@@ -303,7 +224,7 @@ export function ChatPage() {
   // ============================================================
   // 이벤트 핸들러
   // ============================================================
-  const handleSendMessage = async (content: string, msgMode?: string, model?: string) => {
+  const handleSendMessage = async (content: string, msgMode: string, reasoning: ReasoningPreference, allowRemote: boolean) => {
     // v1.0.0: 두 번째 메시지도 확인 후 라우팅 흐름 사용
     if (!threadId || streaming.isStreaming) return
 
@@ -324,7 +245,7 @@ export function ChatPage() {
         messages: [...state.messages, tempUserMessage],
       }))
 
-      // 2. POST 응답에서 바로 SSE를 소비한다. GET stream은 재접속 경로로 유지한다.
+      // 2. POST로 작업 ID를 받은 뒤 GET SSE로 Worker 응답을 받는다.
       const store = useChatStore.getState()
       const abortController = store._startStreaming()
       await sendMessageStream(
@@ -332,7 +253,8 @@ export function ChatPage() {
         {
           query: content,
           mode: effectiveMode,
-          model,
+          reasoning,
+          allow_remote: allowRemote,
           context: contentContextEnabled && threadContentId
             ? { content_id: threadContentId }
             : undefined,
@@ -375,8 +297,8 @@ export function ChatPage() {
     }
   }
 
-  const handleRegenerate = async (regenMode?: string, model?: string) => {
-    await regenerate(regenMode || mode, model)
+  const handleRegenerate = async (regenMode: string, reasoning: ReasoningPreference, allowRemote: boolean) => {
+    await regenerate(regenMode || mode, reasoning, allowRemote)
   }
 
   // ============================================================

@@ -15,6 +15,7 @@ import {
   regenerateStream,
 } from '@/shared/services/chatStreamService'
 import type { Message, Source, ThinkingStep } from '@/shared/types'
+import type { ReasoningPreference } from '@/shared/types'
 
 // ============================================================
 // Types
@@ -55,7 +56,7 @@ interface ChatActions {
   switchThread: (threadId: string | null, initialMessages?: Message[]) => void
 
   // 메시지 전송
-  regenerate: (mode?: string, model?: string) => Promise<void>
+  regenerate: (mode: string, reasoning: ReasoningPreference, allowRemote: boolean) => Promise<void>
 
   // 스트리밍 제어
   cancelStreaming: () => void
@@ -163,7 +164,7 @@ export const useChatStore = create<ChatStore>()(
       // --------------------------------------------------------
       // 메시지 전송
       // --------------------------------------------------------
-      regenerate: async (mode = 'auto', model) => {
+      regenerate: async (mode, reasoning, allowRemote) => {
         const { threadId, messages, _startStreaming, _appendToken, setStreamingContent, _addThinkingStep, _addSource, _setSources, _setSearchQueries, _finishStreaming } = get()
         if (!threadId) return
 
@@ -172,12 +173,13 @@ export const useChatStore = create<ChatStore>()(
         if (lastAssistantIdx === -1) return
 
         const newMessages = messages.slice(0, lastAssistantIdx)
+        const removedAssistant = messages[lastAssistantIdx]
         set({ messages: newMessages }, false, 'removeLastAssistant')
 
         const abortController = _startStreaming()
 
         try {
-          await regenerateStream(threadId, mode, model, {
+          await regenerateStream(threadId, mode, reasoning, allowRemote, {
             onToken: _appendToken,
             onContent: setStreamingContent,
             onThinkingStep: _addThinkingStep,
@@ -186,14 +188,24 @@ export const useChatStore = create<ChatStore>()(
             onSearchQueries: _setSearchQueries,
             onComplete: _finishStreaming,
             onError: (err) => {
-              set({ error: err, isLoading: false }, false, 'regenerateError')
+              if (get().threadId === threadId) {
+                set({ error: err, isLoading: false }, false, 'regenerateError')
+              }
             },
           }, abortController.signal)
         } catch (err) {
-          if (err instanceof DOMException && err.name === 'AbortError') {
-            return
+          const isCurrentThread = get().threadId === threadId
+          const isAbort = err instanceof DOMException && err.name === 'AbortError'
+          if (isCurrentThread) {
+            set({
+              messages: [...newMessages, removedAssistant],
+              streaming: { ...initialStreamingState },
+              isLoading: false,
+              error: isAbort ? null : err as Error,
+              abortController: null,
+            }, false, 'restoreLastAssistant')
           }
-          set({ error: err as Error, isLoading: false }, false, 'regenerateError')
+          if (isAbort) return
         }
       },
 

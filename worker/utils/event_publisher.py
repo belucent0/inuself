@@ -50,7 +50,7 @@ def publish_file_progress(
         message: 사용자에게 표시할 메시지
         metadata: 추가 메타데이터 (선택사항)
 
-    채널: events:file_progress:{file_id}
+    채널: events:file_progress:{file_id}, events:file_progress:global
 
     메시지 포맷:
         {
@@ -80,6 +80,7 @@ def publish_file_progress(
             event["metadata"] = metadata
 
         _publish(channel, event)
+        _publish("events:file_progress:global", event)
 
         logger.debug(
             "[EventPublisher] Published file_progress: file_id={}, step={}, progress={}%",

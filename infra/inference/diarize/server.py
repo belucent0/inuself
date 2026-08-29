@@ -28,6 +28,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 app = FastAPI(title="asr-diarize", version="1.0.0")
 
 _MODEL_ID = os.getenv("DIAR_MODEL", "pyannote/speaker-diarization-community-1")
+_WARMUP_AUDIO = os.getenv(
+    "DIAR_WARMUP_AUDIO",
+    "/opt/venv/lib/python3.12/site-packages/pyannote/audio/sample/sample.wav",
+)
 _DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 _pipe: Any = None
 
@@ -60,6 +64,22 @@ def _get_pipe() -> Any:
     return _pipe
 
 
+def _load_audio(path: str | Path) -> tuple[dict[str, Any], float]:
+    waveform, sr = sf.read(path, dtype="float32", always_2d=True)
+    waveform_t = torch.from_numpy(waveform.T)
+    return {"waveform": waveform_t, "sample_rate": sr}, float(waveform_t.shape[1] / sr)
+
+
+@app.on_event("startup")
+def load_pipeline() -> None:
+    pipe = _get_pipe()
+    audio_input, _ = _load_audio(_WARMUP_AUDIO)
+    t0 = time.perf_counter()
+    with torch.inference_mode():
+        pipe(audio_input)
+    logger.info(f"pipeline warm-up ready in {time.perf_counter() - t0:.1f}s")
+
+
 @app.get("/health")
 async def health() -> dict:
     return {
@@ -83,11 +103,7 @@ async def diarize(
 
     try:
         # soundfile decode — bypass torchcodec
-        waveform, sr = sf.read(tmp_path, dtype="float32", always_2d=True)
-        # soundfile gives (time, channel); pyannote wants (channel, time)
-        waveform_t = torch.from_numpy(waveform.T)
-        duration_s = float(waveform_t.shape[1] / sr)
-        audio_input = {"waveform": waveform_t, "sample_rate": sr}
+        audio_input, duration_s = _load_audio(tmp_path)
 
         pipe = _get_pipe()
         kwargs: dict[str, Any] = {}

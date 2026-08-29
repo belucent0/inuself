@@ -1,188 +1,165 @@
 import hmac
 from datetime import datetime, timezone
-from typing import Any
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.auth import (
-    get_current_access_payload,
+    SESSION_COOKIE_NAME,
+    clear_login_failures,
+    clear_session_cookie,
+    create_session,
+    delete_session,
+    ensure_login_allowed,
     get_current_user,
     hash_password,
-    issue_token_pair,
-    revoke_access_token_jti,
-    revoke_refresh_family,
+    record_login_failure,
     revoke_user_sessions,
-    rotate_refresh_token,
+    set_session_cookie,
     verify_password,
 )
+from ..core.config import get_settings
 from ..db.models import User
 from ..db.session import get_session
 from ..schemas.auth import (
     LOGIN_ID_PATTERN,
-    AuthLoginRequest,
     AuthLoginIdCheckResponse,
-    AuthLogoutRequest,
-    AuthRefreshRequest,
+    AuthLoginRequest,
+    AuthSessionResponse,
     AuthSignupRequest,
-    AuthTokenResponse,
     AuthUserResponse,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_SIGNUP_ACCESS_CODE = "zoo"
+_DUMMY_PASSWORD_HASH = f"pbkdf2_sha256$120000${'00' * 16}${'00' * 32}"
 
 
 def _normalize_login_id(login_id: str) -> str:
     return login_id.strip().lower()
 
 
+def _no_store(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store"
+
+
+async def _replace_session(
+    request: Request, response: Response, user_id: str
+) -> None:
+    await delete_session(request.cookies.get(SESSION_COOKIE_NAME))
+    token, record = await create_session(user_id)
+    set_session_cookie(response, token, int(record["absolute_expires_at"]))
+
+
 @router.get("/check-id", response_model=AuthLoginIdCheckResponse)
 async def check_login_id(
     login_id: str = Query(..., min_length=4, max_length=20),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session, scope="function"),
 ):
     normalized_login_id = _normalize_login_id(login_id)
     if not LOGIN_ID_PATTERN.fullmatch(normalized_login_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="올바른 아이디 형식이 아닙니다.",
+            detail="Invalid login ID format.",
         )
 
-    existing_user_result = await session.execute(
+    result = await session.execute(
         select(User).where(User.email == normalized_login_id)
     )
-    existing_user = existing_user_result.scalar_one_or_none()
-
     return AuthLoginIdCheckResponse(
         login_id=normalized_login_id,
-        available=existing_user is None,
+        available=result.scalar_one_or_none() is None,
     )
 
 
-def _to_token_response(tokens: dict[str, Any], user: User) -> AuthTokenResponse:
-    return AuthTokenResponse(
-        access_token=tokens["access_token"],
-        refresh_token=tokens["refresh_token"],
-        token_type=tokens["token_type"],
-        access_expires_in=tokens["access_expires_in"],
-        refresh_expires_in=tokens["refresh_expires_in"],
-        user=AuthUserResponse.model_validate(user),
-    )
-
-
-@router.post("/signup", response_model=AuthTokenResponse)
+@router.post("/signup", response_model=AuthSessionResponse)
 async def signup(
-    request: AuthSignupRequest,
-    session: AsyncSession = Depends(get_session),
+    signup_request: AuthSignupRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session, scope="function"),
 ):
-    if not hmac.compare_digest(request.signup_code, _SIGNUP_ACCESS_CODE):
+    settings = get_settings()
+    if not hmac.compare_digest(signup_request.signup_code, settings.signup_access_code):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="가입 인증코드가 유효하지 않습니다.",
+            detail="Invalid signup access code.",
         )
 
-    login_id = _normalize_login_id(request.login_id)
-
-    existing_user_result = await session.execute(
-        select(User).where(User.email == login_id)
-    )
-    existing_user = existing_user_result.scalar_one_or_none()
-    if existing_user is not None:
+    login_id = _normalize_login_id(signup_request.login_id)
+    result = await session.execute(select(User).where(User.email == login_id))
+    if result.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="이미 사용 중인 아이디입니다.",
+            detail="Login ID is already in use.",
         )
 
     user = User(
         email=login_id,
-        password=hash_password(request.password),
-        name=request.name.strip() if request.name else None,
+        password=hash_password(signup_request.password),
+        name=signup_request.name.strip() if signup_request.name else None,
         is_active=True,
+        is_super=False,
+        last_login_at=datetime.now(timezone.utc),
     )
-    user.last_login_at = datetime.now(timezone.utc)
-
     session.add(user)
     await session.flush()
+    await _replace_session(request, response, str(user.id))
+    _no_store(response)
+    return AuthSessionResponse(user=AuthUserResponse.model_validate(user))
 
-    tokens = await issue_token_pair(user_id=str(user.id))
-    return _to_token_response(tokens=tokens, user=user)
 
-
-@router.post("/login", response_model=AuthTokenResponse)
+@router.post("/login", response_model=AuthSessionResponse)
 async def login(
-    request: AuthLoginRequest,
-    session: AsyncSession = Depends(get_session),
+    login_request: AuthLoginRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session, scope="function"),
 ):
-    login_id = _normalize_login_id(request.login_id)
+    login_id = _normalize_login_id(login_request.login_id)
+    await ensure_login_allowed(login_id)
 
-    user_result = await session.execute(select(User).where(User.email == login_id))
-    user = user_result.scalar_one_or_none()
-
-    if user is None or not verify_password(request.password, user.password):
+    result = await session.execute(select(User).where(User.email == login_id))
+    user = result.scalar_one_or_none()
+    password_hash = user.password if user is not None else _DUMMY_PASSWORD_HASH
+    password_valid = verify_password(login_request.password, password_hash)
+    if user is None or not password_valid or not user.is_active:
+        await record_login_failure(login_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="아이디 또는 비밀번호가 올바르지 않습니다.",
+            detail="Invalid login ID or password.",
         )
 
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="비활성화된 계정입니다.",
-        )
-
+    await clear_login_failures(login_id)
     user.last_login_at = datetime.now(timezone.utc)
     await session.flush()
-
-    tokens = await issue_token_pair(user_id=str(user.id))
-    return _to_token_response(tokens=tokens, user=user)
-
-
-@router.post("/refresh", response_model=AuthTokenResponse)
-async def refresh_token(
-    request: AuthRefreshRequest,
-    session: AsyncSession = Depends(get_session),
-):
-    tokens = await rotate_refresh_token(request.refresh_token)
-    user_result = await session.execute(
-        select(User).where(User.id == UUID(str(tokens["user_id"])))
-    )
-    user = user_result.scalar_one_or_none()
-
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="사용자 정보를 찾을 수 없습니다.",
-        )
-
-    return _to_token_response(tokens=tokens, user=user)
+    await _replace_session(request, response, str(user.id))
+    _no_store(response)
+    return AuthSessionResponse(user=AuthUserResponse.model_validate(user))
 
 
-@router.post("/logout")
-async def logout(
-    request: AuthLogoutRequest | None = None,
-    payload: dict[str, Any] = Depends(get_current_access_payload),
-):
-    access_jti = str(payload["jti"])
-    await revoke_access_token_jti(access_jti)
-
-    if request and request.refresh_token:
-        await revoke_refresh_family(request.refresh_token)
-
-    return {"message": "로그아웃되었습니다."}
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(request: Request, response: Response) -> None:
+    await delete_session(request.cookies.get(SESSION_COOKIE_NAME))
+    clear_session_cookie(response)
+    _no_store(response)
 
 
-@router.post("/logout-all")
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
 async def logout_all(
+    response: Response,
     current_user: User = Depends(get_current_user),
-):
+) -> None:
     await revoke_user_sessions(str(current_user.id))
-    return {"message": "모든 디바이스에서 로그아웃되었습니다."}
+    clear_session_cookie(response)
+    _no_store(response)
 
 
 @router.get("/me", response_model=AuthUserResponse)
-async def me(current_user: User = Depends(get_current_user)):
+async def me(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+) -> AuthUserResponse:
+    _no_store(response)
     return AuthUserResponse.model_validate(current_user)

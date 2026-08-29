@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.dialects import postgresql
@@ -122,4 +122,4 @@ async def test_search_scope_all_drops_only_content_ids_not_owner(monkeypatch):
     await RAGRetrieverNode(SimpleNamespace())(state)
 
     assert search.await_args.kwargs["content_ids"] is None
-    assert search.await_args.kwargs["user_id"] == user_id
+    assert search.await_args.kwargs["user_id"] == UUID(user_id)

@@ -26,16 +26,24 @@ jobs:
         run: |
           python -m pytest -q \
             backend/tests/agents/test_agent_history.py \
+            backend/tests/agents/test_agent_tenant_isolation.py \
             backend/tests/agents/test_rag_tenant_isolation.py \
             backend/tests/controllers/test_ai_chat_handoff.py \
-            backend/tests/services/test_agent_job_recovery.py \
+            backend/tests/test_auth_controllers.py \
+            backend/tests/db/test_ai_message_active_index.py \
+            backend/tests/services/test_agent_dispatcher.py \
+            backend/tests/services/test_agent_stream_relay.py \
+            backend/tests/services/test_ai_gateway_routing.py \
             backend/tests/services/test_block_generator.py \
-            backend/tests/services/test_circuit_breaker.py \
             backend/tests/services/test_content_summary_regeneration.py \
             backend/tests/services/test_summary_renderer.py \
             backend/tests/services/test_summary_runner.py \
             backend/tests/services/test_translation_runner.py \
-            backend/tests/tasks/test_agent_task.py
+            backend/tests/tasks/test_agent_task.py \
+            backend/tests/test_auth_boundaries.py \
+            backend/tests/test_auth_session.py \
+            worker/tests/test_event_publisher.py \
+            worker/tests/test_worker_ai_gateway_routing.py
 
   ai-gateway-npu-routing:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -51,7 +59,7 @@ jobs:
           cache: pip
           cache-dependency-path: infra/ai-gateway/requirements.txt
       - run: python -m pip install -r requirements.txt pytest
-      - run: python -m pytest -q tests/test_chat_npu_routing.py
+      - run: python -m pytest -q tests
 
   frontend-stream-and-build:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -67,5 +75,6 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - run: npm run test:auth-session
       - run: npm run test:chat-stream
       - run: npm run build

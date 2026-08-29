@@ -1,10 +1,10 @@
 """AI Gateway chat completion 엔드포인트를 통한 ASR/Diarization 요청 클라이언트.
 
 v1.2.0 현행 흐름:
-- ASR: Worker → ai-gateway (/v1/chat/completions, task_type=asr) → ai-asr 컨테이너
+- ASR: Worker → ai-gateway (/v1/chat/completions, task_type=asr) → ai-asr-vllm 컨테이너
 - Diarization: Worker → ai-gateway (task_type=diarization) → ai-diarize 컨테이너
 - LLM: Worker → ai-gateway → ai-llm (vLLM)
-- OCR: Worker → ai-gateway → ai-ocr
+- OCR: Worker → ai-gateway → ai-llm (Gemma 4)
 
 ASR+Diarization 묶음 잠금:
 - pipeline.py에서 lock_id 획득 후 전달
@@ -189,7 +189,7 @@ def call_ai_gateway_transcription(
 ) -> tuple[dict[str, Any], float, float, ASRProvider]:
     """ai-gateway chat completion 엔드포인트를 통한 ASR 요청.
 
-    v1.2.0: Worker → ai-gateway (/v1/chat/completions, task_type=asr) → ai-asr 컨테이너 직결.
+    v1.2.0: Worker → ai-gateway (/v1/chat/completions, task_type=asr) → ai-asr-vllm 컨테이너 직결.
     - extra_body에 task_type=asr, audio_base64 전달
 
     Args:

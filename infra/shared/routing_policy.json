@@ -1,0 +1,59 @@
+{
+  "settings": {
+    "health_interval_seconds": 5,
+    "health_timeout_seconds": 2,
+    "first_output_timeout_seconds": 120,
+    "request_timeout_seconds": 300,
+    "failure_threshold": 2,
+    "circuit_cooldown_seconds": 10,
+    "admission_timeout_seconds": 30
+  },
+  "providers": {
+    "npu-chat": {
+      "kind": "npu",
+      "base_url_env": "NPU_LLM_BASE_URL",
+      "base_url_default": "",
+      "model_env": "NPU_LLM_MODEL_NAME",
+      "model_default": "gemma4-it:e4b",
+      "api_key_env": "",
+      "scope": "local",
+      "max_inflight": 1,
+      "health_path": "/v1/models",
+      "workloads": ["chat"],
+      "reasoning_min": "none",
+      "reasoning_max": "none"
+    },
+    "gpu-llm": {
+      "kind": "gpu",
+      "base_url_env": "LLM_BASE_URL",
+      "base_url_default": "http://ai-llm:8000",
+      "model_env": "LLM_MODEL_NAME",
+      "model_default": "gemma4-a4b",
+      "api_key_env": "",
+      "scope": "local",
+      "max_inflight": 4,
+      "health_path": "/v1/models",
+      "workloads": ["chat", "summary"],
+      "reasoning_min": "none",
+      "reasoning_max": "high"
+    },
+    "codex": {
+      "kind": "remote",
+      "base_url_env": "CODEX_API_BASE",
+      "base_url_default": "http://cli-proxy-api:8317/v1",
+      "model_env": "CODEX_MODEL",
+      "model_default": "gpt-5.3-codex-spark",
+      "api_key_env": "CLIPROXY_API_KEY",
+      "scope": "remote",
+      "max_inflight": 2,
+      "health_path": null,
+      "workloads": ["chat"],
+      "reasoning_min": "high",
+      "reasoning_max": "high"
+    }
+  },
+  "routes": {
+    "chat": ["npu-chat", "gpu-llm", "codex"],
+    "summary": ["gpu-llm"]
+  }
+}

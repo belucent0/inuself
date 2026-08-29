@@ -1,7 +1,7 @@
 """2단계 LLM 요약 Executor with 검증 & 재시도.
 
-Phase 1: 메타데이터 추출 (tier-simple) → JSON
-Phase 2: 요약 생성 (tier-recap) → 파이프 구분 텍스트
+Phase 1: 메타데이터 추출 (summary/low) → JSON
+Phase 2: 요약 생성 (summary/low) → 파이프 구분 텍스트
 """
 
 import asyncio
@@ -11,6 +11,7 @@ from typing import Dict, List, Tuple, Any, Optional
 from dataclasses import dataclass
 
 from ..core.config import Settings
+from ..core.reasoning import routing_profile
 from ..core.logging import logger
 from .ai_gateway_client import request_ai_gateway_completion
 
@@ -84,7 +85,7 @@ class PhaseExecutor:
         return title, summary_md
 
     async def _execute_phase_1(self, text: str) -> PhaseResult:
-        """Phase 1: 메타데이터 추출 (tier-simple)"""
+        """Phase 1: 메타데이터 추출 (summary/low)"""
         from ..prompts.summary import (
             PHASE1_STRUCTURE_TEMPLATE_V2,
             SUMMARY_SYSTEM_PROMPT,
@@ -102,6 +103,8 @@ class PhaseExecutor:
 
                 response = request_ai_gateway_completion(
                     settings=self.settings,
+                    model="auto",
+                    routing=routing_profile("summary", "low"),
                     messages=messages,
                 )
 
@@ -144,7 +147,7 @@ class PhaseExecutor:
         )
 
     async def _execute_phase_2(self, text: str, metadata: Dict) -> PhaseResult:
-        """Phase 2: 요약 생성 (tier-recap)"""
+        """Phase 2: 요약 생성 (summary/low)"""
         from ..prompts.summary import PHASE2_SUMMARY_TEMPLATE, SUMMARY_SYSTEM_PROMPT
 
         for attempt in range(1, self.max_retries + 1):
@@ -165,7 +168,8 @@ class PhaseExecutor:
 
                 response = request_ai_gateway_completion(
                     settings=self.settings,
-                    model=self.settings.ai_gateway_model_summarize,
+                    model="auto",
+                    routing=routing_profile("summary", "low"),
                     messages=messages,
                 )
 

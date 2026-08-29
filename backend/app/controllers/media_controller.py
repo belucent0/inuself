@@ -1,7 +1,7 @@
 """미디어 파일 프록시 API.
 
 보안이 중요한 미디어 파일을 위한 인증 기반 프록시.
-- JWT 인증 확인 후에만 접근 가능
+- Cookie session 인증 확인 후에만 접근 가능
 - Range 요청 지원 (영상 탐색, 부분 다운로드)
 - 로컬 캐시 활용
 """
@@ -15,18 +15,13 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.auth import get_current_user_id
 from ..db.session import get_session
 from ..repositories.content_repository import ContentRepository
 from ..services.media_cache_service import get_media_cache_service, MediaCacheService
 
 
 router = APIRouter(prefix="/api/media", tags=["media"])
-
-
-# TODO: 실제 인증 구현 시 교체
-async def get_current_user_id() -> UUID:
-    """현재 사용자 ID 반환 (임시 구현)."""
-    return UUID("01234567-89ab-cdef-0123-456789abcdef")
 
 
 def parse_range_header(range_header: str | None, file_size: int) -> tuple[int, int]:
@@ -71,7 +66,7 @@ async def stream_media(
     content_id: UUID,
     request: Request,
     range: str | None = Header(default=None, alias="Range"),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session, scope="function"),
     user_id: UUID = Depends(get_current_user_id),
     cache_service: MediaCacheService = Depends(get_media_cache_service),
 ):
@@ -90,10 +85,8 @@ async def stream_media(
     if not content:
         raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
 
-    # TODO: 권한 확인 로직 (소유자 또는 공유 대상)
-    # 현재는 인증된 사용자면 모두 허용
-    # if content.owner_id != user_id and not is_shared_to(content, user_id):
-    #     raise HTTPException(status_code=403, detail="접근 권한이 없습니다")
+    if content.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # 2. object_key 조회
     object_key = content.file.object_key if content.file else None
@@ -121,7 +114,7 @@ async def stream_media(
         "Accept-Ranges": "bytes",
         "Content-Disposition": f'inline; filename="{object_key.split("/")[-1]}"',
         # 캐시 제어: 브라우저 캐시 허용하되 재검증 필요
-        "Cache-Control": "private, max-age=3600",
+        "Cache-Control": "private, no-store",
     }
 
     if range:
@@ -148,7 +141,7 @@ async def stream_media(
 @router.head("/{content_id}")
 async def head_media(
     content_id: UUID,
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session, scope="function"),
     user_id: UUID = Depends(get_current_user_id),
     cache_service: MediaCacheService = Depends(get_media_cache_service),
 ):
@@ -162,6 +155,9 @@ async def head_media(
 
     if not content:
         raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
+
+    if content.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     object_key = content.file.object_key if content.file else None
     if not object_key:
@@ -179,6 +175,7 @@ async def head_media(
         "Content-Type": content_type,
         "Content-Length": str(file_size),
         "Accept-Ranges": "bytes",
+        "Cache-Control": "private, no-store",
     }
 
     return StreamingResponse(
