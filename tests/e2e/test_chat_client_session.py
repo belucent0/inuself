@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from .chat_client import ChatClient
+from .chat_client import ChatClient, ChatClientError
 
 
 @pytest.mark.asyncio
@@ -47,3 +47,38 @@ async def test_login_cookie_is_reused_for_json_and_sse_requests() -> None:
         "/api/threads",
         "/api/threads/thread/messages/answer/stream",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "message"),
+    [
+        ('data: {"type":"done","data":{"content":""}}\n\n', "비어 있습니다"),
+        (
+            'data: {"type":"error","data":"provider unavailable"}\n\n'
+            'data: {"type":"done","data":{"content":"partial"}}\n\n',
+            "error 이벤트",
+        ),
+    ],
+)
+async def test_unusable_inference_stream_is_an_error(stream: str, message: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth/login":
+            return httpx.Response(200, headers={"Set-Cookie": "session=ok"})
+        if request.method == "POST":
+            return httpx.Response(200, json={"thread_id": "thread", "message_id": "answer"})
+        return httpx.Response(200, text=stream)
+
+    client = ChatClient("https://example.test")
+    await client._client.aclose()
+    client._client = httpx.AsyncClient(
+        base_url="https://example.test",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await client.login("tester", "password")
+        thread_id, message_id = await client.create_thread("hello")
+        with pytest.raises(ChatClientError, match=message):
+            await client.stream_response(thread_id, message_id)
+    finally:
+        await client.close()

@@ -360,14 +360,17 @@ async def main() -> int:
     client = ChatClient(base_url=E2E_BASE_URL)
     await client.login(E2E_LOGIN_ID, E2E_PASSWORD)
 
-    # LLM 워밍업: 첫 요청의 콜드 스타트 지연을 eval 전에 소진
-    print("워밍업 중... (LLM 콜드 스타트 방지)")
+    # 첫 실추론으로 인프라 장애와 품질 회귀를 분리하고 콜드 스타트도 소진한다.
+    print("추론 준비 확인 중...")
     try:
         w_thread_id, w_msg_id = await client.create_thread("hi", "simple")
         await client.stream_response(w_thread_id, w_msg_id)
-        print("워밍업 완료")
-    except Exception as warmup_err:
-        print(f"워밍업 경고 (무시): {warmup_err}")
+        print("추론 준비 확인 완료")
+    except Exception as preflight_err:
+        print(f"::error title=추론 환경 사용 불가::{preflight_err}")
+        await client.cleanup_all()
+        await client.close()
+        return 2
     print("-" * 60)
 
     try:
