@@ -190,6 +190,10 @@ class ChatClient:
                     break
 
         elapsed = time.monotonic() - start
+        if had_error:
+            raise ChatClientError("추론 스트림에서 error 이벤트가 발생했습니다.")
+        if not full_content.strip():
+            raise ChatClientError("추론 응답 내용이 비어 있습니다.")
         return TurnResult(
             full_content=full_content,
             mode_used=mode_used,
