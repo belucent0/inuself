@@ -1,7 +1,7 @@
-# ROCm 10.0.0 WSL 업그레이드·성능 비교 계획
+# ROCm 10.0.0 WSL 업그레이드·성능 비교 결과
 
 - 작성일: 2026-08-29
-- 상태: 계획 승인 전 — 운영 이미지는 ROCm 7.2.1 계열 유지
+- 상태: 단독 검증 완료, 승격 보류 — 운영 이미지는 ROCm 7.2.1 계열 유지
 
 ## 결론
 
@@ -9,11 +9,11 @@ ROCm Core SDK 10.0.0은 2026-08-26 정식 공개되었고 `gfx1150` 및 WSL용
 ROCDXG 설치 경로를 제공한다. AMD는 ROCm 10.0.0 + PyTorch 2.12 + vLLM
 0.27 조합의 컨테이너도 문서화했다.
 
-다만 이 호스트는 WSL2 `/dev/dxg`, 31.8 GiB UMA, Gemma 4 A4B MTP 패치,
-ROCr idle-poll 수정에 의존한다. 따라서 호스트와 운영 이미지를 바로 교체하지
-않고, ROCm 10 후보 이미지를 별도 태그로 설치한 뒤 동일 입력의 설치 전·후
-성능을 비교한다. 첫 승격 대상은 `ai-llm` 하나이며 ASR과 pyannote는 그 다음
-단계에서 각각 추가한다.
+이 호스트의 WSL2 `/dev/dxg`에서 공식 ROCm 10 이미지를 설치하고 Gemma 4 A4B와
+MTP k4까지 단독 검증했다. ROCr idle-poll 수정은 ROCm 10에도
+필요했고, 수정 후 유휴 CPU는 정상화되었다. 그러나 동일 토큰 벤치마크에서
+ROCm 7.2.1/vLLM 0.26보다 처리량이 15.5~33.0% 낮아 5% 승격 기준을 통과하지
+못했다. 전체 스택 검증은 생략하고 운영 스택을 기존 이미지로 복구했다.
 
 공식 근거:
 
@@ -24,6 +24,40 @@ ROCr idle-poll 수정에 의존한다. 따라서 호스트와 운영 이미지�
 - [TheRock transition guide](https://rocm.docs.amd.com/en/docs-10.0.0/about/transition-guide-TheRock.html)
 - [ROCr WSL idle-poll fix](https://github.com/ROCm/rocm-systems/pull/7898)
 - [ROCm 10 source tag (`therock-10.0`)](https://github.com/ROCm/rocm-systems/tree/therock-10.0)
+
+## 2026-08-29 실측 결과
+
+실험 이미지는
+`rocm/vllm@sha256:b8a082f346d069376d35784250e38b23a043efe979408ae3a33d7c6b62ee3276`
+를 고정해 사용했다. 내부 버전은 PyTorch `2.12.0+rocm10.0.0`, HIP
+`7.15.26333`, vLLM `0.27.1.dev5`였다. Radeon 890M `gfx1150` 인식과 행렬
+연산, A4B AWQ INT4 및 공식 MTP assistant 로드는 모두 성공했다.
+
+벤치마크는 양쪽 모두 32K / seq4 / KV 3 GiB / batch1024 / MTP k4로 맞추고,
+JIT 완료 후 64 output token을 EOS 무시 조건으로 요청했다. ROCm 7.2.1은
+2회 warm run의 평균, ROCm 10은 explicit async scheduling warm run 결과다.
+
+| 항목 | ROCm 7.2.1 / vLLM 0.26 | ROCm 10 / vLLM 0.27 | 변화율 |
+|---|---:|---:|---:|
+| concurrency 1 aggregate TPS | 15.94 tok/s | 13.46 tok/s | -15.5% |
+| concurrency 4 aggregate TPS | 40.22 tok/s | 26.94 tok/s | -33.0% |
+| concurrency 1 TTFT | 0.465초 | 0.707초 | +52.0% |
+| concurrency 4 TTFT | 1.080초 | 1.497초 | +38.7% |
+| ROCm 10 MTP acceptance | - | 740 / 1,388, 53.31% | 참고값 |
+| 모델 메모리 | 17.37 GiB | 17.38 GiB | 사실상 동일 |
+| KV cache | 3 GiB, 80,972 tokens | 3 GiB, 80,972 tokens | 동일 |
+
+ROCm 10의 최초 요청은 W4A16, attention, MoE, MTP 커널 JIT로 1분 이상
+걸렸으며 steady-state 비교에서 제외했다. stock ROCm 10 컨테이너의 유휴 CPU는
+약 223%였지만, `therock-10.0`에 upstream `46558b7`을 적용해 빌드한 ROCr로
+교체하자 약 3.4%로 감소했다. 패치한 ROCr artifact의 SHA-256은
+`5bb6dd86ffbc66e70369a6e986263d12cc801bfa4596c2942ba062bed428214d`다.
+
+vLLM 0.27.1은 현재 Transformers의 Gemma 4 heterogeneous `head_dim` 및
+`num_key_value_heads` 설정을 직접 처리하지 못해 최소 backport가 필요했다.
+모델과 MTP가 정상 기동한 뒤에도 성능 게이트를 통과하지 못했으므로, 버전 내부
+소스에 의존하는 임시 backport와 로컬 실험 이미지는 커밋하거나 운영에 적용하지
+않는다. 다음 검증은 이 호환성 문제가 upstream에서 해결된 버전으로 다시 시작한다.
 
 ## 현재 기준선
 
@@ -105,7 +139,8 @@ python infra/inference/bench/concurrent_bench.py \
   --model gemma4-a4b \
   --concurrency 1,4 \
   --requests-per-level 8 \
-  --max-tokens 128
+  --max-tokens 64 \
+  --ignore-eos
 
 python infra/inference/bench/ocr_smoke.py /path/to/same-image.png
 ```
@@ -151,21 +186,13 @@ batch1024/MTP k4로 서버를 띄운다. 다음 순서로 비교한다.
 6. 동일 이미지 OCR
 7. 요청 없는 상태 60초 CPU와 메모리
 
-속도 결과는 다음 표에 채운다.
+결과는 위 `2026-08-29 실측 결과`에 기록했다. 5% 처리량 게이트에서 중단했기
+때문에 long-context 및 전체 스택 결과는 생성하지 않았다.
 
-| 항목 | ROCm 7.2.1/vLLM 0.26 | ROCm 10/vLLM 0.27 | 변화율 |
-|---|---:|---:|---:|
-| 단건 128-token TPS median | TBD | TBD | TBD |
-| concurrency 4 aggregate TPS | TBD | TBD | TBD |
-| concurrency 4 TTFT p50 | TBD | TBD | TBD |
-| 4 x 16K aggregate TPS | TBD | TBD | TBD |
-| OCR wall time / 정확성 | TBD | TBD | TBD |
-| ai-llm idle CPU 60초 평균 | TBD | TBD | TBD |
-| iGPU resident / peak | TBD | TBD | TBD |
+### 4. 전체 스택 비교 — 미실행
 
-### 4. 전체 스택 비교
-
-A4B 단독이 통과한 뒤에만 Whisper vLLM을 ROCm 10 후보로 추가한다. pyannote는
+A4B 단독이 통과한 뒤에만 Whisper vLLM을 ROCm 10 후보로 추가한다. 이번에는
+단독 처리량 게이트를 통과하지 못해 이 단계를 실행하지 않았다. pyannote는
 마지막에 별도 이미지로 추가한다. 각 추가 단계에서 real request를 실행하고 peak
 메모리를 확인한다.
 
@@ -175,7 +202,8 @@ python infra/inference/bench/concurrent_bench.py \
   --model gemma4-a4b \
   --concurrency 1,4 \
   --requests-per-level 8 \
-  --max-tokens 128
+  --max-tokens 64 \
+  --ignore-eos
 
 docker exec ai-diarize python /bench/pyannote_smoke.py /audio/test_10s.wav
 ```
