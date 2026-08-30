@@ -379,7 +379,7 @@ services:
     restart: unless-stopped
 
   # ─── 추론 컨테이너 (refactor/inference): WSL2 + AMD ROCm gfx1150 ───
-  # ai-llm: vLLM 0.26 + Gemma 4 26B A4B QAT AWQ INT4.
+  # ai-llm: vLLM 0.28 + Gemma 4 26B A4B QAT AWQ INT4.
   #          Official BF16 assistant MTP k=4; text chat + vision OCR unified.
   #          WSL 32GiB limit: fixed 3GiB KV cache instead of UMA utilization.
   # ai-asr-vllm: Whisper-large-v3-turbo, fixed 512MiB KV cache.
@@ -389,7 +389,7 @@ services:
     build:
       context: ./infra/inference/llm
       dockerfile: Dockerfile
-    image: ai-llm-gemma4:0.26.0
+    image: ai-llm-gemma4:0.28.0
     container_name: ai-llm
     ports:
       - "18000:8000"   # OpenAI-compatible API
@@ -402,6 +402,8 @@ services:
       - ./infra/inference/restart-after-dependents.sh:/usr/local/bin/restart-after-dependents.sh:ro
     environment:
       - HSA_ENABLE_DXG_DETECTION=1
+      - ROCPROFILER_REGISTER_ENABLED=0
+      - VLLM_WORKER_MULTIPROC_METHOD=spawn
       - VLLM_USE_V2_MODEL_RUNNER=0
       - HF_TOKEN=${HF_TOKEN:-}
     entrypoint:
@@ -449,7 +451,7 @@ services:
     build:
       context: ./infra/inference/llm
       dockerfile: Dockerfile
-    image: ai-llm-gemma4:0.26.0
+    image: ai-llm-gemma4:0.28.0
     container_name: ai-asr-vllm
     ports:
       - "127.0.0.1:18002:8000"
@@ -463,6 +465,8 @@ services:
       - ./infra/inference/wait-for-service.sh:/usr/local/bin/wait-for-service.sh:ro
     environment:
       - HSA_ENABLE_DXG_DETECTION=1
+      - ROCPROFILER_REGISTER_ENABLED=0
+      - VLLM_WORKER_MULTIPROC_METHOD=spawn
       - VLLM_USE_V2_MODEL_RUNNER=0
       - VLLM_MAX_AUDIO_CLIP_FILESIZE_MB=200   # tariff 28MB 등 큰 파일 허용
     entrypoint: ["bash", "/usr/local/bin/wait-for-service.sh", "http://ai-llm:8000/v1/models"]
@@ -682,4 +686,4 @@ volumes:
   cliproxy-logs-data:
   hf-cache-fast: # HuggingFace 모델 캐시 (llm/asr/diarize/embedding 공유)
   vllm-compile-cache: # vLLM torch.compile 캐시 (ai-llm cold start 가속)
-  tvm-ffi-cache: # vLLM 0.26 ROCm TVM-FFI 보조 모듈 캐시
+  tvm-ffi-cache: # vLLM 0.28 ROCm TVM-FFI 보조 모듈 캐시

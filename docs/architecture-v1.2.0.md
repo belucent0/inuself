@@ -88,7 +88,7 @@ docker-compose.yml
 ├── ai-gateway     :4000       — FastAPI 추론 라우터 (httpx + AsyncOpenAI)
 ├── cli-proxy-api  :8317/:1455 — OAuth CLI Proxy (Codex 접근, serverless 폴백)
 │
-├── ai-llm         :8000       — vLLM 0.26 Gemma 4 26B A4B AWQ INT4 + MTP k=4 (ROCm)
+├── ai-llm         :8000       — vLLM 0.28 Gemma 4 26B A4B AWQ INT4 + MTP k=4 (ROCm)
 ├── ai-asr-vllm    :8000       — vLLM Whisper-large-v3-turbo (512 MiB KV, seqs=1)
 ├── ai-diarize     :8003       — pyannote community-1 (ROCm, startup warm-up)
 ├── ai-embedding   :8000(int)  — EmbeddingGemma 308M Q4 GGUF (llama.cpp CPU)
@@ -1348,15 +1348,15 @@ Media/embedding 경로는 RoutingProfile 대상이 아니며 기존 전용 라�
 
 | 컨테이너 | 이미지/베이스 | GPU 사용 | 모델 | 컨텍스트 |
 |---------|--------------|---------|------|---------|
-| `ai-llm` | `vllm/vllm-openai-rocm:v0.26.0` | gfx1150 | Gemma 4 26B A4B AWQ INT4 + MTP k=4 | 32768 |
-| `ai-asr-vllm` | `ai-llm-gemma4:0.26.0` (vLLM ROCm 공용 이미지) | gfx1150 | Whisper-large-v3-turbo | 448 |
+| `ai-llm` | `vllm/vllm-openai-rocm:v0.28.0` | gfx1150 | Gemma 4 26B A4B AWQ INT4 + MTP k=4 | 32768 |
+| `ai-asr-vllm` | `ai-llm-gemma4:0.28.0` (vLLM ROCm 공용 이미지) | gfx1150 | Whisper-large-v3-turbo | 448 |
 | `ai-diarize` | `pyannote-audio` (custom ROCm build) | gfx1150 | community-1 | — |
 | `ai-embedding` | `llama.cpp` (CPU) | CPU | EmbeddingGemma 300M Q4 GGUF | 2048 |
 
 **공유 자원:**
 - Docker named volume `hf-cache-fast` — HuggingFace 모델 캐시 공유
 - Docker named volume `vllm-compile-cache` — ASR vLLM torch.compile 캐시 보존
-- Docker named volume `tvm-ffi-cache` — vLLM 0.26 ROCm 보조 모듈 cold compile 캐시
+- Docker named volume `tvm-ffi-cache` — vLLM 0.28 ROCm 보조 모듈 cold compile 캐시
 - GPU 추론 컨테이너에 `/dev/dxg`와 `libdxcore.so` 마운트
 
 `ai-asr-vllm`은 WSL UVA 제약 때문에 V1 runner를 사용한다. 운영값은 고정 KV 512 MiB,
@@ -1575,7 +1575,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | Embeddings 엔드포인트 | `infra/ai-gateway/routes/embeddings.py` |
 | Media (ASR/OCR) 엔드포인트 | `infra/ai-gateway/routes/media.py` |
 | Provider 정책·capacity | `infra/shared/routing_policy.json`, `infra/ai-gateway/services/provider_pool.py` |
-| ai-llm (vLLM) | `infra/inference/llm/` (Dockerfile + WSL shims/MTP patch) |
+| ai-llm (vLLM) | `infra/inference/llm/` (Dockerfile + WSL shims) |
 | ai-asr-vllm (Whisper) | `docker-compose.yml`의 vLLM 서비스 정의 |
 | ai-diarize (pyannote) | `infra/inference/diarize/` |
 | ai-embedding (EmbeddingGemma) | `infra/inference/embedding/` |
