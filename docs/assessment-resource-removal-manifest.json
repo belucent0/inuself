@@ -1,0 +1,863 @@
+{
+    "version":  1,
+    "preparedAt":  "2026-10-13T15:40:56.916669+00:00",
+    "status":  "deleted",
+    "inventoryCommit":  "fe30c3bcd6df355d3cc669d1b3a1b7af2fff4dfd",
+    "sourceRoot":  "C:\\timblo\\torch-test",
+    "counts":  {
+                   "migratedOriginals":  85,
+                   "questionCopies":  6,
+                   "discarded":  17
+               },
+    "databaseModified":  false,
+    "files":  [
+                  {
+                      "path":  "docs/wpi/realist_trust.pdf",
+                      "bytes":  855922,
+                      "sha256":  "b8de8a24e4f48a3206781bddaf6895fde1a417bd57507ff53f9834caccca4fd0",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/realist_trust.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/realist_manual.pdf",
+                      "bytes":  297044,
+                      "sha256":  "6123061f44ab9de350e6a7ed8c6e110b7348ffc37a69010d6258daad7222cb88",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/realist_manual.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/realist_self.pdf",
+                      "bytes":  331130,
+                      "sha256":  "787c1fc1c3c324e39addd31701402b300ff650f66d3b621e778a6096630d8eac",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/realist_self.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/realist_culture.pdf",
+                      "bytes":  332906,
+                      "sha256":  "457a63aa9f2e48ee2b835c1e9c6c4d1f3b3e475015879a76423127b3aebb6cc4",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/realist_culture.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/romanticist_relation.pdf",
+                      "bytes":  287176,
+                      "sha256":  "0bda7c7fe8791e3866287ed6ae6976afa2816ec971a0e57e44093227cc4f3c11",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/romanticist_relation.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/romanticist_trust.pdf",
+                      "bytes":  283724,
+                      "sha256":  "640ae5a3e8f6655d662645b0bd4fba7287d05fff31e80b3d40b22819aa1a019d",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/romanticist_trust.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/romanticist_manual.pdf",
+                      "bytes":  330076,
+                      "sha256":  "6fc40d3692a9ed3e362dc30c8a4f67579c6651e7aa7e8f501002c71392a5207f",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/romanticist_manual.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/romanticist_self.pdf",
+                      "bytes":  321029,
+                      "sha256":  "88a3bbdbd9b3ded7cf33270965f6a579f5f03e4c8248fc7a0d568fcf1fcf6af1",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/romanticist_self.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/romanticist_culture.pdf",
+                      "bytes":  316682,
+                      "sha256":  "83df78cc4d9008c49327e5872aa5cfb80d665703e977fffd9eaf5c24b6301f9c",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/romanticist_culture.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/human_relation.pdf",
+                      "bytes":  325496,
+                      "sha256":  "dfd406ea85417bb49472b06a68bfefeabb616c1a731ae789340e9186df9f4c00",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/human_relation.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/humanist_trust.pdf",
+                      "bytes":  321749,
+                      "sha256":  "79243fb9632986a36121ef3d72c5c6e6c2f9c576594a8ab8b57bc6e2cdabf1ce",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/humanist_trust.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/humanist_manual.pdf",
+                      "bytes":  292388,
+                      "sha256":  "6d44165de580ed9b27ba5b304411b7575fe2c15357ec4c153b1214167d957e37",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/humanist_manual.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/humanist_self.pdf",
+                      "bytes":  289202,
+                      "sha256":  "bca4d03515834c06f8abb8ac2ed1224f2cc60e8c6bae257ef6e28b233add32db",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/humanist_self.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/humanist_culture.pdf",
+                      "bytes":  321388,
+                      "sha256":  "e108ca806163be255ef10c392018bf92a1c0ff5d7e29ef72539c2bbf18c60a91",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/humanist_culture.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/idealist_relation.pdf",
+                      "bytes":  284629,
+                      "sha256":  "113b58db78766b712c09f1947095ffb7ae5085977611008baee4c1917a429852",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/idealist_relation.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/idealist_trust.pdf",
+                      "bytes":  291179,
+                      "sha256":  "840020aeec7cfd24de9bde2d165eedbca683c8274a025f61b39e1b99e20872f1",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/idealist_trust.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/idealist_manual.pdf",
+                      "bytes":  289620,
+                      "sha256":  "9a53861719ba2e1a317af688aa811b209cd547618d2e58dcab30e34f2c87e675",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/idealist_manual.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/idealist_self.pdf",
+                      "bytes":  286898,
+                      "sha256":  "7d3f5cd7e94409c4e2ee2c5c22fe7eb4208fba4577d10669eecd19ba58ad7752",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/idealist_self.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/idealist_culture.pdf",
+                      "bytes":  316044,
+                      "sha256":  "b82557d060e3a7286f0da849480cad9ae1c1b62537b7c595dac144009f027442",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/idealist_culture.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_relation.pdf",
+                      "bytes":  344767,
+                      "sha256":  "f45650be13b06739bea34d9980acd3363f94fcd713f49e75ff26567914cf8318",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/agent_relation.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_trust.pdf",
+                      "bytes":  285333,
+                      "sha256":  "4a454b919d6c4e66adf7e7054ef04ac048a5acf6feff052b21b04956d28de7ac",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/agent_trust.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_manual.pdf",
+                      "bytes":  320276,
+                      "sha256":  "3e412fdc5cf8f39c8248bbcc7464636af4e7d654190ab4290dd3c0c80704cbb0",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/agent_manual.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_self.pdf",
+                      "bytes":  330303,
+                      "sha256":  "a014fa635825f40cb836bea92a1cf2271fa8654c452e27a8d3c2c23fecf55d35",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/agent_self.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_culture.pdf",
+                      "bytes":  316459,
+                      "sha256":  "c77d34d457d4c7055f1d700b4a5dfae197c191f5d3b78c669e90716f5689e26c",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/agent_culture.pdf"
+                  },
+                  {
+                      "path":  "docs/wpi/realist_relation.txt",
+                      "bytes":  8479,
+                      "sha256":  "13dec3a9b5e8315023bf00da9cb07c9a63c3922cb13e5ef169d22839c12bba87",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/realist_relation.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/realist_trust.txt",
+                      "bytes":  9255,
+                      "sha256":  "880ba782f8e94157d12a0afc99f6d4cc1aaf3dc244ead471b3cc64c0df978b2a",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/realist_trust.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/realist_manual.txt",
+                      "bytes":  7989,
+                      "sha256":  "732b6e5dde5a88a1182f84522d5594a71854966e9572377a0246031254343477",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/realist_manual.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/realist_self.txt",
+                      "bytes":  9394,
+                      "sha256":  "61788e5d454267ec8579224d44b766a64447aa49ca75dfb3d47abedb449ef98c",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/realist_self.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/realist_culture.txt",
+                      "bytes":  9724,
+                      "sha256":  "58aef7ede1258603bed485b9ee3cd7f5c6a481c6ee2340da76d49af198ad3327",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/realist_culture.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/romanticist_relation.txt",
+                      "bytes":  9028,
+                      "sha256":  "92ad7ecd0ab476dd83ed448d70eb6d9dce5589def44b932f82504ba6b7409d73",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/romanticist_relation.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/romanticist_trust.txt",
+                      "bytes":  8653,
+                      "sha256":  "5c557898e31b9e0bbe2f8a4cc1973dcbde02c1751aecc2f0454c333f613c77d7",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/romanticist_trust.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/romanticist_manual.txt",
+                      "bytes":  8726,
+                      "sha256":  "23a965594d60737d0168f03bff3d4b3a716c2265a66c0588a488e49243f47cfb",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/romanticist_manual.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/romanticist_self.txt",
+                      "bytes":  9092,
+                      "sha256":  "e68b6ac88fea5f6c4185bed9718e5d722a5ced71084a91651046c71899a3899c",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/romanticist_self.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/romanticist_culture.txt",
+                      "bytes":  8334,
+                      "sha256":  "b87e3b66a3a7661699b10eec9fa913d266ea28c67375228ec6d703fc3e15ccb6",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/romanticist_culture.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/human_relation.txt",
+                      "bytes":  9394,
+                      "sha256":  "7900e652b661f52242ec4b2de56272e40d15922c05f501f72c82ec3d26d625d1",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/human_relation.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/humanist_trust.txt",
+                      "bytes":  9321,
+                      "sha256":  "8437ff96127421ae8969c2f2cedc00244137b746f487aabb301a33d8aa1c8b32",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/humanist_trust.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/humanist_manual.txt",
+                      "bytes":  9153,
+                      "sha256":  "f8221f02e9f8848d7774af904882238e8b0bc03474ea27eea315c99c062ef0bd",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/humanist_manual.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/humanist_self.txt",
+                      "bytes":  8502,
+                      "sha256":  "12b1bec197651f2b6e4ef1ed6d3a2c06b5eda87920ab8c952bc74cc524f53065",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/humanist_self.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/humanist_culture.txt",
+                      "bytes":  8879,
+                      "sha256":  "4a90b54e0b23e529496d55405d08dc875cb6451ae46b3eb8480974c2e63bee25",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/humanist_culture.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/idealist_relation.txt",
+                      "bytes":  7813,
+                      "sha256":  "9d7df8980a48e12e1b457c3bbf32933a6f013ab155fa88e312b1824cd35a230c",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/idealist_relation.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/idealist_trust.txt",
+                      "bytes":  8824,
+                      "sha256":  "6f1745bad850ede29d225481adba3da2b8b11a185b85f97f438c5a9cc6aa3b1a",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/idealist_trust.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/idealist_manual.txt",
+                      "bytes":  8943,
+                      "sha256":  "b820686dc4d4b606ce2579b531e03402e6507dd23ed3b070c5d67df734e184ca",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/idealist_manual.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/idealist_self.txt",
+                      "bytes":  8247,
+                      "sha256":  "009b7f8a505d1ef84542ae8840ac4e87e5b05ab8527ab469782497c7ebaec4bd",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/idealist_self.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/idealist_culture.txt",
+                      "bytes":  7598,
+                      "sha256":  "016074bcb2f40f56d63a1ea66dbe2ea08b0266b5f686e109e43baa3a8d44ec13",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/idealist_culture.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_relation.txt",
+                      "bytes":  8529,
+                      "sha256":  "2633d14583247bdce434c07fff0695f2ab8f86893af69b1dfe54fa9fb2234790",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/agent_relation.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_trust.txt",
+                      "bytes":  7906,
+                      "sha256":  "880efcb0bd6cd7d7b7881259f6886c25210212098ac9787600dc37a4cefdcf45",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/agent_trust.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_manual.txt",
+                      "bytes":  8699,
+                      "sha256":  "5f4e6dd5834ef918fede6f45d7669a1195e455dca054ec4e1e84a6e86d5a4f9d",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/agent_manual.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_self.txt",
+                      "bytes":  7926,
+                      "sha256":  "74ea15339e88915d4c2f173771a803f65705e48040ffda2f6de49b4a7fbcfd29",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/agent_self.txt"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_culture.txt",
+                      "bytes":  7952,
+                      "sha256":  "14637bfa30039115e78adf116b88896a04c38b4badb5c3deda22c0dc84f128a9",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpi/agent_culture.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/realist/default.txt",
+                      "bytes":  5001,
+                      "sha256":  "7a322d57f275f5df8dfd958a43ae07e8e66f1eb2046d26716b3c71bc47c46dd0",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/realist/default.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/realist/relation.txt",
+                      "bytes":  2151,
+                      "sha256":  "52c5c53c14076a74cae8db4a20f556e9d1e2e381743e3f74b27334903c976d88",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/realist/relation.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/realist/trust.txt",
+                      "bytes":  2920,
+                      "sha256":  "b0ad3aa531d76377cdcf9a393f46d62b8ba05eedb83edb0b05e52c83d43ca553",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/realist/trust.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/realist/manual.txt",
+                      "bytes":  1628,
+                      "sha256":  "9c4f3c43f780ae479b1347cf340c155bb74b3da435c15355c10bd35d8ec81607",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/realist/manual.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/realist/self.txt",
+                      "bytes":  2916,
+                      "sha256":  "be1d6e253c46e0e4aa9f6a42ac67314417f4b6608374dece8375d1d17c3e36d2",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/realist/self.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/realist/culture.txt",
+                      "bytes":  3229,
+                      "sha256":  "62cd065f8d9993fc4e97f1930232b5afe4a3d5dad9e42a85f34b573716483406",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/realist/culture.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/romanticist/default.txt",
+                      "bytes":  4317,
+                      "sha256":  "8631a60d7192b6241f0e09716b2e8ad033cc6d36493be4ba397d40f43e854436",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/romanticist/default.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/romanticist/relation.txt",
+                      "bytes":  3418,
+                      "sha256":  "77c40b5856cb98e13ea78d67bc5da5a75b316bee929ee35bdc3afa6346155138",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/romanticist/relation.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/romanticist/trust.txt",
+                      "bytes":  3047,
+                      "sha256":  "3bacc8981180ed552fb7e434683ec34faa32312ee354baad77971754a86fe571",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/romanticist/trust.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/romanticist/manual.txt",
+                      "bytes":  3119,
+                      "sha256":  "c85a14218cfdca3e8f247fcc0808c7614ffd12f4d460ae0cfd00b452a3461e95",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/romanticist/manual.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/romanticist/self.txt",
+                      "bytes":  3371,
+                      "sha256":  "9272a13b2200cfcfe54d77b8ee60e5100beb838e96475c83c576b71fdc8cfa29",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/romanticist/self.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/romanticist/culture.txt",
+                      "bytes":  2623,
+                      "sha256":  "f1d51a4342af08e75b35b9268ede102be49e3f549177afb047cdae7ce9e7fff6",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/romanticist/culture.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/humanist/default.txt",
+                      "bytes":  4453,
+                      "sha256":  "6c67d492a1751e2b1f75cbaa2a82b9cb7f08e083b13c449c5372185546d68d14",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/humanist/default.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/humanist/relation.txt",
+                      "bytes":  2926,
+                      "sha256":  "53edcb61ef8083138681933825b577cad4fbc00b7f6c54da165b195c0313f112",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/humanist/relation.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/humanist/trust.txt",
+                      "bytes":  2854,
+                      "sha256":  "0e1e926bf806739664593c2755b33d4590ff5d638f750d2795e634ce96a13ecb",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/humanist/trust.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/humanist/manual.txt",
+                      "bytes":  2801,
+                      "sha256":  "13b0bad790b250e5cd174895b392d0f267ce0b5a73de4fa2972539e0e9f8bfd7",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/humanist/manual.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/humanist/self.txt",
+                      "bytes":  2157,
+                      "sha256":  "b29d6394269284fe76338e2f90231610d4ef63c14b417edfac1505e24e688867",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/humanist/self.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/humanist/culture.txt",
+                      "bytes":  2425,
+                      "sha256":  "f79e82494a3f919bdc8fde7dc3224ea654a5c9c0481f70bdba7fa3502ed33f0b",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/humanist/culture.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/idealist/default.txt",
+                      "bytes":  4788,
+                      "sha256":  "cce715166b2838d7593e37bc371a07df2743c0d6f4d2514ff60cf33ad9b29ed9",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/idealist/default.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/idealist/relation.txt",
+                      "bytes":  2127,
+                      "sha256":  "f9c65534746de51f8fedfef650530c15e20da95960432a694da40002c29bee9c",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/idealist/relation.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/idealist/trust.txt",
+                      "bytes":  3124,
+                      "sha256":  "6edc139a73956550b601e39348e3295bdb3ee6fd2094433fa467e96d061ded71",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/idealist/trust.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/idealist/manual.txt",
+                      "bytes":  3241,
+                      "sha256":  "6347a0bff90c5bec1a970d3cc9c6c55ee450a443a9a4e704327291e4c7741f8f",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/idealist/manual.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/idealist/self.txt",
+                      "bytes":  2551,
+                      "sha256":  "ac9e4ca63b9b6134da402b1a7b463a2dcd002891daf79681c2698e223203693b",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/idealist/self.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/idealist/culture.txt",
+                      "bytes":  1793,
+                      "sha256":  "e617bc4d627ab17a6851ba82b2caa508b51724d7e8247e6f9563c0f3af43ae06",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/idealist/culture.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/agent/default.txt",
+                      "bytes":  4518,
+                      "sha256":  "a5b152b991fcc060a2b0cd471f363db8f46fa5dc7cc4e4d07820c59082070c51",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/agent/default.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/agent/relation.txt",
+                      "bytes":  2888,
+                      "sha256":  "d3cf3eab40e5590bc10c403fc0bf5ba8ceed9fa94e6b080945486a051cc62792",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/agent/relation.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/agent/trust.txt",
+                      "bytes":  2383,
+                      "sha256":  "1add16e01214624924a0661574d3525f113267195da056631daca3b3c1e4c1e2",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/agent/trust.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/agent/manual.txt",
+                      "bytes":  3059,
+                      "sha256":  "da0f0953f814e1b4d4061f4f23a9ab007596c47461042b4b5cc94a0254f25bab",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/agent/manual.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/agent/self.txt",
+                      "bytes":  2404,
+                      "sha256":  "8575ce7a1e09eebc6fe9894d14bb7ed4fb726f822bd9668ca1e023150f8b1a1b",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/agent/self.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/agent/culture.txt",
+                      "bytes":  2325,
+                      "sha256":  "a976b7ea327ffc3477cb649b866a79d8138d52378dbec9fb2f17beb0e4445d51",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/agent/culture.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/_common/relation_base.txt",
+                      "bytes":  1542,
+                      "sha256":  "3175a5da43fa94c3eb4f3e637a6a236375a879ba506266fad234d775914c00d2",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/_common/relation_base.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/_common/trust_base.txt",
+                      "bytes":  1523,
+                      "sha256":  "979d6ee53d2a35aec2d18a0b700647070bb0c940307886f54b0b46d5ad1dfd5f",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/_common/trust_base.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/_common/manual_base.txt",
+                      "bytes":  1514,
+                      "sha256":  "1e2033844b53bca99486492dcf2afd625f53dfce5a072c032ff06496c0154444",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/_common/manual_base.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/_common/self_base.txt",
+                      "bytes":  1506,
+                      "sha256":  "c3b2ac46d6a621a761b837aa56c1f8b85a379c9fcc5071bc014376ebd3aecacb",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/_common/self_base.txt"
+                  },
+                  {
+                      "path":  "docs/wpis/_common/culture_base.txt",
+                      "bytes":  1525,
+                      "sha256":  "9cd2621b03f39dc13bafae8e0b6a5be7e64d48887fe59ac4fbf4659178bce53a",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/wpis/_common/culture_base.txt"
+                  },
+                  {
+                      "path":  "docs/personal/0-wpi-consul-model.md",
+                      "bytes":  1941,
+                      "sha256":  "1a500ebeef105aa3be0cbb3a5ac1fa7f2bfd3fe2114306dc215607536066f011",
+                      "category":  "migrated-original",
+                      "recovery":  "byte-exact-inventory-git",
+                      "inventoryPath":  "reference/inuself/docs/personal/0-wpi-consul-model.md"
+                  },
+                  {
+                      "path":  "backend/data/wpi/i-test-question.json",
+                      "bytes":  5647,
+                      "sha256":  "a7a9a38bbc5951ae0370633722b67ec305519182673c6b5ac10d3e13d9bf8988",
+                      "category":  "question-copy",
+                      "recovery":  "canonical-json-equivalent-not-byte-exact",
+                      "inventoryPath":  "src/data/wpi/i-test-question.json"
+                  },
+                  {
+                      "path":  "backend/data/wpi/me-test-question.json",
+                      "bytes":  5301,
+                      "sha256":  "c659996cac003d17b953fec5eeb9ccd50db29fd3ebe9b73ff904ee30189f5f7d",
+                      "category":  "question-copy",
+                      "recovery":  "canonical-json-equivalent-not-byte-exact",
+                      "inventoryPath":  "src/data/wpi/me-test-question.json"
+                  },
+                  {
+                      "path":  "backend/app/data/wpi/i-test-question.json",
+                      "bytes":  5859,
+                      "sha256":  "8a3ef76d1caeb1f35ef07163d1c42edf11640ae8593be886232226bf5b96c65b",
+                      "category":  "question-copy",
+                      "recovery":  "canonical-json-equivalent-not-byte-exact",
+                      "inventoryPath":  "src/data/wpi/i-test-question.json"
+                  },
+                  {
+                      "path":  "backend/app/data/wpi/me-test-question.json",
+                      "bytes":  5513,
+                      "sha256":  "2a8d9eaa33f1f3f8aef40f1990f1d46317ccb6ac529ab1d6ae415147e1d24c1b",
+                      "category":  "question-copy",
+                      "recovery":  "canonical-json-equivalent-not-byte-exact",
+                      "inventoryPath":  "src/data/wpi/me-test-question.json"
+                  },
+                  {
+                      "path":  "docs/personal/i-test-question.json",
+                      "bytes":  5857,
+                      "sha256":  "00587a2adacf2c88b6521e822f7baaeeede31dd5f0843cef9c5e3fbe792abc03",
+                      "category":  "question-copy",
+                      "recovery":  "canonical-json-equivalent-not-byte-exact",
+                      "inventoryPath":  "src/data/wpi/i-test-question.json"
+                  },
+                  {
+                      "path":  "docs/personal/me-test-question.json",
+                      "bytes":  5511,
+                      "sha256":  "66b47d126930028bf0410728282ce49ff72f4e06ad48954cc42d24ee8aa6688c",
+                      "category":  "question-copy",
+                      "recovery":  "canonical-json-equivalent-not-byte-exact",
+                      "inventoryPath":  "src/data/wpi/me-test-question.json"
+                  },
+                  {
+                      "path":  "docs/wpi/agent_culture_.txt",
+                      "bytes":  7952,
+                      "sha256":  "15506e21bb624cf94457db84f7ed19c6908f5e7fc97f631378c619c63dc176aa",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/wpi/realist_relation copy.txt",
+                      "bytes":  8479,
+                      "sha256":  "13dec3a9b5e8315023bf00da9cb07c9a63c3922cb13e5ef169d22839c12bba87",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/wpi/analysis_result.txt",
+                      "bytes":  264,
+                      "sha256":  "c0241c699d384c1ba24ec94b061c9f851ab0e97bc700ed9035a08f793a16a41d",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/wpi/analyze_chars.py",
+                      "bytes":  2172,
+                      "sha256":  "3b1a88a6a6873350b46f727cb1bb74c1df0f527a7ccc5b0853a5d74869f1eddc",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/wpi/download_pdfs.py",
+                      "bytes":  2142,
+                      "sha256":  "1269aec58212a956cf8c1c57be7d050f395a15c0bd9541236b52bd0f181a9e60",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/wpi/extract_text.py",
+                      "bytes":  1013,
+                      "sha256":  "b0405454916ec3a554217c74ac30910dc943d17c4e56da3a9805d736883a60d9",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/wpi/fix_encoding.py",
+                      "bytes":  1131,
+                      "sha256":  "dd9eb9db7cd01a54da73ea6763270d0b97ee70fa9387f33016a9ea688925b4ef",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/wpi/process_all_docs.py",
+                      "bytes":  2853,
+                      "sha256":  "df3f071e9f23b92dc8ecccb9f88c55d757dff29bfc883207eb1ae9e3737ea2f8",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/wpi/__pycache__/fix_encoding.cpython-312.pyc",
+                      "bytes":  1771,
+                      "sha256":  "705b91dd2a65773f4ed5bc3691f2047719aec3c3d54961c922b8e34ec6c0117d",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/wpis/realist/default_backup.txt",
+                      "bytes":  6232,
+                      "sha256":  "c451ed2bcc658f3d14f50e21856fd8ed0ba288bead3170ad85adbbb9bb878b51",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/wpis/_common/README.md",
+                      "bytes":  1387,
+                      "sha256":  "dcae707229ff5ae4c6dd1a2b3af2186b9bee2ea5aa6c424ac5c761144f6d355f",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "backend/app/prompts/wpi_report.py",
+                      "bytes":  17720,
+                      "sha256":  "9b20faf25aa2b61e08a5dd8355d7707eb38d12575c2d94ac5b3ebb6d2c7ecd7f",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "backend/app/data/wpi/.gitkeep",
+                      "bytes":  0,
+                      "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/personal/01-wpi-psychology-system.md",
+                      "bytes":  39398,
+                      "sha256":  "7ceb1040c0d5b180b53f807a9a00052d9b916db22c2b75c79e655109576eb3b9",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/personal/04-wpi-combination-types.md",
+                      "bytes":  22998,
+                      "sha256":  "c45e45dd379ac130215dbfac2ef14cfdea7f4fcbaac803d7770039f7ca83fb0f",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/personal/05-wpi-philosophy-and-interpretation-principles.md",
+                      "bytes":  5360,
+                      "sha256":  "0e81a280600e72cbaf6605d301dd30b00cc54279c9843fc31d864488dbf1540f",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  },
+                  {
+                      "path":  "docs/plans/260215-wpi-125-routing-spec.md",
+                      "bytes":  4868,
+                      "sha256":  "990ac0e26944fd59ad852d04d002f2f7a4536182bfdf01e56e5bad3cfbb65b87",
+                      "category":  "obsolete-test-only",
+                      "recovery":  "not-migrated-no-recovery-guarantee"
+                  }
+              ],
+    "completedAt":  "2026-10-13T15:41:27.9708254Z"
+}

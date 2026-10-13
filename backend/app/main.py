@@ -268,12 +268,6 @@ def create_app() -> FastAPI:
     app.include_router(events_controller.router)
     logger.info("[FastAPI] SSE events routes registered at /api/events")
 
-    # 심리검사 라우터 추가 (WPI 등)
-    from .controllers import scan_controller
-
-    app.include_router(scan_controller.router, prefix=settings.api_prefix)
-    logger.info("[FastAPI] Scan routes registered at /api/scan")
-
     # 미디어 프록시 라우터 추가 (인증 기반 스트리밍)
     from .controllers import media_controller
 

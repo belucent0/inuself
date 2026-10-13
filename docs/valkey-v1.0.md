@@ -20,7 +20,7 @@
 > 현재 `allkeys-lru` 정책에서는 세션도 eviction 대상이므로 배포 acceptance에서
 > `evicted_keys=0`을 확인하고 증가 시 auth 전용 Valkey 분리를 검토합니다.
 > 본 문서는 v1.1 시점의 SoT로 보존되며, 현행 운영 다이어그램은
-> [`architecture-v1.2.0.md`](./architecture-v1.2.0.md)를 참조하세요.
+> [`architecture-v1.3.0.md`](./architecture-v1.3.0.md)를 참조하세요.
 
 ---
 

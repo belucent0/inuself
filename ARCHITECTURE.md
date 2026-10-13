@@ -1,7 +1,7 @@
 # 시스템 전체 조감도 (System Architecture Overview)
 
 현재 시스템의 모든 컴포넌트와 데이터/요청 흐름을 보여주는 조감도입니다.
-상세 문서는 [`docs/architecture-v1.2.0.md`](docs/architecture-v1.2.0.md) 참조.
+상세 문서는 [`docs/architecture-v1.3.0.md`](docs/architecture-v1.3.0.md) 참조.
 
 ```mermaid
 flowchart TD

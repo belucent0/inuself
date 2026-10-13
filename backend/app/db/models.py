@@ -352,7 +352,7 @@ class User(Base):
         "Content", back_populates="user", cascade="all, delete-orphan"
     )
 
-    # 검사 결과 관계 (1:N - 검사 이력 누적)
+    # 기존 검사 기록과 사용자 관계를 보존하기 위해 유지합니다.
     scan_results: Mapped[list["ScanResult"]] = relationship(
         "ScanResult", back_populates="user", cascade="all, delete-orphan", order_by="ScanResult.created_at.desc()"
     )
@@ -369,30 +369,7 @@ class User(Base):
 
 
 class ScanResult(Base):
-    """범용 심리검사 결과 테이블.
-
-    다양한 검사 유형(WPI, WSI, MCDC 등)의 결과를 단일 테이블에서 관리.
-    검사별 상세 데이터는 JSONB(data) 컬럼에 저장.
-
-    WPI 예시:
-      scan_type: "wpi"
-      status: "completed"
-      data: {
-        "version": 1,
-        "i_test": {"scores": {...}, "dominant_type": "...", "raw_responses": {...}},
-        "me_test": {"scores": {...}, "dominant_type": "...", "raw_responses": {...}},
-        "gap_analysis": {"axis_gaps": {...}}
-      }
-
-    WSI 예시 (향후):
-      scan_type: "wsi"
-      status: "completed"
-      data: {
-        "version": 1,
-        "scores": {...},
-        "raw_responses": {...}
-      }
-    """
+    """기존 검사 결과와 외래 키 호환성을 보존하는 레거시 테이블."""
 
     __tablename__ = "scan_result"
 
@@ -409,7 +386,7 @@ class ScanResult(Base):
         index=True,
     )
 
-    # 검사 유형 (wpi, wsi, mcdc 등)
+    # 기존 검사 유형
     scan_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
 
     # 검사 상태 (in_progress, completed)
@@ -702,7 +679,7 @@ class Client(Base):
         Vector(768), nullable=True
     )
 
-    # WPI 검사 결과 FK (선택)
+    # 기존 내담자와 검사 기록 연결을 보존하기 위해 유지합니다.
     wpi_scan_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("scan_result.id", ondelete="SET NULL"),

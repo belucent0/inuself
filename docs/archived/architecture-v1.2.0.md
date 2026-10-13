@@ -1,4 +1,6 @@
-# Architecture v1.2.0 (현행 운영 문서)
+# Architecture v1.2.0 (보관본)
+
+> 2026-10-14부터 현행 코드는 [architecture-v1.3.0.md](../architecture-v1.3.0.md)를 참고합니다. 아래 내용은 기능 제거 전 develop의 기록입니다.
 
 > **Timblo AI Platform — 종합 아키텍처 문서 (Source of Truth)**
 >
@@ -1338,7 +1340,7 @@ Media/embedding 경로는 RoutingProfile 대상이 아니며 기존 전용 라�
 | `diarization` | pyannote community-1 (ai-diarize) | — | 화자 분리 |
 | `ocr` | `gemma4-a4b` vision (ai-llm) | — | 이미지 OCR + 표 |
 
-`model=auto`이면 route 순서와 capability를 모두 만족하는 첫 healthy slot을 선택합니다. full 상태는 다음 eligible Provider로 overflow하고, 모두 full이면 30초 한도로 대기합니다. 세부 규칙은 [`routing-v2.md`](routing-v2.md)를 따릅니다.
+`model=auto`이면 route 순서와 capability를 모두 만족하는 첫 healthy slot을 선택합니다. full 상태는 다음 eligible Provider로 overflow하고, 모두 full이면 30초 한도로 대기합니다. 세부 규칙은 [`routing-v2.md`](../routing-v2.md)를 따릅니다.
 
 > `ai-embedding`은 벡터 생성 전용이다. 별도 cross-encoder 리랭커 서비스는 없으며,
 > 웹 검색은 RRF·키워드 관련성·품질/본문 점수로, 문서 RAG는 키워드 검색과

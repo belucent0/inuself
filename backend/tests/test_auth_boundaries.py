@@ -118,10 +118,41 @@ def test_destructive_and_inference_routes_reject_anonymous_requests(app_client):
         app_client.post("/api/chat", json={"messages": [{"role": "user", "content": "x"}]}),
         app_client.post("/api/search", json={"query": "x"}),
         app_client.get("/api/search", params={"q": "x"}),
-        app_client.get("/api/scan/wpi/questions"),
     )
 
-    assert [response.status_code for response in responses] == [401] * 5
+    assert [response.status_code for response in responses] == [401] * 4
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("GET", "history"),
+        ("GET", "history/legacy-result"),
+        ("GET", "history/legacy-result/ai-report"),
+        ("POST", "history/legacy-result/ai-report"),
+        ("GET", "wpi/questions"),
+        ("POST", "wpi/submit"),
+        ("GET", "wpi/profile"),
+        ("GET", "wpi/status"),
+        ("DELETE", "wpi/in-progress"),
+    ],
+)
+def test_scan_routes_are_retired(app_client, method, path):
+    assert app_client.request(method, f"/api/scan/{path}").status_code == 404
+
+
+def test_openapi_excludes_scan_and_keeps_active_routes(app_client):
+    paths = app_client.get("/openapi.json").json()["paths"]
+
+    assert not any(path.startswith("/api/scan") for path in paths)
+    assert {
+        "/health",
+        "/api/auth/me",
+        "/api/contents",
+        "/api/threads",
+        "/api/search",
+        "/api/events/file-progress/stream",
+    }.issubset(paths)
 
 
 def test_file_progress_endpoint_rejects_anonymous_request(app_client):
