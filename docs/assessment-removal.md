@@ -42,6 +42,8 @@
 
 사용자의 커밋·develop push 요청 후 최신 `origin/develop`(`b46736b`)을 가져왔습니다. 로컬 작업 브랜치가 원격과 갈라져 있어 제거 변경만 별도 worktree의 피처 브랜치에 적용했습니다. 최신 Agent Worker·ROCm·인증 설정·문서를 유지하면서 심리검사 항목만 제거했고, v1.2 보관본도 최신 develop 내용을 기준으로 만들었습니다. 통합본에서 프론트엔드 빌드, 백엔드 44개 테스트, 로컬 1440px·390px 브라우저 검사, Python AST·Compose 구문 검증을 다시 통과했습니다. 기존 저장소의 무관한 변경·임시 파일과 Git 제외 문서는 커밋 대상에서 제외합니다. 운영 배포는 수행하지 않습니다.
 
+develop은 PR 경유만 허용되어 [PR #178](https://github.com/belucent0/inuself/pull/178)을 생성했습니다. 최초 CI에서 프론트엔드·게이트웨이는 통과했으나 백엔드·Agent 검사는 `greenlet` 미설치로 SQLAlchemy asyncio import 단계에서 멈췄습니다. 검사 제거에 따른 실행 실패가 아니라 비동기 런타임 의존성 선언 누락이므로 `sqlalchemy[asyncio]`를 명시하고 Docker에서 쓰는 `uv.lock`을 갱신했습니다. 잠긴 179개 패키지의 버전은 모두 유지했습니다. CI의 pip 설치 경로와 Docker의 frozen uv 경로 모두 해당 의존성을 포함하도록 하는 최소 보완입니다.
+
 ---
 
 ## 2026-10-13: 최초 기능 제거 당시 기록
