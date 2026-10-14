@@ -109,6 +109,8 @@ python -m pip install -e "./backend[dev]"
 
 Backend는 저장소 루트의 `.env`를 읽습니다. [`.env.example`](.env.example)을 참고해 `.env`를 만들고, [설정 모델](backend/app/core/config.py)에 맞춰 개발용 PostgreSQL·Valkey·MinIO의 주소와 자격 증명을 구성합니다. `SIGNUP_ACCESS_CODE`는 필수이며 비워 두면 Backend가 시작되지 않습니다. AI 연결에는 `AI_GATEWAY_URL`·`AI_GATEWAY_API_KEY`를 설정하고, `SESSION_COOKIE_SECURE`는 로컬 HTTP에서 `false`, HTTPS 운영 환경에서 `true`로 지정합니다.
 
+Gateway의 `/v1/chat/completions`(OCR·ASR 포함), `/v1/embeddings`, `/health/readiness`는 `Authorization: Bearer <AI_GATEWAY_API_KEY>`를 요구합니다. Gateway·Backend·Agent Worker·Batch Worker와 평가·벤치마크 클라이언트에 같은 비어 있지 않은 키를 설정한 뒤 함께 재시작합니다. Gateway 키가 없으면 해당 경로는 503, 호출자 키가 없거나 다르면 401을 반환합니다. Docker 생존 점검용 `/health`와 `/health/liveliness`는 인증 없이 사용할 수 있습니다. 자세한 이관 절차는 [라우팅 운영 계약](docs/routing-v2.md#5-readiness와-배포-불변식)을 참고합니다.
+
 로컬 프로세스와 Docker 컨테이너에서 사용하는 서비스 주소가 다르므로 예제 값을 그대로 사용하지 않습니다. 파일 변환에는 FFmpeg, YouTube 다운로드에는 Deno 등 [Backend 이미지](backend/Dockerfile)의 실행 의존성도 필요합니다.
 
 **개발용 DB와 저장소·큐 서비스가 준비된 뒤**, `.env`가 해당 개발 환경을 가리키는지 확인하고 실행합니다. 마이그레이션 명령은 지정한 DB의 스키마를 변경합니다.
