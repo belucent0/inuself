@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-import httpx
-import openai
 import anyio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -31,6 +28,7 @@ from services.routing import (
 from utils.response import openai_error
 from utils.inputs import InputError, read_body, validate_chat
 from utils.routing import RoutingValidationError, _extract_routing, has_routing
+from utils.upstream import _await_cleanup, _cleanup_stream, _do_cleanup_stream, _classify_upstream_error
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -38,7 +36,6 @@ router = APIRouter()
 _openai_clients: dict[tuple[str, str, float], AsyncOpenAI] = {}
 _CODEX_MODELS = set(CODEX_REASONING_EFFORT_MAP)
 _POLICY_SETTINGS = ProviderPool.load_settings()
-_STREAM_CLOSE_TIMEOUT = 5
 
 
 class EmptyUpstreamStream(RuntimeError):
@@ -127,7 +124,7 @@ async def chat_completions(request: Request):
             body["extra_body"] = extra_body
         from routes.media import handle_media_request
 
-        return await handle_media_request(body)
+        return await handle_media_request(body, getattr(request.app.state, "provider_pool", None))
 
     try:
         model = _validate_model(body)
@@ -401,48 +398,6 @@ def _sse(chunk: object) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-async def _close_stream(stream: object | None) -> None:
-    if stream is None:
-        return
-    closer = getattr(stream, "close", None) or getattr(stream, "aclose", None)
-    if closer:
-        try:
-            result = closer()
-            if inspect.isawaitable(result):
-                await result
-        except Exception as exc:
-            logger.debug("failed to close upstream stream exception=%s", type(exc).__name__)
-
-
-async def _cleanup_stream(stream, release=None):
-    await _await_cleanup(asyncio.create_task(_do_cleanup_stream(stream, release)))
-
-
-async def _await_cleanup(task):
-    cancellation = None
-    with anyio.CancelScope(shield=True):
-        while not task.done():
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError as exc:
-                cancellation = exc
-    task.result()
-    if cancellation is not None:
-        raise cancellation
-
-
-async def _do_cleanup_stream(stream, release=None):
-    with anyio.CancelScope(shield=True):
-        try:
-            if stream is not None:
-                await asyncio.wait_for(_close_stream(stream), _STREAM_CLOSE_TIMEOUT)
-        except TimeoutError:
-            logger.debug("upstream stream close timed out")
-        finally:
-            if release:
-                await release()
-
-
 def _check_deadline(deadline):
     if asyncio.get_running_loop().time() >= deadline:
         raise TimeoutError
@@ -450,23 +405,6 @@ def _check_deadline(deadline):
 
 def _timed_out():
     return openai_error("Gateway request deadline exceeded", "timed_out", 503, {"x-should-retry": "false"})
-
-
-def _classify_upstream_error(exc: BaseException) -> tuple[str, int]:
-    if isinstance(exc, (TimeoutError, httpx.TimeoutException, httpx.NetworkError)):
-        return "retryable", 503
-    status = getattr(exc, "status_code", None)
-    if status is None and isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-    if status in (400, 413, 422):
-        return "invalid_request", 400
-    if status == 429:
-        return "overloaded", 503
-    if status in (401, 403, 404) or (status is not None and status >= 500):
-        return "retryable", 503
-    if isinstance(exc, (openai.APIConnectionError, openai.APITimeoutError, openai.APIError)):
-        return "retryable", 503
-    return "retryable", 503
 
 
 def _provider_headers(provider: str, model: str, reason: str) -> dict[str, str]:

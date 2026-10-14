@@ -6,6 +6,7 @@ serverless 모드에서는 RunPod API로 위임합니다.
 """
 
 import json
+import asyncio
 import logging
 import sys
 import tempfile
@@ -23,6 +24,7 @@ from config import (
     OCR_BASE_URL,
     OCR_MODEL_NAME,
     OCR_REQUEST_TIMEOUT,
+    LLM_BASE_URL,
     ASR_BASE_URL,
     ASR_MODEL_NAME,
     ASR_REQUEST_TIMEOUT,
@@ -34,6 +36,8 @@ from config import (
 )
 from utils.response import build_openai_response, openai_error, upstream_error
 from utils.inputs import InputError, decode_audio
+from utils.upstream import _classify_upstream_error, _cleanup_stream
+from services.provider_pool import AdmissionTimeout, NoEligibleProvider, NoHealthyProvider, ProviderPool
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +138,7 @@ def _correct_vllm_chunk_timestamps(
     return corrected
 
 
-async def handle_media_request(body: dict) -> JSONResponse:
+async def handle_media_request(body: dict, pool: ProviderPool | None = None) -> JSONResponse:
     """미디어 요청 디스패처."""
     extra_body = body.get("extra_body", {})
     task_type = extra_body.get("task_type", "")
@@ -144,7 +148,7 @@ async def handle_media_request(body: dict) -> JSONResponse:
     elif task_type == "diarization":
         return await _handle_diarization(body)
     elif task_type == "ocr":
-        return await _handle_ocr(body)
+        return await _handle_ocr(body, pool)
     else:
         return JSONResponse(
             {"error": "Unknown task_type"},
@@ -254,7 +258,11 @@ async def _handle_diarization(body: dict) -> JSONResponse:
         return upstream_error(e, "Diarize", logger)
 
 
-async def _handle_ocr(body: dict) -> JSONResponse:
+def _inference_base(url: str) -> str:
+    return url.strip().rstrip("/").removesuffix("/v1")
+
+
+async def _handle_ocr(body: dict, pool: ProviderPool | None = None) -> JSONResponse:
     """OCR (이미지 텍스트 추출) 요청 처리.
 
     local-gpu에서는 ai-llm의 Gemma 4 vision으로 처리한다.
@@ -275,16 +283,41 @@ async def _handle_ocr(body: dict) -> JSONResponse:
         "temperature": body.get("temperature", 0.1),
     }
 
+    lease = None
+    client = None
     try:
         if DEPLOY_MODE == "serverless":
             return await _handle_ocr_serverless(body)
-        async with httpx.AsyncClient(timeout=OCR_REQUEST_TIMEOUT) as client:
-            r = await client.post(f"{OCR_BASE_URL}/v1/chat/completions", json=payload)
-            r.raise_for_status()
-            return JSONResponse(r.json())
-
+        gpu = pool.specs.get("gpu-llm") if pool is not None else None
+        shared = _inference_base(OCR_BASE_URL) == _inference_base(gpu.base_url if gpu else LLM_BASE_URL)
+        if shared:
+            if pool is None or pool.routes.get("ocr") != ("gpu-llm",):
+                return openai_error("shared OCR provider is not configured", "unavailable", 503)
+            lease = await pool.acquire("ocr", "none", "local_only")
+        client = httpx.AsyncClient(timeout=OCR_REQUEST_TIMEOUT)
+        r = await client.post(f"{_inference_base(OCR_BASE_URL)}/v1/chat/completions", json=payload)
+        r.raise_for_status()
+        result = r.json()
+        if lease:
+            await pool.record_success(lease.spec.name)
+        return JSONResponse(result)
+    except AdmissionTimeout:
+        return openai_error("shared OCR provider is busy", "overloaded", 503, {"Retry-After": "5"})
+    except (NoEligibleProvider, NoHealthyProvider):
+        return openai_error("shared OCR provider is unavailable", "unavailable", 503)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
+        kind, _ = _classify_upstream_error(e)
+        if lease and kind == "retryable" and (
+            isinstance(e, (TimeoutError, httpx.TimeoutException, httpx.NetworkError))
+            or isinstance(e, httpx.HTTPStatusError) and e.response.status_code >= 500
+        ):
+            await pool.record_failure(lease.spec.name)
         return upstream_error(e, "OCR", logger)
+    finally:
+        if client is not None or lease is not None:
+            await _cleanup_stream(client, lease.release if lease else None)
 
 
 def _extract_vision_content(messages: list) -> tuple[Optional[str], Optional[str]]:

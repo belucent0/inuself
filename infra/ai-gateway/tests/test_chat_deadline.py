@@ -14,6 +14,7 @@ from services.provider_pool import ProviderPool
 from services.routing import ProviderResult
 from test_chat_routing import FakeChunk, FakeClient, FakeResponse, FakeStream
 from test_provider_pool import _policy
+from utils import upstream
 
 
 class CountedStream(FakeStream):
@@ -248,7 +249,7 @@ class ChatDeadlineTest(unittest.IsolatedAsyncioTestCase):
     async def test_slow_upstream_close_is_bounded_and_slot_returns(self):
         stream = CountedStream(FakeChunk("npu-model"), slow_close=True)
         response = await self.response(stream)
-        with patch.object(chat, "_STREAM_CLOSE_TIMEOUT", 0.05):
+        with patch.object(upstream, "_STREAM_CLOSE_TIMEOUT", 0.05):
             await asyncio.wait_for(response.finish(), timeout=1)
         self.assertTrue(stream.close_cancelled)
         self.assertEqual(stream.close_calls, 1)

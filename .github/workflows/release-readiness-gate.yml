@@ -47,6 +47,7 @@ jobs:
             backend/tests/test_auth_boundaries.py \
             backend/tests/test_auth_session.py \
             worker/tests/test_event_publisher.py \
+            worker/tests/test_ocr_gateway_capacity.py \
             worker/tests/test_worker_ai_gateway_routing.py
 
   ai-gateway-npu-routing:

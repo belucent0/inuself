@@ -28,7 +28,8 @@ class InputGuardsTest(unittest.IsolatedAsyncioTestCase):
         self.stack.enter_context(patch.object(auth, "GATEWAY_API_KEY", "test-key"))
         for module in (chat, embeddings, media):
             self.stack.enter_context(patch.object(module, "DEPLOY_MODE", "local-gpu"))
-        self.stack.enter_context(patch.object(main.app.state, "provider_pool", object(), create=True))
+        self.stack.enter_context(patch.object(media, "OCR_BASE_URL", "http://separate-ocr"))
+        self.stack.enter_context(patch.object(main.app.state, "provider_pool", SimpleNamespace(specs={}, routes={}), create=True))
         self.success = {"model": "chat-model", "choices": [{"message": {"content": "answer"}}]}
         self.local = self.stack.enter_context(patch.object(chat, "_handle_local", AsyncMock(return_value=JSONResponse(self.success))))
         self.client = httpx.AsyncClient(

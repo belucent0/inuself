@@ -26,6 +26,10 @@ AI_GATEWAY_API_KEY = os.getenv("AI_GATEWAY_API_KEY", "")
 OCR_REQUEST_TIMEOUT = 300.0  # 5분
 
 
+class OCRGatewayRetryableError(RuntimeError):
+    """Shared OCR provider is busy or unavailable; retry the complete job."""
+
+
 def _call_ocr_via_ai_gateway(
     image_base64: str,
     prompt: str,
@@ -99,6 +103,14 @@ def _call_ocr_via_ai_gateway(
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(url, json=payload, headers=headers)
+            if response.status_code == 503:
+                try:
+                    error = response.json().get("error", {})
+                    error_type = error.get("type") if isinstance(error, dict) else None
+                except (ValueError, AttributeError):
+                    error_type = None
+                if error_type in ("overloaded", "unavailable"):
+                    raise OCRGatewayRetryableError(f"OCR gateway {error_type}")
             response.raise_for_status()
             result = response.json()
 
@@ -108,16 +120,18 @@ def _call_ocr_via_ai_gateway(
                 logger.info(f"[OCR Vision] OCR completed via AI Gateway")
                 return content.strip()
 
-            raise ValueError(f"Unexpected OCR response format: {result}")
+            raise ValueError("Unexpected OCR response format")
 
+    except OCRGatewayRetryableError:
+        raise
     except httpx.HTTPStatusError as e:
-        logger.error(f"[OCR Vision] AI Gateway HTTP error: {e.response.status_code} - {e.response.text}")
-        raise RuntimeError(f"OCR HTTP error: {e.response.status_code}")
+        logger.error(f"[OCR Vision] AI Gateway HTTP error: {e.response.status_code}")
+        raise RuntimeError(f"OCR HTTP error: {e.response.status_code}") from None
     except httpx.TimeoutException:
-        raise TimeoutError(f"OCR timeout after {timeout}s")
+        raise TimeoutError(f"OCR timeout after {timeout}s") from None
     except Exception as e:
-        logger.error(f"[OCR Vision] AI Gateway request failed: {e}")
-        raise RuntimeError(f"OCR request failed: {e}")
+        logger.error(f"[OCR Vision] AI Gateway request failed: {type(e).__name__}")
+        raise RuntimeError(f"OCR request failed: {type(e).__name__}") from None
 
 
 OcrMode = Literal["document", "portray"]
@@ -298,8 +312,10 @@ class OcrVisionProcessor:
             response = self._call_llm_api(prompt, image_base64)
             response_lower = response.strip().lower()
             return "yes" in response_lower or "표" in response_lower
+        except OCRGatewayRetryableError:
+            raise
         except Exception as e:
-            logger.warning(f"Table detection failed, assuming no table: {e}")
+            logger.warning(f"Table detection failed, assuming no table: {type(e).__name__}")
             return False
 
     def _call_llm_api(self, prompt: str, image_base64: str | None = None, file_id: str = None) -> str:
@@ -442,6 +458,8 @@ class OcrVisionProcessor:
                     page_progress = 25 + (page_num / len(images)) * 60
                     on_progress(page_progress, f"페이지 {page_num}/{len(images)} 완료")
 
+            except OCRGatewayRetryableError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to process page {page_num}: {e}")
                 page_texts.append("")
