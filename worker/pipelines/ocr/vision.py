@@ -64,11 +64,9 @@ def _call_ocr_via_ai_gateway(
     # OpenTelemetry trace context 주입 (Worker→AI Gateway 연결)
     try:
         from worker.telemetry import inject_trace_context
-        logger.info(f"[Telemetry Debug] Headers before injection: {headers}")
         inject_trace_context(headers)
-        logger.info(f"[Telemetry Debug] Headers after injection: {headers}")
     except Exception as e:
-        logger.error(f"[Telemetry Debug] Failed to inject trace context: {e}")
+        logger.error(f"[OCR Vision] Trace context injection failed: {type(e).__name__}")
         pass  # telemetry 미초기화 시 무시
 
     extra_body = {

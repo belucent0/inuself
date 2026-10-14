@@ -29,7 +29,7 @@ from worker.telemetry import get_trace_id, inject_trace_context
 
 # AI Gateway URL
 AI_GATEWAY_URL = os.getenv("AI_GATEWAY_URL", "http://ai-gateway:4000")
-AI_GATEWAY_API_KEY = os.getenv("AI_GATEWAY_API_KEY", "sk-1234")
+AI_GATEWAY_API_KEY = os.getenv("AI_GATEWAY_API_KEY", "")
 
 # Redis URL (잠금용)
 REDIS_URL = os.getenv("REDIS_URL", "redis://valkey:6379/0")

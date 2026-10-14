@@ -7,7 +7,7 @@ OpenAI-compatible API를 제공하면서 local-gpu 모드는 추론 컨테이너
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
 from config import DEPLOY_MODE, LLM_MODEL_NAME, RUNPOD_LLM_BASE_URL
@@ -15,6 +15,7 @@ from core.redis import close_async_redis
 from routes.chat import close_openai_clients, router as chat_router
 from routes.embeddings import router as embeddings_router
 from services.provider_pool import ProviderPool
+from utils.auth import require_gateway_key
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,8 +56,8 @@ app = FastAPI(
 
 # 라우터 등록
 # chat_router가 /v1/chat/completions를 처리하며, task_type에 따라 media.py로 내부 분기
-app.include_router(chat_router)
-app.include_router(embeddings_router)
+app.include_router(chat_router, dependencies=[Depends(require_gateway_key)])
+app.include_router(embeddings_router, dependencies=[Depends(require_gateway_key)])
 
 
 @app.get("/health/liveliness")
@@ -71,7 +72,7 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/health/readiness")
+@app.get("/health/readiness", dependencies=[Depends(require_gateway_key)])
 async def health_readiness():
     """Report initial-probe, route, circuit, and provider readiness."""
     if DEPLOY_MODE == "serverless":

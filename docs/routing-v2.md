@@ -93,6 +93,10 @@ serverless의 `auto` primary는 RunPod LLM이다. RunPod가 첫 출력 전에 �
 
 ## 5. Readiness와 배포 불변식
 
+`/v1/chat/completions`(media·vision 분기 포함), `/v1/embeddings`, `/health/readiness`는 `Authorization: Bearer <AI_GATEWAY_API_KEY>`로 인증한다. 인증은 요청 JSON 파싱과 Provider 호출 전에 실행된다. Gateway에 키가 없거나 공백뿐이면 HTTP 503, 인증 헤더가 없거나 중복·잘못된 형식·다른 키면 HTTP 401이다. 인증 오류는 키나 요청 원문 없이 `{"detail":"..."}`를 반환하고, 401에는 `WWW-Authenticate: Bearer`가 포함된다. `/health`와 `/health/liveliness`는 공개 생존 점검으로 계속 HTTP 200을 반환한다.
+
+기존 배포 이관 시 Gateway, Backend, Agent Worker, Batch Worker, 평가·벤치마크 클라이언트에 동일한 비어 있지 않은 `AI_GATEWAY_API_KEY`를 지정하고 함께 재시작한다. 이전의 ASR용 기본 키는 제거했다. `.env`와 키를 커밋하거나 요청 헤더를 로그에 남기지 않는다. 평가·벤치마크는 이미 키를 전달하지만 별도 실행 환경에도 값이 있어야 한다. 키 교체도 같은 절차를 따르며 여러 키의 동시 유효 기간은 제공하지 않는다.
+
 `GET /health/readiness`는 `status`, `mode`, `providers`, `routes`를 반환한다. Provider별 `health`, `inflight`, `max_inflight`, `model`, `circuit_open`과 route별 `ready|unavailable`을 확인한다.
 
 - healthy하고 circuit가 닫힌 local chat Provider가 있으면 HTTP 200
