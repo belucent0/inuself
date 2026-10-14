@@ -36,7 +36,7 @@ class GatewayAuthTest(unittest.IsolatedAsyncioTestCase):
             [("Authorization", f"Bearer {self.key}"), ("Authorization", "Bearer wrong-key")],
         )
         with (
-            patch.object(Request, "json", AsyncMock()) as parse,
+            patch.object(Request, "stream") as parse,
             patch.object(chat, "_handle_local", AsyncMock()) as local,
             patch.object(chat, "_handle_serverless", AsyncMock()) as remote,
             patch.object(media, "handle_media_request", AsyncMock()) as media_call,
@@ -54,7 +54,7 @@ class GatewayAuthTest(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(response.json(), {"detail": "Invalid Gateway credentials"})
                         self.assertNotIn(self.key, response.text)
                         self.assertNotIn("wrong-key", response.text)
-            parse.assert_not_awaited()
+            parse.assert_not_called()
             local.assert_not_awaited()
             remote.assert_not_awaited()
             media_call.assert_not_awaited()
@@ -67,7 +67,7 @@ class GatewayAuthTest(unittest.IsolatedAsyncioTestCase):
             with (
                 self.subTest(configured_key=configured_key),
                 patch.object(auth, "GATEWAY_API_KEY", configured_key),
-                patch.object(Request, "json", AsyncMock()) as parse,
+                patch.object(Request, "stream") as parse,
                 patch.object(chat, "_handle_local", AsyncMock()) as local,
                 patch.object(chat, "_handle_serverless", AsyncMock()) as remote,
                 patch.object(media, "handle_media_request", AsyncMock()) as media_call,
@@ -81,7 +81,7 @@ class GatewayAuthTest(unittest.IsolatedAsyncioTestCase):
                 for path in ("/health", "/health/liveliness"):
                     response = await self.client.get(path)
                     self.assertEqual((response.status_code, response.json()), (200, {"status": "ok"}))
-                parse.assert_not_awaited()
+                parse.assert_not_called()
                 local.assert_not_awaited()
                 remote.assert_not_awaited()
                 media_call.assert_not_awaited()
@@ -112,7 +112,7 @@ class GatewayAuthTest(unittest.IsolatedAsyncioTestCase):
                 response = await self.client.post("/v1/chat/completions", json=body, headers=headers)
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(media_call.await_args.args[0], body)
-            vision_body = {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,dGVzdA=="}}]}]}
+            vision_body = {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/dGVzdA=="}}]}]}
             response = await self.client.post("/v1/chat/completions", json=vision_body, headers=headers)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(media_call.await_count, 4)

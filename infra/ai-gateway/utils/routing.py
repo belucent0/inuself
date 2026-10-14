@@ -26,7 +26,7 @@ def _extract_routing(body: dict) -> dict[str, str]:
         raise RoutingValidationError("routing must be an object")
     unknown = set(raw) - _ROUTING_KEYS
     if unknown:
-        raise RoutingValidationError(f"unknown routing fields: {sorted(unknown)}")
+        raise RoutingValidationError("unknown routing fields")
 
     profile = {
         "workload": raw.get("workload", "chat"),

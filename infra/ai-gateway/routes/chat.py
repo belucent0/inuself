@@ -28,6 +28,7 @@ from services.routing import (
     get_serverless_llm_provider,
 )
 from utils.response import openai_error
+from utils.inputs import InputError, read_body, validate_chat
 from utils.routing import RoutingValidationError, _extract_routing, has_routing
 
 logger = logging.getLogger(__name__)
@@ -75,11 +76,10 @@ def _validate_model(body: dict) -> str:
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     try:
-        body = await request.json()
-    except (ValueError, UnicodeDecodeError):
-        return openai_error("request body must be valid JSON", "invalid_request", 400)
-    if not isinstance(body, dict):
-        return openai_error("request body must be a JSON object", "invalid_request", 400)
+        body = await read_body(request)
+        validate_chat(body)
+    except InputError as exc:
+        return openai_error(str(exc), "invalid_request", exc.status_code)
     extra_body = body.get("extra_body")
     task_type = extra_body.get("task_type") if isinstance(extra_body, dict) else None
 
@@ -156,7 +156,7 @@ async def _handle_local(
                 continue
             if saw_overload:
                 return _overloaded()
-            return openai_error(str(exc), "unavailable", 503)
+            return openai_error("no eligible provider is available", "unavailable", 503)
 
         attempted.add(lease.spec.name)
         effort = CODEX_REASONING_EFFORT_MAP[model] if use_explicit else (
@@ -177,9 +177,10 @@ async def _handle_local(
             raise
         except Exception as exc:
             kind, status = _classify_upstream_error(exc)
+            logger.warning("upstream request failed status=%s exception=%s", status, type(exc).__name__)
             if kind == "invalid_request":
                 await lease.release()
-                return openai_error(str(exc), kind, status)
+                return openai_error("upstream rejected the request", kind, status)
             if kind == "retryable":
                 await pool.record_failure(lease.spec.name)
             else:
@@ -235,8 +236,9 @@ async def _handle_serverless(body: dict, model: str, profile: dict[str, str]):
             raise
         except Exception as exc:
             kind, status = _classify_upstream_error(exc)
+            logger.warning("upstream request failed status=%s exception=%s", status, type(exc).__name__)
             if kind == "invalid_request":
-                return openai_error(str(exc), kind, status)
+                return openai_error("upstream rejected the request", kind, status)
             saw_overload |= kind == "overloaded"
             failed = True
             continue
@@ -325,11 +327,11 @@ def _stream_response(
             yield "data: [DONE]\n\n"
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             if on_failure:
                 await on_failure()
-            logger.exception("upstream stream failed after first output")
-            raise
+            logger.error("upstream stream failed after first output exception=%s", type(exc).__name__)
+            raise RuntimeError("upstream stream failed after first output") from None
         finally:
             await _close_stream(opened["upstream"])
             if release:
@@ -352,8 +354,8 @@ async def _close_stream(stream: object | None) -> None:
             result = closer()
             if inspect.isawaitable(result):
                 await result
-        except Exception:
-            logger.debug("failed to close upstream stream", exc_info=True)
+        except Exception as exc:
+            logger.debug("failed to close upstream stream exception=%s", type(exc).__name__)
 
 
 def _classify_upstream_error(exc: BaseException) -> tuple[str, int]:

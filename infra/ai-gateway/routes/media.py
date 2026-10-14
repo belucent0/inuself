@@ -5,7 +5,6 @@ local-gpu 모드에서는 ai-gateway가 추론 컨테이너를 httpx로 직접 �
 serverless 모드에서는 RunPod API로 위임합니다.
 """
 
-import base64
 import json
 import logging
 import sys
@@ -33,7 +32,8 @@ from config import (
     RUNPOD_ASR_BASE_URL,
     RUNPOD_VISION_BASE_URL,
 )
-from utils.response import build_openai_response
+from utils.response import build_openai_response, openai_error, upstream_error
+from utils.inputs import InputError, decode_audio
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +147,7 @@ async def handle_media_request(body: dict) -> JSONResponse:
         return await _handle_ocr(body)
     else:
         return JSONResponse(
-            {"error": f"Unknown task_type: {task_type}"},
+            {"error": "Unknown task_type"},
             status_code=400,
         )
 
@@ -164,18 +164,14 @@ async def _handle_asr(body: dict) -> JSONResponse:
     extra = body.get("extra_body", {})
     accuracy_mode = extra.get("accuracy_mode", "")  # 호환만, 분기 안 함
     language = extra.get("language", "ko")
-    audio_base64 = extra.get("audio_base64", "")
-
-    if not audio_base64:
-        return JSONResponse({"error": "audio_base64 is required"}, status_code=400)
-
-    # 서버리스 모드 (RunPod) — 별도 라우팅 유지
-    if DEPLOY_MODE == "serverless":
-        return await _handle_asr_serverless(audio_base64, language, accuracy_mode or "speed")
-
-    audio_bytes = base64.b64decode(audio_base64)
+    try:
+        audio_bytes = decode_audio(extra)
+    except InputError as exc:
+        return openai_error(str(exc), "invalid_request", exc.status_code)
 
     try:
+        if DEPLOY_MODE == "serverless":
+            return await _handle_asr_serverless(audio_bytes, language, accuracy_mode or "speed")
         async with httpx.AsyncClient(timeout=ASR_REQUEST_TIMEOUT) as client:
             files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
             data = {
@@ -220,12 +216,8 @@ async def _handle_asr(body: dict) -> JSONResponse:
         content = json.dumps(worker_result, ensure_ascii=False)
         return JSONResponse(build_openai_response(content, ASR_MODEL_NAME))
 
-    except httpx.HTTPStatusError as e:
-        logger.error(f"[ASR] upstream {e.response.status_code}: {e.response.text[:300]}")
-        return JSONResponse({"error": f"ASR upstream error: {e.response.status_code}"}, status_code=502)
     except Exception as e:
-        logger.error(f"[ASR] Error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return upstream_error(e, "ASR", logger)
 
 
 async def _handle_diarization(body: dict) -> JSONResponse:
@@ -234,14 +226,13 @@ async def _handle_diarization(body: dict) -> JSONResponse:
     refactor/inference: asr-diarize 컨테이너(FastAPI) 직접 호출.
     """
     extra = body.get("extra_body", {})
-    audio_base64 = extra.get("audio_base64", "")
     min_speakers = extra.get("min_speakers")
     max_speakers = extra.get("max_speakers")
 
-    if not audio_base64:
-        return JSONResponse({"error": "audio_base64 is required"}, status_code=400)
-
-    audio_bytes = base64.b64decode(audio_base64)
+    try:
+        audio_bytes = decode_audio(extra)
+    except InputError as exc:
+        return openai_error(str(exc), "invalid_request", exc.status_code)
 
     try:
         async with httpx.AsyncClient(timeout=DIARIZE_REQUEST_TIMEOUT) as client:
@@ -259,12 +250,8 @@ async def _handle_diarization(body: dict) -> JSONResponse:
         content = json.dumps(result, ensure_ascii=False)
         return JSONResponse(build_openai_response(content, result.get("model", "diarization")))
 
-    except httpx.HTTPStatusError as e:
-        logger.error(f"[Diarize] upstream {e.response.status_code}: {e.response.text[:300]}")
-        return JSONResponse({"error": f"Diarize upstream error: {e.response.status_code}"}, status_code=502)
     except Exception as e:
-        logger.error(f"[Diarize] Error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return upstream_error(e, "Diarize", logger)
 
 
 async def _handle_ocr(body: dict) -> JSONResponse:
@@ -280,10 +267,6 @@ async def _handle_ocr(body: dict) -> JSONResponse:
     if not image_url:
         return JSONResponse({"error": "No image found in messages"}, status_code=400)
 
-    # 서버리스 모드 (RunPod) — 별도 라우팅 유지
-    if DEPLOY_MODE == "serverless":
-        return await _handle_ocr_serverless(body)
-
     # 로컬 컨테이너 모드: ai-llm Gemma 4 vision 직접 호출
     payload = {
         "model": OCR_MODEL_NAME,
@@ -293,17 +276,15 @@ async def _handle_ocr(body: dict) -> JSONResponse:
     }
 
     try:
+        if DEPLOY_MODE == "serverless":
+            return await _handle_ocr_serverless(body)
         async with httpx.AsyncClient(timeout=OCR_REQUEST_TIMEOUT) as client:
             r = await client.post(f"{OCR_BASE_URL}/v1/chat/completions", json=payload)
             r.raise_for_status()
             return JSONResponse(r.json())
 
-    except httpx.HTTPStatusError as e:
-        logger.error(f"[OCR] upstream {e.response.status_code}: {e.response.text[:300]}")
-        return JSONResponse({"error": f"OCR upstream error: {e.response.status_code}"}, status_code=502)
     except Exception as e:
-        logger.error(f"[OCR] Error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return upstream_error(e, "OCR", logger)
 
 
 def _extract_vision_content(messages: list) -> tuple[Optional[str], Optional[str]]:
@@ -328,7 +309,7 @@ def _extract_vision_content(messages: list) -> tuple[Optional[str], Optional[str
 
 
 async def _handle_asr_serverless(
-    audio_base64: str,
+    audio_bytes: bytes,
     language: str,
     accuracy_mode: str,
 ) -> JSONResponse:
@@ -337,7 +318,6 @@ async def _handle_asr_serverless(
 
     client = AsyncOpenAI(base_url=RUNPOD_ASR_BASE_URL, api_key=RUNPOD_API_KEY)
 
-    audio_bytes = base64.b64decode(audio_base64)
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     tmp.write(audio_bytes)
     tmp.close()

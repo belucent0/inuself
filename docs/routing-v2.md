@@ -31,6 +31,23 @@ Backend의 `routing_profile(..., allow_remote=None)`과 Worker의 자동 요약�
 
 직접 Python으로 serverless Backend·Worker를 실행할 때는 `DEPLOY_MODE=serverless`를 **프로세스 환경변수**로 지정한다. 설정 모델의 `.env` 읽기만으로 `os.environ`이 채워지지는 않는다. Compose는 기존 `env_file`을 통해 프로세스 환경에 전달한다. 별도 scope 설정 키는 추가하지 않는다.
 
+### 입력 한도와 미디어 형식
+
+Gateway는 인증 이후 요청 stream을 읽으며 `Content-Length` 선검사와 실제 누적 바이트를 모두 확인한다. 누락되거나 실제보다 작은 길이 헤더도 실측 한도를 우회하지 못한다. JSON은 객체여야 하며 잘못된 JSON·64단계를 넘는 객체/배열 중첩·필드 타입 오류는 HTTP 400, 크기 초과는 HTTP 413이다.
+
+| 항목 | 한도·형식 |
+|---|---|
+| 전체 JSON 요청 | 300 MiB, 객체/배열 중첩 최대 64단계 |
+| 텍스트 | 메시지 문자열·text part 합계 또는 embedding 입력 문자열 배열 합계 1,000,000자 |
+| 오디오 | 엄격한 base64, 디코딩 후 최대 200 MiB. 인코딩 길이를 먼저 제한하고 ASR/화자 분리에서 검증한 bytes를 사용 |
+| 이미지 | `data:image/jpeg;base64`, `data:image/png;base64`, `data:image/webp;base64`만 허용. 디코딩된 이미지 합계 24 MiB와 해당 헤더 서명 검사 |
+| 출력 | `max_tokens` 정수 1~32768, bool 제외. 기존 정상 요청의 8192는 허용 |
+| 기타 필드 | `stream` bool, `temperature` 유한한 숫자, `task_type` 문자열, `language` 문자열/null, 화자 수는 양의 정수 및 최소≤최대 |
+
+원격 HTTP(S)·file 이미지 URL은 추론 서버로 전달하지 않는다. 일반 chat의 비어 있는 messages와 빈 embedding 입력은 HTTP 400이며, 기존 ASR/화자 분리의 빈 messages는 허용한다. developer·assistant·user 등 역할과 정상 text/image 메시지, assistant tool-call의 null content는 유지한다.
+
+이미지의 바이트/서명 검사는 압축 해제 뒤 픽셀 수를 제한하지 않는다. 이미지 작업량이 늘면 추론 엔진의 decoder/pixel 한도를 별도로 검증한다. Gateway는 한도 안의 JSON과 미디어를 메모리에 보관하므로, 이 제한이 동시 요청의 총 메모리 상한을 보장하지는 않는다. 오디오 base64 decode는 ASR의 local/serverless 분기 전에 한 번 실행하고 재사용한다.
+
 Backend의 `resolve_reasoning()`은 `auto`를 다음 순서로 한 번 해석한다.
 
 1. 명시된 non-auto 값
@@ -58,6 +75,7 @@ X-Routing-Reason: preferred
 ```
 
 - 잘못된 요청과 upstream 400/413/422: HTTP 400 `invalid_request`, fallback·circuit 증가 없음
+- 입력 크기 한도 초과: HTTP 413 `invalid_request`, Provider 호출 없음
 - `local_only`와 원격 실행 경로 충돌: HTTP 403 `forbidden`, Provider 호출·fallback·circuit 증가 없음
 - 적격 Provider 없음 또는 모두 unhealthy: HTTP 503 `unavailable`, caller는 즉시 실패
 - 모든 healthy Provider가 admission timeout까지 full: HTTP 503 `overloaded`, `Retry-After: 5`
@@ -65,6 +83,8 @@ X-Routing-Reason: preferred
 - 401/403/404, 연결/요청/첫 출력 timeout, 5xx: Provider failure로 기록하고 다음 적격 Provider 시도
 
 Backend와 Worker는 typed `overloaded`만 기존 retry 상한 안에서 `Retry-After`를 존중한다. `unavailable`은 재시도하지 않는다.
+
+Provider 오류 응답 본문·예외 문자열·요청 원문·키는 공개 오류와 Gateway 로그에 출력하지 않는다. chat은 기존 오류 분류와 재시도 동작을 유지하며 정적 메시지를 반환한다. media·embedding의 local/serverless upstream 실패는 HTTP 502 `upstream_error`로 반환한다. 로그에는 작업 이름, HTTP 상태와 예외 종류만 남긴다. 첫 SSE 출력 뒤 실패는 정적 stream 오류로 종료하고 원문 traceback을 로그에 남기지 않는다.
 
 ## 3. 정책과 ProviderPool
 
