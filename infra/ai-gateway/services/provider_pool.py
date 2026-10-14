@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import httpx
+from middleware.telemetry import annotate_routing
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +425,7 @@ class ProviderPool:
                         elif preceding_busy:
                             reason = "capacity-overflow"
                     state.inflight += 1
+                    annotate_routing(provider=spec.name, model=spec.model, reason=reason)
                     if half_open:
                         state.half_open_probe = True
                     logger.info(

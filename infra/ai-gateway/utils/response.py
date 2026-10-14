@@ -4,6 +4,7 @@ import time
 import uuid
 
 from fastapi.responses import JSONResponse
+from middleware.telemetry import annotate_error
 
 
 def build_openai_response(
@@ -46,6 +47,7 @@ def openai_error(
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     """Return the gateway's common OpenAI-compatible error envelope."""
+    annotate_error(error_type, status_code)
     return JSONResponse(
         {"error": {"message": message, "type": error_type}},
         status_code=status_code,

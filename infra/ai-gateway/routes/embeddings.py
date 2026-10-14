@@ -22,6 +22,7 @@ from config import (
 from utils.response import openai_error, upstream_error
 from utils.inputs import InputError, read_body, validate_embedding
 from utils.routing import RoutingValidationError, _extract_routing, has_routing
+from middleware.telemetry import annotate_routing
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -40,6 +41,7 @@ async def embeddings(request: Request):
             profile = _extract_routing(body)
         except RoutingValidationError as exc:
             return openai_error(str(exc), "invalid_request", 400)
+        annotate_routing(execution_scope=profile["execution_scope"])
         if profile["execution_scope"] == "local_only" and DEPLOY_MODE == "serverless":
             return openai_error("local_only forbids remote execution", "forbidden", 403)
     text = body.get("input", "")

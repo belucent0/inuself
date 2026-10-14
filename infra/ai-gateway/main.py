@@ -5,6 +5,7 @@ OpenAI-compatible API를 제공하면서 local-gpu 모드는 추론 컨테이너
 """
 
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -15,6 +16,7 @@ from core.redis import close_async_redis
 from routes.chat import close_openai_clients, router as chat_router
 from routes.embeddings import router as embeddings_router
 from services.provider_pool import ProviderPool
+from middleware.telemetry import GatewayTracingMiddleware, setup_telemetry, shutdown_telemetry
 from utils.auth import require_gateway_key
 
 logging.basicConfig(
@@ -30,6 +32,7 @@ async def lifespan(app: FastAPI):
     logger.info("[AI Gateway] Starting up...")
     pool = None
     try:
+        await asyncio.to_thread(setup_telemetry)
         if DEPLOY_MODE == "local-gpu":
             pool = ProviderPool()
             app.state.provider_pool = pool
@@ -43,8 +46,11 @@ async def lifespan(app: FastAPI):
             try:
                 await close_openai_clients()
             finally:
-                await close_async_redis()
-                logger.info("[AI Gateway] Shut down.")
+                try:
+                    await close_async_redis()
+                finally:
+                    await asyncio.to_thread(shutdown_telemetry)
+                    logger.info("[AI Gateway] Shut down.")
 
 
 app = FastAPI(
@@ -53,6 +59,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.add_middleware(GatewayTracingMiddleware)
 
 # 라우터 등록
 # chat_router가 /v1/chat/completions를 처리하며, task_type에 따라 media.py로 내부 분기

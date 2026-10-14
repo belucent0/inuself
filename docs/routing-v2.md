@@ -180,3 +180,15 @@ GPU 장애로 summary route만 unavailable이면 degraded/200이므로 HTTP 상�
 Judge는 suite 시작 전 합성 질문으로 한 번 확인한다. 비활성화되었거나 대상 turn이 없으면 호출하지 않는다. 이 확인이 실패하거나 turn 채점이 실패하면 남은 Judge 호출을 중단하고 기존 규칙 검증은 계속한다. 연결과 응답 본문 수신을 합쳐 호출당 30초로 제한한다. HTTP 오류 진단은 상태와 허용된 Gateway 오류 유형, 연결 오류는 예외 종류만 출력하며 원문·키·URL을 출력하지 않는다.
 
 채점 응답은 내부 `<think>` 태그 제거 후 `SCORE: 0.0~1.0`과 비어 있지 않은 한 줄 `REASON`이 각각 한 번만 있어야 한다. 중복·추가 텍스트·NaN/Inf·범위 밖 점수·토큰 한도로 잘린 응답은 `format_error`다. HTTP 성공 응답의 Provider와 모델은 길이와 허용 문자를 검사해 형식 실패에서도 기록하며, 식별할 수 없으면 `unknown`으로 표시한다. 결과에는 preflight 상태와 실제 turn의 성공·오류·미실행 수를 분리한다. Judge 점수와 오류는 계속 **정보용**이며 CI 종료 코드는 기존 규칙 검증 결과로만 정한다.
+
+## 8. Gateway 기본 trace
+
+기존 `OTEL_EXPORTER_OTLP_ENDPOINT`가 설정돼 있으면 Gateway 시작 시 explicit OpenTelemetry provider와 HTTP OTLP exporter를 초기화하고 종료 시 flush/shutdown한다. Endpoint가 없거나 초기화가 실패하면 tracing을 끄고 요청을 그대로 처리한다. 전역 tracer provider·propagator를 바꾸거나 HTTPX·Redis·FastAPI 자동 계측을 켜지 않는다. Compose의 기존 Tempo 주소를 사용하며 별도 설정 키와 관리 화면은 추가하지 않는다.
+
+`/v1/chat/completions`, `/v1/embeddings`만 요청당 하나의 server span을 만들고 실제 ASGI 응답 종료·취소까지 유지한다. Health·readiness·알 수 없는 경로는 추적하지 않는다. 표준 HTTP method와 고정 route, HTTP 상태, 검증된 workload/scope, 설정된 Provider/model, 코드에 정의한 선택 사유만 attribute로 남긴다. Upstream이 임의로 반환한 model 문자열은 기록하지 않는다. 오류는 정적인 예외 종류와 ERROR 상태만 기록하며 exception event·stacktrace·상태 설명은 만들지 않는다.
+
+정적인 Gateway 오류 분류는 `gateway.error_type`, 예외 종류는 별도 `error.type`으로 구분한다. HTTP 4xx는 server ERROR로 표시하지 않는다. 첫 헤더 이후의 stream deadline은 HTTP 상태가 이미 200이어도 `gateway.error_type=timed_out`과 ERROR로 남기므로 정상 완료와 구분할 수 있다. 이 표시는 응답 본문이나 재시도 정책을 변경하지 않는다.
+
+분산 연결은 단일한 유효 `traceparent`만 빈 Context에서 추출한다. `tracestate`, `baggage`, 기존 현재 Context는 상속하지 않는다. Resource도 service name/version/environment 세 값으로 직접 만들며 자동 environment resource·프로세스 인자 수집을 사용하지 않는다. Body·header·query·원격 주소·DB statement·파일/회원 식별자는 수집하지 않는다.
+
+추론 서버 내부 처리나 세부 단계별 span은 이번 범위에 포함하지 않는다. Trace 전송은 기존 BatchSpanProcessor가 처리하며 Collector 장애 시 trace가 유실될 수 있다. 자동 테스트는 메모리 exporter로 수집 내용과 종료 처리를 검증한다. 실제 Tempo 수신·보관 정책은 운영 환경에서 별도 확인한다.

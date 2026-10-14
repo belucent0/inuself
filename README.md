@@ -129,6 +129,8 @@ API 서버만 실행해도 AI 작업이 처리되는 것은 아닙니다. 대화
 
 Backend 컨테이너는 `uv.lock`으로 런타임 의존성을 설치하고 시작 시 DB 마이그레이션을 실행합니다. 실제 구성은 [Compose](docker-compose.yml)와 각 서비스의 Dockerfile을 확인하며, [과거 설치 기록](docs/archived/README-legacy.md)은 현재 설치 절차가 아닌 참고 자료로 사용합니다.
 
+AI Gateway는 기존 `OTEL_EXPORTER_OTLP_ENDPOINT`가 있을 때 추론 요청의 기본 trace를 전송합니다. 요청·응답 본문, 헤더, query, 예외 원문은 수집하지 않으며 경로·상태·검증한 라우팅 값·설정된 모델/Provider만 기록합니다. Endpoint가 없으면 꺼져 있고, Collector 장애가 추론을 막도록 연결하지 않습니다. 범위와 운영 제한은 [라우팅 계약](docs/routing-v2.md#8-gateway-기본-trace)을 참고합니다.
+
 ## 검증과 CI
 
 Frontend 디렉터리에서 CI와 같은 검사 명령을 실행할 수 있습니다.

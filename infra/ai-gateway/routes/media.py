@@ -38,6 +38,7 @@ from utils.response import build_openai_response, openai_error, upstream_error
 from utils.inputs import InputError, decode_audio
 from utils.upstream import _classify_upstream_error, _cleanup_stream
 from services.provider_pool import AdmissionTimeout, NoEligibleProvider, NoHealthyProvider, ProviderPool
+from middleware.telemetry import annotate_routing
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +296,7 @@ async def _handle_ocr(body: dict, pool: ProviderPool | None = None) -> JSONRespo
                 return openai_error("shared OCR provider is not configured", "unavailable", 503)
             lease = await pool.acquire("ocr", "none", "local_only")
         client = httpx.AsyncClient(timeout=OCR_REQUEST_TIMEOUT)
+        annotate_routing(model=OCR_MODEL_NAME)
         r = await client.post(f"{_inference_base(OCR_BASE_URL)}/v1/chat/completions", json=payload)
         r.raise_for_status()
         result = r.json()
