@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Literal, TypedDict
 
 
@@ -47,9 +48,11 @@ def resolve_reasoning(
 def routing_profile(
     workload: Workload,
     reasoning: ResolvedReasoning,
-    allow_remote: bool = False,
+    allow_remote: bool | None = None,
 ) -> RoutingProfile:
     """Build the Gateway RoutingProfile payload."""
+    if allow_remote is None:
+        allow_remote = os.getenv("DEPLOY_MODE", "local-gpu") == "serverless"
     return {
         "workload": workload,
         "reasoning": reasoning,

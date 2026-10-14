@@ -29,3 +29,14 @@ def test_reasoning_display_and_profile_contract():
         "reasoning": "high",
         "execution_scope": "remote_allowed",
     }
+
+
+@pytest.mark.parametrize("deploy_mode", ["local-gpu", "serverless"])
+@pytest.mark.parametrize("allow_remote", [None, False, True])
+def test_scope_default_uses_deployment_but_explicit_choice_wins(monkeypatch, deploy_mode, allow_remote):
+    monkeypatch.setenv("DEPLOY_MODE", deploy_mode)
+    expected_remote = deploy_mode == "serverless" if allow_remote is None else allow_remote
+    profile = routing_profile("summary", "low", allow_remote)
+    assert profile["execution_scope"] == ("remote_allowed" if expected_remote else "local_only")
+    if allow_remote is None:
+        assert routing_profile("summary", "low") == profile

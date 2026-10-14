@@ -19,6 +19,8 @@ from config import (
     RUNPOD_API_KEY,
     RUNPOD_EMBED_BASE_URL,
 )
+from utils.response import openai_error
+from utils.routing import RoutingValidationError, _extract_routing, has_routing
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -27,7 +29,19 @@ router = APIRouter()
 @router.post("/v1/embeddings")
 async def embeddings(request: Request):
     """OpenAI-compatible embeddings 엔드포인트."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        return openai_error("request body must be valid JSON", "invalid_request", 400)
+    if not isinstance(body, dict):
+        return openai_error("request body must be a JSON object", "invalid_request", 400)
+    if has_routing(body):
+        try:
+            profile = _extract_routing(body)
+        except RoutingValidationError as exc:
+            return openai_error(str(exc), "invalid_request", 400)
+        if profile["execution_scope"] == "local_only" and DEPLOY_MODE == "serverless":
+            return openai_error("local_only forbids remote execution", "forbidden", 403)
     text = body.get("input", "")
 
     if DEPLOY_MODE == "serverless":

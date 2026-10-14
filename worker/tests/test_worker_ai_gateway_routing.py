@@ -109,3 +109,49 @@ def test_worker_retries_overloaded_using_retry_after(monkeypatch):
     ) == "answer"
     assert calls == 2
     assert sleeps == [4.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deploy_mode", ["local-gpu", "serverless"])
+async def test_summary_processor_uses_deployment_scope(monkeypatch, deploy_mode):
+    from worker.processors import llm_processor
+
+    captured = {}
+
+    def completion(**kwargs):
+        captured.update(kwargs)
+        return "summary"
+
+    monkeypatch.setenv("DEPLOY_MODE", deploy_mode)
+    monkeypatch.setattr(gateway, "request_ai_gateway_completion", completion)
+    for name in ("publish_llm_started", "publish_llm_completed", "publish_llm_failed", "upload_json"):
+        monkeypatch.setattr(llm_processor, name, lambda *args, **kwargs: None)
+    await llm_processor._process_job_async(file_id=1, messages=[{"role": "user", "content": "hello"}])
+    assert captured["routing"] == {
+        "workload": "summary", "reasoning": "low",
+        "execution_scope": "remote_allowed" if deploy_mode == "serverless" else "local_only",
+    }
+
+
+@pytest.mark.parametrize("deploy_mode", ["local-gpu", "serverless"])
+def test_search_pipeline_uses_deployment_scope(monkeypatch, deploy_mode):
+    from worker.pipelines.search import pipeline
+
+    captured = {}
+
+    def completion(**kwargs):
+        captured.update(kwargs)
+        return "summary [1]"
+
+    monkeypatch.setenv("DEPLOY_MODE", deploy_mode)
+    monkeypatch.setattr(pipeline, "get_settings", _settings)
+    monkeypatch.setattr(pipeline, "get_searxng_client", lambda: SimpleNamespace(
+        search=lambda *args, **kwargs: [pipeline.SearchResult("title", "https://example.test", "snippet", "test", 1)]
+    ))
+    monkeypatch.setattr(pipeline, "request_ai_gateway_completion", completion)
+    result = pipeline.deep_search("hello")
+    assert result.summary == "summary [1]"
+    assert captured["routing"] == {
+        "workload": "summary", "reasoning": "low",
+        "execution_scope": "remote_allowed" if deploy_mode == "serverless" else "local_only",
+    }

@@ -25,7 +25,11 @@ Backend와 Worker는 OpenAI SDK의 `extra_body={"routing": profile}`을 사용�
 | `reasoning` | `auto`, `none`, `low`, `medium`, `high` | `medium` | 추론 의도. raw `auto`는 Gateway에서 `medium`으로 정규화 |
 | `execution_scope` | `local_only`, `remote_allowed` | `local_only` | optional Codex 사용 허용 여부 |
 
-`model` 미지정·빈 문자열·`auto`는 위 profile 라우팅을 사용한다. 명시 모델은 운영용 `codex-high`, `codex-medium`, `codex-low`만 허용하며 명시적 원격 실행 동의로 본다. 물리 모델명이나 다른 별칭은 HTTP 400이다. `routing`이 객체가 아니거나 enum 밖 값·알 수 없는 필드를 가지면 HTTP 400이다. media `extra_body.task_type`과 vision 메시지는 이 검증보다 먼저 기존 media 경로로 분기한다.
+`model` 미지정·빈 문자열·`auto`는 위 profile 라우팅을 사용한다. 명시 모델은 운영용 `codex-high`, `codex-medium`, `codex-low`만 허용하며 `execution_scope=remote_allowed`를 함께 지정해야 한다. 물리 모델명이나 다른 별칭은 HTTP 400이다. `routing`이 객체가 아니거나 enum 값이 문자열이 아니거나 허용 범위 밖이면 HTTP 400이다. `local_only`는 모델 선택보다 우선하며 명시 Codex 및 serverless 실행을 Provider 호출 전에 HTTP 403으로 차단한다. media `extra_body.task_type`, vision 메시지, embedding도 `routing`이 있으면 같은 검증과 scope를 적용한다. 기존 media·embedding의 `routing` 없는 요청은 배포 모드에 따른 종전 동작을 유지한다.
+
+Backend의 `routing_profile(..., allow_remote=None)`과 Worker의 자동 요약·검색은 기존 `DEPLOY_MODE`로 기본 scope를 정한다(`local-gpu`→`local_only`, `serverless`→`remote_allowed`). 명시 `False`는 어느 배포에서든 `local_only`, 명시 `True`는 `remote_allowed`다. AI 채팅의 controller와 generator·reasoner metadata는 기존 기본 `False`를 유지한다. 따라서 serverless AI 채팅은 UI의 외부 모델 허용을 켜야 하며, `False` 요청을 배포 모드만으로 외부 실행으로 바꾸지 않는다. Judge 평가는 온프레미스 `local_only`를 유지하므로 serverless Gateway에서 거절되는 것이 정상이다. Codex capacity 벤치마크는 명시 `remote_allowed`를 전달한다.
+
+직접 Python으로 serverless Backend·Worker를 실행할 때는 `DEPLOY_MODE=serverless`를 **프로세스 환경변수**로 지정한다. 설정 모델의 `.env` 읽기만으로 `os.environ`이 채워지지는 않는다. Compose는 기존 `env_file`을 통해 프로세스 환경에 전달한다. 별도 scope 설정 키는 추가하지 않는다.
 
 Backend의 `resolve_reasoning()`은 `auto`를 다음 순서로 한 번 해석한다.
 
@@ -50,10 +54,11 @@ X-Routing-Reason: preferred
 `X-Routing-Reason`은 `preferred`, `capacity-overflow`, `unhealthy-fallback`, `error-fallback`, `explicit-codex` 중 하나다. 오류 body는 OpenAI 호환 형식이다.
 
 ```json
-{"error":{"message":"...","type":"invalid_request|unavailable|overloaded"}}
+{"error":{"message":"...","type":"invalid_request|forbidden|unavailable|overloaded"}}
 ```
 
 - 잘못된 요청과 upstream 400/413/422: HTTP 400 `invalid_request`, fallback·circuit 증가 없음
+- `local_only`와 원격 실행 경로 충돌: HTTP 403 `forbidden`, Provider 호출·fallback·circuit 증가 없음
 - 적격 Provider 없음 또는 모두 unhealthy: HTTP 503 `unavailable`, caller는 즉시 실패
 - 모든 healthy Provider가 admission timeout까지 full: HTTP 503 `overloaded`, `Retry-After: 5`
 - upstream 429: 현재 Provider를 제외하고 fallback 가능, circuit 증가 없음
@@ -87,9 +92,9 @@ Probe health와 inference circuit는 독립적이다. model ID probe가 2회 연
 
 ## 4. Local과 serverless
 
-local-gpu의 자동 route는 `chat: npu-chat → gpu-llm → codex`, `summary: gpu-llm`이다. Codex는 `high + remote_allowed`에서만 자동 후보가 된다. 명시 `codex-*`는 profile scope와 무관하게 원격 동의를 내포하지만 Codex capacity/circuit는 우회하지 않으며 첫 출력 전 실패 시 GPU high/local로 한 번 fallback한다.
+local-gpu의 자동 route는 `chat: npu-chat → gpu-llm → codex`, `summary: gpu-llm`이다. Codex는 `high + remote_allowed`에서만 자동 후보가 된다. 명시 `codex-*`도 `remote_allowed`가 필요하며 Codex capacity/circuit는 우회하지 않는다. 첫 출력 전 실패 시 GPU high/local로 한 번 fallback한다.
 
-serverless의 `auto` primary는 RunPod LLM이다. RunPod가 첫 출력 전에 실패하고 `high + remote_allowed`인 경우만 Codex로 fallback한다. 명시 Codex 실패는 RunPod로 fallback한다. serverless에는 이번 버전의 in-process capacity pool을 적용하지 않지만 동일한 실제 모델명·응답 헤더 계약을 지킨다.
+serverless의 LLM 요청은 `remote_allowed`가 필요하며 `auto` primary는 RunPod LLM이다. RunPod가 첫 출력 전에 실패하고 `high + remote_allowed`인 경우만 Codex로 fallback한다. 명시 Codex 실패는 RunPod로 fallback한다. serverless에는 이번 버전의 in-process capacity pool을 적용하지 않지만 동일한 실제 모델명·응답 헤더 계약을 지킨다.
 
 ## 5. Readiness와 배포 불변식
 
