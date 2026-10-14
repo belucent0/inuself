@@ -5,6 +5,7 @@ SearXNG로 검색 → AI Gateway으로 요약 → Citation 매핑
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -152,7 +153,7 @@ def deep_search(
             routing={
                 "workload": "summary",
                 "reasoning": "low",
-                "execution_scope": "local_only",
+                "execution_scope": "remote_allowed" if os.getenv("DEPLOY_MODE", "local-gpu") == "serverless" else "local_only",
             },
             messages=messages,
             temperature=temperature,

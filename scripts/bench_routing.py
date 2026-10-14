@@ -110,12 +110,11 @@ def _payload(
         "temperature": 0,
         "max_tokens": max_tokens,
     }
-    if model == "auto":
-        body["routing"] = {
-            "workload": "chat",
-            "reasoning": reasoning,
-            "execution_scope": execution_scope,
-        }
+    body["routing"] = {
+        "workload": "chat",
+        "reasoning": reasoning,
+        "execution_scope": execution_scope,
+    }
     return body
 
 
@@ -571,7 +570,7 @@ async def _scenario_s7(
         "S7",
         "codex",
         2,
-        _payload(CODEX_HOLDER_PROMPT, model="codex-low", max_tokens=4096),
+        _payload(CODEX_HOLDER_PROMPT, model="codex-low", execution_scope="remote_allowed", max_tokens=4096),
         holder_deadline,
     )
     stop = asyncio.Event()
@@ -587,7 +586,7 @@ async def _scenario_s7(
                 gateway,
                 "S7",
                 "third-explicit-codex",
-                _payload("Reply with only OK.", model="codex-low"),
+                _payload("Reply with only OK.", model="codex-low", execution_scope="remote_allowed"),
             )
         )
         done, _ = await asyncio.wait({third}, timeout=1.0)

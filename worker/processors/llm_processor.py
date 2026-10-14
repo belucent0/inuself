@@ -6,6 +6,7 @@ Backend에서 완성된 프롬프트(messages)를 받아 LLM에 던지고, Raw �
 백엔드 DB에 직접 접근하지 않습니다.
 """
 
+import os
 from uuid import uuid4
 
 from worker.config import get_settings
@@ -88,7 +89,7 @@ async def _process_job_async(
             routing={
                 "workload": "summary",
                 "reasoning": "low",
-                "execution_scope": "local_only",
+                "execution_scope": "remote_allowed" if os.getenv("DEPLOY_MODE", "local-gpu") == "serverless" else "local_only",
             },
         )
 

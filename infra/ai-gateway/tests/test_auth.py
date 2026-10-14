@@ -99,13 +99,13 @@ class GatewayAuthTest(unittest.IsolatedAsyncioTestCase):
             patch.object(media, "handle_media_request", AsyncMock(return_value=success)) as media_call,
             patch.object(embeddings, "_handle_serverless", AsyncMock(return_value=JSONResponse({"data": []}))) as embed_call,
         ):
-            chat_body = {"model": "auto", "messages": [{"role": "user", "content": "hello"}], "stream": True}
+            chat_body = {"model": "auto", "messages": [{"role": "user", "content": "hello"}], "stream": True, "routing": {"execution_scope": "remote_allowed"}}
             response = await self.client.post("/v1/chat/completions", json=chat_body, headers=headers)
             self.assertEqual(response.status_code, 200)
             chat_call.assert_awaited_once()
             self.assertEqual(chat_call.await_args.args[0], chat_body)
             self.assertEqual(chat_call.await_args.args[1], "auto")
-            self.assertEqual(chat_call.await_args.args[2]["execution_scope"], "local_only")
+            self.assertEqual(chat_call.await_args.args[2]["execution_scope"], "remote_allowed")
 
             for task in ("asr", "diarization", "ocr"):
                 body = {"messages": [], "extra_body": {"task_type": task}}

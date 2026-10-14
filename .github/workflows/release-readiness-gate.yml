@@ -34,6 +34,8 @@ jobs:
             backend/tests/services/test_agent_dispatcher.py \
             backend/tests/services/test_agent_stream_relay.py \
             backend/tests/services/test_ai_gateway_routing.py \
+            backend/tests/test_reasoning.py \
+            backend/tests/test_gateway_benchmark_contract.py \
             backend/tests/services/test_block_generator.py \
             backend/tests/services/test_content_summary_regeneration.py \
             backend/tests/services/test_summary_renderer.py \

@@ -28,21 +28,14 @@ from services.routing import (
     get_serverless_llm_provider,
 )
 from utils.response import openai_error
+from utils.routing import RoutingValidationError, _extract_routing, has_routing
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _openai_clients: dict[tuple[str, str, float], AsyncOpenAI] = {}
-_ROUTING_KEYS = {"workload", "reasoning", "execution_scope"}
-_WORKLOADS = {"chat", "summary"}
-_REASONING = {"auto", "none", "low", "medium", "high"}
-_SCOPES = {"local_only", "remote_allowed"}
 _CODEX_MODELS = set(CODEX_REASONING_EFFORT_MAP)
 _POLICY_SETTINGS = ProviderPool.load_settings()
-
-
-class RoutingValidationError(ValueError):
-    pass
 
 
 class EmptyUpstreamStream(RuntimeError):
@@ -65,34 +58,6 @@ async def close_openai_clients() -> None:
     _openai_clients.clear()
     for client in clients:
         await client.close()
-
-
-def _extract_routing(body: dict) -> dict[str, str]:
-    if "routing" in body:
-        raw = body["routing"]
-    else:
-        extra = body.get("extra_body")
-        raw = extra.get("routing") if isinstance(extra, dict) and "routing" in extra else {}
-    if not isinstance(raw, dict):
-        raise RoutingValidationError("routing must be an object")
-    unknown = set(raw) - _ROUTING_KEYS
-    if unknown:
-        raise RoutingValidationError(f"unknown routing fields: {sorted(unknown)}")
-
-    profile = {
-        "workload": raw.get("workload", "chat"),
-        "reasoning": raw.get("reasoning", "medium"),
-        "execution_scope": raw.get("execution_scope", "local_only"),
-    }
-    if profile["workload"] not in _WORKLOADS:
-        raise RoutingValidationError("routing.workload must be chat or summary")
-    if profile["reasoning"] not in _REASONING:
-        raise RoutingValidationError("routing.reasoning has an invalid value")
-    if profile["execution_scope"] not in _SCOPES:
-        raise RoutingValidationError("routing.execution_scope has an invalid value")
-    if profile["reasoning"] == "auto":
-        profile["reasoning"] = "medium"
-    return profile
 
 
 def _validate_model(body: dict) -> str:
@@ -118,12 +83,15 @@ async def chat_completions(request: Request):
     extra_body = body.get("extra_body")
     task_type = extra_body.get("task_type") if isinstance(extra_body, dict) else None
 
-    # Media and vision contracts predate LLM routing and must remain first.
-    if task_type in ("asr", "diarization", "ocr"):
-        from routes.media import handle_media_request
+    try:
+        profile = _extract_routing(body)
+    except RoutingValidationError as exc:
+        return openai_error(str(exc), "invalid_request", 400)
 
-        return await handle_media_request(body)
-    if _is_vision_request(body.get("messages", [])):
+    # Legacy media has no RoutingProfile; an explicit scope always applies.
+    if task_type in ("asr", "diarization", "ocr") or _is_vision_request(body.get("messages", [])):
+        if has_routing(body) and profile["execution_scope"] == "local_only" and DEPLOY_MODE == "serverless":
+            return openai_error("local_only forbids remote execution", "forbidden", 403)
         if not task_type:
             extra_body = extra_body if isinstance(extra_body, dict) else {}
             extra_body["task_type"] = "ocr"
@@ -134,9 +102,13 @@ async def chat_completions(request: Request):
 
     try:
         model = _validate_model(body)
-        profile = _extract_routing(body)
     except RoutingValidationError as exc:
         return openai_error(str(exc), "invalid_request", 400)
+
+    if profile["execution_scope"] == "local_only" and (
+        model in _CODEX_MODELS or DEPLOY_MODE == "serverless"
+    ):
+        return openai_error("local_only forbids remote execution", "forbidden", 403)
 
     if DEPLOY_MODE == "local-gpu":
         pool: ProviderPool | None = getattr(request.app.state, "provider_pool", None)
