@@ -76,6 +76,7 @@ X-Routing-Reason: preferred
 
 - 잘못된 요청과 upstream 400/413/422: HTTP 400 `invalid_request`, fallback·circuit 증가 없음
 - 입력 크기 한도 초과: HTTP 413 `invalid_request`, Provider 호출 없음
+- Gateway LLM 처리 deadline 초과: HTTP 503 `timed_out`, `x-should-retry: false`
 - `local_only`와 원격 실행 경로 충돌: HTTP 403 `forbidden`, Provider 호출·fallback·circuit 증가 없음
 - 적격 Provider 없음 또는 모두 unhealthy: HTTP 503 `unavailable`, caller는 즉시 실패
 - 모든 healthy Provider가 admission timeout까지 full: HTTP 503 `overloaded`, `Retry-After: 5`
@@ -85,6 +86,16 @@ X-Routing-Reason: preferred
 Backend와 Worker는 typed `overloaded`만 기존 retry 상한 안에서 `Retry-After`를 존중한다. `unavailable`은 재시도하지 않는다.
 
 Provider 오류 응답 본문·예외 문자열·요청 원문·키는 공개 오류와 Gateway 로그에 출력하지 않는다. chat은 기존 오류 분류와 재시도 동작을 유지하며 정적 메시지를 반환한다. media·embedding의 local/serverless upstream 실패는 HTTP 502 `upstream_error`로 반환한다. 로그에는 작업 이름, HTTP 상태와 예외 종류만 남긴다. 첫 SSE 출력 뒤 실패는 정적 stream 오류로 종료하고 원문 traceback을 로그에 남기지 않는다.
+
+### LLM 처리 시간과 슬롯 반환
+
+LLM chat은 업로드·입력 검증을 마친 뒤 기존 `request_timeout_seconds`(현재 300초)를 한 번의 절대 deadline으로 사용한다. Provider 대기·첫 출력·조건부 fallback·비스트리밍 생성·상태 기록·JSON 응답 생성이 같은 예산을 공유한다. Provider마다 예산을 새로 시작하지 않는다. 첫 출력 제한(`first_output_timeout_seconds`, 현재 120초)은 남은 전체 예산 안에서 적용한다. Gateway의 cached OpenAI client는 `max_retries=0`이며 재시도는 기존 Provider 라우팅 한 곳에서 관리한다.
+
+스트리밍은 같은 deadline을 ASGI 응답 전송까지 적용한다. 느린 수신자가 첫 헤더나 chunk 전송을 막아도 자원을 무한 점유하지 못한다. 전송 시작 전에 예산이 이미 끝났으면 upstream을 닫고 슬롯을 반환한 뒤 정적 `timed_out` 503을 보낸다. 첫 헤더 전송을 시도한 뒤에는 timeout 때문에 503을 다시 쓰거나 다른 모델로 fallback하지 않고 기존 stream을 종료한다.
+
+스트림 생성 전·후의 취소, 실패, 상태 기록 예외와 미시작 stream 모두 cleanup을 실행한다. cleanup은 하나의 공유 task에서 close를 최대 5초 기다린 뒤 슬롯을 반환한다. 호출자는 AnyIO 취소와 반복되는 `Task.cancel()`에도 이 task가 끝날 때까지 기다린 뒤 취소를 전파한다. 중복 cleanup은 같은 task를 기다리며 요청 종료 후 background task를 남기지 않는다. close 완료를 기다리는 유예 때문에 자원 반환이 deadline보다 최대 5초 늦을 수 있다.
+
+이 보장은 Gateway의 LLM 추론 자원 점유 구간에 해당한다. 비스트리밍 JSON의 HTTP 전송, 이미 슬롯을 반환한 timeout 오류의 전송, 업로드·검증·UI 전체 시간의 상한은 포함하지 않는다. ASR·OCR·embedding의 기존 timeout은 변경하지 않는다. `timed_out` 응답의 `x-should-retry: false`는 OpenAI SDK가 같은 추론을 자동 반복하지 않도록 한다.
 
 ## 3. 정책과 ProviderPool
 
