@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 
 import httpx
 import openai
+import anyio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import AsyncOpenAI
@@ -37,10 +38,37 @@ router = APIRouter()
 _openai_clients: dict[tuple[str, str, float], AsyncOpenAI] = {}
 _CODEX_MODELS = set(CODEX_REASONING_EFFORT_MAP)
 _POLICY_SETTINGS = ProviderPool.load_settings()
+_STREAM_CLOSE_TIMEOUT = 5
 
 
 class EmptyUpstreamStream(RuntimeError):
     pass
+
+
+class DeadlineStreamingResponse(StreamingResponse):
+    def __init__(self, content, headers, deadline, cleanup):
+        super().__init__(content, media_type="text/event-stream", headers=headers)
+        self.deadline, self.cleanup = deadline, cleanup
+
+    async def finish(self):
+        with anyio.CancelScope(shield=True):
+            try:
+                await self.body_iterator.aclose()
+            finally:
+                await self.cleanup()
+
+    async def __call__(self, scope, receive, send):
+        try:
+            if asyncio.get_running_loop().time() >= self.deadline:
+                await self.finish()
+                await _timed_out()(scope, receive, send)
+                return
+            async with asyncio.timeout_at(self.deadline):
+                await super().__call__(scope, receive, send)
+        except TimeoutError:
+            logger.info("Gateway stream deadline reached")
+        finally:
+            await self.finish()
 
 
 def _get_openai_client(base_url: str, api_key: str, timeout: float) -> AsyncOpenAI:
@@ -50,6 +78,7 @@ def _get_openai_client(base_url: str, api_key: str, timeout: float) -> AsyncOpen
             base_url=base_url,
             api_key=api_key or "none",
             timeout=timeout,
+            max_retries=0,
         )
     return _openai_clients[key]
 
@@ -124,88 +153,89 @@ async def _handle_local(
     profile: dict[str, str],
     pool: ProviderPool,
 ):
+    deadline = asyncio.get_running_loop().time() + pool.settings.request_timeout_seconds
     attempted: set[str] = set()
     explicit = model in _CODEX_MODELS
     use_explicit = explicit
     fell_back = False
     saw_overload = False
 
-    while True:
-        try:
-            if use_explicit:
-                lease = await pool.acquire_explicit("codex")
-            else:
-                route_profile = (
-                    {"workload": "chat", "reasoning": "high", "execution_scope": "local_only"}
-                    if explicit
-                    else profile
-                )
-                lease = await pool.acquire(
-                    route_profile["workload"],
-                    route_profile["reasoning"],
-                    route_profile["execution_scope"],
-                    frozenset(attempted),
-                )
-        except AdmissionTimeout:
-            return _overloaded()
-        except (NoEligibleProvider, NoHealthyProvider) as exc:
-            if use_explicit:
-                attempted.add("codex")
-                use_explicit = False
-                fell_back = True
-                continue
-            if saw_overload:
-                return _overloaded()
-            return openai_error("no eligible provider is available", "unavailable", 503)
+    try:
+        async with asyncio.timeout_at(deadline):
+            while True:
+                _check_deadline(deadline)
+                try:
+                    if use_explicit:
+                        lease = await pool.acquire_explicit("codex")
+                    else:
+                        route_profile = (
+                            {"workload": "chat", "reasoning": "high", "execution_scope": "local_only"}
+                            if explicit else profile
+                        )
+                        lease = await pool.acquire(
+                            route_profile["workload"], route_profile["reasoning"],
+                            route_profile["execution_scope"], frozenset(attempted),
+                        )
+                except AdmissionTimeout:
+                    return _overloaded()
+                except (NoEligibleProvider, NoHealthyProvider):
+                    if use_explicit:
+                        attempted.add("codex")
+                        use_explicit, fell_back = False, True
+                        continue
+                    if saw_overload:
+                        return _overloaded()
+                    return openai_error("no eligible provider is available", "unavailable", 503)
 
-        attempted.add(lease.spec.name)
-        effort = CODEX_REASONING_EFFORT_MAP[model] if use_explicit else (
-            "high" if lease.spec.name == "codex" else None
-        )
-        try:
-            opened = await _open_upstream(
-                body,
-                base_url=_openai_base(lease.spec.base_url),
-                api_key=lease.spec.api_key,
-                model=lease.spec.model,
-                reasoning_effort=effort,
-                request_timeout=pool.settings.request_timeout_seconds,
-                first_output_timeout=pool.settings.first_output_timeout_seconds,
-            )
-        except asyncio.CancelledError:
-            await lease.release()
-            raise
-        except Exception as exc:
-            kind, status = _classify_upstream_error(exc)
-            logger.warning("upstream request failed status=%s exception=%s", status, type(exc).__name__)
-            if kind == "invalid_request":
-                await lease.release()
-                return openai_error("upstream rejected the request", kind, status)
-            if kind == "retryable":
-                await pool.record_failure(lease.spec.name)
-            else:
-                saw_overload = True
-            await lease.release()
-            fell_back = True
-            use_explicit = False
-            continue
+                opened, handed_off = None, False
+                attempted.add(lease.spec.name)
+                effort = CODEX_REASONING_EFFORT_MAP[model] if use_explicit else (
+                    "high" if lease.spec.name == "codex" else None
+                )
+                try:
+                    try:
+                        _check_deadline(deadline)
+                        opened = await _open_upstream(
+                            body, base_url=_openai_base(lease.spec.base_url),
+                            api_key=lease.spec.api_key, model=lease.spec.model,
+                            reasoning_effort=effort,
+                            request_timeout=pool.settings.request_timeout_seconds,
+                            first_output_timeout=min(pool.settings.first_output_timeout_seconds, deadline - asyncio.get_running_loop().time()),
+                        )
+                    except Exception as exc:
+                        kind, status = _classify_upstream_error(exc)
+                        logger.warning("upstream request failed status=%s exception=%s", status, type(exc).__name__)
+                        if kind == "invalid_request":
+                            return openai_error("upstream rejected the request", kind, status)
+                        if kind == "retryable":
+                            await pool.record_failure(lease.spec.name)
+                        else:
+                            saw_overload = True
+                        fell_back, use_explicit = True, False
+                        continue
 
-        reason = "error-fallback" if fell_back else lease.reason
-        headers = _provider_headers(lease.spec.name, opened["model"], reason)
-        if opened["payload"] is not None:
-            await pool.record_success(lease.spec.name)
-            await lease.release()
-            return JSONResponse(opened["payload"], headers=headers)
-        return _stream_response(
-            opened,
-            headers,
-            on_success=lambda: pool.record_success(lease.spec.name),
-            on_failure=lambda: pool.record_failure(lease.spec.name),
-            release=lease.release,
-        )
+                    headers = _provider_headers(lease.spec.name, opened["model"], "error-fallback" if fell_back else lease.reason)
+                    if opened["payload"] is not None:
+                        await pool.record_success(lease.spec.name)
+                        _check_deadline(deadline)
+                        return JSONResponse(opened["payload"], headers=headers)
+                    response = _stream_response(
+                        opened, headers, deadline=deadline,
+                        on_success=lambda: pool.record_success(lease.spec.name),
+                        on_failure=lambda: pool.record_failure(lease.spec.name),
+                        release=lease.release,
+                    )
+                    handed_off = True
+                    return response
+                finally:
+                    if not handed_off:
+                        await _cleanup_stream(opened["upstream"] if opened else None, lease.release)
+    except TimeoutError:
+        return _timed_out()
 
 
 async def _handle_serverless(body: dict, model: str, profile: dict[str, str]):
+    deadline = asyncio.get_running_loop().time() + _POLICY_SETTINGS.request_timeout_seconds
     explicit = model in _CODEX_MODELS
     providers: list[ProviderResult]
     if explicit:
@@ -217,39 +247,44 @@ async def _handle_serverless(body: dict, model: str, profile: dict[str, str]):
 
     saw_overload = False
     failed = False
-    for provider in providers:
-        if not provider.api_base:
-            failed = True
-            continue
-        api_key = CODEX_API_KEY if provider.name == "codex" else RUNPOD_API_KEY
-        try:
-            opened = await _open_upstream(
-                body,
-                base_url=provider.api_base,
-                api_key=api_key,
-                model=provider.model,
-                reasoning_effort=provider.reasoning_effort,
-                request_timeout=_POLICY_SETTINGS.request_timeout_seconds,
-                first_output_timeout=_POLICY_SETTINGS.first_output_timeout_seconds,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            kind, status = _classify_upstream_error(exc)
-            logger.warning("upstream request failed status=%s exception=%s", status, type(exc).__name__)
-            if kind == "invalid_request":
-                return openai_error("upstream rejected the request", kind, status)
-            saw_overload |= kind == "overloaded"
-            failed = True
-            continue
-
-        reason = "error-fallback" if failed else (
-            "explicit-codex" if explicit else "preferred"
-        )
-        headers = _provider_headers(provider.name, opened["model"], reason)
-        if opened["payload"] is not None:
-            return JSONResponse(opened["payload"], headers=headers)
-        return _stream_response(opened, headers)
+    try:
+        async with asyncio.timeout_at(deadline):
+            for provider in providers:
+                _check_deadline(deadline)
+                if not provider.api_base:
+                    failed = True
+                    continue
+                opened, handed_off = None, False
+                api_key = CODEX_API_KEY if provider.name == "codex" else RUNPOD_API_KEY
+                try:
+                    try:
+                        opened = await _open_upstream(
+                            body, base_url=provider.api_base, api_key=api_key,
+                            model=provider.model, reasoning_effort=provider.reasoning_effort,
+                            request_timeout=_POLICY_SETTINGS.request_timeout_seconds,
+                            first_output_timeout=min(_POLICY_SETTINGS.first_output_timeout_seconds, deadline - asyncio.get_running_loop().time()),
+                        )
+                    except Exception as exc:
+                        kind, status = _classify_upstream_error(exc)
+                        logger.warning("upstream request failed status=%s exception=%s", status, type(exc).__name__)
+                        if kind == "invalid_request":
+                            return openai_error("upstream rejected the request", kind, status)
+                        saw_overload |= kind == "overloaded"
+                        failed = True
+                        continue
+                    reason = "error-fallback" if failed else ("explicit-codex" if explicit else "preferred")
+                    headers = _provider_headers(provider.name, opened["model"], reason)
+                    if opened["payload"] is not None:
+                        _check_deadline(deadline)
+                        return JSONResponse(opened["payload"], headers=headers)
+                    response = _stream_response(opened, headers, deadline=deadline)
+                    handed_off = True
+                    return response
+                finally:
+                    if not handed_off:
+                        await _cleanup_stream(opened["upstream"] if opened else None)
+    except TimeoutError:
+        return _timed_out()
 
     if saw_overload:
         return _overloaded()
@@ -296,10 +331,10 @@ async def _open_upstream(
                 first = await anext(iterator)
             except StopAsyncIteration as exc:
                 raise EmptyUpstreamStream("upstream stream ended before first output") from exc
+            first_payload = first.model_dump()
     except BaseException:
-        await _close_stream(upstream)
+        await _cleanup_stream(upstream)
         raise
-    first_payload = first.model_dump()
     return {
         "payload": None,
         "model": first_payload.get("model") or model,
@@ -316,28 +351,49 @@ def _stream_response(
     on_success: Callable[[], Awaitable[None]] | None = None,
     on_failure: Callable[[], Awaitable[None]] | None = None,
     release: Callable[[], Awaitable[None]] | None = None,
+    deadline: float | None = None,
 ) -> StreamingResponse:
+    if deadline is None:
+        deadline = asyncio.get_running_loop().time() + _POLICY_SETTINGS.request_timeout_seconds
+    cleanup_task = None
+
+    async def cleanup():
+        nonlocal cleanup_task
+        if cleanup_task is None:
+            cleanup_task = asyncio.create_task(_do_cleanup_stream(opened["upstream"], release))
+        await _await_cleanup(cleanup_task)
+
     async def generate() -> AsyncIterator[str]:
         try:
+            _check_deadline(deadline)
             yield _sse(opened["first"])
-            async for chunk in opened["iterator"]:
+            while True:
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        chunk = await anext(opened["iterator"])
+                except StopAsyncIteration:
+                    break
+                _check_deadline(deadline)
                 yield _sse(chunk)
             if on_success:
-                await on_success()
+                async with asyncio.timeout_at(deadline):
+                    await on_success()
+            _check_deadline(deadline)
             yield "data: [DONE]\n\n"
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             if on_failure:
-                await on_failure()
+                async with asyncio.timeout_at(deadline):
+                    await on_failure()
             logger.error("upstream stream failed after first output exception=%s", type(exc).__name__)
+            if isinstance(exc, TimeoutError):
+                raise TimeoutError("Gateway stream deadline reached") from None
             raise RuntimeError("upstream stream failed after first output") from None
         finally:
-            await _close_stream(opened["upstream"])
-            if release:
-                await release()
+            await cleanup()
 
-    return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
+    return DeadlineStreamingResponse(generate(), headers, deadline, cleanup)
 
 
 def _sse(chunk: object) -> str:
@@ -356,6 +412,44 @@ async def _close_stream(stream: object | None) -> None:
                 await result
         except Exception as exc:
             logger.debug("failed to close upstream stream exception=%s", type(exc).__name__)
+
+
+async def _cleanup_stream(stream, release=None):
+    await _await_cleanup(asyncio.create_task(_do_cleanup_stream(stream, release)))
+
+
+async def _await_cleanup(task):
+    cancellation = None
+    with anyio.CancelScope(shield=True):
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+    task.result()
+    if cancellation is not None:
+        raise cancellation
+
+
+async def _do_cleanup_stream(stream, release=None):
+    with anyio.CancelScope(shield=True):
+        try:
+            if stream is not None:
+                await asyncio.wait_for(_close_stream(stream), _STREAM_CLOSE_TIMEOUT)
+        except TimeoutError:
+            logger.debug("upstream stream close timed out")
+        finally:
+            if release:
+                await release()
+
+
+def _check_deadline(deadline):
+    if asyncio.get_running_loop().time() >= deadline:
+        raise TimeoutError
+
+
+def _timed_out():
+    return openai_error("Gateway request deadline exceeded", "timed_out", 503, {"x-should-retry": "false"})
 
 
 def _classify_upstream_error(exc: BaseException) -> tuple[str, int]:
