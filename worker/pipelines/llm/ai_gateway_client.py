@@ -25,7 +25,7 @@ class AIGatewayClientError(RuntimeError):
 def _gateway_error_type(body: Any) -> str | None:
     if not isinstance(body, Mapping):
         return None
-    error = body.get("error")
+    error = body.get("error", body)
     return error.get("type") if isinstance(error, Mapping) else None
 
 
@@ -46,6 +46,7 @@ def get_openai_client(base_url: str, api_key: str) -> OpenAI:
         base_url=f"{base_url.rstrip('/')}/v1",
         api_key=api_key,
         timeout=120.0,
+        max_retries=0,
     )
 
 

@@ -42,4 +42,5 @@ def get_async_openai_client(long_running: bool = False) -> AsyncOpenAI:
         base_url=get_ai_gateway_base_url().rstrip("/"),
         api_key=get_ai_gateway_api_key(),
         timeout=LONG_RUNNING_TIMEOUT if long_running else DEFAULT_TIMEOUT,
+        max_retries=0,
     )
