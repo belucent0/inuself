@@ -63,10 +63,9 @@ function AuthenticatedLayout() {
   const pathname = location.pathname
   const isDetailPage = pathname?.startsWith('/contents/') && pathname !== '/contents'
   const isChatPage = pathname?.startsWith('/chat/')
-  const isWpiTestPage = pathname === '/scan/wpi'
   const isMonitoringPage = pathname?.startsWith('/monitoring')
   // 특수 페이지들은 자체 스크롤/패딩 관리
-  const isSpecialPage = isChatPage || isDetailPage || isWpiTestPage || isMonitoringPage
+  const isSpecialPage = isChatPage || isDetailPage || isMonitoringPage
   return (
     <ThreadTitleProvider>
       <SidebarProvider defaultOpen={!isDetailPage}>

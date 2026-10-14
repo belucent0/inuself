@@ -1,4 +1,6 @@
-# Architecture v1.2.0 (현행 운영 문서)
+# Architecture v1.2.0 (보관본)
+
+> 2026-10-14부터 현행 코드는 [architecture-v1.3.0.md](../architecture-v1.3.0.md)를 참고합니다. 아래 내용은 기능 제거 전 develop의 기록입니다.
 
 > **Timblo AI Platform — 종합 아키텍처 문서 (Source of Truth)**
 >
@@ -88,7 +90,7 @@ docker-compose.yml
 ├── ai-gateway     :4000       — FastAPI 추론 라우터 (httpx + AsyncOpenAI)
 ├── cli-proxy-api  :8317/:1455 — OAuth CLI Proxy (Codex 접근, serverless 폴백)
 │
-├── ai-llm         :8000       — vLLM 0.26 Gemma 4 26B A4B AWQ INT4 + MTP k=4 (ROCm)
+├── ai-llm         :8000       — vLLM 0.28 Gemma 4 26B A4B AWQ INT4 + MTP k=4 (ROCm)
 ├── ai-asr-vllm    :8000       — vLLM Whisper-large-v3-turbo (512 MiB KV, seqs=1)
 ├── ai-diarize     :8003       — pyannote community-1 (ROCm, startup warm-up)
 ├── ai-embedding   :8000(int)  — EmbeddingGemma 308M Q4 GGUF (llama.cpp CPU)
@@ -1338,7 +1340,7 @@ Media/embedding 경로는 RoutingProfile 대상이 아니며 기존 전용 라�
 | `diarization` | pyannote community-1 (ai-diarize) | — | 화자 분리 |
 | `ocr` | `gemma4-a4b` vision (ai-llm) | — | 이미지 OCR + 표 |
 
-`model=auto`이면 route 순서와 capability를 모두 만족하는 첫 healthy slot을 선택합니다. full 상태는 다음 eligible Provider로 overflow하고, 모두 full이면 30초 한도로 대기합니다. 세부 규칙은 [`routing-v2.md`](routing-v2.md)를 따릅니다.
+`model=auto`이면 route 순서와 capability를 모두 만족하는 첫 healthy slot을 선택합니다. full 상태는 다음 eligible Provider로 overflow하고, 모두 full이면 30초 한도로 대기합니다. 세부 규칙은 [`routing-v2.md`](../routing-v2.md)를 따릅니다.
 
 > `ai-embedding`은 벡터 생성 전용이다. 별도 cross-encoder 리랭커 서비스는 없으며,
 > 웹 검색은 RRF·키워드 관련성·품질/본문 점수로, 문서 RAG는 키워드 검색과
@@ -1348,15 +1350,15 @@ Media/embedding 경로는 RoutingProfile 대상이 아니며 기존 전용 라�
 
 | 컨테이너 | 이미지/베이스 | GPU 사용 | 모델 | 컨텍스트 |
 |---------|--------------|---------|------|---------|
-| `ai-llm` | `vllm/vllm-openai-rocm:v0.26.0` | gfx1150 | Gemma 4 26B A4B AWQ INT4 + MTP k=4 | 32768 |
-| `ai-asr-vllm` | `ai-llm-gemma4:0.26.0` (vLLM ROCm 공용 이미지) | gfx1150 | Whisper-large-v3-turbo | 448 |
+| `ai-llm` | `vllm/vllm-openai-rocm:v0.28.0` | gfx1150 | Gemma 4 26B A4B AWQ INT4 + MTP k=4 | 32768 |
+| `ai-asr-vllm` | `ai-llm-gemma4:0.28.0` (vLLM ROCm 공용 이미지) | gfx1150 | Whisper-large-v3-turbo | 448 |
 | `ai-diarize` | `pyannote-audio` (custom ROCm build) | gfx1150 | community-1 | — |
 | `ai-embedding` | `llama.cpp` (CPU) | CPU | EmbeddingGemma 300M Q4 GGUF | 2048 |
 
 **공유 자원:**
 - Docker named volume `hf-cache-fast` — HuggingFace 모델 캐시 공유
 - Docker named volume `vllm-compile-cache` — ASR vLLM torch.compile 캐시 보존
-- Docker named volume `tvm-ffi-cache` — vLLM 0.26 ROCm 보조 모듈 cold compile 캐시
+- Docker named volume `tvm-ffi-cache` — vLLM 0.28 ROCm 보조 모듈 cold compile 캐시
 - GPU 추론 컨테이너에 `/dev/dxg`와 `libdxcore.so` 마운트
 
 `ai-asr-vllm`은 WSL UVA 제약 때문에 V1 runner를 사용한다. 운영값은 고정 KV 512 MiB,
@@ -1575,7 +1577,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 | Embeddings 엔드포인트 | `infra/ai-gateway/routes/embeddings.py` |
 | Media (ASR/OCR) 엔드포인트 | `infra/ai-gateway/routes/media.py` |
 | Provider 정책·capacity | `infra/shared/routing_policy.json`, `infra/ai-gateway/services/provider_pool.py` |
-| ai-llm (vLLM) | `infra/inference/llm/` (Dockerfile + WSL shims/MTP patch) |
+| ai-llm (vLLM) | `infra/inference/llm/` (Dockerfile + WSL shims) |
 | ai-asr-vllm (Whisper) | `docker-compose.yml`의 vLLM 서비스 정의 |
 | ai-diarize (pyannote) | `infra/inference/diarize/` |
 | ai-embedding (EmbeddingGemma) | `infra/inference/embedding/` |

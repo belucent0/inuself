@@ -14,11 +14,6 @@ import {
   MonitoringPage,
   RoadmapPage,
   ThreadsPage,
-  ScanPage,
-  WpiTestPage,
-  WpiResultPage,
-  ScanHistoryPage,
-  ScanDetailPage,
 } from '@/pages'
 import { RootLayout, AdminRoute } from '@/shared/components/layout'
 
@@ -71,27 +66,6 @@ const router = createBrowserRouter([
       {
         path: 'roadmap',
         element: <RoadmapPage />,
-      },
-      // Scan routes
-      {
-        path: 'scan',
-        element: <ScanPage />,
-      },
-      {
-        path: 'scan/wpi',
-        element: <WpiTestPage />,
-      },
-      {
-        path: 'scan/wpi/result',
-        element: <WpiResultPage />,
-      },
-      {
-        path: 'scan/history',
-        element: <ScanHistoryPage />,
-      },
-      {
-        path: 'scan/history/:resultId',
-        element: <ScanDetailPage />,
       },
     ],
   },

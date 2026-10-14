@@ -25,7 +25,7 @@ Backend와 Worker는 OpenAI SDK의 `extra_body={"routing": profile}`을 사용�
 | `reasoning` | `auto`, `none`, `low`, `medium`, `high` | `medium` | 추론 의도. raw `auto`는 Gateway에서 `medium`으로 정규화 |
 | `execution_scope` | `local_only`, `remote_allowed` | `local_only` | optional Codex 사용 허용 여부 |
 
-`model` 미지정·빈 문자열·`auto`는 위 profile 라우팅을 사용한다. 명시 모델은 운영/WPI용 `codex-high`, `codex-medium`, `codex-low`만 허용하며 명시적 원격 실행 동의로 본다. 물리 모델명이나 다른 별칭은 HTTP 400이다. `routing`이 객체가 아니거나 enum 밖 값·알 수 없는 필드를 가지면 HTTP 400이다. media `extra_body.task_type`과 vision 메시지는 이 검증보다 먼저 기존 media 경로로 분기한다.
+`model` 미지정·빈 문자열·`auto`는 위 profile 라우팅을 사용한다. 명시 모델은 운영용 `codex-high`, `codex-medium`, `codex-low`만 허용하며 명시적 원격 실행 동의로 본다. 물리 모델명이나 다른 별칭은 HTTP 400이다. `routing`이 객체가 아니거나 enum 밖 값·알 수 없는 필드를 가지면 HTTP 400이다. media `extra_body.task_type`과 vision 메시지는 이 검증보다 먼저 기존 media 경로로 분기한다.
 
 Backend의 `resolve_reasoning()`은 `auto`를 다음 순서로 한 번 해석한다.
 

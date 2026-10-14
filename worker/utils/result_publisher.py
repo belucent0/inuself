@@ -185,53 +185,6 @@ def publish_llm_failed(file_id: int, *, error: str) -> str:
 
 
 # =============================================================================
-# WPI AI 리포트 결과 발행
-# =============================================================================
-
-
-def publish_wpi_report_started(scan_result_id: str) -> str:
-    """WPI AI 리포트 작업 시작을 발행합니다."""
-
-    return _publish_result(
-        {
-            "type": "wpi_report",
-            "event": "started",
-            "scan_result_id": scan_result_id,
-        }
-    )
-
-
-def publish_wpi_report_completed(
-    scan_result_id: str,
-    *,
-    result_s3_key: str,
-) -> str:
-    """WPI AI 리포트 작업 완료를 발행합니다."""
-
-    return _publish_result(
-        {
-            "type": "wpi_report",
-            "event": "completed",
-            "scan_result_id": scan_result_id,
-            "result_s3_key": result_s3_key,
-        }
-    )
-
-
-def publish_wpi_report_failed(scan_result_id: str, *, error: str) -> str:
-    """WPI AI 리포트 작업 실패를 발행합니다."""
-
-    return _publish_result(
-        {
-            "type": "wpi_report",
-            "event": "failed",
-            "scan_result_id": scan_result_id,
-            "error": error,
-        }
-    )
-
-
-# =============================================================================
 # OCR 결과 발행
 # =============================================================================
 

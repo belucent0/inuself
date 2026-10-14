@@ -13,9 +13,3 @@ export { MonitoringPage } from './MonitoringPage'
 export { default as RoadmapPage } from './RoadmapPage'
 
 export { ThreadsPage } from './ThreadsPage'
-
-// Scan pages
-export { ScanPage } from './ScanPage'
-export { WpiTestPage } from './WpiTestPage'
-export { WpiResultPage } from './WpiResultPage'
-export { ScanHistoryPage, ScanDetailPage } from './ScanHistoryPage'

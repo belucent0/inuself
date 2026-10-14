@@ -22,8 +22,6 @@ EVENT_TYPES = {
     "content_view": "콘텐츠 상세 조회",
     "feedback": "AI 응답 피드백",
     "search_query": "검색 실행",
-    "wpi_test_start": "WPI 검사 시작",
-    "wpi_test_complete": "WPI 검사 완료",
     "thread_create": "대화 스레드 생성",
     "thread_delete": "대화 스레드 삭제",
 }
@@ -169,23 +167,6 @@ class EventTrackingService:
             payload={
                 "query": query[:200],
                 "results_count": results_count,
-            },
-        )
-
-    async def track_wpi_test(
-        self,
-        user_id: UUID,
-        event_type: str,  # "wpi_test_start" or "wpi_test_complete"
-        test_type: str | None = None,  # "i_test" or "me_test"
-        dominant_type: str | None = None,
-    ) -> UserEvent | None:
-        """WPI 검사 이벤트 기록."""
-        return await self.track(
-            user_id=user_id,
-            event_type=event_type,
-            payload={
-                "test_type": test_type,
-                "dominant_type": dominant_type,
             },
         )
 

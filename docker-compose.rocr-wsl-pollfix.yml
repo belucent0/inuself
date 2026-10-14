@@ -1,12 +1,12 @@
 services:
   ai-llm:
     build: !reset null
-    image: ai-llm-gemma4:0.26.0-rocr-pollfix-46558b7
+    image: ai-llm-gemma4:0.28.0-rocr-pollfix-46558b7
     pull_policy: never
 
   ai-asr-vllm:
     build: !reset null
-    image: ai-llm-gemma4:0.26.0-rocr-pollfix-46558b7
+    image: ai-llm-gemma4:0.28.0-rocr-pollfix-46558b7
     pull_policy: never
 
   ai-diarize:
