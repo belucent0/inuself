@@ -151,3 +151,11 @@ python scripts/bench_routing.py --gateway http://localhost:4000 --out docs/bench
 5. 새 `chat/none/local_only` 요청이 NPU `preferred`로 돌아왔는지 확인한다.
 
 GPU 장애로 summary route만 unavailable이면 degraded/200이므로 HTTP 상태뿐 아니라 body의 `status`와 `routes.summary`에도 경보를 건다.
+
+## 7. 정보용 LLM Judge 계약
+
+`scripts/run_eval.py`는 `model=auto`, `chat/none/local_only`만 요청한다. 별도 `JUDGE_MODEL` 환경변수나 CI secret으로 물리 모델명을 지정하지 않는다. 실제 모델 교체는 기존 Gateway Provider 설정에서 처리한다. 이 계약은 연결 가능한 모델이 채점 형식도 잘 지킨다는 뜻은 아니다.
+
+Judge는 suite 시작 전 합성 질문으로 한 번 확인한다. 비활성화되었거나 대상 turn이 없으면 호출하지 않는다. 이 확인이 실패하거나 turn 채점이 실패하면 남은 Judge 호출을 중단하고 기존 규칙 검증은 계속한다. 연결과 응답 본문 수신을 합쳐 호출당 30초로 제한한다. HTTP 오류 진단은 상태와 허용된 Gateway 오류 유형, 연결 오류는 예외 종류만 출력하며 원문·키·URL을 출력하지 않는다.
+
+채점 응답은 내부 `<think>` 태그 제거 후 `SCORE: 0.0~1.0`과 비어 있지 않은 한 줄 `REASON`이 각각 한 번만 있어야 한다. 중복·추가 텍스트·NaN/Inf·범위 밖 점수·토큰 한도로 잘린 응답은 `format_error`다. HTTP 성공 응답의 Provider와 모델은 길이와 허용 문자를 검사해 형식 실패에서도 기록하며, 식별할 수 없으면 `unknown`으로 표시한다. 결과에는 preflight 상태와 실제 turn의 성공·오류·미실행 수를 분리한다. Judge 점수와 오류는 계속 **정보용**이며 CI 종료 코드는 기존 규칙 검증 결과로만 정한다.

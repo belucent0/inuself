@@ -27,6 +27,7 @@ Langfuse UI에서 확인:
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 import sys
@@ -53,9 +54,13 @@ RUN_NAME = os.environ.get(
 
 # LLM-as-Judge 설정 (정보용 — CI 게이트에 영향 없음)
 JUDGE_AI_GATEWAY_URL = os.environ.get("JUDGE_AI_GATEWAY_URL", "http://localhost:4000")
-JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "auto")
 JUDGE_ENABLED = os.environ.get("JUDGE_ENABLED", "true").lower() == "true"
 JUDGE_AI_GATEWAY_API_KEY = os.environ.get("JUDGE_AI_GATEWAY_API_KEY", os.environ.get("AI_GATEWAY_API_KEY", ""))
+JUDGE_TIMEOUT_SECONDS = 30.0
+
+
+def _judge_identifier(value: object) -> str:
+    return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", value) else ""
 
 
 def _score_result(
@@ -107,11 +112,11 @@ async def _llm_judge(
     query: str,
     response: str,
     conversation_history: list[dict],
-) -> tuple[float, str]:
+) -> tuple[float, str, dict[str, str]]:
     """LLM 심사위원이 응답 품질을 채점합니다.
 
     Returns:
-        (score, reason) — score는 0~1 float, 오류 시 -1.0 반환
+        (score, reason, metadata) — 오류 시 -1.0과 원문 없는 진단 반환
     """
     history_text = ""
     if conversation_history:
@@ -136,12 +141,12 @@ async def _llm_judge(
 
     try:
         headers = {"Authorization": f"Bearer {JUDGE_AI_GATEWAY_API_KEY}"} if JUDGE_AI_GATEWAY_API_KEY else {}
-        async with httpx.AsyncClient() as http:
+        async with asyncio.timeout(JUDGE_TIMEOUT_SECONDS), httpx.AsyncClient() as http:
             resp = await http.post(
                 f"{JUDGE_AI_GATEWAY_URL}/v1/chat/completions",
                 headers=headers,
                 json={
-                    "model": JUDGE_MODEL,
+                    "model": "auto",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0,
                     "max_tokens": 100,
@@ -151,30 +156,47 @@ async def _llm_judge(
                         "execution_scope": "local_only",
                     },
                 },
-                timeout=30.0,
+                timeout=JUDGE_TIMEOUT_SECONDS,
             )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-
-        # 일부 모델의 내부 추론 태그를 제거해 채점 응답 형식을 정규화한다.
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-
-        score = -1.0
-        reason = content.strip()
-        for line in content.splitlines():
-            line = line.strip()
-            if line.startswith("SCORE:"):
+            if not resp.is_success:
+                error_type = ""
                 try:
-                    score = float(line.split(":", 1)[1].strip())
-                    score = max(0.0, min(1.0, score))
-                except ValueError:
+                    value = resp.json().get("error", {}).get("type")
+                    if value in {"invalid_request", "forbidden", "unavailable", "overloaded", "timed_out", "upstream_error"}:
+                        error_type = f" {value}"
+                except (ValueError, AttributeError, TypeError):
                     pass
-            elif line.startswith("REASON:"):
-                reason = line.split(":", 1)[1].strip()
-        return score, reason
+                return -1.0, f"http_error HTTP {resp.status_code}{error_type}", {}
+
+            header_model = _judge_identifier(resp.headers.get("X-Inference-Model"))
+            metadata = {
+                "provider": _judge_identifier(resp.headers.get("X-Inference-Provider")) or "unknown",
+                "model": header_model or "unknown",
+            }
+            try:
+                data = resp.json()
+                if not header_model and isinstance(data, dict):
+                    metadata["model"] = _judge_identifier(data.get("model")) or "unknown"
+                choice = data["choices"][0]
+                content = choice["message"]["content"]
+                if not isinstance(content, str) or choice.get("finish_reason") == "length":
+                    return -1.0, "format_error", metadata
+                # 일부 모델의 내부 추론 태그를 제거해 채점 응답 형식을 정규화한다.
+                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                match = re.fullmatch(r"SCORE:[ \t]*(\S+)[ \t]*\r?\nREASON:[ \t]*([^\r\n]+)", content)
+                if not match or content.count("SCORE:") != 1 or content.count("REASON:") != 1:
+                    return -1.0, "format_error", metadata
+                score = float(match[1])
+                reason = match[2].strip()
+                if not math.isfinite(score) or not 0 <= score <= 1 or not reason:
+                    return -1.0, "format_error", metadata
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+                return -1.0, "format_error", metadata
+
+            return score, reason, metadata
 
     except Exception as exc:
-        return -1.0, f"judge 오류: {exc}"
+        return -1.0, f"request_error {_judge_identifier(type(exc).__name__)}", {}
 
 
 async def run_suite(
@@ -186,7 +208,11 @@ async def run_suite(
     fixture_assertions: dict | None = None,
 ) -> dict:
     """한 데이터셋의 모든 케이스를 순서대로 실행합니다."""
-    results = {"total": 0, "passed": 0, "failed": 0, "skipped": 0}
+    results = {
+        "total": 0, "passed": 0, "failed": 0, "skipped": 0,
+        "judge_success": 0, "judge_errors": 0, "judge_not_run": 0,
+        "judge_preflight": "disabled",
+    }
 
     # suite_id 별로 그룹화 (멀티턴 순서 유지)
     suites: dict[str, list] = {}
@@ -197,6 +223,17 @@ async def run_suite(
 
     # fixture JSON 순서대로 suite 실행 (Langfuse는 최신순 반환이라 역순 방지)
     ordered_suite_ids = fixture_suite_order if fixture_suite_order else list(suites.keys())
+    judge_active = False
+    if JUDGE_ENABLED:
+        results["judge_preflight"] = "no_targets"
+        if any(suites.get(sid) for sid in ordered_suite_ids):
+            p_score, p_reason, p_metadata = await _llm_judge(
+                "대한민국의 수도는?", "대한민국의 수도는 서울입니다.", []
+            )
+            p_metadata = p_metadata or {"provider": "unknown", "model": "unknown"}
+            judge_active = p_score >= 0
+            results["judge_preflight"] = "ok" if judge_active else f"error: {p_reason}"
+            print(f"[Judge preflight] {results['judge_preflight']} {p_metadata}")
 
     for suite_id in ordered_suite_ids:
         if suite_id not in suites:
@@ -209,6 +246,7 @@ async def run_suite(
         conversation_history: list[dict] = []  # judge용 대화 맥락
 
         for item in suite_items:
+            judge_status = "judge_not_run"
             turn = item.input.get("turn", "?")
             query = item.input.get("query", "")
             print(f"  Turn {turn}: '{query}'", end=" ", flush=True)
@@ -269,13 +307,19 @@ async def run_suite(
                     print(f"      [warn] langfuse.score 실패 (무시): {score_err}")
 
                 # LLM-as-Judge (정보용 — CI 게이트 무관)
-                judge_tag = ""
-                if JUDGE_ENABLED:
-                    j_score, j_reason = await _llm_judge(
+                judge_tag = " [judge=NOT_RUN]" if JUDGE_ENABLED else ""
+                if judge_active:
+                    j_score, j_reason, j_metadata = await _llm_judge(
                         query, result.full_content, conversation_history
                     )
+                    j_metadata = j_metadata or {"provider": "unknown", "model": "unknown"}
                     if j_score >= 0:
+                        judge_status = "judge_success"
                         try:
+                            trace.update(metadata={
+                                "run_name": run_name, "suite_id": suite_id,
+                                "judge": j_metadata,
+                            })
                             langfuse.score(
                                 trace_id=trace.id,
                                 name="quality_judge",
@@ -283,10 +327,12 @@ async def run_suite(
                                 comment=j_reason,
                             )
                         except Exception as score_err:
-                            print(f"      [warn] langfuse.score(judge) 실패 (무시): {score_err}")
-                        judge_tag = f" [judge={j_score:.2f}]"
+                            print(f"      [warn] langfuse.score(judge) 실패 (무시): {type(score_err).__name__}")
+                        judge_tag = f" [judge={j_score:.2f} {j_metadata}]"
                     else:
-                        judge_tag = f" [judge=ERR: {j_reason[:60]}]"
+                        judge_status = "judge_errors"
+                        judge_active = False
+                        judge_tag = f" [judge=ERR: {j_reason} {j_metadata}]"
 
                 # 이번 턴 대화 맥락 저장 (다음 턴 judge용)
                 conversation_history.append({"query": query, "response": result.full_content})
@@ -314,6 +360,13 @@ async def run_suite(
                 results["total"] += 1
                 results["failed"] += 1
 
+            results[judge_status] += 1
+
+    print(
+        f"[Judge summary] preflight={results['judge_preflight']}, "
+        f"success={results['judge_success']}, errors={results['judge_errors']}, "
+        f"not_run={results['judge_not_run']} (정보용 — CI 게이트 무관)"
+    )
     langfuse.flush()
     return results
 
@@ -357,23 +410,22 @@ async def main() -> int:
     print(f"대상: {E2E_BASE_URL} | 케이스: {len(active_items)}개 (전체 {len(dataset.items)}개 중 fixture 기준 필터)")
     print("-" * 60)
 
-    client = ChatClient(base_url=E2E_BASE_URL)
-    await client.login(E2E_LOGIN_ID, E2E_PASSWORD)
-
-    # 첫 실추론으로 인프라 장애와 품질 회귀를 분리하고 콜드 스타트도 소진한다.
-    print("추론 준비 확인 중...")
+    client = None
     try:
-        w_thread_id, w_msg_id = await client.create_thread("hi", "simple")
-        await client.stream_response(w_thread_id, w_msg_id)
-        print("추론 준비 확인 완료")
-    except Exception as preflight_err:
-        print(f"::error title=추론 환경 사용 불가::{preflight_err}")
-        await client.cleanup_all()
-        await client.close()
-        return 2
-    print("-" * 60)
+        client = ChatClient(base_url=E2E_BASE_URL)
+        await client.login(E2E_LOGIN_ID, E2E_PASSWORD)
 
-    try:
+        # 첫 실추론으로 인프라 장애와 품질 회귀를 분리하고 콜드 스타트도 소진한다.
+        print("추론 준비 확인 중...")
+        try:
+            w_thread_id, w_msg_id = await client.create_thread("hi", "simple")
+            await client.stream_response(w_thread_id, w_msg_id)
+            print("추론 준비 확인 완료")
+        except Exception as preflight_err:
+            print(f"::error title=추론 환경 사용 불가::{preflight_err}")
+            return 2
+        print("-" * 60)
+
         fixture_suite_order = [s["id"] for s in fixtures["test_suites"]]
         # fixture를 assertions source of truth로 사용 (Langfuse expected_output 구버전 방지)
         fixture_assertions: dict = {}
@@ -390,8 +442,11 @@ async def main() -> int:
                 }
         results = await run_suite(langfuse, client, active_items, RUN_NAME, fixture_suite_order, fixture_assertions)
     finally:
-        await client.cleanup_all()
-        await client.close()
+        if client is not None:
+            try:
+                await client.cleanup_all()
+            finally:
+                await client.close()
 
     print("\n" + "=" * 60)
     print(f"결과: {results['passed']}/{results['total']} 통과")
