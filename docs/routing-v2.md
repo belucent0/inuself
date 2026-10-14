@@ -108,7 +108,7 @@ LLM chat은 업로드·입력 검증을 마친 뒤 기존 `request_timeout_secon
 | Provider | Scope | Workload | Reasoning | Capacity | Probe |
 |---|---|---|---|---:|---|
 | `npu-chat` | local | chat | none | 1 | `/v1/models`에 `gemma4-it:e4b` |
-| `gpu-llm` | local | chat, summary | none..high | 4 | `/v1/models`에 `gemma4-a4b` |
+| `gpu-llm` | local | chat, summary, 내부 OCR | none..high | 4 | `/v1/models`에 `gemma4-a4b` |
 | `codex` | remote | chat | high | 2 | inference 결과만 사용 |
 
 `NPU_LLM_BASE_URL`이 비면 NPU는 disabled다. capacity와 모든 interval/timeout/cooldown은 양수여야 한다. 파일·필수키 누락, 잘못된 provider 참조는 Gateway 기동 실패다.
@@ -131,6 +131,10 @@ local-gpu의 자동 route는 `chat: npu-chat → gpu-llm → codex`, `summary: g
 
 serverless의 LLM 요청은 `remote_allowed`가 필요하며 `auto` primary는 RunPod LLM이다. RunPod가 첫 출력 전에 실패하고 `high + remote_allowed`인 경우만 Codex로 fallback한다. 명시 Codex 실패는 RunPod로 fallback한다. serverless에는 이번 버전의 in-process capacity pool을 적용하지 않지만 동일한 실제 모델명·응답 헤더 계약을 지킨다.
 
+local OCR의 `OCR_BASE_URL`과 `gpu-llm.base_url`이 같은 경우 chat·summary·OCR은 GPU의 같은 slot을 사용한다. 비교 시 공백과 끝 `/`, 끝 `/v1`을 정리한다. 내부 정책의 `ocr: [gpu-llm]`과 `gpu-llm.workloads`의 `ocr`가 필요하며, 예전 custom policy는 이 항목을 추가해야 한다. 공유 URL에서 pool이나 OCR 경로가 없으면 HTTP 503 `unavailable`로 차단한다. admission이 끝날 때까지 자리가 없으면 HTTP 503 `overloaded`와 `Retry-After: 5`를 반환한다. 별도 OCR URL과 serverless OCR은 기존 직접 호출을 유지한다. 공개 `RoutingProfile.workload`는 계속 `chat|summary`이며 `ocr`를 요청 필드로 추가하지 않는다.
+
+공유 OCR의 upstream 5xx·연결 오류·timeout은 기존 GPU circuit failure에 반영한다. 400/413/422/429 등 요청 거절은 failure를 늘리지 않으며, 정상 종료와 취소 모두 HTTP client를 닫고 slot을 반환한다. Worker는 typed `overloaded|unavailable`에서 전체 OCR 작업을 기존 Celery 정책으로 재시도한다. 표 감지나 두 번째 이후 페이지에서 바쁨 오류가 나도 빈 결과 또는 부분 성공으로 처리하지 않는다. 그 밖의 실제 페이지 OCR 실패는 기존 부분 성공 동작을 유지한다.
+
 ## 5. Readiness와 배포 불변식
 
 `/v1/chat/completions`(media·vision 분기 포함), `/v1/embeddings`, `/health/readiness`는 `Authorization: Bearer <AI_GATEWAY_API_KEY>`로 인증한다. 인증은 요청 JSON 파싱과 Provider 호출 전에 실행된다. Gateway에 키가 없거나 공백뿐이면 HTTP 503, 인증 헤더가 없거나 중복·잘못된 형식·다른 키면 HTTP 401이다. 인증 오류는 키나 요청 원문 없이 `{"detail":"..."}`를 반환하고, 401에는 `WWW-Authenticate: Bearer`가 포함된다. `/health`와 `/health/liveliness`는 공개 생존 점검으로 계속 HTTP 200을 반환한다.
@@ -146,6 +150,8 @@ serverless의 LLM 요청은 `remote_allowed`가 필요하며 `auto` primary는 R
 - startup probe가 완료되기 전에는 ready가 아님
 
 Capacity는 Gateway 프로세스 메모리 상태다. `infra/ai-gateway/Dockerfile`과 compose의 uvicorn `--workers 1`, 단일 Gateway replica를 반드시 유지한다. 이 불변식을 깨면 NPU 1/GPU 4/Codex 2 상한을 보장할 수 없다.
+
+`readiness.routes.ocr`는 내부 공유 GPU 경로의 health/circuit만 나타낸다. 별도 `OCR_BASE_URL`의 서비스 건강 상태를 점검하는 항목이 아니며, 서로 다른 URL이 실제로 같은 서버를 가리키는지 자동으로 확인하지 않는다.
 
 배포와 실증 명령:
 

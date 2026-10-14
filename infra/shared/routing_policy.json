@@ -33,7 +33,7 @@
       "scope": "local",
       "max_inflight": 4,
       "health_path": "/v1/models",
-      "workloads": ["chat", "summary"],
+      "workloads": ["chat", "summary", "ocr"],
       "reasoning_min": "none",
       "reasoning_max": "high"
     },
@@ -54,6 +54,7 @@
   },
   "routes": {
     "chat": ["npu-chat", "gpu-llm", "codex"],
-    "summary": ["gpu-llm"]
+    "summary": ["gpu-llm"],
+    "ocr": ["gpu-llm"]
   }
 }
