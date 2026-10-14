@@ -48,6 +48,7 @@ def _get_async_client(base_url: str, api_key: str) -> AsyncOpenAI:
         base_url=f"{base_url.rstrip('/')}/v1",
         api_key=api_key,
         timeout=120.0,
+        max_retries=0,
     )
 
 

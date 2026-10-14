@@ -85,6 +85,10 @@ X-Routing-Reason: preferred
 
 Backend와 Worker는 typed `overloaded`만 기존 retry 상한 안에서 `Retry-After`를 존중한다. `unavailable`은 재시도하지 않는다.
 
+Gateway의 upstream SDK와 Backend·Worker의 Gateway SDK는 `max_retries=0`으로 SDK 자동 재시도를 사용하지 않는다. Provider 전환은 Gateway가 처리하며, caller의 기존 명시 재시도만 유지한다. Agent LLM은 typed `overloaded`에 대해 `Retry-After`를 최대 30초로 제한하고 총 3번까지 요청한다. Backend 서비스와 Worker는 기존 누적 대기 시간 예산 안에서 overloaded와 연결 오류를 재시도하며, Celery 작업 재시도도 그대로다. 일반 chat/search의 공통 SDK 클라이언트에는 별도 재시도 루프가 없으므로 오류가 SDK 자동 복구 없이 기존 오류 처리 경로로 바로 전달된다. 이 변경은 UI 전체 실행 시간의 상한을 보장하지 않는다.
+
+오류 유형 판별은 Gateway의 `{"error":{"type":"overloaded"}}` 형식과 OpenAI SDK가 예외 body에 넣는 내부 `{"type":"overloaded"}` 형식을 모두 읽는다. 따라서 실제 SDK 응답에서도 caller의 명시 overloaded 재시도가 적용된다.
+
 Provider 오류 응답 본문·예외 문자열·요청 원문·키는 공개 오류와 Gateway 로그에 출력하지 않는다. chat은 기존 오류 분류와 재시도 동작을 유지하며 정적 메시지를 반환한다. media·embedding의 local/serverless upstream 실패는 HTTP 502 `upstream_error`로 반환한다. 로그에는 작업 이름, HTTP 상태와 예외 종류만 남긴다. 첫 SSE 출력 뒤 실패는 정적 stream 오류로 종료하고 원문 traceback을 로그에 남기지 않는다.
 
 ### LLM 처리 시간과 슬롯 반환
