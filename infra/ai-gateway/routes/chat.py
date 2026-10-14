@@ -29,6 +29,7 @@ from utils.response import openai_error
 from utils.inputs import InputError, read_body, validate_chat
 from utils.routing import RoutingValidationError, _extract_routing, has_routing
 from utils.upstream import _await_cleanup, _cleanup_stream, _do_cleanup_stream, _classify_upstream_error
+from middleware.telemetry import annotate_routing, annotate_error
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -63,6 +64,7 @@ class DeadlineStreamingResponse(StreamingResponse):
             async with asyncio.timeout_at(self.deadline):
                 await super().__call__(scope, receive, send)
         except TimeoutError:
+            annotate_error("timed_out")
             logger.info("Gateway stream deadline reached")
         finally:
             await self.finish()
@@ -116,6 +118,10 @@ async def chat_completions(request: Request):
 
     # Legacy media has no RoutingProfile; an explicit scope always applies.
     if task_type in ("asr", "diarization", "ocr") or _is_vision_request(body.get("messages", [])):
+        annotate_routing(
+            workload=task_type if task_type in ("asr", "diarization", "ocr") else "ocr",
+            execution_scope=profile["execution_scope"] if has_routing(body) else None,
+        )
         if has_routing(body) and profile["execution_scope"] == "local_only" and DEPLOY_MODE == "serverless":
             return openai_error("local_only forbids remote execution", "forbidden", 403)
         if not task_type:
@@ -125,6 +131,8 @@ async def chat_completions(request: Request):
         from routes.media import handle_media_request
 
         return await handle_media_request(body, getattr(request.app.state, "provider_pool", None))
+
+    annotate_routing(workload=profile["workload"], execution_scope=profile["execution_scope"])
 
     try:
         model = _validate_model(body)
@@ -255,6 +263,8 @@ async def _handle_serverless(body: dict, model: str, profile: dict[str, str]):
                 api_key = CODEX_API_KEY if provider.name == "codex" else RUNPOD_API_KEY
                 try:
                     try:
+                        reason = "error-fallback" if failed else ("explicit-codex" if explicit else "preferred")
+                        annotate_routing(provider=provider.name, reason=reason)
                         opened = await _open_upstream(
                             body, base_url=provider.api_base, api_key=api_key,
                             model=provider.model, reasoning_effort=provider.reasoning_effort,
@@ -269,7 +279,6 @@ async def _handle_serverless(body: dict, model: str, profile: dict[str, str]):
                         saw_overload |= kind == "overloaded"
                         failed = True
                         continue
-                    reason = "error-fallback" if failed else ("explicit-codex" if explicit else "preferred")
                     headers = _provider_headers(provider.name, opened["model"], reason)
                     if opened["payload"] is not None:
                         _check_deadline(deadline)
@@ -298,6 +307,7 @@ async def _open_upstream(
     request_timeout: float,
     first_output_timeout: float,
 ) -> dict:
+    annotate_routing(model=model)
     client = _get_openai_client(base_url, api_key, request_timeout)
     kwargs = {
         "model": model,
@@ -380,6 +390,8 @@ def _stream_response(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if isinstance(exc, TimeoutError):
+                annotate_error("timed_out")
             if on_failure:
                 async with asyncio.timeout_at(deadline):
                     await on_failure()
@@ -408,6 +420,7 @@ def _timed_out():
 
 
 def _provider_headers(provider: str, model: str, reason: str) -> dict[str, str]:
+    annotate_routing(provider=provider, reason=reason)
     return {
         "X-Inference-Provider": provider,
         "X-Inference-Model": model,
