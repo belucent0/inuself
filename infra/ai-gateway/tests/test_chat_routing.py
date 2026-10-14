@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
+from starlette.datastructures import Headers
 
 from routes import chat
 from services.provider_pool import ProviderPool
@@ -81,12 +82,14 @@ class FakeClient:
 class FakeRequest:
     def __init__(self, body, pool=None):
         self._body = body
+        self.headers = Headers()
         self.app = SimpleNamespace(state=SimpleNamespace(provider_pool=pool))
 
-    async def json(self):
+    async def stream(self):
         if isinstance(self._body, BaseException):
-            raise self._body
-        return self._body
+            yield b"{"
+        else:
+            yield json.dumps(self._body).encode()
 
 
 class ChatRoutingTest(unittest.IsolatedAsyncioTestCase):

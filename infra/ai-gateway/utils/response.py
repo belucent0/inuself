@@ -51,3 +51,11 @@ def openai_error(
         status_code=status_code,
         headers=headers,
     )
+
+
+def upstream_error(exc: Exception, operation: str, logger) -> JSONResponse:
+    status = getattr(exc, "status_code", None)
+    if status is None and hasattr(exc, "response"):
+        status = getattr(exc.response, "status_code", None)
+    logger.error("%s upstream request failed status=%s exception=%s", operation, status, type(exc).__name__)
+    return openai_error("upstream request failed", "upstream_error", 502)

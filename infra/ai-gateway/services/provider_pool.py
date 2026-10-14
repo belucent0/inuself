@@ -331,8 +331,8 @@ class ProviderPool:
                     for item in models
                     if isinstance(item, dict)
                 )
-        except Exception:
-            logger.warning("provider probe failed name=%s", spec.name, exc_info=True)
+        except Exception as exc:
+            logger.warning("provider probe failed name=%s exception=%s", spec.name, type(exc).__name__)
 
         async with self._condition:
             state = self.states[spec.name]

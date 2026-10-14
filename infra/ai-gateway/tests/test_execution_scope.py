@@ -47,10 +47,10 @@ class ExecutionScopeTest(unittest.IsolatedAsyncioTestCase):
 
     def cases(self):
         return [
-            ("chat", {"model": "auto", "messages": []}),
-            ("codex", {"model": "codex-high", "messages": []}),
+            ("chat", {"model": "auto", "messages": [{"role": "user", "content": "hello"}]}),
+            ("codex", {"model": "codex-high", "messages": [{"role": "user", "content": "hello"}]}),
             *((task, {"messages": [], "extra_body": {"task_type": task}}) for task in ("asr", "diarization", "ocr")),
-            ("vision", {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,dGVzdA=="}}]}]}),
+            ("vision", {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/dGVzdA=="}}]}]}),
             ("embedding", {"input": "hello"}),
         ]
 
